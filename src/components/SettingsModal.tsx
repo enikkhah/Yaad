@@ -1,0 +1,830 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { AppSettings, AppTheme, PhoneAlarmSound, Reminder, IdeaNote, SavedLocation } from '../types';
+import { 
+  X, 
+  Palette, 
+  Clock, 
+  Cloud, 
+  LogOut,
+  Sliders,
+  Bell,
+  BarChart3,
+  Sparkles,
+  Type,
+  Smartphone,
+  CheckCircle2,
+  Globe,
+  Upload,
+  Database,
+  FileJson,
+  MapPin,
+  Check,
+  AlertCircle,
+  Flashlight,
+  Download,
+  Info
+} from 'lucide-react';
+import { getT } from '../utils/i18n';
+import { APP_VERSION, APP_VERSION_INFO } from '../utils/version';
+import { toPersianDigits } from '../utils/jalali';
+import { 
+  getSystemNotificationPermission, 
+  requestSystemNotificationPermission, 
+  showSystemAlarmNotification 
+} from '../utils/systemNotification';
+import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
+import { User } from 'firebase/auth';
+import nikAppIcon from '../assets/images/nik_reminder_icon_1790104279557.jpg';
+
+interface SettingsModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  settings: AppSettings;
+  onUpdateSettings: (newSettings: Partial<AppSettings>) => void;
+  googleUser: User | null;
+  googleToken: string | null;
+  onGoogleSignIn: () => Promise<void>;
+  onGoogleSignOut: () => Promise<void>;
+  onOpenStats?: () => void;
+  reminders?: Reminder[];
+  ideas?: IdeaNote[];
+  savedLocations?: SavedLocation[];
+  onRestoreData?: (data: { reminders?: Reminder[]; ideas?: IdeaNote[]; savedLocations?: SavedLocation[]; settings?: Partial<AppSettings> }, mode: 'replace' | 'merge') => void;
+}
+
+export const SettingsModal: React.FC<SettingsModalProps> = ({
+  isOpen,
+  onClose,
+  settings,
+  onUpdateSettings,
+  googleUser,
+  googleToken,
+  onGoogleSignIn,
+  onGoogleSignOut,
+  onOpenStats,
+  reminders = [],
+  ideas = [],
+  savedLocations = [],
+  onRestoreData,
+}) => {
+  const isFa = (settings.language || 'fa') === 'fa';
+  const t = getT(settings.language);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default');
+  const [mapsKeyInput, setMapsKeyInput] = useState(settings.googleMapsApiKey || '');
+  const [keySavedMessage, setKeySavedMessage] = useState(false);
+
+  // Backup & Restore state
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [backupSuccessMessage, setBackupSuccessMessage] = useState<string | null>(null);
+  const [backupErrorMessage, setBackupErrorMessage] = useState<string | null>(null);
+  const [pendingRestoreData, setPendingRestoreData] = useState<{
+    reminders?: Reminder[];
+    ideas?: IdeaNote[];
+    savedLocations?: SavedLocation[];
+    settings?: Partial<AppSettings>;
+  } | null>(null);
+
+  const [isTestingTorch, setIsTestingTorch] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setNotifPermission(getSystemNotificationPermission());
+    }
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+
+  const handleToggleNotifications = async () => {
+    const isCurrentlyActive = (settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted';
+    if (!isCurrentlyActive) {
+      const granted = await requestSystemNotificationPermission();
+      setNotifPermission(granted ? 'granted' : 'denied');
+      if (granted) {
+        onUpdateSettings({ systemNotificationsEnabled: true });
+        showSystemAlarmNotification({
+          id: 'test-system-notif',
+          title: isFa ? '🔔 اعلان‌های سیستم فعال شد' : '🔔 Yaad Notifications Active',
+          description: isFa 
+            ? 'اعلان‌های یادآور با موفقیت روی صفحه قفل و سایر برنامه‌ها فعال گردید'
+            : 'System notifications enabled on lock screen and over other apps',
+          dueTimestamp: Date.now(),
+          category: 'work',
+          priority: 'high',
+          status: 'pending',
+          postponeCount: 0,
+          ringTune: 'work',
+          useFlash: true,
+          voiceReadAloud: false,
+          createdAt: Date.now(),
+        });
+      }
+    } else {
+      onUpdateSettings({ systemNotificationsEnabled: false });
+    }
+  };
+
+  const handleTestTorch = async () => {
+    setIsTestingTorch(true);
+    try {
+      const started = await startFlashlightStrobe();
+      if (!started) {
+        // If not started, try requesting permission
+        console.warn('Torch could not start directly, check device permissions');
+      }
+      setTimeout(() => {
+        stopFlashlightStrobe();
+        setIsTestingTorch(false);
+      }, 4000);
+    } catch {
+      stopFlashlightStrobe();
+      setIsTestingTorch(false);
+    }
+  };
+
+  const themes: { id: AppTheme; name: string; preview: string }[] = [
+    { id: 'dark-gold', name: isFa ? 'مشکی طلایی' : 'Dark Gold', preview: 'bg-stone-950 border-amber-500' },
+    { id: 'dark-slate', name: isFa ? 'آبی تیره' : 'Dark Slate', preview: 'bg-slate-950 border-sky-500' },
+    { id: 'light-clean', name: isFa ? 'روشن مدرن' : 'Light Clean', preview: 'bg-stone-100 border-stone-400' },
+    { id: 'sketch-contrast', name: isFa ? 'اسکچ خط‌چین' : 'Sketch High Contrast', preview: 'bg-black border-dashed border-white' },
+  ];
+
+  // Handle downloading JSON backup
+  const handleDownloadBackup = () => {
+    try {
+      const backupPayload = {
+        app: 'yad-reminder',
+        version: 2,
+        exportedAt: new Date().toISOString(),
+        reminders: reminders || [],
+        ideas: ideas || [],
+        savedLocations: savedLocations || [],
+        settings,
+      };
+
+      const dataStr = JSON.stringify(backupPayload, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const now = new Date();
+      const dateTag = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      link.href = url;
+      link.download = `yad-backup-${dateTag}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setBackupSuccessMessage(settings.language === 'en' ? 'Backup file downloaded successfully.' : 'فایل نسخه پشتیبان با موفقیت دانلود شد.');
+      setBackupErrorMessage(null);
+      setTimeout(() => setBackupSuccessMessage(null), 4000);
+    } catch (err) {
+      setBackupErrorMessage(settings.language === 'en' ? 'Error generating backup.' : 'خطا در تولید فایل پشتیبان.');
+    }
+  };
+
+  // Handle uploading and parsing JSON backup
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+
+        // Basic verification
+        if (!parsed || (typeof parsed !== 'object')) {
+          throw new Error('فرمت فایل نامعتبر است.');
+        }
+
+        const validReminders = Array.isArray(parsed.reminders) ? parsed.reminders : [];
+        const validIdeas = Array.isArray(parsed.ideas) ? parsed.ideas : [];
+        const validLocations = Array.isArray(parsed.savedLocations) ? parsed.savedLocations : [];
+        const validSettings = parsed.settings && typeof parsed.settings === 'object' ? parsed.settings : undefined;
+
+        if (validReminders.length === 0 && validIdeas.length === 0 && validLocations.length === 0 && !validSettings) {
+          throw new Error('در این فایل هیچ یادآور، ایده یا تنظیمی یافت نشد.');
+        }
+
+        setPendingRestoreData({
+          reminders: validReminders,
+          ideas: validIdeas,
+          savedLocations: validLocations,
+          settings: validSettings,
+        });
+        setBackupErrorMessage(null);
+      } catch (err: any) {
+        setBackupErrorMessage(err.message || 'خطا در خواندن فایل JSON. لطفاً از صحت فایل پشتیبان مطمئن شوید.');
+        setPendingRestoreData(null);
+      }
+    };
+    reader.onerror = () => {
+      setBackupErrorMessage('خطا در بارگذاری فایل از حافظه.');
+    };
+    reader.readAsText(file);
+
+    // Reset input
+    if (e.target) {
+      e.target.value = '';
+    }
+  };
+
+  const handleConfirmRestore = (mode: 'replace' | 'merge') => {
+    if (!pendingRestoreData || !onRestoreData) return;
+
+    onRestoreData(pendingRestoreData, mode);
+    setBackupSuccessMessage(
+      mode === 'replace' 
+        ? 'داده‌ها با موفقیت بازیابی و جایگزین شدند.' 
+        : 'داده‌های فایل پشتیبان با موفقیت ادغام شدند.'
+    );
+    setPendingRestoreData(null);
+    setTimeout(() => setBackupSuccessMessage(null), 4000);
+  };
+
+  const handleSaveMapsKey = () => {
+    onUpdateSettings({ googleMapsApiKey: mapsKeyInput.trim() });
+    setKeySavedMessage(true);
+    setTimeout(() => setKeySavedMessage(false), 3000);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
+      <div 
+        id="settings-modal-panel"
+        className="w-full max-w-xl bg-stone-900 border border-stone-800 rounded-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
+      >
+        {/* Header */}
+        <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden border border-amber-500/30 flex-shrink-0 bg-stone-950 shadow-sm">
+              <img
+                src={nikAppIcon}
+                alt="YAAD"
+                referrerPolicy="no-referrer"
+                className="w-full h-full object-cover"
+              />
+            </div>
+            <h3 className="font-black text-base sm:text-lg text-white">
+              {settings.language === 'en' ? 'YAAD Settings' : 'تنظیمات YAAD'}
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Settings Body */}
+        <div className="flex-1 overflow-y-auto px-2.5 py-4 sm:p-5 space-y-4 sm:space-y-5">
+          
+          {/* 0. APP LANGUAGE (فارسی / ENGLISH) */}
+          <section className="space-y-3 p-3 sm:p-4 rounded-2xl bg-stone-950/70 border border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
+                <Globe className="w-4 h-4 text-amber-400" />
+                <span>زبان برنامه / App Language</span>
+              </div>
+              <span className="text-xs px-2.5 py-0.5 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">
+                {(settings.language || 'fa') === 'fa' ? 'فارسی (Persian)' : 'English'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <button
+                type="button"
+                onClick={() => onUpdateSettings({ language: 'fa' })}
+                className={`p-3 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
+                  (settings.language || 'fa') === 'fa'
+                    ? 'border-amber-500 bg-amber-500/15 ring-1 ring-amber-500/30 shadow-md shadow-amber-500/10'
+                    : 'border-stone-800 bg-stone-900/60 hover:text-white hover:bg-stone-900'
+                }`}
+              >
+                <span className="font-bold text-xs sm:text-sm text-white">فارسی (Persian)</span>
+                {(settings.language || 'fa') === 'fa' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onUpdateSettings({ language: 'en' })}
+                className={`p-3 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
+                  settings.language === 'en'
+                    ? 'border-amber-500 bg-amber-500/15 ring-1 ring-amber-500/30 shadow-md shadow-amber-500/10'
+                    : 'border-stone-800 bg-stone-900/60 hover:text-white hover:bg-stone-900'
+                }`}
+              >
+                <span className="font-bold text-xs sm:text-sm text-white">English (انگلیسی)</span>
+                {settings.language === 'en' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+              </button>
+            </div>
+          </section>
+
+          {/* 2. FONT SIZE SLIDER */}
+          <section className="space-y-3 p-3 sm:p-4 rounded-2xl bg-stone-950/70 border border-teal-500/25">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-bold text-teal-300">
+                <Type className="w-4 h-4 text-teal-400" />
+                <span>{isFa ? 'اندازه فونت' : 'Font Size'}</span>
+              </div>
+              <span className="font-mono text-xs text-teal-300 font-black bg-stone-900 px-2 py-0.5 rounded border border-teal-500/30">
+                {isFa ? toPersianDigits(
+                  typeof settings.fontSize === 'number'
+                    ? settings.fontSize
+                    : settings.fontSize === 'small'
+                    ? 14
+                    : settings.fontSize === 'large'
+                    ? 18
+                    : settings.fontSize === 'xlarge'
+                    ? 21
+                    : 16
+                ) : (
+                  typeof settings.fontSize === 'number'
+                    ? settings.fontSize
+                    : settings.fontSize === 'small'
+                    ? 14
+                    : settings.fontSize === 'large'
+                    ? 18
+                    : settings.fontSize === 'xlarge'
+                    ? 21
+                    : 16
+                )}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <span className="text-xs font-bold text-stone-400">{isFa ? 'الف' : 'A'}</span>
+              <input
+                type="range"
+                min="13"
+                max="23"
+                step="1"
+                value={
+                  typeof settings.fontSize === 'number'
+                    ? settings.fontSize
+                    : settings.fontSize === 'small'
+                    ? 14
+                    : settings.fontSize === 'large'
+                    ? 18
+                    : settings.fontSize === 'xlarge'
+                    ? 21
+                    : 16
+                }
+                onChange={(e) => onUpdateSettings({ fontSize: parseInt(e.target.value, 10) })}
+                className="w-full accent-teal-500 h-2 bg-stone-800 rounded-lg cursor-pointer"
+              />
+              <span className="text-base font-black text-white">{isFa ? 'الف' : 'A'}</span>
+            </div>
+          </section>
+
+          {/* 3. SYSTEM ALARM NOTIFICATIONS ON PHONE & OTHER APPS - SLIDING TOGGLE SWITCH */}
+          <section className="space-y-2.5 pt-2 border-t border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-bold text-stone-100">
+                <Smartphone className="w-4 h-4 text-amber-400" />
+                <span>{isFa ? 'اعلان‌های سیستم گوشی (صفحه قفل و سایر برنامه‌ها)' : 'System Notifications (Lock Screen & Apps)'}</span>
+              </div>
+              {((settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted') ? (
+                <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                  <CheckCircle2 className="w-3 h-3" />
+                  <span>{isFa ? 'روشن' : 'Enabled'}</span>
+                </span>
+              ) : (
+                <span className="text-[11px] text-stone-400 font-bold bg-stone-800/60 border border-stone-700/60 px-2 py-0.5 rounded-full">
+                  {isFa ? 'خاموش' : 'Disabled'}
+                </span>
+              )}
+            </div>
+
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-stone-950/80 border border-stone-800 flex items-center justify-between gap-3">
+              <div className="space-y-1 pr-1">
+                <p className="text-xs sm:text-sm text-white font-bold">
+                  {isFa ? 'دسترسی به آلارم و اعلان‌های صوتی سیستم' : 'System alarm & notification access'}
+                </p>
+                <p className="text-[11px] text-stone-400 leading-relaxed">
+                  {isFa 
+                    ? 'پخش آلارم، ویبره و اعلان زمان یادآوری روی صفحه قفل و حتی هنگام بستن برنامه' 
+                    : 'Sound, vibration & pop-up alarms even when the app is closed'}
+                </p>
+              </div>
+
+              {/* Sliding Toggle Switch (دکمه کشویی) */}
+              <div dir="ltr" className="inline-flex items-center flex-shrink-0">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={(settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted'}
+                  onClick={handleToggleNotifications}
+                  className={`relative inline-flex h-7 w-13 flex-shrink-0 cursor-pointer rounded-full p-0.5 transition-colors duration-200 ease-in-out focus:outline-none shadow-inner ${
+                    (settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted'
+                      ? 'bg-amber-500'
+                      : 'bg-stone-700'
+                  }`}
+                  title={isFa ? 'روشن / خاموش کردن اعلان‌ها' : 'Toggle notifications on/off'}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200 ease-in-out ${
+                      (settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted'
+                        ? 'translate-x-6'
+                        : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Android Heads-up Banner Guide */}
+            <div className="p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 text-[11px] text-stone-300 leading-relaxed flex items-start gap-2">
+              <span className="text-amber-400 font-bold mt-0.5">💡</span>
+              <p>
+                {isFa 
+                  ? 'برای باز شدن پاپ‌آپ بالای صفحه در اندروید (Heads-up): در تنظیمات گوشی ➔ برنامه‌ها ➔ Chrome (یا YAAD) ➔ اعلان‌ها ➔ دسته‌های اعلان ➔ فعال بودن گزینه «نمایش به صورت پاپ‌آپ روی صفحه» (Pop on screen) را بررسی نمایید.'
+                  : 'To enable floating banner pop-ups over other apps on Android: Open Phone Settings ➔ Apps ➔ Chrome ➔ Notifications ➔ Turn on "Pop on screen / Banners".'}
+              </p>
+            </div>
+          </section>
+
+          {/* 4. THEME SELECTION */}
+          <section className="space-y-2.5 pt-2 border-t border-stone-800">
+            <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
+              <Palette className="w-4 h-4 text-amber-400" />
+              <span>{isFa ? 'پوسته‌ها و قالب ظاهری' : 'Appearance Themes'}</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {themes.map((themeItem) => {
+                const isSelected = settings.theme === themeItem.id;
+                return (
+                  <button
+                    key={themeItem.id}
+                    type="button"
+                    onClick={() => onUpdateSettings({ theme: themeItem.id })}
+                    className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center gap-2 cursor-pointer active:scale-95 ${
+                      isSelected
+                        ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/30'
+                        : 'border-stone-800 bg-stone-950/60 hover:border-stone-700'
+                    }`}
+                  >
+                    <span className={`w-5 h-5 rounded-full border ${themeItem.preview}`} />
+                    <span className="font-bold text-xs text-white">{themeItem.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* 5. TIMELINE STYLE (MODERN vs SKETCH) */}
+          <section className="space-y-2.5 pt-2 border-t border-stone-800">
+            <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
+              <Sparkles className="w-4 h-4 text-amber-400" />
+              <span>{isFa ? 'سبک نمایش تایم‌لاین' : 'Timeline Display Style'}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => onUpdateSettings({ timelineMode: 'modern' })}
+                className={`p-3 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
+                  (settings.timelineMode || 'modern') === 'modern'
+                    ? 'border-amber-500 bg-amber-500/15 text-white ring-1 ring-amber-500/30'
+                    : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
+                }`}
+              >
+                <div className="font-black text-xs sm:text-sm text-amber-300">{isFa ? 'مدرن طلایی' : 'Modern Gold'}</div>
+              </button>
+              <button
+                type="button"
+                onClick={() => onUpdateSettings({ timelineMode: 'sketch' })}
+                className={`p-3 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
+                  settings.timelineMode === 'sketch'
+                    ? 'border-white bg-white/15 text-white ring-1 ring-white/40'
+                    : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
+                }`}
+              >
+                <div className="font-black text-xs sm:text-sm text-white font-mono">{isFa ? 'اسکچ خط‌چین' : 'Sketch Border'}</div>
+              </button>
+            </div>
+          </section>
+
+          {/* 6. GOOGLE WORKSPACE SYNC */}
+          <section className="space-y-2.5 pt-2 border-t border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
+                <Cloud className="w-4 h-4 text-sky-400" />
+                <span>{isFa ? 'همگام‌سازی گوگل (Calendar & Tasks)' : 'Google Workspace Sync (Calendar & Tasks)'}</span>
+              </div>
+              {googleUser && (
+                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-bold">
+                  {isFa ? 'متصل' : 'Connected'}
+                </span>
+              )}
+            </div>
+
+            <div className="p-3 rounded-xl bg-stone-950 border border-stone-800 flex items-center justify-between gap-3">
+              <div className="truncate">
+                {googleUser ? (
+                  <p className="text-xs font-semibold text-white truncate">{googleUser.email}</p>
+                ) : (
+                  <p className="text-xs text-stone-400">{isFa ? 'اتصال به تقویم و تسک‌های گوگل' : 'Connect to Google Calendar & Tasks'}</p>
+                )}
+              </div>
+
+              {googleUser ? (
+                <button
+                  type="button"
+                  onClick={onGoogleSignOut}
+                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold cursor-pointer active:scale-95 shadow-sm"
+                >
+                  <LogOut className="w-3.5 h-3.5 text-white" />
+                  <span className="text-white">{isFa ? 'خروج' : 'Sign Out'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setIsSigningIn(true);
+                    try {
+                      await onGoogleSignIn();
+                    } finally {
+                      setIsSigningIn(false);
+                    }
+                  }}
+                  disabled={isSigningIn}
+                  className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/30 disabled:opacity-50"
+                >
+                  <span>{isSigningIn ? (settings.language === 'en' ? 'Connecting...' : 'اتصال...') : (settings.language === 'en' ? 'Sign in with Google' : 'ورود با گوگل')}</span>
+                </button>
+              )}
+            </div>
+          </section>
+
+          {/* 6. GENERAL PREFERENCES */}
+          <section className="space-y-2 pt-2 border-t border-stone-800">
+            <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
+              <Sliders className="w-4 h-4 text-amber-400" />
+              <span>{settings.language === 'en' ? 'General Preferences' : 'سایر گزینه‌ها'}</span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <label className="flex items-center justify-between p-2.5 rounded-xl bg-stone-950 border border-stone-800 cursor-pointer self-start">
+                <span className="text-xs font-bold text-white block">
+                  {isFa ? 'فلاش چراغ دوربین پشت گوشی' : 'Camera LED Flashlight'}
+                </span>
+                <input
+                  type="checkbox"
+                  checked={settings.enableFlash}
+                  onChange={(e) => onUpdateSettings({ enableFlash: e.target.checked })}
+                  className="w-4 h-4 rounded accent-amber-500"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-2.5 rounded-xl bg-stone-950 border border-stone-800 cursor-pointer self-start">
+                <span className="text-xs font-bold text-white">{settings.language === 'en' ? t.autoMicInput : 'میکروفون خودکار فرم'}</span>
+                <input
+                  type="checkbox"
+                  checked={settings.autoVoiceInput}
+                  onChange={(e) => onUpdateSettings({ autoVoiceInput: e.target.checked })}
+                  className="w-4 h-4 rounded accent-amber-500"
+                />
+              </label>
+            </div>
+          </section>
+
+          {/* 7. PERFORMANCE STATISTICS (MOVED TO SETTINGS) */}
+          {onOpenStats && (
+            <section className="space-y-2 pt-2 border-t border-stone-800">
+              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-950/80 border border-stone-800 hover:border-amber-500/40 transition-all">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center flex-shrink-0">
+                    <BarChart3 className="w-5 h-5" />
+                  </div>
+                  <h5 className="text-xs sm:text-sm font-black text-white">{settings.language === 'en' ? t.statsTitle : 'آمار و گزارش عملکرد'}</h5>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenStats();
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer whitespace-nowrap"
+                >
+                  {settings.language === 'en' ? t.viewStats : 'مشاهده آمار'}
+                </button>
+              </div>
+            </section>
+          )}
+
+          {/* 8. LOCAL BACKUP & RESTORE */}
+          <section className="space-y-3 pt-3 border-t border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
+                <Database className="w-4 h-4 text-emerald-400" />
+                <span>{isFa ? 'پشتیبان‌گیری محلی (دانلود و بازیابی JSON)' : 'Local Backup & Restore (JSON)'}</span>
+              </div>
+              <span className="text-[11px] px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-medium">
+                {isFa ? 'ذخیره آفلاین' : 'Offline Save'}
+              </span>
+            </div>
+
+            <p className="text-xs text-stone-400 leading-relaxed">
+              {isFa 
+                ? 'شما می‌توانید تمام یادآورها، ایده‌ها، لوکیشن‌های ثبت‌شده و تنظیمات برنامه را به صورت فایل JSON در حافظه دستگاه خود ذخیره کرده یا از فایل قبلی بازیابی نمایید.'
+                : 'Export all reminders, ideas, GPS places and settings to a JSON backup file or restore from a previously exported file.'}
+            </p>
+
+            {/* Current items badge counters */}
+            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
+                <span className="text-[10px] text-stone-500 block">{isFa ? 'یادآورها' : 'Reminders'}</span>
+                <span className="font-bold text-amber-400 text-sm">{isFa ? toPersianDigits(reminders.length) : reminders.length}</span>
+              </div>
+              <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
+                <span className="text-[10px] text-stone-500 block">{isFa ? 'ایده‌ها' : 'Ideas'}</span>
+                <span className="font-bold text-sky-400 text-sm">{isFa ? toPersianDigits(ideas.length) : ideas.length}</span>
+              </div>
+              <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
+                <span className="text-[10px] text-stone-500 block">{isFa ? 'مکان‌های GPS' : 'GPS Places'}</span>
+                <span className="font-bold text-emerald-400 text-sm">{isFa ? toPersianDigits(savedLocations.length) : savedLocations.length}</span>
+              </div>
+            </div>
+
+            {/* Success / Error alerts */}
+            {backupSuccessMessage && (
+              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in">
+                <Check className="w-4 h-4 flex-shrink-0 text-emerald-400" />
+                <span>{backupSuccessMessage}</span>
+              </div>
+            )}
+
+            {backupErrorMessage && (
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+                <span>{backupErrorMessage}</span>
+              </div>
+            )}
+
+            {/* Download & Upload Buttons */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={handleDownloadBackup}
+                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-700/80 text-white font-bold text-xs shadow-sm hover:border-emerald-500/50 transition-all cursor-pointer active:scale-95"
+              >
+                <Download className="w-4 h-4 text-emerald-400" />
+                <span>{isFa ? 'دانلود فایل پشتیبان (JSON)' : 'Download Backup (JSON)'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-700/80 text-white font-bold text-xs shadow-sm hover:border-sky-500/50 transition-all cursor-pointer active:scale-95"
+              >
+                <Upload className="w-4 h-4 text-sky-400" />
+                <span>{isFa ? 'بازیابی از فایل JSON' : 'Restore from JSON File'}</span>
+              </button>
+
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json,application/json"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+            </div>
+
+            {/* Pending Restore Confirmation Box */}
+            {pendingRestoreData && (
+              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                  <FileJson className="w-4 h-4" />
+                  <span>{isFa ? 'فایل پشتیبان با موفقیت شناسایی شد:' : 'Backup file successfully parsed:'}</span>
+                </div>
+
+                <div className="text-xs text-stone-300 space-y-1 pr-2">
+                  <p>• {isFa ? 'تعداد یادآورها:' : 'Reminders count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.reminders?.length || 0) : (pendingRestoreData.reminders?.length || 0)}</strong></p>
+                  <p>• {isFa ? 'تعداد ایده‌ها:' : 'Ideas count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.ideas?.length || 0) : (pendingRestoreData.ideas?.length || 0)}</strong></p>
+                  <p>• {isFa ? 'تعداد مکان‌های GPS:' : 'GPS Places count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.savedLocations?.length || 0) : (pendingRestoreData.savedLocations?.length || 0)}</strong></p>
+                  {pendingRestoreData.settings && <p>• {isFa ? 'حاوی تنظیمات اختصاصی سفارشی' : 'Contains custom settings'}</p>}
+                </div>
+
+                <p className="text-[11px] text-amber-200/80">
+                  {isFa ? 'نحوه بازیابی را مشخص کنید:' : 'Choose how to restore your data:'}
+                </p>
+
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmRestore('replace')}
+                    className="flex-1 py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95"
+                  >
+                    {isFa ? 'جایگزینی داده‌ها (Overwrite)' : 'Overwrite Data'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => handleConfirmRestore('merge')}
+                    className="flex-1 py-2 px-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95 border border-stone-700"
+                  >
+                    {isFa ? 'افزودن و ادغام (Merge)' : 'Merge Data'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setPendingRestoreData(null)}
+                    className="py-2 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs cursor-pointer active:scale-95 border border-stone-800"
+                  >
+                    {isFa ? 'انصراف' : 'Cancel'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* 9. GOOGLE MAPS API SETTINGS */}
+          <section className="space-y-3 pt-3 border-t border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
+                <MapPin className="w-4 h-4 text-emerald-400" />
+                <span>{settings.language === 'en' ? t.mapsServiceTitle : 'تنظیمات خدمات Google Maps'}</span>
+              </div>
+              <span className="text-[10px] text-stone-400">{settings.language === 'en' ? 'Optional' : 'اختیاری'}</span>
+            </div>
+
+            <p className="text-xs text-stone-400">
+              {settings.language === 'en' ? t.mapsKeyLabel : 'کلید اختصاصی Google Maps (پیش‌فرض سرویس استاندارد فعال است):'}
+            </p>
+
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={mapsKeyInput}
+                onChange={(e) => setMapsKeyInput(e.target.value)}
+                placeholder="Google Maps API Key"
+                className="flex-1 px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-600 text-xs font-mono focus:outline-none focus:border-emerald-500/70"
+              />
+              <button
+                type="button"
+                onClick={handleSaveMapsKey}
+                className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 active:scale-95 transition-all"
+              >
+                {keySavedMessage ? <Check className="w-4 h-4 text-white" /> : null}
+                <span>{keySavedMessage ? (settings.language === 'en' ? t.saved : 'ذخیره شد') : (settings.language === 'en' ? t.save : 'ذخیره')}</span>
+              </button>
+            </div>
+          </section>
+
+          {/* 10. APP SPECIFICATIONS & VERSION (مشخصات اپلیکیشن) */}
+          <section className="space-y-3 pt-3 border-t border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
+                <Info className="w-4 h-4 text-amber-400" />
+                <span>{isFa ? 'مشخصات و نسخه اپلیکیشن' : 'App Specifications & Version'}</span>
+              </div>
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-xs font-bold">
+                v{APP_VERSION}
+              </span>
+            </div>
+
+            <div className="p-3.5 rounded-2xl bg-stone-950 border border-stone-800 space-y-2.5 text-xs">
+              <div className="flex items-center justify-between border-b border-stone-800/80 pb-2">
+                <span className="text-stone-400">{isFa ? 'نام برنامه' : 'App Name'}</span>
+                <span className="font-bold text-white">{APP_VERSION_INFO.name}</span>
+              </div>
+              <div className="flex items-center justify-between border-b border-stone-800/80 pb-2">
+                <span className="text-stone-400">{isFa ? 'نسخه فعلی' : 'Current Version'}</span>
+                <span className="font-mono font-bold text-amber-400">{isFa ? `نسخه ${toPersianDigits(APP_VERSION)}` : `Version ${APP_VERSION}`}</span>
+              </div>
+              <div className="flex items-center justify-between border-b border-stone-800/80 pb-2">
+                <span className="text-stone-400">{isFa ? 'نوع پلتفرم' : 'Platform Type'}</span>
+                <span className="text-stone-200">{isFa ? 'اپلیکیشن تحت وب پیشرونده (PWA)' : 'Progressive Web App (PWA)'}</span>
+              </div>
+              <div className="space-y-1 pt-0.5">
+                <span className="text-stone-400 block">{isFa ? 'قوانین نسخه‌بندی اپلیکیشن:' : 'Versioning Rules:'}</span>
+                <div className="text-[11px] text-stone-300 bg-stone-900/90 p-2.5 rounded-xl border border-stone-800 space-y-1">
+                  <p>• {isFa ? 'بازنگری اساسی: ۱+ واحد (مثلاً از ۱.۱۴ به ۲.۱۴)' : 'Major overhaul: +1.0'}</p>
+                  <p>• {isFa ? 'بازنگری کلی: ۰.۱+ واحد (یک دهم - مثلاً از ۱.۱۴ به ۱.۲۴)' : 'General revision: +0.1'}</p>
+                  <p>• {isFa ? 'بازنگری جزئی: ۰.۰۱+ واحد (یک صدم - مثلاً از ۱.۱۴ به ۱.۱۵)' : 'Minor revision: +0.01'}</p>
+                </div>
+              </div>
+            </div>
+          </section>
+
+        </div>
+
+        {/* Footer - Sticky above keyboard */}
+        <div className="sticky bottom-0 z-20 shrink-0 px-3 sm:px-5 py-3 border-t border-stone-800 flex justify-end bg-stone-900/95 backdrop-blur shadow-2xl">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-6 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-xs sm:text-sm shadow-md active:scale-95"
+          >
+            {settings.language === 'en' ? t.confirm : 'تأیید'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
