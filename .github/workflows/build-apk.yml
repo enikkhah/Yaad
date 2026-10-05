@@ -24,7 +24,10 @@ jobs:
 
       - name: Build web app
         run: npm run build
-
+        
+      - name: Init Capacitor
+        run: npx cap init "Yaad" "com.yaad.app"
+        
       - name: Add Android
         run: npx cap add android
 
