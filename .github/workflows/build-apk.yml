@@ -33,7 +33,7 @@ jobs:
 
       - name: Sync Capacitor
         run: npx cap sync android
-            - name: Generate Android App Icon
+      - name: Generate Android App Icon
         run: |
           npm install @capacitor/assets --no-save
           mkdir -p resources
