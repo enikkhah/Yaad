@@ -35,7 +35,7 @@ jobs:
         run: npx cap sync android
       - name: Generate Android App Icon
         run: |
-          npm install @capacitor/assets --no-save
+         npm install @capacitor/assets --no-save --legacy-peer-deps
           mkdir -p resources
           cp public/icon.png resources/icon.png
           npx capacitor-assets generate --android --iconBackgroundColor '#111111' --iconBackgroundColorDark '#111111'
