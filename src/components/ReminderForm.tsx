@@ -9,12 +9,14 @@ import {
 import { 
   RECURRENCE_OPTIONS, 
   PERSIAN_WEEK_DAYS, 
+  ENGLISH_WEEK_DAYS,
   HOURLY_INTERVALS 
 } from '../utils/recurrence';
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
 import { parseSmsOrText } from '../utils/smsParser';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { requestSystemNotificationPermission } from '../utils/systemNotification';
+import { requestMicrophonePermission } from '../utils/nativePermissions';
 import { 
   Mic, 
   MicOff, 
@@ -37,7 +39,8 @@ import {
   Repeat,
   ShieldCheck,
   FileText,
-  AlertCircle
+  AlertCircle,
+  Smartphone
 } from 'lucide-react';
 import { WheelPicker } from './WheelPicker';
 import { AppLanguage, getT } from '../utils/i18n';
@@ -68,6 +71,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   language = 'fa',
 }) => {
   const t = getT(language);
+  const isEn = language === 'en';
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<Category>('work');
@@ -93,10 +97,18 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [recurrenceDaysOfWeek, setRecurrenceDaysOfWeek] = useState<number[]>([]);
   const [recurrenceCustomDates, setRecurrenceCustomDates] = useState<string[]>([]);
 
-  // Speech to text states
+  // Speech to text states & continuous listening refs
   const [isListening, setIsListening] = useState(false);
+  const [voiceLang, setVoiceLang] = useState<'fa' | 'en'>(language === 'en' ? 'en' : 'fa');
   const [speechTranscript, setSpeechTranscript] = useState('');
   const recognitionRef = useRef<any>(null);
+  const shouldKeepListeningRef = useRef<boolean>(false);
+  const baseVoiceTextRef = useRef<string>('');
+  const sessionFinalTextRef = useRef<string>('');
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const speechStartTimeRef = useRef<number>(0);
+  const lastSpeechTimeRef = useRef<number>(0);
+  const [voiceErrorMsg, setVoiceErrorMsg] = useState<string | null>(null);
 
   // Camera & SMS states
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -164,6 +176,15 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
 
   useEffect(() => {
+    if (!isOpen) {
+      stopVoiceListening();
+    }
+    return () => {
+      stopVoiceListening();
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
     if (typeof window === 'undefined' || !window.visualViewport) return;
     const handleViewportChange = () => {
       if (window.visualViewport) {
@@ -185,83 +206,226 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     setRingTune(newCat);
   };
 
-  // Web Speech recognition setup
-  const startVoiceListening = () => {
-    const win = window as unknown as IWindow;
-    const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
-
-    if (!SpeechRec) {
-      console.warn('Speech recognition is not supported in this browser.');
-      return;
-    }
-
-    try {
-      if (recognitionRef.current) {
-        recognitionRef.current.abort();
-      }
-
-      const rec = new SpeechRec();
-      rec.lang = 'fa-IR';
-      rec.continuous = true;
-      rec.interimResults = true;
-
-      rec.onstart = () => {
-        setIsListening(true);
-      };
-
-      rec.onresult = (event: any) => {
-        let fullTranscript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          fullTranscript += event.results[i][0].transcript;
-        }
-        setSpeechTranscript(fullTranscript);
-
-        // Smartly fill title or parse speech
-        if (fullTranscript.trim()) {
-          const parsed = parseSmsOrText(fullTranscript);
-          setTitle(parsed.title || fullTranscript.trim());
-          if (parsed.suggestedTimestamp) {
-            const j = getJalaliComponents(parsed.suggestedTimestamp);
-            setSelectedHour(j.hour);
-            setSelectedMinute(j.minute);
-            setSelectedDay(j.day);
-            setSelectedMonth(j.month);
-            setSelectedYear(j.year);
-          }
-          if (parsed.category) {
-            setCategory(parsed.category);
-            setRingTune(parsed.category);
-          }
-        }
-      };
-
-      rec.onerror = (e: any) => {
-        console.warn('Speech recognition error:', e.error);
-        setIsListening(false);
-      };
-
-      rec.onend = () => {
-        setIsListening(false);
-      };
-
-      recognitionRef.current = rec;
-      rec.start();
-    } catch (err) {
-      console.warn('Failed to start speech recognition:', err);
-      setIsListening(false);
-    }
-  };
-
+  // Web Speech recognition setup:
+  // روشن شدن، پشتیبانی از صوت فارسی یا انگلیسی، و خاموش شدن خودکار پس از ۵ ثانیه سکوت بدون لوپ یا قطع و وصل شدن
   const stopVoiceListening = () => {
+    shouldKeepListeningRef.current = false;
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
     if (recognitionRef.current) {
       try {
-        recognitionRef.current.stop();
+        recognitionRef.current.abort();
       } catch {
         // Ignore
       }
       recognitionRef.current = null;
     }
     setIsListening(false);
+    setSpeechTranscript('');
+  };
+
+  const startVoiceListening = async (forcedLang?: 'fa' | 'en') => {
+    setVoiceErrorMsg(null);
+    const win = window as unknown as IWindow;
+    const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
+
+    if (!SpeechRec) {
+      setVoiceErrorMsg(
+        isEn
+          ? 'Voice speech recognition not supported in this Android browser/WebView.'
+          : 'تبدیل گفتار به متن در این مرورگر در دسترس نیست. لطفاً از کیبورد صوتی گوشی استفاده نمایید.'
+      );
+      setTimeout(() => setVoiceErrorMsg(null), 5000);
+      return;
+    }
+
+    // Explicitly trigger Android OS native microphone permission dialog
+    const micGranted = await requestMicrophonePermission();
+    if (!micGranted) {
+      setVoiceErrorMsg(
+        isEn
+          ? 'Microphone permission denied. Please allow microphone access in settings.'
+          : 'دسترسی میکروفون رد شد. لطفاً در تنظیمات گوشی دسترسی میکروفون را فعال نمایید.'
+      );
+      setTimeout(() => setVoiceErrorMsg(null), 5000);
+      return;
+    }
+
+    try {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch {
+          // Ignore
+        }
+        recognitionRef.current = null;
+      }
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
+
+      const activeLang = forcedLang || voiceLang;
+      shouldKeepListeningRef.current = true;
+      baseVoiceTextRef.current = title.trim();
+      sessionFinalTextRef.current = '';
+      speechStartTimeRef.current = Date.now();
+      lastSpeechTimeRef.current = 0;
+      setIsListening(true);
+
+      // Start initial 5-second silence timer: if no voice arrives within 5 seconds, turn off
+      silenceTimerRef.current = setTimeout(() => {
+        stopVoiceListening();
+      }, 5000);
+
+      const resetSilenceTimer = (durationMs = 5000) => {
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+        silenceTimerRef.current = setTimeout(() => {
+          stopVoiceListening();
+        }, durationMs);
+      };
+
+      const createAndRunRecognition = () => {
+        if (!shouldKeepListeningRef.current) return;
+
+        // Check if 5 seconds have passed without voice
+        const now = Date.now();
+        const refTime = lastSpeechTimeRef.current || speechStartTimeRef.current;
+        if (now - refTime >= 4900) {
+          stopVoiceListening();
+          return;
+        }
+
+        try {
+          const rec = new SpeechRec();
+          rec.lang = activeLang === 'en' ? 'en-US' : 'fa-IR';
+          rec.continuous = true;
+          rec.interimResults = true;
+
+          rec.onstart = () => {
+            setIsListening(true);
+          };
+
+          rec.onresult = (event: any) => {
+            let currentFinal = '';
+            let currentInterim = '';
+
+            for (let i = 0; i < event.results.length; ++i) {
+              const res = event.results[i];
+              if (res.isFinal) {
+                currentFinal += res[0].transcript + ' ';
+              } else {
+                currentInterim += res[0].transcript;
+              }
+            }
+
+            sessionFinalTextRef.current = currentFinal.trim();
+            const currentSpoken = [sessionFinalTextRef.current, currentInterim].filter(Boolean).join(' ').trim();
+            const combined = [baseVoiceTextRef.current, currentSpoken].filter(Boolean).join(' ').trim();
+
+            setSpeechTranscript(currentSpoken);
+
+            if (combined) {
+              lastSpeechTimeRef.current = Date.now();
+              const parsed = parseSmsOrText(combined);
+              setTitle(parsed.title || combined);
+              if (parsed.suggestedTimestamp) {
+                const j = getJalaliComponents(parsed.suggestedTimestamp);
+                setSelectedHour(j.hour);
+                setSelectedMinute(j.minute);
+                setSelectedDay(j.day);
+                setSelectedMonth(j.month);
+                setSelectedYear(j.year);
+              }
+              if (parsed.category) {
+                setCategory(parsed.category);
+                setRingTune(parsed.category);
+              }
+            }
+
+            // Voice received: reset silence timer to wait 5 seconds after speech ends
+            resetSilenceTimer(5000);
+          };
+
+          rec.onerror = (e: any) => {
+            console.warn('Speech recognition error:', e.error);
+            if (e.error === 'no-speech') {
+              const now = Date.now();
+              const refTime = lastSpeechTimeRef.current || speechStartTimeRef.current;
+              if (now - refTime >= 4800) {
+                stopVoiceListening();
+              }
+              return;
+            }
+            if (e.error === 'not-allowed') {
+              setVoiceErrorMsg(
+                isEn
+                  ? 'Microphone access denied.'
+                  : 'دسترسی به میکروفون داده نشده است. لطفاً در تنظیمات اندروید دسترسی را تایید کنید.'
+              );
+              setTimeout(() => setVoiceErrorMsg(null), 5000);
+              stopVoiceListening();
+              return;
+            }
+            if (e.error === 'service-not-allowed' || e.error === 'network') {
+              setVoiceErrorMsg(
+                isEn
+                  ? 'Google Speech Service unavailable. Check internet or phone speech engine.'
+                  : 'سرویس گفتار گوگل پاسخگو نیست. لطفاً اینترنت یا برنامه گفتار گوگل را بررسی کنید.'
+              );
+              setTimeout(() => setVoiceErrorMsg(null), 5000);
+              stopVoiceListening();
+              return;
+            }
+            stopVoiceListening();
+          };
+
+          rec.onend = () => {
+            if (!shouldKeepListeningRef.current) {
+              setIsListening(false);
+              return;
+            }
+
+            const now = Date.now();
+            const refTime = lastSpeechTimeRef.current || speechStartTimeRef.current;
+            if (now - refTime >= 4800) {
+              // 5 seconds elapsed without speech -> stop cleanly
+              stopVoiceListening();
+              return;
+            }
+
+            // Keep base text accumulated
+            if (sessionFinalTextRef.current) {
+              baseVoiceTextRef.current = [baseVoiceTextRef.current, sessionFinalTextRef.current].filter(Boolean).join(' ').trim();
+              sessionFinalTextRef.current = '';
+            }
+
+            // Seamlessly resume only if still inside 5-second window
+            setTimeout(() => {
+              if (shouldKeepListeningRef.current) {
+                createAndRunRecognition();
+              }
+            }, 80);
+          };
+
+          recognitionRef.current = rec;
+          rec.start();
+        } catch (err) {
+          console.warn('Failed to start speech recognition instance:', err);
+          stopVoiceListening();
+        }
+      };
+
+      createAndRunRecognition();
+    } catch (err) {
+      console.warn('Failed to initialize speech recognition:', err);
+      stopVoiceListening();
+    }
   };
 
   const toggleListening = () => {
@@ -441,6 +605,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     e.preventDefault();
     if (!title.trim()) {
       setShowValidationModal(true);
+      setTimeout(() => titleInputRef.current?.focus(), 30);
       return;
     }
     setValidationError(null);
@@ -483,6 +648,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       <div 
         className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
         style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
+        dir={isEn ? 'ltr' : 'rtl'}
       >
         <div 
           className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-150"
@@ -495,7 +661,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 <Plus className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
               </div>
               <h2 className="text-base sm:text-lg font-bold text-white">
-                {initialData ? 'ویرایش یادآور' : 'ثبت سریع یادآور'}
+                {initialData 
+                  ? (isEn ? 'Edit Reminder' : 'ویرایش یادآور') 
+                  : (isEn ? 'Add New Reminder' : 'ثبت سریع یادآور')}
               </h2>
             </div>
 
@@ -503,16 +671,17 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               <button
                 type="button"
                 onClick={() => setIsSmsImportOpen(true)}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs rounded-xl bg-cyan-950/60 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-900/50 transition-colors"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs rounded-xl bg-cyan-950/60 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-900/50 transition-colors cursor-pointer"
               >
                 <MessageSquare className="w-3.5 h-3.5" />
-                <span>ورود از پیامک</span>
+                <span>{isEn ? 'Import from SMS' : 'ورود از پیامک'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={onClose}
-                className="p-1.5 sm:p-2 rounded-full text-stone-400 hover:text-white hover:bg-stone-800"
+                className="p-1.5 sm:p-2 rounded-full text-stone-400 hover:text-white hover:bg-stone-800 cursor-pointer"
+                title={isEn ? 'Close' : 'بستن'}
               >
                 <X className="w-5 h-5" />
               </button>
@@ -533,17 +702,40 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
 
             {/* Title Input with Integrated Microphone Button */}
             <div>
-              <div className="flex items-center justify-between mb-1.5">
+              <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
                 <label className="text-xs font-bold text-stone-200 flex items-center gap-1">
-                  <span>عنوان یادآور</span>
+                  <span>{isEn ? 'Reminder Title' : 'عنوان یادآور'}</span>
                   <span className="text-amber-400 font-black">*</span>
                 </label>
-                {isListening && (
-                  <span className="text-[11px] font-bold text-amber-400 animate-pulse flex items-center gap-1">
-                    <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                    <span>درحال شنیدن صدای شما... (برای توقف کلیک کنید)</span>
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {/* Language switch button for voice typing */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = voiceLang === 'fa' ? 'en' : 'fa';
+                      setVoiceLang(next);
+                      if (isListening) {
+                        stopVoiceListening();
+                        setTimeout(() => startVoiceListening(next), 100);
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
+                      voiceLang === 'fa'
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
+                        : 'bg-sky-500/15 text-sky-300 border-sky-500/30 hover:bg-sky-500/25'
+                    }`}
+                    title={isEn ? 'Toggle voice typing language (FA / EN)' : 'تغییر زبان گفتار بین فارسی و انگلیسی'}
+                  >
+                    {voiceLang === 'fa' ? 'زبان صوت: فارسی' : 'Voice: English'}
+                  </button>
+
+                  {isListening && (
+                    <span className="text-[11px] font-bold text-amber-400 animate-pulse flex items-center gap-1">
+                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                      <span>{isEn ? 'Waiting for voice (stops in 5s)...' : 'منتظر صوت (خاموشی بعد از ۵ ثانیه)...'}</span>
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="relative flex items-center">
                 <input
@@ -554,8 +746,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     setTitle(e.target.value);
                     if (validationError) setValidationError(null);
                   }}
-                  placeholder="مثال: تحویل پروژه، تماس با پزشک، خرید نان..."
-                  className={`w-full bg-stone-950 border rounded-2xl pr-4 pl-14 py-3.5 text-white placeholder-stone-500 focus:outline-none transition-all text-sm sm:text-base font-medium ${
+                  placeholder={isEn ? 'e.g. Project delivery, Doctor appointment, Buy groceries...' : 'مثال: تحویل پروژه، تماس با پزشک، خرید نان...'}
+                  className={`w-full bg-stone-950 border rounded-2xl ${isEn ? 'pl-4 pr-14' : 'pr-4 pl-14'} py-3.5 text-white placeholder-stone-500 focus:outline-none transition-all text-sm sm:text-base font-medium ${
                     isListening
                       ? 'border-amber-400 ring-2 ring-amber-400/20 shadow-lg shadow-amber-500/10'
                       : 'border-stone-700 focus:border-amber-500'
@@ -566,121 +758,127 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 <button
                   type="button"
                   onClick={toggleListening}
-                  className={`absolute left-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+                  className={`absolute ${isEn ? 'right-2' : 'left-2'} top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
                     isListening
                       ? 'bg-amber-500 text-stone-950 shadow-lg shadow-amber-500/50 scale-105 animate-pulse'
                       : 'bg-stone-800/80 hover:bg-stone-700 text-stone-300 hover:text-amber-400 border border-stone-700'
                   }`}
-                  title={isListening ? 'توقف تایپ صوتی' : 'شروع تایپ صوتی (تبدیل گفتار به متن)'}
+                  title={isListening ? (isEn ? 'Stop voice typing' : 'توقف تایپ صوتی') : (isEn ? 'Start voice typing' : 'شروع تایپ صوتی (تبدیل گفتار به متن)')}
                 >
                   <Mic className="w-5 h-5" />
                 </button>
               </div>
+
+              {voiceErrorMsg && (
+                <div className="mt-2 p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center gap-2 animate-in fade-in">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                  <span>{voiceErrorMsg}</span>
+                </div>
+              )}
             </div>
 
             {/* Description / Notes */}
             <div>
               <label className="block text-xs font-semibold text-stone-300 mb-1.5">
-                توضیحات و جزئیات (اختیاری)
+                {isEn ? 'Notes & Details (Optional)' : 'توضیحات و جزئیات (اختیاری)'}
               </label>
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
-                placeholder="توضیحات تکمیلی، آدرس، شماره یا نکته مهم..."
+                placeholder={isEn ? 'Additional details, address, phone number or key notes...' : 'توضیحات تکمیلی، آدرس، شماره یا نکته مهم...'}
                 rows={2}
                 className="w-full bg-stone-950 border border-stone-700 rounded-xl px-4 py-2.5 text-white placeholder-stone-500 focus:outline-none focus:border-amber-500 transition-colors text-xs resize-none"
               />
             </div>
 
-            {/* Category: کار، خانواده، سایر with 3 Ring Tunes */}
+            {/* Category */}
             <div>
               <label className="block text-xs font-semibold text-stone-300 mb-2">
-                تقسیم‌بندی یادآور
+                {isEn ? 'Reminder Category' : 'تقسیم‌بندی یادآور'}
               </label>
               <div className="grid grid-cols-3 gap-2.5">
                 {/* Work */}
                 <button
                   type="button"
                   onClick={() => handleCategoryChange('work')}
-                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center ${
+                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
                     category === 'work'
                       ? 'bg-cyan-950/80 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-950/50'
                       : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
                   }`}
                 >
                   <Briefcase className="w-5 h-5 text-cyan-400" />
-                  <span className="text-xs font-bold">کار</span>
+                  <span className="text-xs font-bold">{isEn ? 'Work' : 'کار'}</span>
                 </button>
 
                 {/* Family */}
                 <button
                   type="button"
                   onClick={() => handleCategoryChange('family')}
-                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center ${
+                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
                     category === 'family'
                       ? 'bg-rose-950/80 border-rose-400 text-rose-200 shadow-md shadow-rose-950/50'
                       : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
                   }`}
                 >
                   <Heart className="w-5 h-5 text-rose-400" />
-                  <span className="text-xs font-bold">خانواده</span>
+                  <span className="text-xs font-bold">{isEn ? 'Family' : 'خانواده'}</span>
                 </button>
 
                 {/* Other */}
                 <button
                   type="button"
                   onClick={() => handleCategoryChange('other')}
-                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center ${
+                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
                     category === 'other'
                       ? 'bg-emerald-950/80 border-emerald-400 text-emerald-200 shadow-md shadow-emerald-950/50'
                       : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
                   }`}
                 >
                   <Tag className="w-5 h-5 text-emerald-400" />
-                  <span className="text-xs font-bold">سایر</span>
+                  <span className="text-xs font-bold">{isEn ? 'Other' : 'سایر'}</span>
                 </button>
               </div>
-
             </div>
 
-            {/* Priorities: ۳ اولویت (بالا، متوسط، پایین) */}
+            {/* Priorities */}
             <div>
               <label className="block text-xs font-semibold text-stone-300 mb-2">
-                اولویت یادآوری
+                {isEn ? 'Reminder Priority' : 'اولویت یادآوری'}
               </label>
               <div className="grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => setPriority('high')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
                     priority === 'high'
                       ? 'bg-red-950/80 border-red-500 text-red-300 shadow-sm'
                       : 'bg-stone-950/50 border-stone-800 text-stone-400'
                   }`}
                 >
-                  بالا (فوری)
+                  {isEn ? 'High (Urgent)' : 'بالا (فوری)'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setPriority('medium')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
                     priority === 'medium'
                       ? 'bg-amber-950/80 border-amber-500 text-amber-300 shadow-sm'
                       : 'bg-stone-950/50 border-stone-800 text-stone-400'
                   }`}
                 >
-                  متوسط
+                  {isEn ? 'Medium' : 'متوسط'}
                 </button>
                 <button
                   type="button"
                   onClick={() => setPriority('low')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all ${
+                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
                     priority === 'low'
                       ? 'bg-blue-950/80 border-blue-500 text-blue-300 shadow-sm'
                       : 'bg-stone-950/50 border-stone-800 text-stone-400'
                   }`}
                 >
-                  پایین (عادی)
+                  {isEn ? 'Normal' : 'پایین (عادی)'}
                 </button>
               </div>
             </div>
@@ -690,7 +888,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 text-xs font-bold text-amber-400">
                   <Calendar className="w-4 h-4" />
-                  <span>تقویم و زمان فارسی (شمسی)</span>
+                  <span>{isEn ? 'Due Date & Time' : 'تقویم و زمان فارسی (شمسی)'}</span>
                 </div>
               </div>
 
@@ -699,52 +897,52 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 <button
                   type="button"
                   onClick={() => applyPreset(1)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 font-bold"
-                  title="تست سریع آلارم برای ۱ دقیقه بعد"
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 font-bold cursor-pointer"
+                  title={isEn ? 'Test alarm 1 min from now' : 'تست سریع آلارم برای ۱ دقیقه بعد'}
                 >
-                  +۱ دقیقه (تست)
+                  {isEn ? '+1 min (Test)' : '+۱ دقیقه (تست)'}
                 </button>
                 <button
                   type="button"
                   onClick={() => applyPreset(5)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 font-bold"
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 font-bold cursor-pointer"
                 >
-                  +۵ دقیقه
+                  {isEn ? '+5 min' : '+۵ دقیقه'}
                 </button>
                 <button
                   type="button"
                   onClick={() => applyPreset(10)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700"
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
                 >
-                  +۱۰ دقیقه
+                  {isEn ? '+10 min' : '+۱۰ دقیقه'}
                 </button>
                 <button
                   type="button"
                   onClick={() => applyPreset(30)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700"
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
                 >
-                  +۳۰ دقیقه
+                  {isEn ? '+30 min' : '+۳۰ دقیقه'}
                 </button>
                 <button
                   type="button"
                   onClick={() => applyPreset(60)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700"
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
                 >
-                  +۱ ساعت
+                  {isEn ? '+1 hour' : '+۱ ساعت'}
                 </button>
                 <button
                   type="button"
                   onClick={setTonight}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-amber-400 border border-stone-700"
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-amber-400 border border-stone-700 cursor-pointer"
                 >
-                  امشب ساعت ۲۰:۰۰
+                  {isEn ? 'Tonight at 20:00' : 'امشب ساعت ۲۰:۰۰'}
                 </button>
                 <button
                   type="button"
                   onClick={setTomorrowMorning}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-cyan-400 border border-stone-700"
+                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-cyan-400 border border-stone-700 cursor-pointer"
                 >
-                  فردا ساعت ۹:۰۰
+                  {isEn ? 'Tomorrow at 09:00' : 'فردا ساعت ۹:۰۰'}
                 </button>
               </div>
 
@@ -752,7 +950,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               <div className="grid grid-cols-3 gap-2 pt-1">
                 {/* Day */}
                 <div>
-                  <label className="block text-[11px] text-stone-400 mb-1">روز</label>
+                  <label className="block text-[11px] text-stone-400 mb-1">{isEn ? 'Day' : 'روز'}</label>
                   <select
                     value={selectedDay}
                     onChange={(e) => setSelectedDay(parseInt(e.target.value, 10))}
@@ -760,7 +958,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   >
                     {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
                       <option key={d} value={d}>
-                        {toPersianDigits(d)}
+                        {isEn ? d : toPersianDigits(d)}
                       </option>
                     ))}
                   </select>
@@ -768,7 +966,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
 
                 {/* Month */}
                 <div>
-                  <label className="block text-[11px] text-stone-400 mb-1">ماه شمسی</label>
+                  <label className="block text-[11px] text-stone-400 mb-1">{isEn ? 'Month' : 'ماه شمسی'}</label>
                   <select
                     value={selectedMonth}
                     onChange={(e) => setSelectedMonth(parseInt(e.target.value, 10))}
@@ -784,7 +982,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
 
                 {/* Year */}
                 <div>
-                  <label className="block text-[11px] text-stone-400 mb-1">سال</label>
+                  <label className="block text-[11px] text-stone-400 mb-1">{isEn ? 'Year' : 'سال'}</label>
                   <select
                     value={selectedYear}
                     onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
@@ -792,7 +990,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   >
                     {[1404, 1405, 1406, 1407].map((y) => (
                       <option key={y} value={y}>
-                        {toPersianDigits(y)}
+                        {isEn ? y : toPersianDigits(y)}
                       </option>
                     ))}
                   </select>
@@ -846,7 +1044,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 {recurrence !== 'none' && (
                   <span className="text-xs px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold flex items-center gap-1">
                     <Repeat className="w-3 h-3" />
-                    <span>{RECURRENCE_OPTIONS.find((o) => o.id === recurrence)?.label}</span>
+                    <span>
+                      {isEn 
+                        ? (RECURRENCE_OPTIONS.find((o) => o.id === recurrence)?.labelEn || recurrence)
+                        : (RECURRENCE_OPTIONS.find((o) => o.id === recurrence)?.label || recurrence)}
+                    </span>
                   </span>
                 )}
               </div>
@@ -862,8 +1064,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       onClick={() => {
                         setRecurrence(opt.id);
                         if (opt.id === 'weekly' && recurrenceDaysOfWeek.length === 0) {
-                          // Default to current selected day's weekday
-                          setRecurrenceDaysOfWeek([0]); // Saturday default or first day
+                          setRecurrenceDaysOfWeek([0]);
                         }
                       }}
                       className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between cursor-pointer active:scale-95 ${
@@ -873,7 +1074,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       }`}
                     >
                       <span className={`text-xs font-black ${isSelected ? 'text-amber-400' : 'text-stone-300'}`}>
-                        {opt.label}
+                        {isEn ? opt.labelEn : opt.label}
                       </span>
                       {isSelected && <Check className="w-3.5 h-3.5 text-amber-400" />}
                     </button>
@@ -886,9 +1087,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               {recurrence === 'hourly' && (
                 <div className="p-3 rounded-xl bg-stone-900/80 border border-stone-800 space-y-2 animate-in fade-in">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-stone-300 font-bold">بازه تکرار ساعتی:</span>
+                    <span className="text-stone-300 font-bold">
+                      {isEn ? 'Hourly Interval:' : 'بازه تکرار ساعتی:'}
+                    </span>
                     <span className="text-amber-400 font-extrabold font-mono">
-                      هر {toPersianDigits(recurrenceInterval)} ساعت
+                      {isEn ? `Every ${recurrenceInterval} hours` : `هر ${toPersianDigits(recurrenceInterval)} ساعت`}
                     </span>
                   </div>
                   <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
@@ -905,7 +1108,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                               : 'bg-stone-950 text-stone-400 hover:text-white border border-stone-800'
                           }`}
                         >
-                          {toPersianDigits(hours)}س
+                          {isEn ? `${hours}h` : `${toPersianDigits(hours)}س`}
                         </button>
                       );
                     })}
@@ -917,7 +1120,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               {recurrence === 'daily' && (
                 <div className="p-2.5 rounded-xl bg-stone-900/80 border border-amber-500/20 text-xs text-stone-300 animate-in fade-in">
                   <p className="font-bold text-amber-300">
-                    تکرار هر روز ساعت {selectedHour.toString().padStart(2, '0')}:{selectedMinute.toString().padStart(2, '0')}
+                    {isEn 
+                      ? `Repeats every day at ${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`
+                      : `تکرار هر روز ساعت ${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`}
                   </p>
                 </div>
               )}
@@ -926,27 +1131,29 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               {recurrence === 'weekly' && (
                 <div className="p-3.5 rounded-xl bg-stone-900/80 border border-stone-800 space-y-3 animate-in fade-in">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-stone-300 font-bold">انتخاب روزهای تکرار در هفته:</span>
+                    <span className="text-stone-300 font-bold">
+                      {isEn ? 'Select Days of Week:' : 'انتخاب روزهای تکرار در هفته:'}
+                    </span>
                     <div className="flex items-center gap-1">
                       <button
                         type="button"
                         onClick={() => setRecurrenceDaysOfWeek([0, 1, 2, 3, 4, 5, 6])}
                         className="text-[10px] text-stone-400 hover:text-amber-400 underline px-1"
                       >
-                        همه روزها
+                        {isEn ? 'All Days' : 'همه روزها'}
                       </button>
                       <button
                         type="button"
                         onClick={() => setRecurrenceDaysOfWeek([0, 1, 2, 3, 4])}
                         className="text-[10px] text-stone-400 hover:text-amber-400 underline px-1"
                       >
-                        روزهای کاری
+                        {isEn ? 'Work Days' : 'روزهای کاری'}
                       </button>
                     </div>
                   </div>
 
                   <div className="grid grid-cols-7 gap-1 sm:gap-2">
-                    {PERSIAN_WEEK_DAYS.map((w) => {
+                    {(isEn ? ENGLISH_WEEK_DAYS : PERSIAN_WEEK_DAYS).map((w) => {
                       const isSel = recurrenceDaysOfWeek.includes(w.index);
                       return (
                         <button
@@ -978,7 +1185,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               {recurrence === 'monthly' && (
                 <div className="p-2.5 rounded-xl bg-stone-900/80 border border-amber-500/20 text-xs text-stone-300 animate-in fade-in">
                   <p className="font-bold text-amber-300">
-                    تکرار هر ماه در روز {selectedDay} ساعت {selectedHour.toString().padStart(2, '0')}:{selectedMinute.toString().padStart(2, '0')}
+                    {isEn 
+                      ? `Repeats monthly on day ${selectedDay} at ${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`
+                      : `تکرار هر ماه در روز ${selectedDay} ساعت ${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`}
                   </p>
                 </div>
               )}
@@ -988,12 +1197,12 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 <div className="space-y-2 animate-in fade-in">
                   <div className="flex items-center justify-between text-xs">
                     <span className="text-stone-200 font-bold">
-                      انتخاب روزهای مشخص از تقویم شمسی:
+                      {isEn ? 'Selected calendar dates:' : 'انتخاب روزهای مشخص از تقویم شمسی:'}
                     </span>
                     <span className="text-amber-400 font-bold text-[11px]">
                       {recurrenceCustomDates.length > 0
-                        ? `${toPersianDigits(recurrenceCustomDates.length)} روز انتخاب شد`
-                        : 'روی روزهای تقویم کلیک کنید'}
+                        ? (isEn ? `${recurrenceCustomDates.length} days selected` : `${toPersianDigits(recurrenceCustomDates.length)} روز انتخاب شد`)
+                        : (isEn ? 'Click dates on calendar' : 'روی روزهای تقویم کلیک کنید')}
                     </span>
                   </div>
 
@@ -1010,7 +1219,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
             {/* Photo Capture & Upload */}
             <div>
               <label className="block text-xs font-semibold text-stone-300 mb-2">
-                عکسبرداری و آپلود تصویر
+                {isEn ? 'Photo Attachment & Upload' : 'عکسبرداری و آپلود تصویر'}
               </label>
               
               {imageUrl ? (
@@ -1021,7 +1230,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       type="button"
                       onClick={() => setImageUrl(undefined)}
                       className="p-2 rounded-full bg-red-600 text-white hover:bg-red-500"
-                      title="حذف عکس"
+                      title={isEn ? 'Remove photo' : 'حذف عکس'}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -1035,7 +1244,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-amber-500/50 text-stone-300 text-xs font-medium transition-colors"
                   >
                     <Camera className="w-4 h-4 text-amber-400" />
-                    <span>گرفتن عکس با دوربین</span>
+                    <span>{isEn ? 'Take Photo' : 'گرفتن عکس با دوربین'}</span>
                   </button>
 
                   <button
@@ -1044,7 +1253,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-amber-500/50 text-stone-300 text-xs font-medium transition-colors"
                   >
                     <Upload className="w-4 h-4 text-cyan-400" />
-                    <span>آپلود فایل عکس</span>
+                    <span>{isEn ? 'Upload File' : 'آپلود فایل عکس'}</span>
                   </button>
                   <input
                     ref={fileInputRef}
@@ -1066,7 +1275,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     <Zap className="w-4 h-4" />
                   </div>
                   <span className="text-xs font-bold text-white">
-                    استفاده از فلاش LED هنگام آلارم
+                    {isEn ? 'Flashlight LED during alarm' : 'استفاده از فلاش LED هنگام آلارم'}
                   </span>
                 </div>
                 <input
@@ -1085,7 +1294,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       <Cloud className="w-4 h-4" />
                     </div>
                     <span className="text-xs font-bold text-white">
-                      همگام‌سازی با Google Calendar
+                      {isEn ? 'Sync with Google Calendar' : 'همگام‌سازی با Google Calendar'}
                     </span>
                   </div>
                   <input
@@ -1096,8 +1305,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   />
                 </label>
               )}
-            </div>
 
+            </div>
             </div>
 
             {/* Sticky Submit Footer - Always positioned right above virtual keyboard */}
@@ -1107,7 +1316,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 onClick={onClose}
                 className="px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-medium transition-colors"
               >
-                انصراف
+                {isEn ? 'Cancel' : 'انصراف'}
               </button>
               <button
                 type="submit"
@@ -1119,7 +1328,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               >
                 <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-amber-300' : 'text-stone-950'}`} />
                 <span className={!title.trim() ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
-                  {initialData ? 'ذخیره تغییرات' : 'ثبت نهایی یادآور'}
+                  {initialData ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') : (isEn ? 'Save Reminder' : 'ثبت نهایی یادآور')}
                 </span>
               </button>
             </div>
@@ -1134,8 +1343,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
           setShowValidationModal(false);
           setTimeout(() => titleInputRef.current?.focus(), 50);
         }}
-        title="تکمیل فیلد اجباری"
-        fieldName="عنوان یادآور"
+        title={isEn ? "Required Field Missing" : "تکمیل فیلد اجباری"}
+        fieldName={isEn ? "Reminder Title" : "عنوان یادآور"}
+        language={language}
       />
 
       {/* Camera Capture Modal */}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { APP_VERSION } from '../utils/version';
 import { toPersianDigits } from '../utils/jalali';
+import { AppLanguage } from '../utils/i18n';
 
 interface SplashScreenProps {
   onStartExit?: () => void;
@@ -8,6 +9,7 @@ interface SplashScreenProps {
   matteDelayMs?: number;
   logoDisplayMs?: number;
   fadeOutMs?: number;
+  language?: AppLanguage;
 }
 
 export const SplashScreen: React.FC<SplashScreenProps> = ({
@@ -16,7 +18,9 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   matteDelayMs = 0,
   logoDisplayMs = 1400,
   fadeOutMs = 350,
+  language = 'fa',
 }) => {
+  const isEn = language === 'en';
   const [containerOpacity, setContainerOpacity] = useState<'opacity-100' | 'opacity-0'>('opacity-100');
   const [logoVisible, setLogoVisible] = useState(true);
 
@@ -64,7 +68,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         transitionDuration: `${fadeOutMs}ms`,
         background: 'radial-gradient(ellipse at 50% 45%, #1c1917 0%, #0c0a09 60%, #000000 100%)',
       }}
-      title="برای ورود سریع لمس کنید"
+      title={isEn ? 'Tap to enter quickly' : 'برای ورود سریع لمس کنید'}
     >
       {/* Ambient background glow */}
       <div 
@@ -93,12 +97,12 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 
         {/* Subtitle */}
         <p className="mt-2 text-xs sm:text-sm text-stone-300 font-bold tracking-wide">
-          یادآور هوشمند و دستیار زمان
+          {isEn ? 'Smart Reminder & Time Assistant' : 'یادآور هوشمند و دستیار زمان'}
         </p>
 
         {/* App Version under YAAD logo per user request */}
         <div className="mt-2.5 px-3 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs font-mono font-bold tracking-wider shadow-sm">
-          نسخه {toPersianDigits(APP_VERSION)} (v{APP_VERSION})
+          {isEn ? `v${APP_VERSION}` : `نسخه ${toPersianDigits(APP_VERSION)} (v${APP_VERSION})`}
         </div>
 
         {/* Luminous Pulsing Indicator */}

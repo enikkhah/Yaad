@@ -70,6 +70,49 @@ export interface Translations {
   statsTotal: string;
   statsDone: string;
   statsPostponed: string;
+  // Extended UI Keys
+  tabReminders: string;
+  tabIdeas: string;
+  tabLocations: string;
+  installApp: string;
+  addReminderTitle: string;
+  addReminderDesc: string;
+  addIdeaTitle: string;
+  addIdeaDesc: string;
+  addLocationTitle: string;
+  addLocationDesc: string;
+  titlePlaceholder: string;
+  descriptionPlaceholder: string;
+  importFromSms: string;
+  cameraPhoto: string;
+  uploadPhoto: string;
+  useFlashLed: string;
+  saveReminder: string;
+  saveChanges: string;
+  requiredFieldAlert: string;
+  autoDismiss: string;
+  timelineTitle: string;
+  now: string;
+  noPastReminders: string;
+  noFutureReminders: string;
+  nextReminder: string;
+  ideaModalTitle: string;
+  tabText: string;
+  tabVoice: string;
+  tabVideo: string;
+  tabDrawing: string;
+  saveIdea: string;
+  locationModalTitle: string;
+  locationTitleLabel: string;
+  locationDescLabel: string;
+  saveLocation: string;
+  directions: string;
+  refreshGps: string;
+  alarmDueTitle: string;
+  snooze15Action: string;
+  dismissAction: string;
+  completeAction: string;
+  googleSynced: string;
 }
 
 export const translations: Record<AppLanguage, Translations> = {
@@ -80,7 +123,7 @@ export const translations: Record<AppLanguage, Translations> = {
     captureIdea: 'یادداشت ایده',
     settings: 'تنظیمات',
     stats: 'آمار',
-    searchPlaceholder: 'جستجو در یادآورها و ایده‌ها...',
+    searchPlaceholder: 'جستجو در یادآورها، ایده‌ها و مکان‌ها...',
     filterAll: 'همه',
     filterPending: 'در انتظار',
     filterCompleted: 'انجام‌شده',
@@ -143,15 +186,57 @@ export const translations: Record<AppLanguage, Translations> = {
     statsTotal: 'کل یادآورها',
     statsDone: 'انجام‌شده',
     statsPostponed: 'به تعویق افتاده',
+    tabReminders: 'یادآورها',
+    tabIdeas: 'ایده‌ها',
+    tabLocations: 'مکان‌ها',
+    installApp: 'نصب برنامه',
+    addReminderTitle: 'ثبت یادآور',
+    addReminderDesc: 'با آلارم، صوت و تقویم شمسی',
+    addIdeaTitle: 'ثبت ایده',
+    addIdeaDesc: 'متن، ویس، ویدیو و نقاشی',
+    addLocationTitle: 'ثبت لوکیشن (GPS)',
+    addLocationDesc: 'مختصات، عکس دوربین و نقشه',
+    titlePlaceholder: 'عنوان یادآور (مثلاً: تماس با همکار، نوبت دندانپزشکی...)',
+    descriptionPlaceholder: 'توضیحات و جزئیات تکمیلی یادآور...',
+    importFromSms: 'ورود از پیامک',
+    cameraPhoto: 'گرفتن عکس با دوربین',
+    uploadPhoto: 'آپلود فایل عکس',
+    useFlashLed: 'استفاده از فلاش LED هنگام آلارم',
+    saveReminder: 'ثبت نهایی یادآور',
+    saveChanges: 'ذخیره تغییرات',
+    requiredFieldAlert: 'تکمیل فیلد اجباری',
+    autoDismiss: 'محو خودکار',
+    timelineTitle: 'خط زمانی ۱۲ ساعته',
+    now: 'اکنون',
+    noPastReminders: 'بدون یادآور در ۱۲ ساعت گذشته',
+    noFutureReminders: 'بدون یادآور در ۱۲ ساعت آینده',
+    nextReminder: 'یادآور بعدی',
+    ideaModalTitle: 'ثبت ایده، یادداشت و افکار',
+    tabText: 'متن و یادداشت',
+    tabVoice: 'ویس صوتی',
+    tabVideo: 'ویدیو کوتاه',
+    tabDrawing: 'طراحی و نقاشی',
+    saveIdea: 'ثبت نهایی ایده',
+    locationModalTitle: 'ثبت موقعیت مکانی (GPS)',
+    locationTitleLabel: 'عنوان یا نام مکان:',
+    locationDescLabel: 'توضیحات و جزئیات تکمیلی (فیلد توضیح):',
+    saveLocation: 'ذخیره لوکیشن و اطلاعات',
+    directions: 'مسیریابی',
+    refreshGps: 'دریافت مجدد GPS',
+    alarmDueTitle: 'سررسید یادآوری',
+    snooze15Action: '⏱ به تعویق انداختن (۱۵ دقیقه)',
+    dismissAction: '✕ بستن',
+    completeAction: '✓ خاتمه (تیک انجام)',
+    googleSynced: 'همگام با گوگل',
   },
   en: {
-    appTitle: 'Yadnik Smart Reminder',
-    appSubtitle: 'Professional Task Management with Loud Alarms & Recurrence',
+    appTitle: 'YAAD Smart Reminder',
+    appSubtitle: 'Professional Task Management with Loud Alarms & Jalali/Gregorian Calendar',
     newReminder: 'Add Reminder',
     captureIdea: 'Capture Idea',
     settings: 'Settings',
     stats: 'Statistics',
-    searchPlaceholder: 'Search reminders and ideas...',
+    searchPlaceholder: 'Search reminders, ideas & places...',
     filterAll: 'All',
     filterPending: 'Pending',
     filterCompleted: 'Completed',
@@ -174,14 +259,14 @@ export const translations: Record<AppLanguage, Translations> = {
     cancel: 'Cancel',
     language: 'App Language',
     languagePersian: 'Persian (فارسی)',
-    languageEnglish: 'English',
+    languageEnglish: 'English (انگلیسی)',
     theme: 'App Theme',
     fontSize: 'Font Size',
     fontSmall: 'Small',
     fontNormal: 'Standard',
     fontLarge: 'Large',
     fontXLarge: 'Extra Large',
-    alarmVolume: 'Alarm Volume',
+    alarmVolume: 'Alarm Volume (Amplified)',
     alarmSound: 'Alarm Ring Sound',
     voiceSpeechRate: 'Text-to-Speech Speed',
     systemNotification: 'System Notifications (Lock screen & Apps)',
@@ -214,6 +299,48 @@ export const translations: Record<AppLanguage, Translations> = {
     statsTotal: 'Total Reminders',
     statsDone: 'Completed',
     statsPostponed: 'Postponed',
+    tabReminders: 'Reminders',
+    tabIdeas: 'Ideas',
+    tabLocations: 'Places',
+    installApp: 'Install App',
+    addReminderTitle: 'Add Reminder',
+    addReminderDesc: 'With alarm, audio & recurrence',
+    addIdeaTitle: 'Capture Idea',
+    addIdeaDesc: 'Text, voice memo, video & sketch',
+    addLocationTitle: 'Save GPS Place',
+    addLocationDesc: 'Coordinates, photo & maps',
+    titlePlaceholder: 'Reminder title (e.g., Call colleague, Dentist appointment...)',
+    descriptionPlaceholder: 'Additional notes and details...',
+    importFromSms: 'Import from SMS',
+    cameraPhoto: 'Take Camera Photo',
+    uploadPhoto: 'Upload Photo',
+    useFlashLed: 'Camera LED Flashlight during alarm',
+    saveReminder: 'Save Reminder',
+    saveChanges: 'Save Changes',
+    requiredFieldAlert: 'Required Field Missing',
+    autoDismiss: 'Auto-dismiss',
+    timelineTitle: '12-Hour Timeline',
+    now: 'Now',
+    noPastReminders: 'No reminders in the past 12 hours',
+    noFutureReminders: 'No reminders in the next 12 hours',
+    nextReminder: 'Next Reminder',
+    ideaModalTitle: 'Capture Ideas, Notes & Thoughts',
+    tabText: 'Text & Note',
+    tabVoice: 'Voice Memo',
+    tabVideo: 'Short Video',
+    tabDrawing: 'Sketch & Draw',
+    saveIdea: 'Save Idea',
+    locationModalTitle: 'Save GPS Location',
+    locationTitleLabel: 'Location Name / Title:',
+    locationDescLabel: 'Notes, directions & details:',
+    saveLocation: 'Save Location',
+    directions: 'Directions',
+    refreshGps: 'Refresh GPS',
+    alarmDueTitle: 'Reminder Alarm',
+    snooze15Action: '⏱ Snooze (15 min)',
+    dismissAction: '✕ Dismiss',
+    completeAction: '✓ Done (Complete)',
+    googleSynced: 'Google Synced',
   },
 };
 

@@ -47,9 +47,10 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       return;
     }
 
-    // Play alarm sound (with volume determined by phone/device system controls)
+    // Play alarm sound with volume configured in app settings
     const sound: PhoneAlarmSound = (reminder.ringTune as PhoneAlarmSound) || settings?.alarmSound || 'digital-beep';
-    startAlarmRinging(reminder.category, sound, 1.0);
+    const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
+    startAlarmRinging(reminder.category, sound, vol);
 
     // Strobe the physical camera flash LED on the back of the phone (no screen flash per user request)
     if (reminder.useFlash || settings?.enableFlash) {
@@ -118,8 +119,8 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       {/* Floating Pop-up Banner over the screen with amber neon border */}
       <div 
         id="alarm-popup-banner"
-        className="relative z-[100] w-full max-w-4xl bg-stone-900 border-2 border-amber-500/80 rounded-2xl sm:rounded-3xl p-4 sm:p-6 shadow-2xl shadow-amber-950/90 text-right animate-in fade-in zoom-in-95 duration-200"
-        dir="rtl"
+        className="relative z-[100] w-full max-w-4xl bg-stone-900 border-2 border-amber-500/80 rounded-2xl sm:rounded-3xl p-4 sm:p-6 shadow-2xl shadow-amber-950/90 animate-in fade-in zoom-in-95 duration-200"
+        dir={settings?.language === 'en' ? 'ltr' : 'rtl'}
       >
         {/* Top bar with pulsing alarm icon, category badge & close button */}
         <div className="flex items-center justify-between gap-3 pb-3 mb-3 border-b border-stone-800">
@@ -131,15 +132,23 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-black text-sm sm:text-base text-amber-400">پاپ‌آپ هشدار یادآور</span>
+              <span className="font-black text-sm sm:text-base text-amber-400">
+                {settings?.language === 'en' ? 'Reminder Alarm Alert' : 'پاپ‌آپ هشدار یادآور'}
+              </span>
               <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-stone-800 border border-stone-700 text-xs text-white">
                 {getCategoryIcon()}
-                <span>{reminder.category === 'work' ? 'کاری' : reminder.category === 'family' ? 'خانوادگی' : 'سایر'}</span>
+                <span>
+                  {reminder.category === 'work' 
+                    ? (settings?.language === 'en' ? 'Work' : 'کاری') 
+                    : reminder.category === 'family' 
+                    ? (settings?.language === 'en' ? 'Family' : 'خانوادگی') 
+                    : (settings?.language === 'en' ? 'Other' : 'سایر')}
+                </span>
               </div>
               {(reminder.useFlash || settings?.enableFlash) && (
                 <span className="flex items-center gap-1 text-[11px] text-amber-300 bg-amber-500/15 border border-amber-500/30 px-2.5 py-0.5 rounded-full font-bold">
                   <Flashlight className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-                  فلاش چراغ دوربین فعال
+                  {settings?.language === 'en' ? 'Flashlight active' : 'فلاش چراغ دوربین فعال'}
                 </span>
               )}
             </div>
@@ -150,8 +159,8 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             <button 
               type="button"
               onClick={handleDismiss}
-              className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-stone-800 transition-colors"
-              title="بستن موقت"
+              className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-stone-800 transition-colors cursor-pointer"
+              title={settings?.language === 'en' ? 'Dismiss temporary' : 'بستن موقت'}
             >
               <X className="w-5 h-5 text-white" />
             </button>
@@ -173,13 +182,13 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
               <span className="flex items-center gap-1.5 text-stone-300">
                 <Clock className="w-3.5 h-3.5 text-amber-400" />
                 <span className="font-mono text-amber-300 font-bold">
-                  {toPersianDigits(formatJalaliFull(reminder.dueTimestamp))}
+                  {formatJalaliFull(reminder.dueTimestamp, settings?.language || 'fa')}
                 </span>
               </span>
               {reminder.recurrence && reminder.recurrence !== 'none' && (
                 <span className="flex items-center gap-1 text-teal-300 bg-teal-500/15 border border-teal-500/30 px-2 py-0.5 rounded-md font-bold">
                   <Repeat className="w-3 h-3 text-teal-400" />
-                  {getRecurrenceLabel(reminder)}
+                  {getRecurrenceLabel(reminder, settings?.language || 'fa')}
                 </span>
               )}
             </div>
@@ -195,7 +204,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs sm:text-sm border border-stone-700 transition-all cursor-pointer active:scale-95 shadow-sm"
           >
             <Clock className="w-4 h-4 text-white" />
-            <span className="text-white">+۱۵ دقیقه تعویق</span>
+            <span className="text-white">{settings?.language === 'en' ? '+15m Snooze' : '+۱۵ دقیقه تعویق'}</span>
           </button>
 
           {/* Postpone 1 Hour Button */}
@@ -204,7 +213,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             onClick={() => handlePostpone(60)}
             className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs sm:text-sm border border-stone-700 transition-all cursor-pointer active:scale-95 shadow-sm"
           >
-            <span className="text-white">+۱ ساعت تعویق</span>
+            <span className="text-white">{settings?.language === 'en' ? '+1h Snooze' : '+۱ ساعت تعویق'}</span>
           </button>
 
           {/* Complete Button (Primary) */}
@@ -214,7 +223,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             className="flex-1 sm:flex-initial flex items-center justify-center gap-2 px-7 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs sm:text-sm shadow-lg shadow-emerald-600/30 transition-all cursor-pointer active:scale-95"
           >
             <CheckCircle2 className="w-4 h-4 text-white stroke-[2.5]" />
-            <span className="text-white">انجام شد (تیک خاتمه)</span>
+            <span className="text-white">{settings?.language === 'en' ? 'Done (Complete)' : 'انجام شد (تیک خاتمه)'}</span>
           </button>
         </div>
       </div>

@@ -3,6 +3,7 @@ import { Category, PhoneAlarmSound } from '../types';
 let audioCtx: AudioContext | null = null;
 let activeAlarmInterval: number | null = null;
 let globalVolume = 0.85;
+let isAudioUnlocked = false;
 
 export function setGlobalVolume(volume: number): void {
   globalVolume = Math.max(0.0, Math.min(1.0, volume));
@@ -18,9 +19,46 @@ function getAudioContext(): AudioContext {
     audioCtx = new AudioContextClass();
   }
   if (audioCtx.state === 'suspended') {
-    audioCtx.resume();
+    audioCtx.resume().catch(() => {});
   }
   return audioCtx;
+}
+
+/**
+ * Proactively unlocks Web Audio on the very first user interaction with the window.
+ * This guarantees browser autoplay policies permit alarms to ring anytime in the background.
+ */
+export function unlockAudio(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    // Play a tiny silent buffer to warm up audio engine
+    const buffer = ctx.createBuffer(1, 1, 22050);
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(ctx.destination);
+    source.start(0);
+    isAudioUnlocked = true;
+  } catch (err) {
+    console.warn('Audio unlock warning:', err);
+  }
+}
+
+// Auto-register unlock listeners for any initial user interaction anywhere on screen
+if (typeof window !== 'undefined') {
+  const unlockEvents = ['pointerdown', 'touchstart', 'click', 'keydown'];
+  const handleFirstInteraction = () => {
+    unlockAudio();
+    if (isAudioUnlocked) {
+      unlockEvents.forEach((ev) => window.removeEventListener(ev, handleFirstInteraction, true));
+    }
+  };
+  unlockEvents.forEach((ev) => {
+    window.addEventListener(ev, handleFirstInteraction, { capture: true, passive: true });
+  });
 }
 
 /**
@@ -49,12 +87,12 @@ function getMasterOutput(ctx: AudioContext): AudioNode {
   return anyCtx._masterBooster;
 }
 
-export const PHONE_ALARM_SOUNDS: { id: PhoneAlarmSound; label: string; desc: string }[] = [
-  { id: 'digital-beep', label: 'دیجیتال استاندارد گوشی', desc: 'بیپ هشدار دوگانه استاندارد با وضوح بالا' },
-  { id: 'radar', label: 'رادار گوشی (Radar)', desc: 'آلارم پرطرفدار گوشی‌های هوشمند' },
-  { id: 'marimba', label: 'ماریمبا (Marimba)', desc: 'صدای چوبین ریتمیک زنگ گوشی' },
-  { id: 'morning-chime', label: 'چایم پرطنین صبحگاهی', desc: 'ملودی آکوستیک آرامش‌بخش و واضح' },
-  { id: 'urgent-bell', label: 'زنگ پرانرژی (Urgent Bell)', desc: 'هشدار سریع با فرکانس بالا برای کارهای فوری' },
+export const PHONE_ALARM_SOUNDS: { id: PhoneAlarmSound; label: string; labelEn: string; desc: string; descEn: string }[] = [
+  { id: 'digital-beep', label: 'دیجیتال استاندارد گوشی', labelEn: 'Digital Beep (Default)', desc: 'بیپ هشدار دوگانه استاندارد با وضوح بالا', descEn: 'High clarity dual beep alarm' },
+  { id: 'radar', label: 'رادار گوشی (Radar)', labelEn: 'Radar Tone', desc: 'آلارم پرطرفدار گوشی‌های هوشمند', descEn: 'Popular classic radar phone tone' },
+  { id: 'marimba', label: 'ماریمبا (Marimba)', labelEn: 'Marimba Rhythmic', desc: 'صدای چوبین ریتمیک زنگ گوشی', descEn: 'Pleasant rhythmic acoustic marimba chime' },
+  { id: 'morning-chime', label: 'چایم پرطنین صبحگاهی', labelEn: 'Morning Chime', desc: 'ملودی آکوستیک آرامش‌بخش و واضح', descEn: 'Peaceful acoustic waking melody' },
+  { id: 'urgent-bell', label: 'زنگ پرانرژی (Urgent Bell)', labelEn: 'Urgent Bell', desc: 'هشدار سریع با فرکانس بالا برای کارهای فوری', descEn: 'High-frequency pulse for urgent tasks' },
 ];
 
 /**
@@ -260,15 +298,25 @@ export function playRingTune(category: Category = 'work', durationScale = 1, cus
 }
 
 /**
- * Starts continuous repeating phone alarm sound
+ * Starts continuous repeating phone alarm sound & vibration
  */
 export function startAlarmRinging(category?: Category, soundType: PhoneAlarmSound = 'digital-beep', volume?: number): void {
   stopAlarmRinging();
+  unlockAudio();
+
   const ring = () => {
     if (soundType) {
       playPhoneAlarmSound(soundType, volume);
     } else {
       playRingTune(category || 'work', 1, volume);
+    }
+    // Also trigger mobile device vibration
+    if (typeof window !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([400, 200, 400, 200, 600]);
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -277,21 +325,15 @@ export function startAlarmRinging(category?: Category, soundType: PhoneAlarmSoun
 }
 
 /**
- * Stops continuous repeating alarm immediately and releases audio resources
+ * Stops continuous repeating alarm immediately without closing the AudioContext
+ * (Preserving AudioContext keeps it unlocked for future scheduled alarms)
  */
 export function stopAlarmRinging(): void {
   if (activeAlarmInterval !== null) {
     clearInterval(activeAlarmInterval);
     activeAlarmInterval = null;
   }
-  if (audioCtx) {
-    try {
-      audioCtx.close().catch(() => {});
-    } catch {
-      // ignore
-    }
-    audioCtx = null;
-  }
+  // We intentionally DO NOT close audioCtx here so that browser user-gesture unlock remains active!
   if (typeof window !== 'undefined' && 'vibrate' in navigator) {
     try {
       navigator.vibrate(0);

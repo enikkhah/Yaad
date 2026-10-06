@@ -1,5 +1,5 @@
 // Service Worker for Yadnik Native Background Notifications, Offline Caching & PWA Installability
-const CACHE_NAME = 'yadnik-pwa-cache-v7';
+const CACHE_NAME = 'yadnik-pwa-cache-v8';
 
 const PRECACHE_ASSETS = [
   '/',
@@ -62,15 +62,22 @@ async function saveStoredAlarms(list) {
 
 // Helper: Show native system notification from Service Worker & trigger in-app popup modal
 function showAlarmNotification(alarm) {
-  const title = `🔔 یادآور YAAD: ${alarm.title}`;
-  const body = `زمان یادآوری: ${alarm.timeStr || ''}${alarm.description ? ' • ' + alarm.description : ''}`;
+  // Title and Body styled exactly like the Android Reminder heads-up screenshot:
+  const title = alarm.title;
+  const timeText = alarm.timeStr ? `Today, ${alarm.timeStr}` : 'Today';
+  const body = `${timeText}${alarm.description ? ' • ' + alarm.description : ''}`;
 
-  // Notify any active/open window client to popup the AlarmModal with sound & camera flash immediately
+  const fullReminder = {
+    ...alarm,
+    status: 'pending',
+  };
+
+  // Notify any active/open window client to popup the banner immediately
   self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
     for (const client of clientList) {
       client.postMessage({
         type: 'TRIGGER_ALARM_MODAL',
-        reminder: alarm,
+        reminder: fullReminder,
       });
       if ('focus' in client) {
         client.focus().catch(() => {});
@@ -78,20 +85,34 @@ function showAlarmNotification(alarm) {
     }
   });
 
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const bc = new BroadcastChannel('yadnik_alarm_channel');
+      bc.postMessage({
+        type: 'TRIGGER_ALARM_MODAL',
+        reminder: fullReminder,
+      });
+      bc.close();
+    }
+  } catch (err) {
+    // ignore
+  }
+
   return self.registration.showNotification(title, {
     body,
-    icon: '/pwa-192x192.png',
+    icon: '/purple-bell-192.png',
     badge: '/favicon.ico',
     tag: `yadnik-alarm-${alarm.id}`,
     renotify: true,
     requireInteraction: true,
     silent: false,
     vibrate: [500, 200, 500, 200, 500, 200, 1000],
-    data: { reminderId: alarm.id, reminder: alarm },
+    timestamp: alarm.dueTimestamp || Date.now(),
+    data: { reminderId: alarm.id, reminder: fullReminder },
     actions: [
-      { action: 'complete', title: '✓ خاتمه (تیک انجام)' },
-      { action: 'snooze', title: '⏱ به تعویق انداختن (۱۵ دقیقه)' },
-      { action: 'dismiss', title: '✕ بستن' },
+      { action: 'complete', title: '✓ خاتمه / Done' },
+      { action: 'snooze', title: '⏱ تعویق ۱۵د / Snooze' },
+      { action: 'dismiss', title: '✕ بستن / Dismiss' },
     ],
   });
 }
@@ -185,6 +206,11 @@ self.addEventListener('message', (event) => {
       id: r.id,
       title: r.title,
       description: r.description,
+      category: r.category || 'work',
+      priority: r.priority || 'medium',
+      ringTune: r.ringTune || 'work',
+      useFlash: r.useFlash !== false,
+      status: r.status || 'pending',
       dueTimestamp: r.dueTimestamp,
       timeStr: r.timeStr,
       triggered: false,
@@ -192,6 +218,38 @@ self.addEventListener('message', (event) => {
 
     saveStoredAlarms(scheduledAlarms);
     checkAndTriggerDueAlarms();
+
+    // Register with Android / Chromium TimestampTrigger if supported
+    try {
+      if ('showTrigger' in Notification.prototype && typeof TimestampTrigger !== 'undefined') {
+        const now = Date.now();
+        for (const alarm of scheduledAlarms.filter((a) => !a.triggered && a.dueTimestamp > now)) {
+          const timeText = alarm.timeStr ? `Today, ${alarm.timeStr}` : 'Today';
+          const body = `${timeText}${alarm.description ? ` • ${alarm.description}` : ''}`;
+
+          self.registration.showNotification(alarm.title, {
+            showTrigger: new TimestampTrigger(alarm.dueTimestamp),
+            body,
+            icon: '/purple-bell-192.png',
+            badge: '/favicon.ico',
+            tag: `yadnik-alarm-${alarm.id}`,
+            renotify: true,
+            requireInteraction: true,
+            silent: false,
+            vibrate: [500, 200, 500, 200, 500, 200, 1000],
+            timestamp: alarm.dueTimestamp,
+            data: { reminderId: alarm.id, reminder: alarm },
+            actions: [
+              { action: 'complete', title: '✓ خاتمه / Done' },
+              { action: 'snooze', title: '⏱ تعویق ۱۵د / Snooze' },
+              { action: 'dismiss', title: '✕ بستن / Dismiss' },
+            ],
+          }).catch(() => {});
+        }
+      }
+    } catch (e) {
+      // Ignored
+    }
 
     // If next alarm is within 5 minutes, keep the service worker alive
     const timeoutMs = scheduleNextAlarmTimer();
@@ -205,6 +263,8 @@ self.addEventListener('message', (event) => {
         })
       );
     }
+  } else if (event.data.type === 'CHECK_DUE_ALARMS') {
+    checkAndTriggerDueAlarms();
   } else if (event.data.type === 'TRIGGER_NOW_NOTIFICATION') {
     showAlarmNotification(event.data.reminder);
   }
@@ -338,8 +398,14 @@ self.addEventListener('notificationclick', (event) => {
       }
 
       // If user tapped notification body or snooze, focus existing window or open a new one
-      if (clientList.length > 0 && 'focus' in clientList[0]) {
-        return clientList[0].focus();
+      if (clientList.length > 0) {
+        const client = clientList[0];
+        if (reminderId && 'navigate' in client) {
+          client.navigate(`/?alarmId=${reminderId}`).catch(() => {});
+        }
+        if ('focus' in client) {
+          return client.focus();
+        }
       }
 
       if (self.clients.openWindow) {

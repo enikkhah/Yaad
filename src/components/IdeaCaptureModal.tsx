@@ -24,6 +24,8 @@ import {
 import { formatJalaliFull } from '../utils/jalali';
 import { syncToGoogleTasks } from '../utils/googleSync';
 import { ValidationAlertModal } from './ValidationAlertModal';
+import { AppLanguage } from '../utils/i18n';
+import { requestMicrophonePermission } from '../utils/nativePermissions';
 
 interface IdeaCaptureModalProps {
   isOpen: boolean;
@@ -32,6 +34,7 @@ interface IdeaCaptureModalProps {
   onUpdateIdea?: (id: string, idea: Partial<IdeaNote>) => void;
   editingIdea?: IdeaNote | null;
   googleToken: string | null;
+  language?: AppLanguage;
 }
 
 export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
@@ -41,7 +44,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   onUpdateIdea,
   editingIdea,
   googleToken,
+  language = 'fa',
 }) => {
+  const isEn = language === 'en';
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [category, setCategory] = useState<Category>('work');
@@ -71,10 +76,24 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   // Voice typing (Speech-to-text) state for body content
   const [isVoiceTyping, setIsVoiceTyping] = useState(false);
   const speechRecognitionRef = useRef<any>(null);
+  const shouldKeepContentListeningRef = useRef<boolean>(false);
+  const baseContentTextRef = useRef<string>('');
+  const sessionFinalContentTextRef = useRef<string>('');
+  const contentSilenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const contentSpeechStartTimeRef = useRef<number>(0);
+  const contentLastSpeechTimeRef = useRef<number>(0);
 
   // Voice typing for title
   const [isTitleVoiceTyping, setIsTitleVoiceTyping] = useState(false);
+  const [voiceLang, setVoiceLang] = useState<'fa' | 'en'>(language === 'en' ? 'en' : 'fa');
+  const [voiceErrorMsg, setVoiceErrorMsg] = useState<string | null>(null);
   const titleSpeechRecognitionRef = useRef<any>(null);
+  const shouldKeepTitleListeningRef = useRef<boolean>(false);
+  const baseTitleTextRef = useRef<string>('');
+  const sessionFinalTitleTextRef = useRef<string>('');
+  const titleSilenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const titleSpeechStartTimeRef = useRef<number>(0);
+  const titleLastSpeechTimeRef = useRef<number>(0);
 
   // Audio recording state
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
@@ -129,18 +148,26 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     }
   }, [isOpen, editingIdea]);
 
-  // Clean up streams on close
+  // Clean up streams & speech on close
   useEffect(() => {
     if (!isOpen) {
       if (videoStreamRef.current) {
         videoStreamRef.current.getTracks().forEach((t) => t.stop());
         videoStreamRef.current = null;
       }
+      shouldKeepContentListeningRef.current = false;
+      shouldKeepTitleListeningRef.current = false;
+      if (contentSilenceTimerRef.current) clearTimeout(contentSilenceTimerRef.current);
+      if (titleSilenceTimerRef.current) clearTimeout(titleSilenceTimerRef.current);
+      setIsVoiceTyping(false);
+      setIsTitleVoiceTyping(false);
       if (speechRecognitionRef.current) {
-        speechRecognitionRef.current.stop();
+        try { speechRecognitionRef.current.abort(); } catch {}
+        speechRecognitionRef.current = null;
       }
       if (titleSpeechRecognitionRef.current) {
-        titleSpeechRecognitionRef.current.stop();
+        try { titleSpeechRecognitionRef.current.abort(); } catch {}
+        titleSpeechRecognitionRef.current = null;
       }
       if (mediaRecorderRef.current && isRecordingAudio) {
         mediaRecorderRef.current.stop();
@@ -149,9 +176,20 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   }, [isOpen]);
 
   // 0. VOICE TYPING FOR TITLE (تبدیل گفتار به متن برای عنوان ایده)
-  const toggleTitleVoiceTyping = () => {
+  const toggleTitleVoiceTyping = async (forcedLang?: 'fa' | 'en') => {
+    setVoiceErrorMsg(null);
     if (isTitleVoiceTyping) {
-      titleSpeechRecognitionRef.current?.stop();
+      shouldKeepTitleListeningRef.current = false;
+      if (titleSilenceTimerRef.current) {
+        clearTimeout(titleSilenceTimerRef.current);
+        titleSilenceTimerRef.current = null;
+      }
+      try {
+        titleSpeechRecognitionRef.current?.abort();
+      } catch {
+        // Ignore
+      }
+      titleSpeechRecognitionRef.current = null;
       setIsTitleVoiceTyping(false);
       return;
     }
@@ -160,48 +198,165 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      alert('مرورگر شما از تبدیل صوت به متن پشتیبانی نمی‌کند.');
+      setVoiceErrorMsg(isEn ? 'Speech recognition not supported on this device.' : 'تبدیل گفتار به متن در این دستگاه در دسترس نیست.');
+      setTimeout(() => setVoiceErrorMsg(null), 4000);
+      return;
+    }
+
+    const micGranted = await requestMicrophonePermission();
+    if (!micGranted) {
+      setVoiceErrorMsg(isEn ? 'Microphone permission denied.' : 'دسترسی به میکروفون مجاز نیست. لطفاً در تنظیمات دستگاه اجازه دسترسی دهید.');
+      setTimeout(() => setVoiceErrorMsg(null), 4000);
       return;
     }
 
     try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'fa-IR';
-      recognition.continuous = true;
-      recognition.interimResults = true;
+      const activeLang = forcedLang || voiceLang;
+      shouldKeepTitleListeningRef.current = true;
+      baseTitleTextRef.current = title.trim();
+      sessionFinalTitleTextRef.current = '';
+      titleSpeechStartTimeRef.current = Date.now();
+      titleLastSpeechTimeRef.current = 0;
+      setIsTitleVoiceTyping(true);
 
-      recognition.onstart = () => {
-        setIsTitleVoiceTyping(true);
-      };
-
-      recognition.onresult = (event: any) => {
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          transcript += event.results[i][0].transcript;
+      const resetTitleSilenceTimer = (durationMs = 5000) => {
+        if (titleSilenceTimerRef.current) {
+          clearTimeout(titleSilenceTimerRef.current);
+          titleSilenceTimerRef.current = null;
         }
-        setTitle((prev) => (prev ? prev + ' ' + transcript : transcript));
+        titleSilenceTimerRef.current = setTimeout(() => {
+          shouldKeepTitleListeningRef.current = false;
+          try {
+            titleSpeechRecognitionRef.current?.abort();
+          } catch {
+            // Ignore
+          }
+          titleSpeechRecognitionRef.current = null;
+          setIsTitleVoiceTyping(false);
+        }, durationMs);
       };
 
-      recognition.onerror = () => {
-        setIsTitleVoiceTyping(false);
+      resetTitleSilenceTimer(5000);
+
+      const createAndRunTitleRec = () => {
+        if (!shouldKeepTitleListeningRef.current) return;
+
+        const now = Date.now();
+        const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
+        if (now - refTime >= 4900) {
+          shouldKeepTitleListeningRef.current = false;
+          setIsTitleVoiceTyping(false);
+          return;
+        }
+
+        try {
+          const recognition = new SpeechRecognition();
+          recognition.lang = activeLang === 'en' ? 'en-US' : 'fa-IR';
+          recognition.continuous = true;
+          recognition.interimResults = true;
+
+          recognition.onstart = () => {
+            setIsTitleVoiceTyping(true);
+          };
+
+          recognition.onresult = (event: any) => {
+            let currentFinal = '';
+            let currentInterim = '';
+
+            for (let i = 0; i < event.results.length; ++i) {
+              const res = event.results[i];
+              if (res.isFinal) {
+                currentFinal += res[0].transcript + ' ';
+              } else {
+                currentInterim += res[0].transcript;
+              }
+            }
+
+            sessionFinalTitleTextRef.current = currentFinal.trim();
+            const speechPart = [sessionFinalTitleTextRef.current, currentInterim].filter(Boolean).join(' ').trim();
+            const combined = [baseTitleTextRef.current, speechPart].filter(Boolean).join(' ').trim();
+
+            if (combined) {
+              titleLastSpeechTimeRef.current = Date.now();
+              setTitle(combined);
+            }
+
+            resetTitleSilenceTimer(5000);
+          };
+
+          recognition.onerror = (e: any) => {
+            if (e.error === 'no-speech') {
+              const now = Date.now();
+              const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
+              if (now - refTime >= 4800) {
+                shouldKeepTitleListeningRef.current = false;
+                setIsTitleVoiceTyping(false);
+              }
+              return;
+            }
+            if (e.error === 'not-allowed') {
+              shouldKeepTitleListeningRef.current = false;
+              setIsTitleVoiceTyping(false);
+              return;
+            }
+          };
+
+          recognition.onend = () => {
+            if (!shouldKeepTitleListeningRef.current) {
+              setIsTitleVoiceTyping(false);
+              return;
+            }
+
+            const now = Date.now();
+            const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
+            if (now - refTime >= 4800) {
+              shouldKeepTitleListeningRef.current = false;
+              setIsTitleVoiceTyping(false);
+              return;
+            }
+
+            if (sessionFinalTitleTextRef.current) {
+              baseTitleTextRef.current = [baseTitleTextRef.current, sessionFinalTitleTextRef.current].filter(Boolean).join(' ').trim();
+              sessionFinalTitleTextRef.current = '';
+            }
+
+            setTimeout(() => {
+              if (shouldKeepTitleListeningRef.current) {
+                createAndRunTitleRec();
+              }
+            }, 80);
+          };
+
+          titleSpeechRecognitionRef.current = recognition;
+          recognition.start();
+        } catch (e) {
+          console.warn('Title speech recognition failed', e);
+          setIsTitleVoiceTyping(false);
+        }
       };
 
-      recognition.onend = () => {
-        setIsTitleVoiceTyping(false);
-      };
-
-      titleSpeechRecognitionRef.current = recognition;
-      recognition.start();
+      createAndRunTitleRec();
     } catch (e) {
       console.warn('Title speech recognition failed', e);
       setIsTitleVoiceTyping(false);
     }
   };
 
-  // 1. VOICE TYPING (Speech-to-text for Persian)
-  const toggleVoiceTyping = () => {
+  // 1. VOICE TYPING (Speech-to-text for Persian / English)
+  const toggleVoiceTyping = async (forcedLang?: 'fa' | 'en') => {
+    setVoiceErrorMsg(null);
     if (isVoiceTyping) {
-      speechRecognitionRef.current?.stop();
+      shouldKeepContentListeningRef.current = false;
+      if (contentSilenceTimerRef.current) {
+        clearTimeout(contentSilenceTimerRef.current);
+        contentSilenceTimerRef.current = null;
+      }
+      try {
+        speechRecognitionRef.current?.abort();
+      } catch {
+        // Ignore
+      }
+      speechRecognitionRef.current = null;
       setIsVoiceTyping(false);
       return;
     }
@@ -210,38 +365,144 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      alert('مرورگر شما از تبدیل صوت به متن پشتیبانی نمی‌کند.');
+      setVoiceErrorMsg(isEn ? 'Speech recognition not supported on this device.' : 'تبدیل گفتار به متن در این دستگاه در دسترس نیست.');
+      setTimeout(() => setVoiceErrorMsg(null), 4000);
+      return;
+    }
+
+    const micGranted = await requestMicrophonePermission();
+    if (!micGranted) {
+      setVoiceErrorMsg(isEn ? 'Microphone permission denied.' : 'دسترسی به میکروفون مجاز نیست. لطفاً در تنظیمات دستگاه اجازه دسترسی دهید.');
+      setTimeout(() => setVoiceErrorMsg(null), 4000);
       return;
     }
 
     try {
-      const recognition = new SpeechRecognition();
-      recognition.lang = 'fa-IR';
-      recognition.continuous = true;
-      recognition.interimResults = true;
+      const activeLang = forcedLang || voiceLang;
+      shouldKeepContentListeningRef.current = true;
+      baseContentTextRef.current = content.trim();
+      sessionFinalContentTextRef.current = '';
+      contentSpeechStartTimeRef.current = Date.now();
+      contentLastSpeechTimeRef.current = 0;
+      setIsVoiceTyping(true);
 
-      recognition.onstart = () => {
-        setIsVoiceTyping(true);
-      };
-
-      recognition.onresult = (event: any) => {
-        let transcript = '';
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          transcript += event.results[i][0].transcript;
+      const resetContentSilenceTimer = (durationMs = 5000) => {
+        if (contentSilenceTimerRef.current) {
+          clearTimeout(contentSilenceTimerRef.current);
+          contentSilenceTimerRef.current = null;
         }
-        setContent((prev) => (prev ? prev + ' ' + transcript : transcript));
+        contentSilenceTimerRef.current = setTimeout(() => {
+          shouldKeepContentListeningRef.current = false;
+          try {
+            speechRecognitionRef.current?.abort();
+          } catch {
+            // Ignore
+          }
+          speechRecognitionRef.current = null;
+          setIsVoiceTyping(false);
+        }, durationMs);
       };
 
-      recognition.onerror = () => {
-        setIsVoiceTyping(false);
+      resetContentSilenceTimer(5000);
+
+      const createAndRunContentRec = () => {
+        if (!shouldKeepContentListeningRef.current) return;
+
+        const now = Date.now();
+        const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
+        if (now - refTime >= 4900) {
+          shouldKeepContentListeningRef.current = false;
+          setIsVoiceTyping(false);
+          return;
+        }
+
+        try {
+          const recognition = new SpeechRecognition();
+          recognition.lang = activeLang === 'en' ? 'en-US' : 'fa-IR';
+          recognition.continuous = true;
+          recognition.interimResults = true;
+
+          recognition.onstart = () => {
+            setIsVoiceTyping(true);
+          };
+
+          recognition.onresult = (event: any) => {
+            let currentFinal = '';
+            let currentInterim = '';
+
+            for (let i = 0; i < event.results.length; ++i) {
+              const res = event.results[i];
+              if (res.isFinal) {
+                currentFinal += res[0].transcript + ' ';
+              } else {
+                currentInterim += res[0].transcript;
+              }
+            }
+
+            sessionFinalContentTextRef.current = currentFinal.trim();
+            const speechPart = [sessionFinalContentTextRef.current, currentInterim].filter(Boolean).join(' ').trim();
+            const combined = [baseContentTextRef.current, speechPart].filter(Boolean).join(' ').trim();
+
+            if (combined) {
+              contentLastSpeechTimeRef.current = Date.now();
+              setContent(combined);
+            }
+
+            resetContentSilenceTimer(5000);
+          };
+
+          recognition.onerror = (e: any) => {
+            if (e.error === 'no-speech') {
+              const now = Date.now();
+              const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
+              if (now - refTime >= 4800) {
+                shouldKeepContentListeningRef.current = false;
+                setIsVoiceTyping(false);
+              }
+              return;
+            }
+            if (e.error === 'not-allowed') {
+              shouldKeepContentListeningRef.current = false;
+              setIsVoiceTyping(false);
+              return;
+            }
+          };
+
+          recognition.onend = () => {
+            if (!shouldKeepContentListeningRef.current) {
+              setIsVoiceTyping(false);
+              return;
+            }
+
+            const now = Date.now();
+            const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
+            if (now - refTime >= 4800) {
+              shouldKeepContentListeningRef.current = false;
+              setIsVoiceTyping(false);
+              return;
+            }
+
+            if (sessionFinalContentTextRef.current) {
+              baseContentTextRef.current = [baseContentTextRef.current, sessionFinalContentTextRef.current].filter(Boolean).join(' ').trim();
+              sessionFinalContentTextRef.current = '';
+            }
+
+            setTimeout(() => {
+              if (shouldKeepContentListeningRef.current) {
+                createAndRunContentRec();
+              }
+            }, 80);
+          };
+
+          speechRecognitionRef.current = recognition;
+          recognition.start();
+        } catch (e) {
+          console.warn('Speech recognition start failed', e);
+          setIsVoiceTyping(false);
+        }
       };
 
-      recognition.onend = () => {
-        setIsVoiceTyping(false);
-      };
-
-      speechRecognitionRef.current = recognition;
-      recognition.start();
+      createAndRunContentRec();
     } catch (e) {
       console.warn('Speech recognition start failed', e);
       setIsVoiceTyping(false);
@@ -519,6 +780,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         id="idea-capture-modal-panel"
         className="w-full max-w-2xl bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-150"
         style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '92dvh' }}
+        dir={isEn ? 'ltr' : 'rtl'}
       >
         {/* Header */}
         <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
@@ -527,13 +789,16 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
               <Lightbulb className="w-5 h-5" />
             </div>
             <h3 className="font-bold text-base sm:text-lg text-white">
-              {editingIdea ? 'ویرایش ایده' : 'ثبت ایده و افکار لحظه‌ای'}
+              {editingIdea 
+                ? (isEn ? 'Edit Idea' : 'ویرایش ایده') 
+                : (isEn ? 'Capture Idea & Thoughts' : 'ثبت ایده و افکار لحظه‌ای')}
             </h3>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition-colors"
+            className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition-colors cursor-pointer"
+            title={isEn ? 'Close' : 'بستن'}
           >
             <X className="w-5 h-5" />
           </button>
@@ -553,37 +818,69 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div className="sm:col-span-2 space-y-1">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-medium text-stone-300">عنوان ایده یا فکر</label>
-                <span className="text-[11px] text-stone-400">تایپ یا صوت</span>
+                <label className="text-xs font-medium text-stone-300">
+                  {isEn ? 'Idea Title' : 'عنوان ایده یا فکر'}
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = voiceLang === 'fa' ? 'en' : 'fa';
+                      setVoiceLang(next);
+                      if (isTitleVoiceTyping) {
+                        toggleTitleVoiceTyping();
+                        setTimeout(() => toggleTitleVoiceTyping(next), 100);
+                      }
+                    }}
+                    className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-all cursor-pointer ${
+                      voiceLang === 'fa'
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        : 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                    }`}
+                  >
+                    {voiceLang === 'fa' ? 'فارسی' : 'English'}
+                  </button>
+                  <span className="text-[11px] text-stone-400">
+                    {isTitleVoiceTyping ? (isEn ? 'Stops in 5s' : 'توقف با ۵ثانیه سکوت') : (isEn ? 'Type or speech' : 'تایپ یا صوت')}
+                  </span>
+                </div>
               </div>
               <div className="relative flex items-center">
                 <input
                   type="text"
-                  placeholder="مثلاً: ایده راه‌اندازی کمپین بازاریابی، طراحی مجدد..."
+                  placeholder={isEn ? 'e.g. Marketing campaign, Redesign idea...' : 'مثلاً: ایده راه‌اندازی کمپین بازاریابی، طراحی مجدد...'}
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className="w-full pl-11 pr-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-stone-100 text-sm outline-none"
+                  className={`w-full ${isEn ? 'pr-11 pl-3.5' : 'pl-11 pr-3.5'} py-2.5 rounded-xl bg-stone-950 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-stone-100 text-sm outline-none`}
                 />
                 <button
                   type="button"
-                  onClick={toggleTitleVoiceTyping}
-                  className={'absolute left-2 p-1.5 rounded-lg transition-all cursor-pointer ' + (isTitleVoiceTyping ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-500/30' : 'text-stone-400 hover:text-amber-400 hover:bg-stone-800')}
-                  title={isTitleVoiceTyping ? 'توقف ضبط گفتار عنوان' : 'تایپ صوتی عنوان ایده'}
+                  onClick={() => toggleTitleVoiceTyping()}
+                  className={`absolute ${isEn ? 'right-2' : 'left-2'} p-1.5 rounded-lg transition-all cursor-pointer ` + (isTitleVoiceTyping ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-500/30' : 'text-stone-400 hover:text-amber-400 hover:bg-stone-800')}
+                  title={isTitleVoiceTyping ? (isEn ? 'Stop voice typing' : 'توقف ضبط گفتار عنوان') : (isEn ? 'Voice input' : 'تایپ صوتی عنوان ایده')}
                 >
                   {isTitleVoiceTyping ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                 </button>
               </div>
+              {voiceErrorMsg && (
+                <div className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center gap-1.5 animate-in fade-in">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                  <span>{voiceErrorMsg}</span>
+                </div>
+              )}
             </div>
             <div className="space-y-1">
-              <label className="text-xs font-medium text-stone-300">دسته‌بندی</label>
+              <label className="text-xs font-medium text-stone-300">
+                {isEn ? 'Category' : 'دسته‌بندی'}
+              </label>
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as Category)}
                 className="w-full px-3 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-stone-100 text-sm focus:border-amber-500 outline-none"
               >
-                <option value="work">کاری (Work)</option>
-                <option value="family">خانواده (Family)</option>
-                <option value="other">شخصی / سایر</option>
+                <option value="work">{isEn ? 'Work' : 'کاری (Work)'}</option>
+                <option value="family">{isEn ? 'Family' : 'خانواده (Family)'}</option>
+                <option value="other">{isEn ? 'Personal / Other' : 'شخصی / سایر'}</option>
               </select>
             </div>
           </div>
@@ -593,42 +890,42 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             <button
               type="button"
               onClick={() => setActiveTab('text')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all cursor-pointer ${
                 activeTab === 'text' ? 'bg-amber-500 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'
               }`}
             >
-              <FileText style={{ color: '#ffffff' }} className="w-4 h-4" />
-              <span style={{ color: '#ffffff' }}>متن و تایپ صوتی</span>
+              <FileText className="w-4 h-4" />
+              <span>{isEn ? 'Text & Voice' : 'متن و تایپ صوتی'}</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('voice')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all cursor-pointer ${
                 activeTab === 'voice' ? 'bg-amber-500 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'
               }`}
             >
               <Mic className="w-4 h-4" />
-              <span>ضبط صدا</span>
+              <span>{isEn ? 'Voice Memo' : 'ضبط صدا'}</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('video')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all cursor-pointer ${
                 activeTab === 'video' ? 'bg-amber-500 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'
               }`}
             >
               <Video className="w-4 h-4" />
-              <span>ضبط ویدیو</span>
+              <span>{isEn ? 'Video' : 'ضبط ویدیو'}</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('sketch')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all ${
+              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all cursor-pointer ${
                 activeTab === 'sketch' ? 'bg-amber-500 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'
               }`}
             >
               <PenTool className="w-4 h-4" />
-              <span>رسم با قلم</span>
+              <span>{isEn ? 'Sketch' : 'رسم با قلم'}</span>
             </button>
           </div>
 
@@ -636,25 +933,48 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           {activeTab === 'text' && (
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-xs text-stone-400">توضیحات ایده و افکار:</span>
-                <button
-                  type="button"
-                  onClick={toggleVoiceTyping}
-                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-                    isVoiceTyping
-                      ? 'bg-rose-500 text-white animate-pulse'
-                      : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
-                  }`}
-                >
-                  {isVoiceTyping ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-amber-400" />}
-                  <span>{isVoiceTyping ? 'در حال شنیدن... (توقف)' : 'شروع تایپ صوتی فارسی'}</span>
-                </button>
+                <span className="text-xs text-stone-400">
+                  {isEn ? 'Idea & notes description:' : 'توضیحات ایده و افکار:'}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = voiceLang === 'fa' ? 'en' : 'fa';
+                      setVoiceLang(next);
+                      if (isVoiceTyping) {
+                        toggleVoiceTyping();
+                        setTimeout(() => toggleVoiceTyping(next), 100);
+                      }
+                    }}
+                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
+                      voiceLang === 'fa'
+                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        : 'bg-sky-500/15 text-sky-300 border-sky-500/30'
+                    }`}
+                    title={isEn ? 'Toggle speech language' : 'تغییر زبان گفتار'}
+                  >
+                    {voiceLang === 'fa' ? 'زبان صوت: فارسی' : 'Voice: English'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => toggleVoiceTyping()}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                      isVoiceTyping
+                        ? 'bg-rose-500 text-white animate-pulse'
+                        : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
+                    }`}
+                  >
+                    {isVoiceTyping ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-amber-400" />}
+                    <span>{isVoiceTyping ? (isEn ? 'Waiting (stops in 5s)' : 'منتظر صوت (خاموشی در ۵ ثانیه)') : (isEn ? 'Voice Typing' : 'شروع تایپ صوتی')}</span>
+                  </button>
+                </div>
               </div>
               <textarea
                 rows={5}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder="افکار، اهداف یا جزئیات ایده‌تان را اینجا بنویسید یا دکمه تایپ صوتی را لمس کنید..."
+                placeholder={isEn ? 'Write your thoughts, goals, or details here, or tap voice typing...' : 'افکار، اهداف یا جزئیات ایده‌تان را اینجا بنویسید یا دکمه تایپ صوتی را لمس کنید...'}
                 className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-stone-100 text-sm focus:border-amber-500 outline-none leading-relaxed"
               />
             </div>
@@ -897,11 +1217,11 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 type="checkbox"
                 checked={syncWithGoogle}
                 onChange={(e) => setSyncWithGoogle(e.target.checked)}
-                className="rounded accent-amber-500 w-4 h-4"
+                className="rounded accent-amber-500 w-4 h-4 cursor-pointer"
               />
               <span className="flex items-center gap-1.5">
                 <Cloud className="w-4 h-4 text-sky-400" />
-                همگام‌سازی و ذخیره در Google Tasks
+                {isEn ? 'Sync & Save to Google Tasks' : 'همگام‌سازی و ذخیره در Google Tasks'}
               </span>
             </label>
           )}
@@ -912,9 +1232,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-stone-400 hover:text-white text-xs font-medium"
+            className="px-4 py-2 rounded-xl text-stone-400 hover:text-white text-xs font-medium cursor-pointer"
           >
-            انصراف
+            {isEn ? 'Cancel' : 'انصراف'}
           </button>
           <button
             id="save-idea-submit-btn"
@@ -928,7 +1248,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           >
             <Save className={`w-4 h-4 ${!title.trim() ? 'text-amber-300' : 'text-yellow-300'}`} />
             <span className={!title.trim() ? 'text-amber-300 font-bold' : 'text-yellow-300 font-black'}>
-              {editingIdea ? 'ذخیره تغییرات ایده' : 'ثبت نهایی ایده'}
+              {editingIdea 
+                ? (isEn ? 'Save Changes' : 'ذخیره تغییرات ایده') 
+                : (isEn ? 'Save Idea' : 'ثبت نهایی ایده')}
             </span>
           </button>
         </div>
@@ -938,8 +1260,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       <ValidationAlertModal
         isOpen={showValidationModal}
         onClose={() => setShowValidationModal(false)}
-        title="تکمیل فیلد اجباری"
-        fieldName="عنوان ایده"
+        title={isEn ? 'Required Field Missing' : 'تکمیل فیلد اجباری'}
+        fieldName={isEn ? 'Idea Title' : 'عنوان ایده'}
+        language={language}
       />
     </div>
   );

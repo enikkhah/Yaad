@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
+  <defs>
+    <linearGradient id="purpleGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#6366f1" />
+      <stop offset="100%" stop-color="#4f46e5" />
+    </linearGradient>
+  </defs>
+  <!-- Circular Purple Background -->
+  <circle cx="96" cy="96" r="90" fill="url(#purpleGrad)" />
+  <!-- White Bell Icon matching Samsung Reminder style -->
+  <path fill="#ffffff" d="M96 38c-5.5 0-10 4.5-10 10v3.4C71.3 54.7 61 68.3 61 84.5v32.5l-8.5 8.5c-2.4 2.4-.7 6.5 2.7 6.5h81.6c3.4 0 5.1-4.1 2.7-6.5L131 117V84.5c0-16.2-10.3-29.8-25-33.1V48c0-5.5-4.5-10-10-10zm0 106c-7.7 0-14-6.3-14-14h28c0 7.7-6.3 14-14 14z" />
+</svg>

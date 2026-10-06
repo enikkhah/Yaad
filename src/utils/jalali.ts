@@ -102,27 +102,38 @@ export function getJalaliComponents(timestamp: number): {
 }
 
 /**
- * Formats a timestamp into: "ساعت ۱۴:۳۰ - ۲۲ فروردین"
+ * Formats a timestamp into: "ساعت ۱۴:۳۰ - ۲۲ فروردین" or "22 Farvardin at 14:30"
  */
-export function formatJalaliFull(timestamp: number): string {
+export function formatJalaliFull(timestamp: number, language: string = 'fa'): string {
   const { dateString, timeString } = getJalaliComponents(timestamp);
+  if (language === 'en') {
+    const d = new Date(timestamp);
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const h = d.getHours().toString().padStart(2, '0');
+    const m = d.getMinutes().toString().padStart(2, '0');
+    return `${months[d.getMonth()]} ${d.getDate()}, ${h}:${m}`;
+  }
   return `${dateString} ساعت ${timeString}`;
 }
 
 /**
- * Formats time only: "۱۴:۳۰"
+ * Formats time only: "۱۴:۳۰" or "14:30"
  */
-export function formatJalaliTime(timestamp: number): string {
+export function formatJalaliTime(timestamp: number, language: string = 'fa'): string {
   const d = new Date(timestamp);
   const h = d.getHours().toString().padStart(2, '0');
   const m = d.getMinutes().toString().padStart(2, '0');
+  if (language === 'en') {
+    return `${h}:${m}`;
+  }
   return `${toPersianDigits(h)}:${toPersianDigits(m)}`;
 }
 
 /**
- * Returns a human friendly relative time in Persian
+ * Returns a human friendly relative time in Persian or English
  */
-export function getPersianRelativeTime(timestamp: number): string {
+export function getPersianRelativeTime(timestamp: number, language: string = 'fa'): string {
+  const isEn = language === 'en';
   const now = Date.now();
   const diff = timestamp - now;
   const absDiff = Math.abs(diff);
@@ -133,18 +144,18 @@ export function getPersianRelativeTime(timestamp: number): string {
 
   if (diff > 0) {
     // In future
-    if (minutes < 1) return 'چند لحظه دیگر';
-    if (minutes < 60) return `${toPersianDigits(minutes)} دقیقه دیگر`;
-    if (hours < 24) return `${toPersianDigits(hours)} ساعت دیگر`;
-    if (days === 1) return 'فردا';
-    return `${toPersianDigits(days)} روز دیگر`;
+    if (minutes < 1) return isEn ? 'in a moment' : 'چند لحظه دیگر';
+    if (minutes < 60) return isEn ? `in ${minutes}m` : `${toPersianDigits(minutes)} دقیقه دیگر`;
+    if (hours < 24) return isEn ? `in ${hours}h` : `${toPersianDigits(hours)} ساعت دیگر`;
+    if (days === 1) return isEn ? 'tomorrow' : 'فردا';
+    return isEn ? `in ${days} days` : `${toPersianDigits(days)} روز دیگر`;
   } else {
     // In past
-    if (minutes < 1) return 'همین الان';
-    if (minutes < 60) return `${toPersianDigits(minutes)} دقیقه پیش`;
-    if (hours < 24) return `${toPersianDigits(hours)} ساعت پیش`;
-    if (days === 1) return 'دیروز';
-    return `${toPersianDigits(days)} روز پیش`;
+    if (minutes < 1) return isEn ? 'just now' : 'همین الان';
+    if (minutes < 60) return isEn ? `${minutes}m ago` : `${toPersianDigits(minutes)} دقیقه پیش`;
+    if (hours < 24) return isEn ? `${hours}h ago` : `${toPersianDigits(hours)} ساعت پیش`;
+    if (days === 1) return isEn ? 'yesterday' : 'دیروز';
+    return isEn ? `${days} days ago` : `${toPersianDigits(days)} روز پیش`;
   }
 }
 

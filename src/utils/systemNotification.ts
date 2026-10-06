@@ -1,5 +1,6 @@
 import { Reminder } from '../types';
 import { formatJalaliTime } from './jalali';
+import { unlockAudio } from './audio';
 
 let swRegistration: ServiceWorkerRegistration | null = null;
 
@@ -26,6 +27,7 @@ export function getSystemNotificationPermission(): NotificationPermission {
 }
 
 export async function requestSystemNotificationPermission(): Promise<boolean> {
+  unlockAudio();
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return false;
   }
@@ -36,6 +38,19 @@ export async function requestSystemNotificationPermission(): Promise<boolean> {
     console.warn('Could not request notification permission:', err);
     return false;
   }
+}
+
+/**
+ * 1-Click anticipation function: unlocks Web Audio engine, requests OS notification permission,
+ * and synchronizes reminders immediately without burdening the user with multiple steps.
+ */
+export async function ensureNotificationAndAudioReady(reminders?: Reminder[]): Promise<boolean> {
+  unlockAudio();
+  const granted = await requestSystemNotificationPermission();
+  if (reminders && reminders.length > 0) {
+    syncRemindersToServiceWorker(reminders).catch(() => {});
+  }
+  return granted;
 }
 
 /**
@@ -92,10 +107,10 @@ export async function showSystemAlarmNotification(
     return;
   }
 
-  const title = `🔔 یادآور YAAD: ${reminder.title}`;
-  const body = `زمان یادآوری: ${formatJalaliTime(reminder.dueTimestamp)}${
-    reminder.description ? ` • ${reminder.description}` : ''
-  }`;
+  // Clean title & Today, time formatted body exactly like the Android Reminder heads-up screenshot:
+  const title = reminder.title;
+  const timeStr = formatJalaliTime(reminder.dueTimestamp);
+  const body = `Today, ${timeStr}${reminder.description ? ' • ' + reminder.description : ''}`;
 
   try {
     let reg = swRegistration;
@@ -107,7 +122,7 @@ export async function showSystemAlarmNotification(
       // Modern Android / Desktop notification with system action buttons
       await (reg as any).showNotification(title, {
         body,
-        icon: '/pwa-192x192.png',
+        icon: '/purple-bell-192.png',
         badge: '/favicon.ico',
         tag: `yadnik-alarm-${reminder.id}`,
         renotify: true,
@@ -116,9 +131,9 @@ export async function showSystemAlarmNotification(
         vibrate: [500, 200, 500, 200, 500, 200, 1000],
         data: { reminderId: reminder.id, reminder },
         actions: [
-          { action: 'complete', title: '✓ خاتمه (تیک انجام)' },
-          { action: 'snooze', title: '⏱ به تعویق انداختن (۱۵ دقیقه)' },
-          { action: 'dismiss', title: '✕ بستن' },
+          { action: 'complete', title: '✓ خاتمه / Done' },
+          { action: 'snooze', title: '⏱ تعویق ۱۵د / Snooze' },
+          { action: 'dismiss', title: '✕ بستن / Dismiss' },
         ],
       });
       return;
@@ -127,7 +142,7 @@ export async function showSystemAlarmNotification(
     // Fallback if service worker showNotification is not available
     const notif = new Notification(title, {
       body,
-      icon: '/pwa-192x192.png',
+      icon: '/purple-bell-192.png',
       tag: `yadnik-alarm-${reminder.id}`,
       requireInteraction: true,
     });
@@ -144,6 +159,48 @@ export async function showSystemAlarmNotification(
   }
 }
 
+// VAPID Public Key for client push registration
+const VAPID_PUBLIC_KEY = 'BEI2Bc7gWMwyXnyRMpJ_GF4iYJaOAu2QSWi5Bvv8IvYdAWCazyukOdGAOOtGNVvJ6jH77hCJzmyvqs2eTrte__w';
+
+function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const buffer = new ArrayBuffer(rawData.length);
+  const outputArray = new Uint8Array(buffer);
+  for (let i = 0; i < rawData.length; ++i) {
+    outputArray[i] = rawData.charCodeAt(i);
+  }
+  return buffer;
+}
+
+export async function getOrRegisterPushSubscription(): Promise<PushSubscription | null> {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
+    return null;
+  }
+
+  try {
+    let reg = swRegistration;
+    if (!reg) {
+      reg = await navigator.serviceWorker.ready;
+    }
+    if (!reg) return null;
+
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const convertedVapidKey = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: convertedVapidKey,
+      });
+    }
+    return sub;
+  } catch (err) {
+    console.warn('Could not register push subscription:', err);
+    return null;
+  }
+}
+
 /**
  * Synchronizes upcoming reminders with the Service Worker and IndexedDB so background alarms
  * fire automatically even when the user is outside the app or phone screen is locked.
@@ -156,6 +213,11 @@ export async function syncRemindersToServiceWorker(reminders: Reminder[]): Promi
       id: r.id,
       title: r.title,
       description: r.description,
+      category: r.category,
+      priority: r.priority,
+      ringTune: r.ringTune,
+      useFlash: r.useFlash,
+      status: r.status,
       dueTimestamp: r.dueTimestamp,
       timeStr: formatJalaliTime(r.dueTimestamp),
       triggered: false,
@@ -164,7 +226,23 @@ export async function syncRemindersToServiceWorker(reminders: Reminder[]): Promi
   // 1. Save to shared IndexedDB so SW reads it even if SW was terminated
   await saveAlarmsToIndexedDB(upcoming);
 
-  // 2. Post message to active SW
+  // 2. Schedule on Cloud Server via real Web Push (guarantees push when browser is closed!)
+  try {
+    if (Notification.permission === 'granted') {
+      const sub = await getOrRegisterPushSubscription();
+      if (sub && upcoming.length > 0) {
+        await fetch('/api/schedule-push', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ subscription: sub, reminders: upcoming }),
+        });
+      }
+    }
+  } catch (err) {
+    // Non-fatal if offline or network error
+  }
+
+  // 3. Post message to active SW
   if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
     try {
       let reg = swRegistration;

@@ -12,16 +12,18 @@ import {
 export interface RecurrenceOptionMeta {
   id: RecurrenceType;
   label: string;
+  labelEn: string;
   desc: string;
+  descEn: string;
 }
 
 export const RECURRENCE_OPTIONS: RecurrenceOptionMeta[] = [
-  { id: 'none', label: 'بدون تکرار', desc: 'یکباره' },
-  { id: 'hourly', label: 'ساعتی', desc: 'هر چند ساعت یک‌بار' },
-  { id: 'daily', label: 'روزانه', desc: 'هر روز در این ساعت' },
-  { id: 'weekly', label: 'هفتگی', desc: 'روزهای مشخص هفته' },
-  { id: 'monthly', label: 'ماهیانه', desc: 'هر ماه در این روز' },
-  { id: 'custom_dates', label: 'انتخاب از تقویم', desc: 'روزهای منتخب تقویم' },
+  { id: 'none', label: 'بدون تکرار', labelEn: 'No Recurrence', desc: 'یکباره', descEn: 'Once' },
+  { id: 'hourly', label: 'ساعتی', labelEn: 'Hourly', desc: 'هر چند ساعت یک‌بار', descEn: 'Every X hours' },
+  { id: 'daily', label: 'روزانه', labelEn: 'Daily', desc: 'هر روز در این ساعت', descEn: 'Every day' },
+  { id: 'weekly', label: 'هفتگی', labelEn: 'Weekly', desc: 'روزهای مشخص هفته', descEn: 'Specific days of week' },
+  { id: 'monthly', label: 'ماهیانه', labelEn: 'Monthly', desc: 'هر ماه در این روز', descEn: 'Every month' },
+  { id: 'custom_dates', label: 'انتخاب از تقویم', labelEn: 'Calendar Dates', desc: 'روزهای منتخب تقویم', descEn: 'Selected dates' },
 ];
 
 export const PERSIAN_WEEK_DAYS = [

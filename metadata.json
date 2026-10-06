@@ -3,7 +3,8 @@
   "description": "اپلیکیشن یادآور هوشمند و دفترچه ثبت ایده با تقویم فارسی، تایپ صوتی، نمودار تایم‌لاین ۱۲ ساعته و همگام‌سازی گوگل",
   "requestFramePermissions": [
     "camera",
-    "microphone"
+    "microphone",
+    "geolocation"
   ],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

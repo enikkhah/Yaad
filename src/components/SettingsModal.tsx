@@ -18,11 +18,21 @@ import {
   Database,
   FileJson,
   MapPin,
+  Camera,
+  Mic,
+  ShieldCheck,
   Check,
   AlertCircle,
   Flashlight,
   Download,
-  Info
+  Info,
+  Volume2,
+  Volume1,
+  VolumeX,
+  Play,
+  Square,
+  Music,
+  Loader2
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION, APP_VERSION_INFO } from '../utils/version';
@@ -30,11 +40,23 @@ import { toPersianDigits } from '../utils/jalali';
 import { 
   getSystemNotificationPermission, 
   requestSystemNotificationPermission, 
-  showSystemAlarmNotification 
+  showSystemAlarmNotification
 } from '../utils/systemNotification';
+import { 
+  isNativeAndroidApp,
+  requestNotificationPermission,
+  requestMicrophonePermission,
+  requestCameraPermission,
+  requestLocationPermission,
+  requestAllNativePermissions,
+  checkAllPermissionsStatus,
+  triggerOutOfAppNotification,
+  NativePermissionsStatus
+} from '../utils/nativePermissions';
 import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
+import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume } from '../utils/audio';
 import { User } from 'firebase/auth';
-import nikAppIcon from '../assets/images/nik_reminder_icon_1790104279557.jpg';
+import yaadAppIcon from '../assets/images/yaad_pwa_icon_1790941867734.jpg';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -50,6 +72,7 @@ interface SettingsModalProps {
   ideas?: IdeaNote[];
   savedLocations?: SavedLocation[];
   onRestoreData?: (data: { reminders?: Reminder[]; ideas?: IdeaNote[]; savedLocations?: SavedLocation[]; settings?: Partial<AppSettings> }, mode: 'replace' | 'merge') => void;
+  onTestHeadsUpBanner?: (reminder: Reminder) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -66,12 +89,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   ideas = [],
   savedLocations = [],
   onRestoreData,
+  onTestHeadsUpBanner,
 }) => {
-  const isFa = (settings.language || 'fa') === 'fa';
-  const t = getT(settings.language);
+  const currentLanguage = settings?.language || 'fa';
+  const isFa = currentLanguage === 'fa';
+  const t = getT(currentLanguage);
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default');
-  const [mapsKeyInput, setMapsKeyInput] = useState(settings.googleMapsApiKey || '');
+  const [mapsKeyInput, setMapsKeyInput] = useState(settings?.googleMapsApiKey || '');
   const [keySavedMessage, setKeySavedMessage] = useState(false);
 
   // Backup & Restore state
@@ -86,17 +111,89 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   } | null>(null);
 
   const [isTestingTorch, setIsTestingTorch] = useState<boolean>(false);
+  const [playingSoundId, setPlayingSoundId] = useState<PhoneAlarmSound | null>(null);
+  const soundTimeoutRef = useRef<number | null>(null);
+
+  // Native permissions state (for Android APK / PWA)
+  const [nativePerms, setNativePerms] = useState<NativePermissionsStatus>({
+    notifications: false,
+    microphone: false,
+    camera: false,
+    location: false,
+  });
+  const [isRequestingAllPerms, setIsRequestingAllPerms] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setNotifPermission(getSystemNotificationPermission());
+      checkAllPermissionsStatus().then(setNativePerms);
+    } else {
+      stopAlarmRinging();
+      setPlayingSoundId(null);
+      if (soundTimeoutRef.current) clearTimeout(soundTimeoutRef.current);
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  const handleRequestPerm = async (type: 'notifications' | 'microphone' | 'camera' | 'location') => {
+    if (type === 'notifications') {
+      const success = await requestNotificationPermission();
+      setNotifPermission(success ? 'granted' : 'denied');
+      onUpdateSettings({ systemNotificationsEnabled: success });
+    } else if (type === 'microphone') {
+      await requestMicrophonePermission();
+    } else if (type === 'camera') {
+      await requestCameraPermission();
+    } else if (type === 'location') {
+      await requestLocationPermission();
+    }
+    const updated = await checkAllPermissionsStatus();
+    setNativePerms(updated);
+  };
+
+  const handleRequestAllPerms = async () => {
+    setIsRequestingAllPerms(true);
+    const updated = await requestAllNativePermissions();
+    setNativePerms(updated);
+    setNotifPermission(updated.notifications ? 'granted' : 'denied');
+    onUpdateSettings({ systemNotificationsEnabled: updated.notifications });
+    setIsRequestingAllPerms(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      stopAlarmRinging();
+      if (soundTimeoutRef.current) clearTimeout(soundTimeoutRef.current);
+    };
+  }, []);
+
+  const handlePreviewSound = (soundId: PhoneAlarmSound) => {
+    if (soundTimeoutRef.current) {
+      clearTimeout(soundTimeoutRef.current);
+      soundTimeoutRef.current = null;
+    }
+
+    if (playingSoundId === soundId) {
+      stopAlarmRinging();
+      setPlayingSoundId(null);
+    } else {
+      stopAlarmRinging();
+      setPlayingSoundId(soundId);
+      const currentVol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
+      playPhoneAlarmSound(soundId, currentVol);
+      soundTimeoutRef.current = window.setTimeout(() => {
+        setPlayingSoundId(null);
+      }, 1900);
+    }
+  };
+
+  const handleVolumeChange = (newVolume: number) => {
+    const clamped = Math.max(0.0, Math.min(1.0, newVolume));
+    onUpdateSettings({ alarmVolume: clamped });
+    setGlobalVolume(clamped);
+  };
 
   const handleToggleNotifications = async () => {
-    const isCurrentlyActive = (settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted';
+    const isCurrentlyActive = (settings?.systemNotificationsEnabled ?? true) && notifPermission === 'granted';
     if (!isCurrentlyActive) {
       const granted = await requestSystemNotificationPermission();
       setNotifPermission(granted ? 'granted' : 'denied');
@@ -121,6 +218,34 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
     } else {
       onUpdateSettings({ systemNotificationsEnabled: false });
+    }
+  };
+
+  const handleTestHeadsUpNotification = async () => {
+    const granted = await requestSystemNotificationPermission();
+    setNotifPermission(granted ? 'granted' : 'denied');
+
+    const testReminder: Reminder = {
+      id: 'test_heads_up_' + Date.now(),
+      title: isFa ? 'آلارم تست نمایش' : 'Alarm Display Test',
+      description: isFa ? 'تست اعلان پاپ‌آپ بالای صفحه (Heads-Up Banner)' : 'Heads-up pop-up banner test',
+      dueTimestamp: Date.now(),
+      category: 'work',
+      priority: 'high',
+      status: 'pending',
+      postponeCount: 0,
+      ringTune: settings.alarmSound || 'digital-beep',
+      useFlash: false,
+      voiceReadAloud: false,
+      createdAt: Date.now(),
+    };
+
+    // 1. Native out-of-app notification (Capacitor Android APK channel + Web Notification)
+    triggerOutOfAppNotification(testReminder, true);
+
+    // 2. In-app heads-up pill banner (matching Samsung / Android Reminder)
+    if (onTestHeadsUpBanner) {
+      onTestHeadsUpBanner(testReminder);
     }
   };
 
@@ -250,6 +375,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setTimeout(() => setKeySavedMessage(false), 3000);
   };
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
       <div 
@@ -261,7 +388,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="flex items-center gap-2.5 sm:gap-3">
             <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden border border-amber-500/30 flex-shrink-0 bg-stone-950 shadow-sm">
               <img
-                src={nikAppIcon}
+                src={yaadAppIcon}
                 alt="YAAD"
                 referrerPolicy="no-referrer"
                 className="w-full h-full object-cover"
@@ -438,14 +565,348 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </div>
             </div>
 
-            {/* Android Heads-up Banner Guide */}
-            <div className="p-2.5 rounded-xl bg-stone-900/80 border border-stone-800 text-[11px] text-stone-300 leading-relaxed flex items-start gap-2">
-              <span className="text-amber-400 font-bold mt-0.5">💡</span>
-              <p>
+            {/* Test Heads-up Notification Button */}
+            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-indigo-950/40 border border-indigo-500/40 shadow-md">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-600/40">
+                  <Bell className="w-4 h-4 fill-white" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold text-white">
+                    {isFa ? 'تست زنده اعلان کرکره‌ای و صوتی سیستم' : 'Live Test System Notification'}
+                  </p>
+                  <p className="text-[11px] text-stone-300 mt-0.5">
+                    {isFa ? 'ارسال فوری اعلان کرکره‌ای روی صفحه گوشی همراه با ویبره و زنگ هشدار' : 'Trigger an instant system heads-up notification with sound and vibration'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleTestHeadsUpNotification}
+                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all shadow-lg shadow-indigo-950/40 active:scale-95 cursor-pointer shrink-0"
+              >
+                {isFa ? 'ارسال تست' : 'Send Test'}
+              </button>
+            </div>
+          </section>
+
+          {/* 3.1. PERMISSIONS HUB (مدیریت دسترسی‌های نوتیفیکیشن، میکروفون، دوربین و GPS برای نسخه APK و وب) */}
+          <section className="space-y-3 pt-3 border-t border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-sky-400">
+                <ShieldCheck className="w-4 h-4 text-sky-400" />
+                <span>{isFa ? 'مدیریت دسترسی‌های اندروید و APK (Permissions Hub)' : 'Android & APK Permissions Hub'}</span>
+              </div>
+              {isNativeAndroidApp() && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                  Android APK
+                </span>
+              )}
+            </div>
+
+            <p className="text-[11px] text-stone-400 leading-relaxed">
+              {isFa
+                ? 'برای کارکرد صحیح اعلان‌های خارج از اپ، تبدیل گفتار به متن (تایپ صوتی)، عکاسی و ثبت لوکیشن، دسترسی‌های زیر را فعال کنید:'
+                : 'Grant permissions for out-of-app notifications, voice speech-to-text, camera, and GPS location:'}
+            </p>
+
+            {/* Request All Permissions at Once */}
+            <button
+              type="button"
+              disabled={isRequestingAllPerms}
+              onClick={handleRequestAllPerms}
+              className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-black transition-all shadow-md shadow-sky-950/40 active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+            >
+              <ShieldCheck className="w-4 h-4" />
+              <span>
+                {isRequestingAllPerms
+                  ? (isFa ? 'در حال ثبت درخواست‌ها...' : 'Requesting permissions...')
+                  : (isFa ? 'درخواست یکجای تمامی دسترسی‌های لازم اندروید' : 'Grant All Required Android Permissions')}
+              </span>
+            </button>
+
+            {/* Individual Permissions Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+              {/* 1. Notification */}
+              <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="p-1.5 rounded-lg bg-indigo-500/15 text-indigo-400">
+                    <Bell className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-stone-200 truncate">
+                      {isFa ? 'نوتیفیکیشن و آلارم' : 'Notifications'}
+                    </p>
+                    <span className={`text-[10px] font-bold ${nativePerms.notifications ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {nativePerms.notifications ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}
+                    </span>
+                  </div>
+                </div>
+                {!nativePerms.notifications && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestPerm('notifications')}
+                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-[11px] font-bold cursor-pointer"
+                  >
+                    {isFa ? 'تایید' : 'Allow'}
+                  </button>
+                )}
+              </div>
+
+              {/* 2. Microphone & Voice Typing */}
+              <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400">
+                    <Mic className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-stone-200 truncate">
+                      {isFa ? 'میکروفون و تایپ صوتی' : 'Microphone (Voice)'}
+                    </p>
+                    <span className={`text-[10px] font-bold ${nativePerms.microphone ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {nativePerms.microphone ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}
+                    </span>
+                  </div>
+                </div>
+                {!nativePerms.microphone && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestPerm('microphone')}
+                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-[11px] font-bold cursor-pointer"
+                  >
+                    {isFa ? 'تایید' : 'Allow'}
+                  </button>
+                )}
+              </div>
+
+              {/* 3. Camera */}
+              <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="p-1.5 rounded-lg bg-rose-500/15 text-rose-400">
+                    <Camera className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-stone-200 truncate">
+                      {isFa ? 'دوربین و عکس پیوست' : 'Camera Capture'}
+                    </p>
+                    <span className={`text-[10px] font-bold ${nativePerms.camera ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {nativePerms.camera ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}
+                    </span>
+                  </div>
+                </div>
+                {!nativePerms.camera && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestPerm('camera')}
+                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-[11px] font-bold cursor-pointer"
+                  >
+                    {isFa ? 'تایید' : 'Allow'}
+                  </button>
+                )}
+              </div>
+
+              {/* 4. GPS / Geolocation */}
+              <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="p-1.5 rounded-lg bg-emerald-500/15 text-emerald-400">
+                    <MapPin className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-xs font-bold text-stone-200 truncate">
+                      {isFa ? 'موقعیت مکانی و GPS' : 'GPS Location'}
+                    </p>
+                    <span className={`text-[10px] font-bold ${nativePerms.location ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {nativePerms.location ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}
+                    </span>
+                  </div>
+                </div>
+                {!nativePerms.location && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestPerm('location')}
+                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-[11px] font-bold cursor-pointer"
+                  >
+                    {isFa ? 'تایید' : 'Allow'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </section>
+
+          {/* 3.5. ALARM SOUND TYPE & VOLUME CONFIGURATION */}
+          <section className="space-y-4 pt-3 border-t border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-amber-300">
+                <Volume2 className="w-4 h-4 text-amber-400" />
+                <span>{isFa ? 'تنظیمات نوع صدای آلارم و ولوم' : 'Alarm Sound & Volume Settings'}</span>
+              </div>
+              <span className="text-[11px] px-2.5 py-0.5 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">
                 {isFa 
-                  ? 'برای باز شدن پاپ‌آپ بالای صفحه در اندروید (Heads-up): در تنظیمات گوشی ➔ برنامه‌ها ➔ Chrome (یا YAAD) ➔ اعلان‌ها ➔ دسته‌های اعلان ➔ فعال بودن گزینه «نمایش به صورت پاپ‌آپ روی صفحه» (Pop on screen) را بررسی نمایید.'
-                  : 'To enable floating banner pop-ups over other apps on Android: Open Phone Settings ➔ Apps ➔ Chrome ➔ Notifications ➔ Turn on "Pop on screen / Banners".'}
-              </p>
+                  ? PHONE_ALARM_SOUNDS.find(s => s.id === (settings.alarmSound || 'digital-beep'))?.label || 'استاندارد'
+                  : settings.alarmSound || 'digital-beep'}
+              </span>
+            </div>
+
+            {/* A. Volume Slider and Presets */}
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-stone-950/80 border border-stone-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-stone-200">
+                  {((settings.alarmVolume ?? 0.85) <= 0.01) ? (
+                    <VolumeX className="w-4 h-4 text-stone-500" />
+                  ) : ((settings.alarmVolume ?? 0.85) < 0.5) ? (
+                    <Volume1 className="w-4 h-4 text-amber-400" />
+                  ) : (
+                    <Volume2 className="w-4 h-4 text-amber-400" />
+                  )}
+                  <span>{isFa ? 'میزان بلندی صدا (ولوم)' : 'Alarm Volume'}</span>
+                </div>
+                <span className="font-mono text-xs font-black text-amber-300 bg-stone-900 px-2.5 py-0.5 rounded-lg border border-amber-500/30">
+                  {isFa ? `${toPersianDigits(Math.round((settings.alarmVolume ?? 0.85) * 100))}٪` : `${Math.round((settings.alarmVolume ?? 0.85) * 100)}%`}
+                </span>
+              </div>
+
+              {/* Slider */}
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleVolumeChange(0)}
+                  title={isFa ? 'بی‌صدا' : 'Mute'}
+                  className="p-1 rounded hover:bg-stone-800 transition-colors"
+                >
+                  <VolumeX 
+                    className={`w-4 h-4 transition-colors ${
+                      (settings.alarmVolume ?? 0.85) <= 0.01 ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
+                    }`} 
+                  />
+                </button>
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value={Math.round((settings.alarmVolume ?? 0.85) * 100)}
+                  onChange={(e) => handleVolumeChange(parseInt(e.target.value, 10) / 100)}
+                  className="w-full accent-amber-500 h-2.5 bg-stone-800 rounded-lg cursor-pointer"
+                />
+                <button
+                  type="button"
+                  onClick={() => handleVolumeChange(1.0)}
+                  title={isFa ? 'حداکثر صدا' : 'Max Volume'}
+                  className="p-1 rounded hover:bg-stone-800 transition-colors"
+                >
+                  <Volume2 
+                    className={`w-4 h-4 transition-colors ${
+                      (settings.alarmVolume ?? 0.85) >= 0.95 ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
+                    }`} 
+                  />
+                </button>
+              </div>
+
+              {/* Quick Volume Preset Chips */}
+              <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                {[
+                  { label: isFa ? 'بی‌صدا (۰٪)' : 'Mute (0%)', val: 0 },
+                  { label: isFa ? 'آرام (۳۰٪)' : 'Low (30%)', val: 0.3 },
+                  { label: isFa ? 'متوسط (۶۰٪)' : 'Medium (60%)', val: 0.6 },
+                  { label: isFa ? 'بلند (۸۵٪)' : 'High (85%)', val: 0.85 },
+                  { label: isFa ? 'حداکثر (۱۰۰٪)' : 'Max (100%)', val: 1.0 },
+                ].map((chip) => {
+                  const isActive = Math.abs((settings.alarmVolume ?? 0.85) - chip.val) < 0.05;
+                  return (
+                    <button
+                      key={chip.val}
+                      type="button"
+                      onClick={() => handleVolumeChange(chip.val)}
+                      className={`text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all cursor-pointer active:scale-95 ${
+                        isActive
+                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                          : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
+                      }`}
+                    >
+                      {chip.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* B. Alarm Sound Selection */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-stone-200">
+                  {isFa ? 'انتخاب ملودی و نوع صدای آلارم:' : 'Select Alarm Tone:'}
+                </span>
+                <span className="text-[11px] text-stone-400">
+                  {isFa ? 'برای شنیدن روی دکمه پخش کلیک کنید' : 'Click play to preview tone'}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {PHONE_ALARM_SOUNDS.map((soundItem) => {
+                  const isSelected = (settings.alarmSound || 'digital-beep') === soundItem.id;
+                  const isPlaying = playingSoundId === soundItem.id;
+
+                  return (
+                    <div
+                      key={soundItem.id}
+                      onClick={() => onUpdateSettings({ alarmSound: soundItem.id })}
+                      className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 cursor-pointer ${
+                        isSelected
+                          ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/40 shadow-md shadow-amber-500/10'
+                          : 'border-stone-800/90 bg-stone-950/60 hover:border-stone-700 hover:bg-stone-900/50'
+                      }`}
+                    >
+                      {/* Radio & Title */}
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors ${
+                          isSelected ? 'border-amber-500 bg-amber-500' : 'border-stone-600 bg-transparent'
+                        }`}>
+                          {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-stone-950" />}
+                        </div>
+
+                        <div className="min-w-0">
+                          <p className={`text-xs sm:text-sm font-bold truncate ${isSelected ? 'text-amber-300' : 'text-stone-200'}`}>
+                            {soundItem.label}
+                          </p>
+                          <p className="text-[11px] text-stone-400 truncate">
+                            {soundItem.desc}
+                          </p>
+                        </div>
+                      </div>
+
+                      {/* Interactive Preview Button */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onUpdateSettings({ alarmSound: soundItem.id });
+                          handlePreviewSound(soundItem.id);
+                        }}
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 flex-shrink-0 ${
+                          isPlaying
+                            ? 'bg-amber-500 text-stone-950 shadow-md shadow-amber-500/30 font-black animate-pulse'
+                            : isSelected
+                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
+                            : 'bg-stone-900 text-stone-300 border border-stone-700/80 hover:bg-stone-800 hover:text-white'
+                        }`}
+                        title={isPlaying ? (isFa ? 'توقف پخش' : 'Stop') : (isFa ? 'پخش نمونه صدا' : 'Play preview')}
+                      >
+                        {isPlaying ? (
+                          <>
+                            <Square className="w-3 h-3 fill-current" />
+                            <span>{isFa ? 'توقف' : 'Stop'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3 h-3 fill-current text-amber-400" />
+                            <span>{isFa ? 'پخش تست' : 'Preview'}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </section>
 
@@ -797,17 +1258,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <span className="text-stone-400">{isFa ? 'نسخه فعلی' : 'Current Version'}</span>
                 <span className="font-mono font-bold text-amber-400">{isFa ? `نسخه ${toPersianDigits(APP_VERSION)}` : `Version ${APP_VERSION}`}</span>
               </div>
-              <div className="flex items-center justify-between border-b border-stone-800/80 pb-2">
+              <div className="flex items-center justify-between">
                 <span className="text-stone-400">{isFa ? 'نوع پلتفرم' : 'Platform Type'}</span>
                 <span className="text-stone-200">{isFa ? 'اپلیکیشن تحت وب پیشرونده (PWA)' : 'Progressive Web App (PWA)'}</span>
-              </div>
-              <div className="space-y-1 pt-0.5">
-                <span className="text-stone-400 block">{isFa ? 'قوانین نسخه‌بندی اپلیکیشن:' : 'Versioning Rules:'}</span>
-                <div className="text-[11px] text-stone-300 bg-stone-900/90 p-2.5 rounded-xl border border-stone-800 space-y-1">
-                  <p>• {isFa ? 'بازنگری اساسی: ۱+ واحد (مثلاً از ۱.۱۴ به ۲.۱۴)' : 'Major overhaul: +1.0'}</p>
-                  <p>• {isFa ? 'بازنگری کلی: ۰.۱+ واحد (یک دهم - مثلاً از ۱.۱۴ به ۱.۲۴)' : 'General revision: +0.1'}</p>
-                  <p>• {isFa ? 'بازنگری جزئی: ۰.۰۱+ واحد (یک صدم - مثلاً از ۱.۱۴ به ۱.۱۵)' : 'Minor revision: +0.01'}</p>
-                </div>
               </div>
             </div>
           </section>

@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Reminder, Category, Priority, IdeaNote, AppSettings, AppTheme, SavedLocation } from './types';
 import { getJalaliComponents, formatJalaliFull, toPersianDigits } from './utils/jalali';
-import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging } from './utils/audio';
+import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { stopFlashlightStrobe } from './utils/torch';
 import { TimelineWidget } from './components/TimelineWidget';
 import { ReminderForm } from './components/ReminderForm';
 import { ReminderCard } from './components/ReminderCard';
 import { AlarmModal } from './components/AlarmModal';
-import { FloatingNotification } from './components/FloatingNotification';
+import { HeadsUpNotificationBanner } from './components/HeadsUpNotificationBanner';
 import { StatisticsModal } from './components/StatisticsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { IdeaCaptureModal } from './components/IdeaCaptureModal';
@@ -31,8 +31,13 @@ import {
   showSystemAlarmNotification, 
   requestSystemNotificationPermission,
   syncRemindersToServiceWorker,
-  getSystemNotificationPermission
+  getSystemNotificationPermission,
+  ensureNotificationAndAudioReady
 } from './utils/systemNotification';
+import { 
+  initAndroidNotificationChannel, 
+  triggerOutOfAppNotification 
+} from './utils/nativePermissions';
 import { getNextRecurrenceTimestamp } from './utils/recurrence';
 import { getT } from './utils/i18n';
 import { 
@@ -57,7 +62,9 @@ import {
   Cloud,
   Check,
   MapPin,
-  Download
+  Download,
+  RotateCcw,
+  Trash2
 } from 'lucide-react';
 
 const REMINDERS_STORAGE_KEY = 'fa_reminder_app_data_v2';
@@ -100,6 +107,7 @@ export default function App() {
   }, [settings.language]);
 
   const t = getT(settings.language);
+  const isEn = settings.language === 'en';
   const formatNumber = (val: number | string) => (settings.language === 'en' ? val.toString() : toPersianDigits(val));
 
   // Dynamic Global Font Sizing (سایز فونت با اسلایدر در کل برنامه)
@@ -213,9 +221,38 @@ export default function App() {
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null);
   const [isAppInstalled, setIsAppInstalled] = useState<boolean>(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState<boolean>(false);
+  const [isAlarmDetailsOpen, setIsAlarmDetailsOpen] = useState<boolean>(false);
+  const [undoToast, setUndoToast] = useState<{
+    reminder: Reminder;
+    index: number;
+    timer: NodeJS.Timeout;
+  } | null>(null);
   const [systemNotifGranted, setSystemNotifGranted] = useState<boolean>(() => {
     return getSystemNotificationPermission() === 'granted';
   });
+
+  // Automatically unlock browser audio context on first user interaction so alarms always sound loudly
+  useEffect(() => {
+    const unlockAudio = () => {
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (AudioContextClass) {
+          const ctx = new AudioContextClass();
+          ctx.resume().catch(() => {});
+        }
+      } catch (e) {
+        // ignore
+      }
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+    window.addEventListener('click', unlockAudio, { once: true });
+    window.addEventListener('touchstart', unlockAudio, { once: true });
+    return () => {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    };
+  }, []);
   // App startup splash screen (fade in & fade out in <= 2s)
   const [showSplash, setShowSplash] = useState<boolean>(true);
   const [appVisible, setAppVisible] = useState<boolean>(false);
@@ -302,8 +339,16 @@ export default function App() {
 
     const handleSwMessage = (event: MessageEvent) => {
       if (event.data?.type === 'TRIGGER_ALARM_MODAL' && event.data.reminder) {
-        if (event.data.reminder.status === 'pending') {
-          setActiveAlarmReminder(event.data.reminder);
+        const rem = event.data.reminder;
+        const found = remindersRef.current.find((r) => r.id === rem.id);
+        if (found) {
+          if (found.status === 'pending') {
+            triggeredAlarmsRef.current.add(found.id);
+            setActiveAlarmReminder(found);
+          }
+        } else {
+          triggeredAlarmsRef.current.add(rem.id);
+          setActiveAlarmReminder(rem);
         }
         return;
       }
@@ -389,6 +434,9 @@ export default function App() {
     };
 
     window.addEventListener('appinstalled', handleAppInstalled);
+
+    // Initialize high-priority notification channel for Android APK
+    initAndroidNotificationChannel().catch(() => {});
 
     // If launched as installed standalone PWA, check & prompt for notification permission
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true;
@@ -477,7 +525,7 @@ export default function App() {
         window.history.replaceState({}, '', cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : ''));
 
         const found = reminders.find((r) => r.id === queryAlarmId);
-        if (found && found.status === 'pending') {
+        if (found) {
           setActiveAlarmReminder(found);
         }
       }
@@ -502,6 +550,9 @@ export default function App() {
         ) {
           triggeredAlarmsRef.current.add(r.id);
           setActiveAlarmReminder(r);
+
+          // Trigger out-of-app notification (for Capacitor native Android APK + Web Service Worker)
+          triggerOutOfAppNotification(r, true).catch(() => {});
 
           // Trigger System Notification with Complete, Snooze, and Dismiss actions
           showSystemAlarmNotification(r, (action, remId) => {
@@ -613,12 +664,14 @@ export default function App() {
     }
 
     if (editingReminder) {
+      triggeredAlarmsRef.current.delete(editingReminder.id);
       setReminders((prev) =>
         prev.map((r) =>
           r.id === editingReminder.id
             ? {
                 ...r,
                 ...data,
+                status: data.dueTimestamp >= Date.now() ? 'pending' : r.status,
                 googleCalendarEventId: calendarEventId || r.googleCalendarEventId,
               }
             : r
@@ -919,13 +972,51 @@ export default function App() {
 
   handlePostponeRef.current = handlePostpone;
 
-  // Handler: Delete reminder
+  // Handler: Delete reminder with 5-second Undo capability
   const handleDelete = (id: string) => {
     stopAlarmRinging();
     stopFlashlightStrobe();
     setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
     triggeredAlarmsRef.current.delete(id);
+
+    const targetIndex = reminders.findIndex((r) => r.id === id);
+    const targetReminder = reminders[targetIndex];
+
+    if (targetReminder) {
+      if (undoToast?.timer) {
+        clearTimeout(undoToast.timer);
+      }
+
+      const timer = setTimeout(() => {
+        setUndoToast(null);
+      }, 5000);
+
+      setUndoToast({
+        reminder: targetReminder,
+        index: targetIndex >= 0 ? targetIndex : 0,
+        timer,
+      });
+    }
+
     setReminders((prev) => prev.filter((r) => r.id !== id));
+  };
+
+  const handleUndoDelete = () => {
+    if (!undoToast) return;
+    if (undoToast.timer) clearTimeout(undoToast.timer);
+
+    const restored = undoToast.reminder;
+    const restoreIdx = undoToast.index;
+
+    setReminders((prev) => {
+      const copy = [...prev];
+      const validIndex = Math.min(Math.max(0, restoreIdx), copy.length);
+      copy.splice(validIndex, 0, restored);
+      return copy;
+    });
+
+    setUndoToast(null);
+    showSyncNotification(settings.language === 'en' ? 'Reminder restored' : 'یادآور با موفقیت بازگردانده شد');
   };
 
   // Handler: Install PWA
@@ -976,8 +1067,20 @@ export default function App() {
 
   const upcomingReminder =
     reminders
-      .filter((r) => r.status === 'pending' && r.dueTimestamp >= currentTime - 60000)
+      .filter((r) => (r.status === 'pending' || r.status === 'postponed') && r.dueTimestamp >= currentTime)
       .sort((a, b) => a.dueTimestamp - b.dueTimestamp)[0] || null;
+
+  const upcomingCountdown = upcomingReminder
+    ? (() => {
+        const diffMs = Math.max(0, upcomingReminder.dueTimestamp - currentTime);
+        const totalSecs = Math.floor(diffMs / 1000);
+        return {
+          hours: Math.floor(totalSecs / 3600),
+          minutes: Math.floor((totalSecs % 3600) / 60),
+          seconds: totalSecs % 60,
+        };
+      })()
+    : null;
 
   const todayJalali = getJalaliComponents(currentTime);
 
@@ -1011,6 +1114,42 @@ export default function App() {
         </div>
       )}
 
+      {/* 5-SECOND UNDO TOAST NOTIFICATION */}
+      {undoToast && (
+        <div 
+          className="fixed bottom-22 sm:bottom-10 left-1/2 -translate-x-1/2 z-50 px-4 py-3 rounded-2xl bg-stone-900/95 border-2 border-amber-500/80 text-white shadow-2xl shadow-black/95 flex items-center gap-3.5 backdrop-blur-xl animate-in fade-in slide-in-from-bottom-4 duration-200"
+          dir={isEn ? 'ltr' : 'rtl'}
+        >
+          <div className="flex items-center gap-2">
+            <Trash2 className="w-4 h-4 text-red-400 shrink-0" />
+            <span className="text-xs sm:text-sm font-bold truncate max-w-[170px] sm:max-w-xs">
+              {isEn ? `Deleted "${undoToast.reminder.title}"` : `«${undoToast.reminder.title}» حذف شد`}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleUndoDelete}
+            className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer shrink-0"
+          >
+            <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
+            <span>{isEn ? 'Undo' : 'بازگردانی'}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (undoToast.timer) clearTimeout(undoToast.timer);
+              setUndoToast(null);
+            }}
+            className="p-1 rounded-lg text-stone-400 hover:text-white transition-colors cursor-pointer"
+            title={isEn ? 'Dismiss' : 'بستن'}
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Top Navigation Bar */}
       <header className={`sticky top-0 z-30 backdrop-blur-md border-b ${
         settings.theme === 'light-clean' 
@@ -1018,8 +1157,8 @@ export default function App() {
           : 'bg-stone-900/90 border-stone-800 text-stone-100'
       }`}>
         <div className="w-full px-2 sm:px-4 md:px-6 h-15 sm:h-16 flex items-center justify-between gap-2.5">
-          {/* Logo Icon Button (لمس آیکون برنامه برای بازگشت به صفحه اصلی) */}
-          <div className="flex items-center gap-2">
+          {/* Logo Icon Button (لمس آیکون برنامه برای بازگشت به صفحه اصلی - شکل زنگوله قبلی) */}
+          <div className="flex items-center gap-2 flex-shrink-0">
             <button
               type="button"
               onClick={() => {
@@ -1031,92 +1170,97 @@ export default function App() {
                 setIsSettingsOpen(false);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              className="relative rounded-2xl overflow-hidden border border-amber-500/40 shadow-md shadow-amber-500/20 bg-stone-900 flex-shrink-0 group cursor-pointer active:scale-95 transition-all"
-              title="بازگشت به صفحه اصلی"
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center flex-shrink-0 group cursor-pointer active:scale-95 transition-all shadow-md shadow-amber-500/20 hover:bg-amber-500/30"
+              title={settings.language === 'en' ? 'Go to Home' : 'بازگشت به صفحه اصلی'}
             >
-              <img
-                src={nikAppIcon}
-                alt="YAAD"
-                referrerPolicy="no-referrer"
-                style={{ width: '35px', height: '35px' }}
-                className="object-cover transition-transform duration-300 group-hover:scale-110"
-              />
+              <Bell className="w-4.5 h-4.5 sm:w-5 sm:h-5 text-amber-400 transition-transform duration-300 group-hover:scale-110" />
             </button>
             {googleUser && (
-              <span className="hidden sm:flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold">
+              <span className="hidden md:flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold">
                 <Cloud className="w-3 h-3" />
                 {settings.language === 'en' ? 'Google Synced' : 'همگام با گوگل'}
               </span>
             )}
           </div>
 
-          {/* Navigation Action Buttons */}
-          <div className="flex items-center gap-2">
-            {/* Main Section Switch: Reminders vs Ideas vs Locations */}
-            <div className="flex bg-stone-800/80 p-1 rounded-xl border border-stone-700/60 text-xs">
+          {/* Navigation Action Buttons - Compact Tabs so Settings button is ALWAYS accessible */}
+          <div className="flex items-center gap-1 sm:gap-2 min-w-0">
+            {/* Main Section Switch: Reminders vs Ideas vs Locations (Compact Width) */}
+            <div className="flex bg-stone-800/90 p-0.5 sm:p-1 rounded-xl border border-stone-700/60 text-[10px] sm:text-xs">
               <button
                 type="button"
                 onClick={() => setActiveMainTab('reminders')}
-                className={`px-2.5 sm:px-3 py-1.5 rounded-lg font-bold transition-all ${
+                className={`px-1.5 sm:px-2.5 py-1 sm:py-1.5 rounded-lg font-bold transition-all whitespace-nowrap ${
                   activeMainTab === 'reminders'
                     ? 'bg-stone-900 border border-amber-400/80 text-amber-300 font-black shadow-sm'
                     : 'text-stone-300 hover:text-white'
                 }`}
               >
-                {settings.language === 'en' ? `Reminders (${reminders.length})` : `یادآورها (${toPersianDigits(reminders.length)})`}
+                <span>{t.tabReminders}</span>
+                <span className="opacity-80 text-[9px] sm:text-xs mr-0.5 ml-0.5 font-mono">
+                  ({settings.language === 'en' ? reminders.length : toPersianDigits(reminders.length)})
+                </span>
               </button>
+
               <button
                 type="button"
                 onClick={() => setActiveMainTab('ideas')}
-                className={`flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg font-bold transition-all ${
+                className={`flex items-center gap-0.5 sm:gap-1 px-1.5 sm:px-2.5 py-1 sm:py-1.5 rounded-lg font-bold transition-all whitespace-nowrap ${
                   activeMainTab === 'ideas'
                     ? 'bg-stone-900 border border-amber-400/80 text-amber-300 font-black shadow-sm'
                     : 'text-stone-300 hover:text-white'
                 }`}
               >
-                <Lightbulb className="w-3.5 h-3.5 text-amber-400" />
-                <span>{settings.language === 'en' ? `Ideas (${ideas.length})` : `ایده‌ها (${toPersianDigits(ideas.length)})`}</span>
+                <Lightbulb className="w-3 h-3 text-amber-400 shrink-0" />
+                <span>{t.tabIdeas}</span>
+                <span className="opacity-80 text-[9px] sm:text-xs font-mono">
+                  ({settings.language === 'en' ? ideas.length : toPersianDigits(ideas.length)})
+                </span>
               </button>
+
               <button
                 type="button"
                 onClick={() => setActiveMainTab('locations')}
-                className={`flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg font-bold transition-all ${
+                className={`flex items-center gap-0.5 sm:gap-1 px-1.5 sm:px-2.5 py-1 sm:py-1.5 rounded-lg font-bold transition-all whitespace-nowrap ${
                   activeMainTab === 'locations'
                     ? 'bg-stone-900 border border-amber-400/80 text-amber-300 font-black shadow-sm'
                     : 'text-stone-300 hover:text-white'
                 }`}
               >
-                <MapPin className="w-3.5 h-3.5 text-amber-400" />
-                <span>{settings.language === 'en' ? `Places (${savedLocations.length})` : `مکان‌ها (${toPersianDigits(savedLocations.length)})`}</span>
+                <MapPin className="w-3 h-3 text-amber-400 shrink-0" />
+                <span>{t.tabLocations}</span>
+                <span className="opacity-80 text-[9px] sm:text-xs font-mono">
+                  ({settings.language === 'en' ? savedLocations.length : toPersianDigits(savedLocations.length)})
+                </span>
               </button>
             </div>
 
-            {/* Install App Button if not standalone installed */}
+            {/* Install App Button (Compact / Icon on mobile) */}
             {!isAppInstalled && (
               <button
                 type="button"
                 onClick={handleInstallClick}
-                className="flex items-center gap-1 sm:gap-1.5 px-2.5 sm:px-3 py-1.5 sm:py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs transition-all active:scale-95 cursor-pointer shadow-md shadow-amber-500/20 whitespace-nowrap"
-                title="نصب اپلیکیشن YAAD روی دستگاه"
+                className="hidden xs:flex items-center gap-1 px-2 sm:px-2.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs transition-all active:scale-95 cursor-pointer shadow-md shadow-amber-500/20 whitespace-nowrap flex-shrink-0"
+                title={t.installApp}
               >
                 <Download className="w-3.5 h-3.5 stroke-[2.5]" />
-                <span>نصب برنامه</span>
+                <span className="hidden sm:inline">{t.installApp}</span>
               </button>
             )}
 
-            {/* Settings Button in Top-Left Header */}
+            {/* Settings Button in Header - ALWAYS ACCESSIBLE & FLEX-SHRINK-0 */}
             <button
               id="header-open-settings-btn"
               type="button"
               onClick={() => setIsSettingsOpen(true)}
-              className="p-2 sm:px-3 sm:py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white border border-stone-700 text-xs font-medium transition-colors flex items-center gap-1.5"
+              className="p-1.5 sm:px-3 sm:py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 hover:text-white border border-stone-700 text-xs font-bold transition-all flex items-center gap-1.5 flex-shrink-0 cursor-pointer shadow-sm active:scale-95"
               title={t.settings}
             >
-              <SettingsIcon className="w-4 h-4 text-amber-400" />
+              <SettingsIcon className="w-4 h-4 text-amber-400 shrink-0" />
               <span className="hidden sm:inline">{t.settings}</span>
             </button>
 
-            {/* Primary Action Button */}
+            {/* Primary Action Button (Desktop/Tablet) */}
             {activeMainTab === 'reminders' ? (
               <button
                 id="header-create-reminder-btn"
@@ -1125,30 +1269,30 @@ export default function App() {
                   setEditingReminder(null);
                   setIsFormOpen(true);
                 }}
-                className="hidden sm:flex items-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-sm font-medium shadow-lg shadow-amber-500/25 transition-all active:scale-95"
+                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-amber-500/25 transition-all active:scale-95 flex-shrink-0"
               >
-                <Plus className="w-4 h-4 text-stone-950" />
-                <span className="text-[14px] font-medium text-stone-950" style={{ fontSize: '14px', fontWeight: 500 }}>{t.newReminder}</span>
+                <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
+                <span>{t.newReminder}</span>
               </button>
             ) : activeMainTab === 'ideas' ? (
               <button
                 id="header-create-idea-btn"
                 type="button"
                 onClick={() => setIsIdeaModalOpen(true)}
-                className="hidden sm:flex items-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-sky-500/25 transition-all active:scale-95"
+                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-sky-500/25 transition-all active:scale-95 flex-shrink-0"
               >
-                <Plus className="w-4 h-4" />
-                <span>{settings.language === 'en' ? 'New Idea' : 'ثبت ایده جدید'}</span>
+                <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
+                <span>{t.addIdeaTitle}</span>
               </button>
             ) : (
               <button
                 id="header-create-location-btn"
                 type="button"
                 onClick={() => setIsLocationModalOpen(true)}
-                className="hidden sm:flex items-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-emerald-500/25 transition-all active:scale-95"
+                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-emerald-500/25 transition-all active:scale-95 flex-shrink-0"
               >
-                <Plus className="w-4 h-4" />
-                <span>{settings.language === 'en' ? 'New Location' : 'ثبت لوکیشن (GPS)'}</span>
+                <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
+                <span>{t.addLocationTitle}</span>
               </button>
             )}
           </div>
@@ -1162,7 +1306,7 @@ export default function App() {
         {activeMainTab === 'reminders' && (
           <>
             {/* SECTION 1: PROMINENT TIMELINE CHART WIDGET (Vertical Auto-Expanding) */}
-            <section aria-label="نمودار محور زمان یادآورها">
+            <section aria-label={isEn ? 'Reminders Timeline Chart' : 'نمودار محور زمان یادآورها'}>
               <TimelineWidget
                 reminders={reminders}
                 onToggleComplete={handleToggleComplete}
@@ -1172,6 +1316,7 @@ export default function App() {
                   setIsFormOpen(true);
                 }}
                 timelineMode={settings.timelineMode}
+                language={settings.language}
               />
             </section>
 
@@ -1277,10 +1422,10 @@ export default function App() {
                     onChange={(e) => setPriorityFilter(e.target.value as any)}
                     className="bg-stone-900 border border-stone-800 rounded-xl px-3 py-2.5 text-xs sm:text-sm text-stone-200 focus:outline-none focus:border-amber-500 font-medium"
                   >
-                    <option value="all">همه اولویت‌ها</option>
-                    <option value="high">فقط فوری</option>
-                    <option value="medium">متوسط</option>
-                    <option value="low">عادی</option>
+                    <option value="all">{isEn ? 'All Priorities' : 'همه اولویت‌ها'}</option>
+                    <option value="high">{isEn ? 'High (Urgent)' : 'فقط فوری'}</option>
+                    <option value="medium">{isEn ? 'Medium' : 'متوسط'}</option>
+                    <option value="low">{isEn ? 'Normal' : 'عادی'}</option>
                   </select>
                 </div>
               </div>
@@ -1290,7 +1435,7 @@ export default function App() {
             <section className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="font-bold text-sm text-stone-300">
-                  فهرست یادآورها ({toPersianDigits(sortedReminders.length)})
+                  {isEn ? 'Reminders List' : 'فهرست یادآورها'} ({formatNumber(sortedReminders.length)})
                 </h3>
               </div>
 
@@ -1300,6 +1445,8 @@ export default function App() {
                     <ReminderCard
                       key={reminder.id}
                       reminder={reminder}
+                      isNext={reminder.id === upcomingReminder?.id && reminder.status !== 'completed'}
+                      countdown={reminder.id === upcomingReminder?.id ? upcomingCountdown : null}
                       onToggleComplete={handleToggleComplete}
                       onPostpone={handlePostpone}
                       onDelete={handleDelete}
@@ -1308,6 +1455,7 @@ export default function App() {
                         setIsFormOpen(true);
                       }}
                       onViewImage={(url) => setViewingImageUrl(url)}
+                      language={settings.language}
                     />
                   ))}
                 </div>
@@ -1316,7 +1464,9 @@ export default function App() {
                   <div className="w-12 h-12 rounded-full bg-stone-800 text-stone-400 flex items-center justify-center mx-auto">
                     <Bell className="w-6 h-6" />
                   </div>
-                  <h4 className="font-bold text-sm text-white">یادآوری یافت نشد</h4>
+                  <h4 className="font-bold text-sm text-white">
+                    {isEn ? 'No reminders found' : 'یادآوری یافت نشد'}
+                  </h4>
                   <button
                     type="button"
                     onClick={() => {
@@ -1326,7 +1476,9 @@ export default function App() {
                     className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 !text-white text-xs font-bold transition-all shadow-md active:scale-95 cursor-pointer"
                   >
                     <Plus className="w-4 h-4 text-white stroke-[3]" />
-                    <span className="text-white font-black">ثبت یادآور جدید</span>
+                    <span className="text-white font-black">
+                      {isEn ? 'Create New Reminder' : 'ثبت یادآور جدید'}
+                    </span>
                   </button>
                 </div>
               )}
@@ -1340,7 +1492,7 @@ export default function App() {
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-stone-800">
               <h3 className="font-bold text-base sm:text-lg text-white flex items-center gap-2">
                 <Lightbulb className="w-5 h-5 text-amber-400" />
-                <span>ثبت و سازماندهی ایده و افکار</span>
+                <span>{isEn ? 'Organize Ideas & Notes' : 'ثبت و سازماندهی ایده و افکار'}</span>
               </h3>
 
               <button
@@ -1349,7 +1501,9 @@ export default function App() {
                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 !text-white font-bold text-xs shadow-md transition-all self-stretch sm:self-auto justify-center active:scale-95 cursor-pointer"
               >
                 <Plus className="w-4 h-4 text-white stroke-[3]" />
-                <span className="text-white font-black">ثبت فکر یا ایده جدید</span>
+                <span className="text-white font-black">
+                  {isEn ? 'Capture New Idea' : 'ثبت فکر یا ایده جدید'}
+                </span>
               </button>
             </div>
 
@@ -1365,6 +1519,7 @@ export default function App() {
                       setIsIdeaModalOpen(true);
                     }}
                     onViewImage={(url) => setViewingImageUrl(url)}
+                    language={settings.language}
                   />
                 ))}
               </div>
@@ -1373,14 +1528,18 @@ export default function App() {
                 <div className="w-12 h-12 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center mx-auto">
                   <Lightbulb className="w-6 h-6" />
                 </div>
-                <h4 className="font-bold text-sm text-white">هنوز ایده‌ای ثبت نشده است</h4>
+                <h4 className="font-bold text-sm text-white">
+                  {isEn ? 'No ideas recorded yet' : 'هنوز ایده‌ای ثبت نشده است'}
+                </h4>
                 <button
                   type="button"
                   onClick={() => setIsIdeaModalOpen(true)}
                   className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 !text-white font-black text-xs shadow-md active:scale-95 cursor-pointer flex items-center gap-1.5 mx-auto"
                 >
                   <Plus className="w-4 h-4 text-white stroke-[3]" />
-                  <span className="text-white font-black">ثبت ایده جدید</span>
+                  <span className="text-white font-black">
+                    {isEn ? 'Create New Idea' : 'ثبت ایده جدید'}
+                  </span>
                 </button>
               </div>
             )}
@@ -1397,12 +1556,14 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="font-bold text-base sm:text-lg text-white flex items-center gap-2">
-                    <span>مکان‌های ثبت‌شده با GPS و Google Maps</span>
+                    <span>{isEn ? 'Saved Places with GPS & Google Maps' : 'مکان‌های ثبت‌شده با GPS و Google Maps'}</span>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono">
-                      {toPersianDigits(savedLocations.length)}
+                      {formatNumber(savedLocations.length)}
                     </span>
                   </h3>
-                  <p className="text-[11px] text-stone-400">ذخیره خودکار مختصات ماهواره‌ای، پیش‌نمایش در گوگل‌مپ، فیلد توضیحات و عکس زنده دوربین</p>
+                  <p className="text-[11px] text-stone-400">
+                    {isEn ? 'Satellite coordinates, Google Maps preview, camera photo and notes' : 'ذخیره خودکار مختصات ماهواره‌ای، پیش‌نمایش در گوگل‌مپ، فیلد توضیحات و عکس زنده دوربین'}
+                  </p>
                 </div>
               </div>
 
@@ -1412,7 +1573,9 @@ export default function App() {
                 className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 !text-white font-bold text-xs shadow-md shadow-emerald-500/20 transition-all self-stretch sm:self-auto justify-center cursor-pointer active:scale-95"
               >
                 <Plus className="w-4 h-4 text-white stroke-[3]" />
-                <span className="text-white font-black">ثبت لوکیشن جدید</span>
+                <span className="text-white font-black">
+                  {isEn ? 'Save New Location' : 'ثبت لوکیشن جدید'}
+                </span>
               </button>
             </div>
 
@@ -1428,6 +1591,7 @@ export default function App() {
                       setIsLocationModalOpen(true);
                     }}
                     onViewPhoto={(url) => setViewingImageUrl(url)}
+                    language={settings.language}
                   />
                 ))}
               </div>
@@ -1436,9 +1600,13 @@ export default function App() {
                 <div className="w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center mx-auto">
                   <MapPin className="w-6 h-6" />
                 </div>
-                <h4 className="font-bold text-sm text-white">هنوز مکانی ثبت نشده است</h4>
+                <h4 className="font-bold text-sm text-white">
+                  {isEn ? 'No locations saved yet' : 'هنوز مکانی ثبت نشده است'}
+                </h4>
                 <p className="text-xs text-stone-400 max-w-sm mx-auto leading-relaxed">
-                  با ثبت لوکیشن، مختصات دقیق GPS به همراه عکس با دوربین گوشی، یادداشت‌ها و امکان مسیریابی در گوگل مپ ذخیره می‌شود.
+                  {isEn 
+                    ? 'Saving a location records exact GPS satellite coordinates, phone camera photos, notes, and directions on Google Maps.'
+                    : 'با ثبت لوکیشن، مختصات دقیق GPS به همراه عکس با دوربین گوشی، یادداشت‌ها و امکان مسیریابی در گوگل مپ ذخیره می‌شود.'}
                 </p>
                 <button
                   type="button"
@@ -1446,7 +1614,9 @@ export default function App() {
                   className="px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 !text-white font-black text-xs shadow-md cursor-pointer active:scale-95 flex items-center gap-1.5 mx-auto"
                 >
                   <Plus className="w-4 h-4 text-white stroke-[3]" />
-                  <span className="text-white font-black">ثبت اولین موقعیت</span>
+                  <span className="text-white font-black">
+                    {isEn ? 'Save First Location' : 'ثبت اولین موقعیت'}
+                  </span>
                 </button>
               </div>
             )}
@@ -1455,29 +1625,11 @@ export default function App() {
 
       </main>
 
-      {/* FOOTER - Full Width */}
-      <footer className="border-t border-stone-800/80 py-4 text-center text-xs text-stone-500 mt-auto">
-        <div className="w-full px-2.5 sm:px-6 md:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <span className="font-bold text-stone-400">YAAD</span>
-          <div className="flex items-center gap-3 text-stone-400">
-            <button
-              onClick={() => setIsSettingsOpen(true)}
-              style={{ width: '94.625px', height: '31px' }}
-              className="hover:text-amber-400 transition-colors flex items-center justify-center gap-1 font-medium"
-            >
-              <SettingsIcon style={{ width: '25px', height: '25px' }} className="w-3.5 h-3.5" />
-              <span style={{ fontSize: '16px' }}>تنظیمات</span>
-            </button>
-          </div>
-        </div>
-      </footer>
-
-      {/* FLOATING ACTION BUTTON (+) - POSITIONED HIGHER UP ABOVE THE WIDE "بعدی" BAR */}
+      {/* FLOATING ACTION BUTTON (+) - POSITION ALWAYS FIXED ON THE RIGHT (NON-FLIPPING ACROSS LANGUAGES) */}
       <div 
-        className={`fixed right-2.5 sm:right-7 z-40 flex items-center pointer-events-auto transition-all duration-300 ${
-          upcomingReminder ? 'bottom-20 sm:bottom-24' : 'bottom-4 sm:bottom-6'
-        }`} 
-        dir="rtl"
+        className="fixed bottom-5 sm:bottom-7 z-40 flex items-center pointer-events-auto transition-all duration-300" 
+        style={{ right: '1.25rem', left: 'auto' }}
+        dir="ltr"
       >
         {/* Relative container for FAB and choice popup */}
         <div className="relative">
@@ -1490,8 +1642,8 @@ export default function App() {
                 onClick={() => setIsCreateChoiceOpen(false)}
               />
 
-              {/* Popup Options: Larger, with zoom-out entrance effect & larger buttons */}
-              <div className="absolute bottom-16 sm:bottom-20 right-0 z-50 bg-stone-900/95 border-2 border-teal-500/80 rounded-3xl p-3 sm:p-4 shadow-2xl shadow-black/95 backdrop-blur-2xl w-64 sm:w-72 space-y-2.5 animate-zoom-out origin-bottom-right">
+              {/* Popup Options: Fixed on the right side with zoom-out entrance effect */}
+              <div className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/95 border-2 border-teal-500/80 rounded-3xl p-3 sm:p-4 shadow-2xl shadow-black/95 backdrop-blur-2xl w-64 sm:w-72 space-y-2.5 animate-zoom-out">
                 {/* Option 1: Reminder */}
                 <button
                   type="button"
@@ -1500,14 +1652,18 @@ export default function App() {
                     setEditingReminder(null);
                     setIsFormOpen(true);
                   }}
-                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-amber-500/15 text-right text-stone-100 hover:text-amber-300 transition-all cursor-pointer group active:scale-95 border border-amber-500/30 hover:border-amber-500/60 shadow-md"
+                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-amber-500/15 text-left rtl:text-right text-stone-100 hover:text-amber-300 transition-all cursor-pointer group active:scale-95 border border-amber-500/30 hover:border-amber-500/60 shadow-md"
                 >
                   <div className="w-11 h-11 rounded-xl bg-amber-500/20 border border-amber-500/50 text-amber-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
                     <Bell className="w-5 h-5 stroke-[2.2]" />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm sm:text-base font-black text-white">ثبت یادآور</span>
-                    <span className="text-[11px] text-stone-400 group-hover:text-amber-200">با آلارم، صوت و تقویم شمسی</span>
+                    <span className="text-sm sm:text-base font-black text-white">
+                      {isEn ? 'New Reminder' : 'ثبت یادآور'}
+                    </span>
+                    <span className="text-[11px] text-stone-400 group-hover:text-amber-200">
+                      {isEn ? 'With alarm, audio & recurrence' : 'با آلارم، صوت و تقویم شمسی'}
+                    </span>
                   </div>
                 </button>
 
@@ -1518,14 +1674,18 @@ export default function App() {
                     setIsCreateChoiceOpen(false);
                     setIsIdeaModalOpen(true);
                   }}
-                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-sky-500/15 text-right text-stone-100 hover:text-sky-300 transition-all cursor-pointer group active:scale-95 border border-sky-500/30 hover:border-sky-500/60 shadow-md"
+                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-sky-500/15 text-left rtl:text-right text-stone-100 hover:text-sky-300 transition-all cursor-pointer group active:scale-95 border border-sky-500/30 hover:border-sky-500/60 shadow-md"
                 >
                   <div className="w-11 h-11 rounded-xl bg-sky-500/20 border border-sky-500/50 text-sky-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
                     <Lightbulb className="w-5 h-5 stroke-[2.2]" />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm sm:text-base font-black text-white">ثبت ایده</span>
-                    <span className="text-[11px] text-stone-400 group-hover:text-sky-200">متن، ویس، ویدیو و نقاشی</span>
+                    <span className="text-sm sm:text-base font-black text-white">
+                      {isEn ? 'Capture Idea' : 'ثبت ایده'}
+                    </span>
+                    <span className="text-[11px] text-stone-400 group-hover:text-sky-200">
+                      {isEn ? 'Text, voice memo, video & sketch' : 'متن، ویس، ویدیو و نقاشی'}
+                    </span>
                   </div>
                 </button>
 
@@ -1536,21 +1696,25 @@ export default function App() {
                     setIsCreateChoiceOpen(false);
                     setIsLocationModalOpen(true);
                   }}
-                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-teal-500/15 text-right text-stone-100 hover:text-teal-300 transition-all cursor-pointer group active:scale-95 border border-teal-500/30 hover:border-teal-500/60 shadow-md"
+                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-teal-500/15 text-left rtl:text-right text-stone-100 hover:text-teal-300 transition-all cursor-pointer group active:scale-95 border border-teal-500/30 hover:border-teal-500/60 shadow-md"
                 >
                   <div className="w-11 h-11 rounded-xl bg-teal-500/20 border border-teal-500/50 text-teal-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
                     <MapPin className="w-5 h-5 stroke-[2.2]" />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm sm:text-base font-black text-white">ثبت لوکیشن (GPS)</span>
-                    <span className="text-[11px] text-stone-400 group-hover:text-teal-200">مختصات، عکس دوربین و نقشه</span>
+                    <span className="text-sm sm:text-base font-black text-white">
+                      {isEn ? 'Save GPS Location' : 'ثبت لوکیشن (GPS)'}
+                    </span>
+                    <span className="text-[11px] text-stone-400 group-hover:text-teal-200">
+                      {isEn ? 'Coordinates, photo & maps' : 'مختصات، عکس دوربین و نقشه'}
+                    </span>
                   </div>
                 </button>
               </div>
             </>
           )}
 
-          {/* Circular FAB - Excluded from turquoise tint as requested */}
+          {/* Circular FAB */}
           <button
             id="fab-create-btn"
             data-keep-color="true"
@@ -1560,27 +1724,13 @@ export default function App() {
             className={`fab-add-btn rounded-full !bg-gradient-to-r !from-amber-500 !to-amber-400 hover:!from-amber-400 hover:!to-amber-300 text-stone-950 flex items-center justify-center shadow-2xl shadow-amber-500/40 hover:scale-105 active:scale-95 transition-all !border-2 !border-amber-300 flex-shrink-0 cursor-pointer ${
               isCreateChoiceOpen ? 'rotate-45' : ''
             }`}
-            title="ثبت جدید (یادآور، ایده یا لوکیشن)"
-            aria-label="ثبت جدید"
+            title={isEn ? 'Add New (Reminder, Idea, Place)' : 'ثبت جدید (یادآور، ایده یا لوکیشن)'}
+            aria-label={isEn ? 'Add New' : 'ثبت جدید'}
           >
             <Plus style={{ width: '35px', height: '35px' }} className="w-7 h-7 stroke-[3] transition-transform duration-200" />
           </button>
         </div>
       </div>
-
-      {/* FULL-WIDTH "بعدی" DOCKED FIELD AT BOTTOM OF SCREEN */}
-      {upcomingReminder && (
-        <FloatingNotification
-          upcomingReminder={upcomingReminder}
-          theme={settings.theme}
-          onToggleComplete={handleToggleComplete}
-          onPostpone={handlePostpone}
-          onSelectReminder={(rem) => {
-            setEditingReminder(rem);
-            setIsFormOpen(true);
-          }}
-        />
-      )}
 
       {/* REMINDER CREATION & EDIT MODAL */}
       <ReminderForm
@@ -1605,9 +1755,10 @@ export default function App() {
         onSaveIdea={handleSaveIdea}
         googleToken={googleToken}
         editingIdea={editingIdea}
+        language={settings.language}
       />
 
-      {/* LOCATION CAPTURE MODAL (ثبت لوکیشن با تکیه بر GPS و گوگل مپ با فیلد توضیح و عکس دوربین) */}
+      {/* LOCATION CAPTURE MODAL */}
       <LocationCaptureModal
         isOpen={isLocationModalOpen}
         onClose={() => {
@@ -1617,6 +1768,7 @@ export default function App() {
         onSave={handleSaveLocation}
         googleMapsApiKey={settings.googleMapsApiKey}
         editingLocation={editingLocation}
+        language={settings.language}
       />
 
       {/* SETTINGS MODAL */}
@@ -1634,6 +1786,10 @@ export default function App() {
         ideas={ideas}
         savedLocations={savedLocations}
         onRestoreData={handleRestoreData}
+        onTestHeadsUpBanner={(testRem) => {
+          setActiveAlarmReminder(testRem);
+          setIsAlarmDetailsOpen(false);
+        }}
       />
 
       {/* INSTALL MODAL */}
@@ -1645,6 +1801,7 @@ export default function App() {
           setIsAppInstalled(true);
           setInstallPromptEvent(null);
         }}
+        language={settings.language}
       />
 
       {/* STATISTICS MODAL */}
@@ -1652,27 +1809,65 @@ export default function App() {
         isOpen={isStatsOpen}
         onClose={() => setIsStatsOpen(false)}
         reminders={reminders}
+        language={settings.language}
       />
 
-      {/* ACTIVE ALARM MODAL */}
-      <AlarmModal
-        reminder={activeAlarmReminder}
-        settings={settings}
-        onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
-        onDismiss={() => {
-          stopAlarmRinging();
-          stopFlashlightStrobe();
-          setActiveAlarmReminder(null);
-          setActiveMainTab('reminders');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onComplete={(id) => {
-          handleCompleteReminder(id);
-          setActiveMainTab('reminders');
-          window.scrollTo({ top: 0, behavior: 'smooth' });
-        }}
-        onPostpone={handlePostpone}
-      />
+      {/* HEADS-UP NOTIFICATION BANNER (Top-of-screen alert over app - matching Android Reminder) */}
+      {activeAlarmReminder && !isAlarmDetailsOpen && (
+        <HeadsUpNotificationBanner
+          reminder={activeAlarmReminder}
+          settings={settings}
+          language={settings.language}
+          onComplete={(id) => {
+            handleCompleteReminder(id);
+            setActiveAlarmReminder(null);
+            setIsAlarmDetailsOpen(false);
+          }}
+          onPostpone={(id, mins) => {
+            handlePostpone(id, mins);
+            setActiveAlarmReminder(null);
+            setIsAlarmDetailsOpen(false);
+          }}
+          onDismiss={() => {
+            stopAlarmRinging();
+            stopFlashlightStrobe();
+            setActiveAlarmReminder(null);
+            setIsAlarmDetailsOpen(false);
+          }}
+          onOpenDetails={() => {
+            setIsAlarmDetailsOpen(true);
+          }}
+        />
+      )}
+
+      {/* ACTIVE FULL ALARM MODAL (Opened if user clicks Details on the Heads-Up banner) */}
+      {activeAlarmReminder && isAlarmDetailsOpen && (
+        <AlarmModal
+          reminder={activeAlarmReminder}
+          settings={settings}
+          onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
+          onDismiss={() => {
+            stopAlarmRinging();
+            stopFlashlightStrobe();
+            setActiveAlarmReminder(null);
+            setIsAlarmDetailsOpen(false);
+            setActiveMainTab('reminders');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onComplete={(id) => {
+            handleCompleteReminder(id);
+            setActiveAlarmReminder(null);
+            setIsAlarmDetailsOpen(false);
+            setActiveMainTab('reminders');
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          }}
+          onPostpone={(id, mins) => {
+            handlePostpone(id, mins);
+            setActiveAlarmReminder(null);
+            setIsAlarmDetailsOpen(false);
+          }}
+        />
+      )}
 
       {/* IMAGE VIEWER MODAL */}
       {viewingImageUrl && (
@@ -1689,7 +1884,7 @@ export default function App() {
             </button>
             <img
               src={viewingImageUrl}
-              alt="پیوست یادآور"
+              alt="Attachment"
               className="w-full h-full object-contain max-h-[85vh]"
             />
           </div>
@@ -1703,9 +1898,10 @@ export default function App() {
         <SplashScreen 
           onStartExit={handleStartExitSplash} 
           onFinish={handleFinishSplash} 
-          matteDelayMs={100}
-          logoDisplayMs={1500}
-          fadeOutMs={400}
+          matteDelayMs={0}
+          logoDisplayMs={1400}
+          fadeOutMs={350}
+          language={settings.language}
         />
       )}
     </>
