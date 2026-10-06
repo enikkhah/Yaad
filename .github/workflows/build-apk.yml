@@ -24,6 +24,11 @@ jobs:
 
       - name: Build web app
         run: npm run build
+        
+      - name: Remove old Android folder
+        run: rm -rf android
+      - name: Add Android
+        run: npx cap add android
       - name: Add Android
         run: |
          if [ ! -d "android" ]; then
