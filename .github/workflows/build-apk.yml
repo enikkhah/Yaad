@@ -24,21 +24,16 @@ jobs:
 
       - name: Build web app
         run: npm run build
-        
-      
-      
-        
-      - name: Add Android
-        run: npx cap add android
-
-      - name: Sync Capacitor
-        run: npx cap sync android
+  
       - name: Generate Android App Icon
         run: |
-         npm install @capacitor/assets --no-save --legacy-peer-deps
-          mkdir -p resources
-          cp public/icon.png resources/icon.png
-          npx capacitor-assets generate --android --iconBackgroundColor '#111111' --iconBackgroundColorDark '#111111'
+          npm install @capacitor/assets --no-save
+           mkdir -p resources
+           cp public/icon.png resources/icon.png
+           npx capacitor-assets generate --android
+
+      - name: Sync Capacitor
+        run: npx cap sync android 
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
