@@ -24,13 +24,6 @@ jobs:
 
       - name: Build web app
         run: npm run build
-  
-      - name: Generate Android App Icon
-        run: |
-          npm install @capacitor/assets --no-save
-           mkdir -p resources
-           cp public/icon.png resources/icon.png
-           npx capacitor-assets generate --android
 
       - name: Sync Capacitor
         run: npx cap sync android 
