@@ -24,7 +24,11 @@ jobs:
 
       - name: Build web app
         run: npm run build
-        
+      - name: Remove old Android folder
+        run: rm -rf android
+
+      - name: Add Android
+        run: npx cap add android
       - name: Generate Android App Icon
         run: |
           npm install @capacitor/assets --legacy-peer-deps
