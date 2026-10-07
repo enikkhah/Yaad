@@ -15,8 +15,8 @@ import {
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
 import { parseSmsOrText } from '../utils/smsParser';
 import { CameraCaptureModal } from './CameraCaptureModal';
-import { requestSystemNotificationPermission } from '../utils/systemNotification';
 import { requestMicrophonePermission } from '../utils/nativePermissions';
+import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 import { 
   Mic, 
   MicOff, 
@@ -241,16 +241,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       return;
     }
 
-    // Explicitly trigger Android OS native microphone permission dialog
-    const micGranted = await requestMicrophonePermission();
-    if (!micGranted) {
-      setVoiceErrorMsg(
-        isEn
-          ? 'Microphone permission denied. Please allow microphone access in settings.'
-          : 'دسترسی میکروفون رد شد. لطفاً در تنظیمات گوشی دسترسی میکروفون را فعال نمایید.'
-      );
-      setTimeout(() => setVoiceErrorMsg(null), 5000);
-      return;
+    // Request mic access gracefully
+    try {
+      await requestMicrophonePermission();
+    } catch {
+      // Non-fatal, SpeechRecognition prompt will trigger
     }
 
     try {
@@ -612,10 +607,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
 
     stopVoiceListening();
 
-    // Proactively request notification permission on user submit gesture so system notifications work
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-      requestSystemNotificationPermission().catch(() => {});
-    }
+    // Request Android notification permission on first reminder need
+    requestNotificationPermission().catch(() => {});
 
     const dueTimestamp = calculateDueTimestamp();
     onSave(

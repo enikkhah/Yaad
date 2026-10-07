@@ -38,11 +38,6 @@ import { getT } from '../utils/i18n';
 import { APP_VERSION, APP_VERSION_INFO } from '../utils/version';
 import { toPersianDigits } from '../utils/jalali';
 import { 
-  getSystemNotificationPermission, 
-  requestSystemNotificationPermission, 
-  showSystemAlarmNotification
-} from '../utils/systemNotification';
-import { 
   isNativeAndroidApp,
   requestNotificationPermission,
   requestMicrophonePermission,
@@ -50,7 +45,6 @@ import {
   requestLocationPermission,
   requestAllNativePermissions,
   checkAllPermissionsStatus,
-  triggerOutOfAppNotification,
   NativePermissionsStatus
 } from '../utils/nativePermissions';
 import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
@@ -95,7 +89,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const isFa = currentLanguage === 'fa';
   const t = getT(currentLanguage);
   const [isSigningIn, setIsSigningIn] = useState(false);
-  const [notifPermission, setNotifPermission] = useState<NotificationPermission>('default');
   const [mapsKeyInput, setMapsKeyInput] = useState(settings?.googleMapsApiKey || '');
   const [keySavedMessage, setKeySavedMessage] = useState(false);
 
@@ -125,7 +118,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      setNotifPermission(getSystemNotificationPermission());
       checkAllPermissionsStatus().then(setNativePerms);
     } else {
       stopAlarmRinging();
@@ -136,9 +128,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const handleRequestPerm = async (type: 'notifications' | 'microphone' | 'camera' | 'location') => {
     if (type === 'notifications') {
-      const success = await requestNotificationPermission();
-      setNotifPermission(success ? 'granted' : 'denied');
-      onUpdateSettings({ systemNotificationsEnabled: success });
+      await requestNotificationPermission();
     } else if (type === 'microphone') {
       await requestMicrophonePermission();
     } else if (type === 'camera') {
@@ -154,8 +144,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsRequestingAllPerms(true);
     const updated = await requestAllNativePermissions();
     setNativePerms(updated);
-    setNotifPermission(updated.notifications ? 'granted' : 'denied');
-    onUpdateSettings({ systemNotificationsEnabled: updated.notifications });
     setIsRequestingAllPerms(false);
   };
 
@@ -190,63 +178,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const clamped = Math.max(0.0, Math.min(1.0, newVolume));
     onUpdateSettings({ alarmVolume: clamped });
     setGlobalVolume(clamped);
-  };
-
-  const handleToggleNotifications = async () => {
-    const isCurrentlyActive = (settings?.systemNotificationsEnabled ?? true) && notifPermission === 'granted';
-    if (!isCurrentlyActive) {
-      const granted = await requestSystemNotificationPermission();
-      setNotifPermission(granted ? 'granted' : 'denied');
-      if (granted) {
-        onUpdateSettings({ systemNotificationsEnabled: true });
-        showSystemAlarmNotification({
-          id: 'test-system-notif',
-          title: isFa ? '🔔 اعلان‌های سیستم فعال شد' : '🔔 Yaad Notifications Active',
-          description: isFa 
-            ? 'اعلان‌های یادآور با موفقیت روی صفحه قفل و سایر برنامه‌ها فعال گردید'
-            : 'System notifications enabled on lock screen and over other apps',
-          dueTimestamp: Date.now(),
-          category: 'work',
-          priority: 'high',
-          status: 'pending',
-          postponeCount: 0,
-          ringTune: 'work',
-          useFlash: true,
-          voiceReadAloud: false,
-          createdAt: Date.now(),
-        });
-      }
-    } else {
-      onUpdateSettings({ systemNotificationsEnabled: false });
-    }
-  };
-
-  const handleTestHeadsUpNotification = async () => {
-    const granted = await requestSystemNotificationPermission();
-    setNotifPermission(granted ? 'granted' : 'denied');
-
-    const testReminder: Reminder = {
-      id: 'test_heads_up_' + Date.now(),
-      title: isFa ? 'آلارم تست نمایش' : 'Alarm Display Test',
-      description: isFa ? 'تست اعلان پاپ‌آپ بالای صفحه (Heads-Up Banner)' : 'Heads-up pop-up banner test',
-      dueTimestamp: Date.now(),
-      category: 'work',
-      priority: 'high',
-      status: 'pending',
-      postponeCount: 0,
-      ringTune: settings.alarmSound || 'digital-beep',
-      useFlash: false,
-      voiceReadAloud: false,
-      createdAt: Date.now(),
-    };
-
-    // 1. Native out-of-app notification (Capacitor Android APK channel + Web Notification)
-    triggerOutOfAppNotification(testReminder, true);
-
-    // 2. In-app heads-up pill banner (matching Samsung / Android Reminder)
-    if (onTestHeadsUpBanner) {
-      onTestHeadsUpBanner(testReminder);
-    }
   };
 
   const handleTestTorch = async () => {
@@ -508,94 +439,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </div>
           </section>
 
-          {/* 3. SYSTEM ALARM NOTIFICATIONS ON PHONE & OTHER APPS - SLIDING TOGGLE SWITCH */}
-          <section className="space-y-2.5 pt-2 border-t border-stone-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-bold text-stone-100">
-                <Smartphone className="w-4 h-4 text-amber-400" />
-                <span>{isFa ? 'اعلان‌های سیستم گوشی (صفحه قفل و سایر برنامه‌ها)' : 'System Notifications (Lock Screen & Apps)'}</span>
-              </div>
-              {((settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted') ? (
-                <span className="flex items-center gap-1 text-[11px] text-emerald-400 font-bold bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                  <CheckCircle2 className="w-3 h-3" />
-                  <span>{isFa ? 'روشن' : 'Enabled'}</span>
-                </span>
-              ) : (
-                <span className="text-[11px] text-stone-400 font-bold bg-stone-800/60 border border-stone-700/60 px-2 py-0.5 rounded-full">
-                  {isFa ? 'خاموش' : 'Disabled'}
-                </span>
-              )}
-            </div>
-
-            <div className="p-3.5 sm:p-4 rounded-2xl bg-stone-950/80 border border-stone-800 flex items-center justify-between gap-3">
-              <div className="space-y-1 pr-1">
-                <p className="text-xs sm:text-sm text-white font-bold">
-                  {isFa ? 'دسترسی به آلارم و اعلان‌های صوتی سیستم' : 'System alarm & notification access'}
-                </p>
-                <p className="text-[11px] text-stone-400 leading-relaxed">
-                  {isFa 
-                    ? 'پخش آلارم، ویبره و اعلان زمان یادآوری روی صفحه قفل و حتی هنگام بستن برنامه' 
-                    : 'Sound, vibration & pop-up alarms even when the app is closed'}
-                </p>
-              </div>
-
-              {/* Sliding Toggle Switch (دکمه کشویی) */}
-              <div dir="ltr" className="inline-flex items-center flex-shrink-0">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={(settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted'}
-                  onClick={handleToggleNotifications}
-                  className={`relative inline-flex h-7 w-13 flex-shrink-0 cursor-pointer rounded-full p-0.5 transition-colors duration-200 ease-in-out focus:outline-none shadow-inner ${
-                    (settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted'
-                      ? 'bg-amber-500'
-                      : 'bg-stone-700'
-                  }`}
-                  title={isFa ? 'روشن / خاموش کردن اعلان‌ها' : 'Toggle notifications on/off'}
-                >
-                  <span
-                    aria-hidden="true"
-                    className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md transition duration-200 ease-in-out ${
-                      (settings.systemNotificationsEnabled ?? true) && notifPermission === 'granted'
-                        ? 'translate-x-6'
-                        : 'translate-x-0'
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
-
-            {/* Test Heads-up Notification Button */}
-            <div className="flex items-center justify-between p-3.5 rounded-2xl bg-indigo-950/40 border border-indigo-500/40 shadow-md">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-600/40">
-                  <Bell className="w-4 h-4 fill-white" />
-                </div>
-                <div>
-                  <p className="text-xs font-bold text-white">
-                    {isFa ? 'تست زنده اعلان کرکره‌ای و صوتی سیستم' : 'Live Test System Notification'}
-                  </p>
-                  <p className="text-[11px] text-stone-300 mt-0.5">
-                    {isFa ? 'ارسال فوری اعلان کرکره‌ای روی صفحه گوشی همراه با ویبره و زنگ هشدار' : 'Trigger an instant system heads-up notification with sound and vibration'}
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={handleTestHeadsUpNotification}
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black transition-all shadow-lg shadow-indigo-950/40 active:scale-95 cursor-pointer shrink-0"
-              >
-                {isFa ? 'ارسال تست' : 'Send Test'}
-              </button>
-            </div>
-          </section>
-
-          {/* 3.1. PERMISSIONS HUB (مدیریت دسترسی‌های نوتیفیکیشن، میکروفون، دوربین و GPS برای نسخه APK و وب) */}
+          {/* 3. PERMISSIONS HUB (مدیریت دسترسی‌های میکروفون، دوربین و GPS برای تایپ صوتی و پیوست‌ها) */}
           <section className="space-y-3 pt-3 border-t border-stone-800">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-sky-400">
                 <ShieldCheck className="w-4 h-4 text-sky-400" />
-                <span>{isFa ? 'مدیریت دسترسی‌های اندروید و APK (Permissions Hub)' : 'Android & APK Permissions Hub'}</span>
+                <span>{isFa ? 'مدیریت دسترسی‌های برنامه (Permissions Hub)' : 'App Permissions Hub'}</span>
               </div>
               {isNativeAndroidApp() && (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
@@ -606,8 +455,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             <p className="text-[11px] text-stone-400 leading-relaxed">
               {isFa
-                ? 'برای کارکرد صحیح اعلان‌های خارج از اپ، تبدیل گفتار به متن (تایپ صوتی)، عکاسی و ثبت لوکیشن، دسترسی‌های زیر را فعال کنید:'
-                : 'Grant permissions for out-of-app notifications, voice speech-to-text, camera, and GPS location:'}
+                ? 'برای کارکرد صحیح اعلان یادآورها در پس‌زمینه و هنگام بسته بودن برنامه، تبدیل گفتار به متن (تایپ صوتی)، عکاسی و ثبت لوکیشن، دسترسی‌های زیر را فعال کنید:'
+                : 'Grant permissions for out-of-app reminder notifications, voice typing, camera, and GPS location:'}
             </p>
 
             {/* Request All Permissions at Once */}
@@ -627,7 +476,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {/* Individual Permissions Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-              {/* 1. Notification */}
+              {/* 1. Notification (Local Notifications) */}
               <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="p-1.5 rounded-lg bg-indigo-500/15 text-indigo-400">
@@ -635,7 +484,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-stone-200 truncate">
-                      {isFa ? 'نوتیفیکیشن و آلارم' : 'Notifications'}
+                      {isFa ? 'اعلان‌ها و آلارم اندروید' : 'Android Notifications'}
                     </p>
                     <span className={`text-[10px] font-bold ${nativePerms.notifications ? 'text-emerald-400' : 'text-amber-400'}`}>
                       {nativePerms.notifications ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}

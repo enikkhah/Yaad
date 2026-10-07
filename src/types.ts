@@ -50,6 +50,7 @@ export interface SavedLocation {
 
 export interface Reminder {
   id: string;
+  notificationId?: number; // Stable 32-bit integer ID for Android Local Notifications
   title: string;
   description?: string;
   category: Category;

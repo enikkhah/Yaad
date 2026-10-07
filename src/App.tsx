@@ -26,19 +26,16 @@ import {
 import { User } from 'firebase/auth';
 import confetti from 'canvas-confetti';
 import nikAppIcon from './assets/images/nik_reminder_icon_1790104279557.jpg';
-import { 
-  initSystemNotifications, 
-  showSystemAlarmNotification, 
-  requestSystemNotificationPermission,
-  syncRemindersToServiceWorker,
-  getSystemNotificationPermission,
-  ensureNotificationAndAudioReady
-} from './utils/systemNotification';
-import { 
-  initAndroidNotificationChannel, 
-  triggerOutOfAppNotification 
-} from './utils/nativePermissions';
 import { getNextRecurrenceTimestamp } from './utils/recurrence';
+import { 
+  initNotificationChannel, 
+  scheduleReminderNotification, 
+  cancelReminderNotification, 
+  rescheduleReminderNotification, 
+  syncAllRemindersWithLocalNotifications, 
+  setupNotificationListeners,
+  getNotificationId
+} from './utils/nativeLocalNotifications';
 import { getT } from './utils/i18n';
 import { 
   Plus, 
@@ -227,9 +224,6 @@ export default function App() {
     index: number;
     timer: NodeJS.Timeout;
   } | null>(null);
-  const [systemNotifGranted, setSystemNotifGranted] = useState<boolean>(() => {
-    return getSystemNotificationPermission() === 'granted';
-  });
 
   // Automatically unlock browser audio context on first user interaction so alarms always sound loudly
   useEffect(() => {
@@ -293,180 +287,51 @@ export default function App() {
       }
     );
 
-    // Initialize Service Worker for System Notifications
-    initSystemNotifications();
-
-    // Helper: Sync any alarms marked completed or dismissed by the Service Worker
-    const syncCompletedFromDB = () => {
-      try {
-        if (typeof indexedDB === 'undefined') return;
-        const req = indexedDB.open('yadnik_alarms_db', 1);
-        req.onsuccess = () => {
-          const db = req.result;
-          if (!db.objectStoreNames.contains('alarms')) return;
-          const tx = db.transaction('alarms', 'readonly');
-          const store = tx.objectStore('alarms');
-          const getAll = store.getAll();
-          getAll.onsuccess = () => {
-            const list = getAll.result || [];
-            const completedAlarms = list.filter((a: any) => a.completed);
-            if (completedAlarms.length > 0) {
-              completedAlarms.forEach((a: any) => {
-                triggeredAlarmsRef.current.add(a.id);
-              });
-              setReminders((prev) => {
-                let hasChanges = false;
-                const next = prev.map((r) => {
-                  const isDone = completedAlarms.some((a: any) => a.id === r.id);
-                  if (isDone && r.status === 'pending') {
-                    hasChanges = true;
-                    return { ...r, status: 'completed' as const, completedAt: Date.now() };
-                  }
-                  return r;
-                });
-                return hasChanges ? next : prev;
-              });
-            }
-          };
-        };
-      } catch {
-        // ignore
-      }
-    };
-
-    // Run initial sync from DB
-    syncCompletedFromDB();
-
-    const handleSwMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'TRIGGER_ALARM_MODAL' && event.data.reminder) {
-        const rem = event.data.reminder;
-        const found = remindersRef.current.find((r) => r.id === rem.id);
-        if (found) {
-          if (found.status === 'pending') {
-            triggeredAlarmsRef.current.add(found.id);
-            setActiveAlarmReminder(found);
-          }
-        } else {
-          triggeredAlarmsRef.current.add(rem.id);
-          setActiveAlarmReminder(rem);
-        }
-        return;
-      }
-
-      if (event.data && event.data.type === 'YADNIK_NOTIFICATION_ACTION') {
-        const { action, reminderId, reminder } = event.data;
-        if (action === 'ok' || action === 'complete') {
-          stopAlarmRinging();
-          stopFlashlightStrobe();
-          setActiveAlarmReminder(null);
-          if (reminderId) {
-            handleCompleteReminderRef.current(reminderId);
-          }
-          return;
-        }
-
-        if (action === 'dismiss') {
-          stopAlarmRinging();
-          stopFlashlightStrobe();
-          setActiveAlarmReminder(null);
-          if (reminderId) {
-            triggeredAlarmsRef.current.add(reminderId);
-          }
-          return;
-        }
-
-        if (action === 'snooze') {
-          stopAlarmRinging();
-          stopFlashlightStrobe();
-          setActiveAlarmReminder(null);
-          if (reminderId) {
-            handlePostponeRef.current(reminderId, 15);
-          }
-          return;
-        }
-
-        if (action === 'focus') {
-          if (reminder && reminder.status === 'pending') {
-            setActiveAlarmReminder(reminder);
-          } else if (reminderId) {
-            const found = remindersRef.current.find((r) => r.id === reminderId);
-            if (found && found.status === 'pending') {
-              setActiveAlarmReminder(found);
-            }
-          }
-          return;
-        }
-      }
-    };
-
+    // Register Service Worker for PWA offline caching
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.addEventListener('message', handleSwMessage);
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
 
-    let bc: BroadcastChannel | null = null;
-    try {
-      if (typeof BroadcastChannel !== 'undefined') {
-        bc = new BroadcastChannel('yadnik_alarm_channel');
-        bc.onmessage = handleSwMessage;
-      }
-    } catch {
-      // ignore
-    }
+    // Initialize Android Notification Channel & Listeners for native Local Notifications
+    initNotificationChannel().catch(() => {});
+    setupNotificationListeners(
+      (id) => handleCompleteReminderRef.current(id),
+      (id, mins) => handlePostponeRef.current(id, mins)
+    );
 
     // Listen for Chrome / Android PWA beforeinstallprompt event
     const handleBeforeInstallPrompt = (e: Event) => {
-       e.preventDefault();
-       setInstallPromptEvent(e);
-     };
+      e.preventDefault();
+      setInstallPromptEvent(e);
+    };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
 
     // When the app is installed via Chrome's 3-dot menu ("Install app" / "نصب برنامه")
-    const handleAppInstalled = async () => {
+    const handleAppInstalled = () => {
       console.log('App was installed via browser menu!');
       setIsAppInstalled(true);
       setInstallPromptEvent(null);
-      try {
-        await requestSystemNotificationPermission();
-      } catch (err) {
-        console.warn('Could not request permission on appinstalled event:', err);
-      }
     };
 
     window.addEventListener('appinstalled', handleAppInstalled);
 
-    // Initialize high-priority notification channel for Android APK
-    initAndroidNotificationChannel().catch(() => {});
-
-    // If launched as installed standalone PWA, check & prompt for notification permission
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true;
     if (isStandalone) {
       setIsAppInstalled(true);
-    }
-    if (isStandalone && typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'default') {
-      setTimeout(() => {
-        requestSystemNotificationPermission();
-      }, 1000);
     }
 
     return () => {
       unsubscribe();
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.removeEventListener('message', handleSwMessage);
-      }
-      if (bc) {
-        bc.close();
-      }
     };
   }, []);
 
-  // Save to localStorage & synchronize with Service Worker for background alarms
+  // Save to localStorage
   useEffect(() => {
     try {
       localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(reminders));
-      syncRemindersToServiceWorker(reminders);
     } catch (err) {
       console.error('Failed to save reminders:', err);
     }
@@ -487,30 +352,6 @@ export default function App() {
       console.error('Failed to save settings:', err);
     }
   }, [settings]);
-
-  const handleEnableSystemNotifications = async () => {
-    const granted = await requestSystemNotificationPermission();
-    setSystemNotifGranted(granted);
-    if (granted) {
-      await syncRemindersToServiceWorker(reminders);
-      showSyncNotification('دسترسی به اعلان‌های سیستم در پس‌زمینه با موفقیت فعال شد.');
-      // Fire immediate confirmation notification
-      showSystemAlarmNotification({
-        id: 'test_activation_' + Date.now(),
-        title: 'فعال‌سازی موفقیت‌آمیز اعلان‌ها',
-        description: 'از این پس یادآورها حتی با خروج از برنامه و قفل بودن صفحه به شما اعلام می‌شوند.',
-        dueTimestamp: Date.now(),
-        category: 'work',
-        priority: 'high',
-        status: 'pending',
-        createdAt: Date.now(),
-        postponeCount: 0,
-        useFlash: true,
-        ringTune: 'digital-beep',
-        voiceReadAloud: false,
-      });
-    }
-  };
 
   // Check URL params for alarmId when launched from notification click
   useEffect(() => {
@@ -550,25 +391,6 @@ export default function App() {
         ) {
           triggeredAlarmsRef.current.add(r.id);
           setActiveAlarmReminder(r);
-
-          // Trigger out-of-app notification (for Capacitor native Android APK + Web Service Worker)
-          triggerOutOfAppNotification(r, true).catch(() => {});
-
-          // Trigger System Notification with Complete, Snooze, and Dismiss actions
-          showSystemAlarmNotification(r, (action, remId) => {
-            if (action === 'complete') {
-              handleCompleteReminder(remId);
-            } else if (action === 'snooze') {
-              stopAlarmRinging();
-              stopFlashlightStrobe();
-              setActiveAlarmReminder(null);
-              handlePostpone(remId, 15);
-            } else if (action === 'dismiss') {
-              stopAlarmRinging();
-              stopFlashlightStrobe();
-              setActiveAlarmReminder(null);
-            }
-          });
         }
       });
     };
@@ -665,28 +487,37 @@ export default function App() {
 
     if (editingReminder) {
       triggeredAlarmsRef.current.delete(editingReminder.id);
+      const updatedReminder: Reminder = {
+        ...editingReminder,
+        ...data,
+        status: data.dueTimestamp >= Date.now() ? 'pending' : editingReminder.status,
+        googleCalendarEventId: calendarEventId || editingReminder.googleCalendarEventId,
+      };
+
+      // Reschedule Android Local Notification
+      rescheduleReminderNotification(editingReminder.id, updatedReminder).catch(() => {});
+
       setReminders((prev) =>
         prev.map((r) =>
-          r.id === editingReminder.id
-            ? {
-                ...r,
-                ...data,
-                status: data.dueTimestamp >= Date.now() ? 'pending' : r.status,
-                googleCalendarEventId: calendarEventId || r.googleCalendarEventId,
-              }
-            : r
+          r.id === editingReminder.id ? updatedReminder : r
         )
       );
       setEditingReminder(null);
     } else {
+      const newId = 'rem_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
       const newReminder: Reminder = {
         ...data,
-        id: 'rem_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+        id: newId,
+        notificationId: getNotificationId(newId),
         createdAt: Date.now(),
         status: 'pending',
         postponeCount: 0,
         googleCalendarEventId: calendarEventId,
       };
+
+      // Schedule Android Local Notification
+      scheduleReminderNotification(newReminder).catch(() => {});
+
       setReminders((prev) => [newReminder, ...prev]);
     }
     setActiveMainTab('reminders');
@@ -820,30 +651,8 @@ export default function App() {
     setActiveAlarmReminder(null);
     triggeredAlarmsRef.current.add(id);
 
-    // Sync completion to IndexedDB so Service Worker also knows it is finished
-    try {
-      if (typeof indexedDB !== 'undefined') {
-        const req = indexedDB.open('yadnik_alarms_db', 1);
-        req.onsuccess = () => {
-          const db = req.result;
-          if (db.objectStoreNames.contains('alarms')) {
-            const tx = db.transaction('alarms', 'readwrite');
-            const store = tx.objectStore('alarms');
-            const getReq = store.get(id);
-            getReq.onsuccess = () => {
-              if (getReq.result) {
-                const item = getReq.result;
-                item.completed = true;
-                item.triggered = true;
-                store.put(item);
-              }
-            };
-          }
-        };
-      }
-    } catch {
-      // ignore
-    }
+    // Cancel Android Local Notification for completed reminder
+    cancelReminderNotification(id).catch(() => {});
 
     setReminders((prev) =>
       prev.map((r) => {
@@ -852,19 +661,23 @@ export default function App() {
           if (r.recurrence && r.recurrence !== 'none') {
             const nextDue = getNextRecurrenceTimestamp(r, Date.now());
             if (nextDue) {
-              confetti({
-                particleCount: 50,
-                spread: 60,
-                origin: { y: 0.8 },
-              });
-              showSyncNotification(`✓ انجام شد! نوبت بعدی برای ${formatJalaliFull(nextDue)} زمان‌بندی شد.`);
-              return {
+              const recurringUpdated: Reminder = {
                 ...r,
                 dueTimestamp: nextDue,
                 status: 'pending',
                 completedAt: undefined,
                 postponeCount: 0,
               };
+              // Schedule next recurrence in Android Local Notifications
+              scheduleReminderNotification(recurringUpdated).catch(() => {});
+
+              confetti({
+                particleCount: 50,
+                spread: 60,
+                origin: { y: 0.8 },
+              });
+              showSyncNotification(`✓ انجام شد! نوبت بعدی برای ${formatJalaliFull(nextDue)} زمان‌بندی شد.`);
+              return recurringUpdated;
             }
           }
 
@@ -898,6 +711,9 @@ export default function App() {
       if (!target) return prev;
       if (target.status !== 'completed') {
         triggeredAlarmsRef.current.add(id);
+        // Cancel Android Local Notification
+        cancelReminderNotification(id).catch(() => {});
+
         confetti({
           particleCount: 50,
           spread: 60,
@@ -907,18 +723,17 @@ export default function App() {
         if (target.recurrence && target.recurrence !== 'none') {
           const nextDue = getNextRecurrenceTimestamp(target, Date.now());
           if (nextDue) {
+            const recurringNext: Reminder = {
+              ...target,
+              dueTimestamp: nextDue,
+              status: 'pending',
+              completedAt: undefined,
+              postponeCount: 0,
+            };
+            scheduleReminderNotification(recurringNext).catch(() => {});
+
             showSyncNotification(`✓ انجام شد! نوبت بعدی برای ${formatJalaliFull(nextDue)} زمان‌بندی شد.`);
-            return prev.map((r) =>
-              r.id === id
-                ? {
-                    ...r,
-                    dueTimestamp: nextDue,
-                    status: 'pending',
-                    completedAt: undefined,
-                    postponeCount: 0,
-                  }
-                : r
-            );
+            return prev.map((r) => (r.id === id ? recurringNext : r));
           }
         }
 
@@ -935,6 +750,9 @@ export default function App() {
 
       // If user deliberately un-completes a completed reminder in the list
       triggeredAlarmsRef.current.delete(id);
+      if (target.dueTimestamp > Date.now()) {
+        scheduleReminderNotification({ ...target, status: 'pending' }).catch(() => {});
+      }
       return prev.map((r) =>
         r.id === id
           ? {
@@ -957,13 +775,16 @@ export default function App() {
         if (r.id === id) {
           const newDue = Math.max(Date.now(), r.dueTimestamp) + minutes * 60000;
           triggeredAlarmsRef.current.delete(id);
-          return {
+          const postponedRem: Reminder = {
             ...r,
             dueTimestamp: newDue,
             status: 'postponed',
             postponedAt: Date.now(),
             postponeCount: r.postponeCount + 1,
           };
+          // Reschedule notification for the new postponed time
+          rescheduleReminderNotification(id, postponedRem).catch(() => {});
+          return postponedRem;
         }
         return r;
       })
@@ -978,6 +799,9 @@ export default function App() {
     stopFlashlightStrobe();
     setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
     triggeredAlarmsRef.current.delete(id);
+
+    // Cancel Android Local Notification immediately
+    cancelReminderNotification(id).catch(() => {});
 
     const targetIndex = reminders.findIndex((r) => r.id === id);
     const targetReminder = reminders[targetIndex];
@@ -1007,6 +831,11 @@ export default function App() {
 
     const restored = undoToast.reminder;
     const restoreIdx = undoToast.index;
+
+    // Reschedule restored reminder if pending and in the future
+    if (restored.status === 'pending' && restored.dueTimestamp > Date.now()) {
+      scheduleReminderNotification(restored).catch(() => {});
+    }
 
     setReminders((prev) => {
       const copy = [...prev];
