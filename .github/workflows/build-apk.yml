@@ -27,13 +27,16 @@ jobs:
         
       - name: Remove old Android folder
         run: rm -rf android
+        
       - name: Add Android
         run: npx cap add android
-      - name: Add Android
+        
+      - name: Generate Android App Icon
         run: |
-         if [ ! -d "android" ]; then
-         npx cap add android
-         fi
+          npm install @capacitor/assets --legacy-peer-deps
+          mkdir -p resources
+          cp public/icon.png resources/icon.png
+          npx capacitor-assets generate --android
       - name: Sync Capacitor
         run: npx cap sync android 
       - name: Setup Java
