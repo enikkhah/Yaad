@@ -57,6 +57,17 @@ jobs:
 
           path.write_text(text)
           PY
+
+      - name: Copy notification audio files to Android
+        run: |
+          mkdir -p android/app/src/main/res/raw
+          cp public/digital_beep.wav android/app/src/main/res/raw/
+          cp public/radar.wav android/app/src/main/res/raw/
+          cp public/marimba.wav android/app/src/main/res/raw/
+          cp public/morning_chime.wav android/app/src/main/res/raw/
+          cp public/urgent_bell.wav android/app/src/main/res/raw/
+          cp public/beep.wav android/app/src/main/res/raw/
+          
       - name: Generate Android App Icon
         run: |
           npm install @capacitor/assets --legacy-peer-deps
