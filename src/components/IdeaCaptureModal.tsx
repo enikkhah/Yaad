@@ -26,6 +26,7 @@ import { syncToGoogleTasks } from '../utils/googleSync';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { AppLanguage } from '../utils/i18n';
 import { requestMicrophonePermission } from '../utils/nativePermissions';
+import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 
 interface IdeaCaptureModalProps {
   isOpen: boolean;
@@ -75,25 +76,38 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
 
   // Voice typing (Speech-to-text) state for body content
   const [isVoiceTyping, setIsVoiceTyping] = useState(false);
+  const [contentInterimTranscript, setContentInterimTranscript] = useState('');
   const speechRecognitionRef = useRef<any>(null);
   const shouldKeepContentListeningRef = useRef<boolean>(false);
-  const baseContentTextRef = useRef<string>('');
-  const sessionFinalContentTextRef = useRef<string>('');
+  const lastFinalContentTranscriptRef = useRef<string>('');
+  const processedFinalContentIndicesRef = useRef<Set<number>>(new Set());
+  const contentRef = useRef<string>('');
   const contentSilenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const contentSpeechStartTimeRef = useRef<number>(0);
   const contentLastSpeechTimeRef = useRef<number>(0);
 
   // Voice typing for title
   const [isTitleVoiceTyping, setIsTitleVoiceTyping] = useState(false);
+  const [titleInterimTranscript, setTitleInterimTranscript] = useState('');
   const [voiceLang, setVoiceLang] = useState<'fa' | 'en'>(language === 'en' ? 'en' : 'fa');
   const [voiceErrorMsg, setVoiceErrorMsg] = useState<string | null>(null);
   const titleSpeechRecognitionRef = useRef<any>(null);
   const shouldKeepTitleListeningRef = useRef<boolean>(false);
-  const baseTitleTextRef = useRef<string>('');
-  const sessionFinalTitleTextRef = useRef<string>('');
+  const lastFinalTitleTranscriptRef = useRef<string>('');
+  const processedFinalTitleIndicesRef = useRef<Set<number>>(new Set());
+  const titleRef = useRef<string>('');
   const titleSilenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const titleSpeechStartTimeRef = useRef<number>(0);
   const titleLastSpeechTimeRef = useRef<number>(0);
+
+  // Keep titleRef and contentRef synced to prevent stale closures
+  useEffect(() => {
+    titleRef.current = title;
+  }, [title]);
+
+  useEffect(() => {
+    contentRef.current = content;
+  }, [content]);
 
   // Audio recording state
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
@@ -161,12 +175,18 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       if (titleSilenceTimerRef.current) clearTimeout(titleSilenceTimerRef.current);
       setIsVoiceTyping(false);
       setIsTitleVoiceTyping(false);
+      setTitleInterimTranscript('');
+      setContentInterimTranscript('');
+      lastFinalTitleTranscriptRef.current = '';
+      lastFinalContentTranscriptRef.current = '';
+      processedFinalTitleIndicesRef.current.clear();
+      processedFinalContentIndicesRef.current.clear();
       if (speechRecognitionRef.current) {
-        try { speechRecognitionRef.current.abort(); } catch {}
+        safeAbortSpeechRecognition(speechRecognitionRef.current);
         speechRecognitionRef.current = null;
       }
       if (titleSpeechRecognitionRef.current) {
-        try { titleSpeechRecognitionRef.current.abort(); } catch {}
+        safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
         titleSpeechRecognitionRef.current = null;
       }
       if (mediaRecorderRef.current && isRecordingAudio) {
@@ -184,13 +204,12 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         clearTimeout(titleSilenceTimerRef.current);
         titleSilenceTimerRef.current = null;
       }
-      try {
-        titleSpeechRecognitionRef.current?.abort();
-      } catch {
-        // Ignore
-      }
+      safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
       titleSpeechRecognitionRef.current = null;
       setIsTitleVoiceTyping(false);
+      setTitleInterimTranscript('');
+      lastFinalTitleTranscriptRef.current = '';
+      processedFinalTitleIndicesRef.current.clear();
       return;
     }
 
@@ -203,6 +222,13 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       return;
     }
 
+    // Clean up any existing title recognition instance
+    safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
+    titleSpeechRecognitionRef.current = null;
+    setTitleInterimTranscript('');
+    lastFinalTitleTranscriptRef.current = '';
+    processedFinalTitleIndicesRef.current.clear();
+
     const micGranted = await requestMicrophonePermission();
     if (!micGranted) {
       setVoiceErrorMsg(isEn ? 'Microphone permission denied.' : 'دسترسی به میکروفون مجاز نیست. لطفاً در تنظیمات دستگاه اجازه دسترسی دهید.');
@@ -213,8 +239,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     try {
       const activeLang = forcedLang || voiceLang;
       shouldKeepTitleListeningRef.current = true;
-      baseTitleTextRef.current = title.trim();
-      sessionFinalTitleTextRef.current = '';
       titleSpeechStartTimeRef.current = Date.now();
       titleLastSpeechTimeRef.current = 0;
       setIsTitleVoiceTyping(true);
@@ -226,13 +250,10 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         }
         titleSilenceTimerRef.current = setTimeout(() => {
           shouldKeepTitleListeningRef.current = false;
-          try {
-            titleSpeechRecognitionRef.current?.abort();
-          } catch {
-            // Ignore
-          }
+          safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
           titleSpeechRecognitionRef.current = null;
           setIsTitleVoiceTyping(false);
+          setTitleInterimTranscript('');
         }, durationMs);
       };
 
@@ -245,40 +266,59 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
         if (now - refTime >= 4900) {
           shouldKeepTitleListeningRef.current = false;
+          safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
+          titleSpeechRecognitionRef.current = null;
           setIsTitleVoiceTyping(false);
+          setTitleInterimTranscript('');
           return;
         }
 
         try {
+          if (titleSpeechRecognitionRef.current) {
+            safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
+            titleSpeechRecognitionRef.current = null;
+          }
+
           const recognition = new SpeechRecognition();
           recognition.lang = activeLang === 'en' ? 'en-US' : 'fa-IR';
           recognition.continuous = true;
           recognition.interimResults = true;
+          processedFinalTitleIndicesRef.current.clear();
 
           recognition.onstart = () => {
             setIsTitleVoiceTyping(true);
           };
 
           recognition.onresult = (event: any) => {
-            let currentFinal = '';
-            let currentInterim = '';
+            let interimText = '';
 
-            for (let i = 0; i < event.results.length; ++i) {
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
               const res = event.results[i];
               if (res.isFinal) {
-                currentFinal += res[0].transcript + ' ';
+                if (!processedFinalTitleIndicesRef.current.has(i)) {
+                  processedFinalTitleIndicesRef.current.add(i);
+                  const finalChunk = res[0]?.transcript?.trim();
+                  if (finalChunk && finalChunk !== lastFinalTitleTranscriptRef.current) {
+                    lastFinalTitleTranscriptRef.current = finalChunk;
+                    titleLastSpeechTimeRef.current = Date.now();
+
+                    const currentTitle = titleRef.current || '';
+                    const updated = appendWithoutDuplicate(currentTitle, finalChunk);
+                    if (updated !== currentTitle) {
+                      titleRef.current = updated;
+                      setTitle(updated);
+                    }
+                  }
+                }
               } else {
-                currentInterim += res[0].transcript;
+                interimText += res[0]?.transcript || '';
               }
             }
 
-            sessionFinalTitleTextRef.current = currentFinal.trim();
-            const speechPart = [sessionFinalTitleTextRef.current, currentInterim].filter(Boolean).join(' ').trim();
-            const combined = [baseTitleTextRef.current, speechPart].filter(Boolean).join(' ').trim();
-
-            if (combined) {
+            const cleanInterim = interimText.trim();
+            setTitleInterimTranscript(cleanInterim);
+            if (cleanInterim) {
               titleLastSpeechTimeRef.current = Date.now();
-              setTitle(combined);
             }
 
             resetTitleSilenceTimer(5000);
@@ -290,13 +330,19 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
               const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
               if (now - refTime >= 4800) {
                 shouldKeepTitleListeningRef.current = false;
+                safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
+                titleSpeechRecognitionRef.current = null;
                 setIsTitleVoiceTyping(false);
+                setTitleInterimTranscript('');
               }
               return;
             }
             if (e.error === 'not-allowed') {
               shouldKeepTitleListeningRef.current = false;
+              safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
+              titleSpeechRecognitionRef.current = null;
               setIsTitleVoiceTyping(false);
+              setTitleInterimTranscript('');
               return;
             }
           };
@@ -304,6 +350,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           recognition.onend = () => {
             if (!shouldKeepTitleListeningRef.current) {
               setIsTitleVoiceTyping(false);
+              setTitleInterimTranscript('');
               return;
             }
 
@@ -311,20 +358,18 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
             if (now - refTime >= 4800) {
               shouldKeepTitleListeningRef.current = false;
+              safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
+              titleSpeechRecognitionRef.current = null;
               setIsTitleVoiceTyping(false);
+              setTitleInterimTranscript('');
               return;
-            }
-
-            if (sessionFinalTitleTextRef.current) {
-              baseTitleTextRef.current = [baseTitleTextRef.current, sessionFinalTitleTextRef.current].filter(Boolean).join(' ').trim();
-              sessionFinalTitleTextRef.current = '';
             }
 
             setTimeout(() => {
               if (shouldKeepTitleListeningRef.current) {
                 createAndRunTitleRec();
               }
-            }, 80);
+            }, 150);
           };
 
           titleSpeechRecognitionRef.current = recognition;
@@ -351,13 +396,12 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         clearTimeout(contentSilenceTimerRef.current);
         contentSilenceTimerRef.current = null;
       }
-      try {
-        speechRecognitionRef.current?.abort();
-      } catch {
-        // Ignore
-      }
+      safeAbortSpeechRecognition(speechRecognitionRef.current);
       speechRecognitionRef.current = null;
       setIsVoiceTyping(false);
+      setContentInterimTranscript('');
+      lastFinalContentTranscriptRef.current = '';
+      processedFinalContentIndicesRef.current.clear();
       return;
     }
 
@@ -370,6 +414,13 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       return;
     }
 
+    // Clean up any existing content recognition instance
+    safeAbortSpeechRecognition(speechRecognitionRef.current);
+    speechRecognitionRef.current = null;
+    setContentInterimTranscript('');
+    lastFinalContentTranscriptRef.current = '';
+    processedFinalContentIndicesRef.current.clear();
+
     const micGranted = await requestMicrophonePermission();
     if (!micGranted) {
       setVoiceErrorMsg(isEn ? 'Microphone permission denied.' : 'دسترسی به میکروفون مجاز نیست. لطفاً در تنظیمات دستگاه اجازه دسترسی دهید.');
@@ -380,8 +431,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     try {
       const activeLang = forcedLang || voiceLang;
       shouldKeepContentListeningRef.current = true;
-      baseContentTextRef.current = content.trim();
-      sessionFinalContentTextRef.current = '';
       contentSpeechStartTimeRef.current = Date.now();
       contentLastSpeechTimeRef.current = 0;
       setIsVoiceTyping(true);
@@ -393,13 +442,10 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         }
         contentSilenceTimerRef.current = setTimeout(() => {
           shouldKeepContentListeningRef.current = false;
-          try {
-            speechRecognitionRef.current?.abort();
-          } catch {
-            // Ignore
-          }
+          safeAbortSpeechRecognition(speechRecognitionRef.current);
           speechRecognitionRef.current = null;
           setIsVoiceTyping(false);
+          setContentInterimTranscript('');
         }, durationMs);
       };
 
@@ -412,40 +458,59 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
         if (now - refTime >= 4900) {
           shouldKeepContentListeningRef.current = false;
+          safeAbortSpeechRecognition(speechRecognitionRef.current);
+          speechRecognitionRef.current = null;
           setIsVoiceTyping(false);
+          setContentInterimTranscript('');
           return;
         }
 
         try {
+          if (speechRecognitionRef.current) {
+            safeAbortSpeechRecognition(speechRecognitionRef.current);
+            speechRecognitionRef.current = null;
+          }
+
           const recognition = new SpeechRecognition();
           recognition.lang = activeLang === 'en' ? 'en-US' : 'fa-IR';
           recognition.continuous = true;
           recognition.interimResults = true;
+          processedFinalContentIndicesRef.current.clear();
 
           recognition.onstart = () => {
             setIsVoiceTyping(true);
           };
 
           recognition.onresult = (event: any) => {
-            let currentFinal = '';
-            let currentInterim = '';
+            let interimText = '';
 
-            for (let i = 0; i < event.results.length; ++i) {
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
               const res = event.results[i];
               if (res.isFinal) {
-                currentFinal += res[0].transcript + ' ';
+                if (!processedFinalContentIndicesRef.current.has(i)) {
+                  processedFinalContentIndicesRef.current.add(i);
+                  const finalChunk = res[0]?.transcript?.trim();
+                  if (finalChunk && finalChunk !== lastFinalContentTranscriptRef.current) {
+                    lastFinalContentTranscriptRef.current = finalChunk;
+                    contentLastSpeechTimeRef.current = Date.now();
+
+                    const currentContent = contentRef.current || '';
+                    const updated = appendWithoutDuplicate(currentContent, finalChunk);
+                    if (updated !== currentContent) {
+                      contentRef.current = updated;
+                      setContent(updated);
+                    }
+                  }
+                }
               } else {
-                currentInterim += res[0].transcript;
+                interimText += res[0]?.transcript || '';
               }
             }
 
-            sessionFinalContentTextRef.current = currentFinal.trim();
-            const speechPart = [sessionFinalContentTextRef.current, currentInterim].filter(Boolean).join(' ').trim();
-            const combined = [baseContentTextRef.current, speechPart].filter(Boolean).join(' ').trim();
-
-            if (combined) {
+            const cleanInterim = interimText.trim();
+            setContentInterimTranscript(cleanInterim);
+            if (cleanInterim) {
               contentLastSpeechTimeRef.current = Date.now();
-              setContent(combined);
             }
 
             resetContentSilenceTimer(5000);
@@ -457,13 +522,19 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
               const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
               if (now - refTime >= 4800) {
                 shouldKeepContentListeningRef.current = false;
+                safeAbortSpeechRecognition(speechRecognitionRef.current);
+                speechRecognitionRef.current = null;
                 setIsVoiceTyping(false);
+                setContentInterimTranscript('');
               }
               return;
             }
             if (e.error === 'not-allowed') {
               shouldKeepContentListeningRef.current = false;
+              safeAbortSpeechRecognition(speechRecognitionRef.current);
+              speechRecognitionRef.current = null;
               setIsVoiceTyping(false);
+              setContentInterimTranscript('');
               return;
             }
           };
@@ -471,6 +542,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           recognition.onend = () => {
             if (!shouldKeepContentListeningRef.current) {
               setIsVoiceTyping(false);
+              setContentInterimTranscript('');
               return;
             }
 
@@ -478,20 +550,18 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
             if (now - refTime >= 4800) {
               shouldKeepContentListeningRef.current = false;
+              safeAbortSpeechRecognition(speechRecognitionRef.current);
+              speechRecognitionRef.current = null;
               setIsVoiceTyping(false);
+              setContentInterimTranscript('');
               return;
-            }
-
-            if (sessionFinalContentTextRef.current) {
-              baseContentTextRef.current = [baseContentTextRef.current, sessionFinalContentTextRef.current].filter(Boolean).join(' ').trim();
-              sessionFinalContentTextRef.current = '';
             }
 
             setTimeout(() => {
               if (shouldKeepContentListeningRef.current) {
                 createAndRunContentRec();
               }
-            }, 80);
+            }, 150);
           };
 
           speechRecognitionRef.current = recognition;
@@ -841,7 +911,15 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                     {voiceLang === 'fa' ? 'فارسی' : 'English'}
                   </button>
                   <span className="text-[11px] text-stone-400">
-                    {isTitleVoiceTyping ? (isEn ? 'Stops in 5s' : 'توقف با ۵ثانیه سکوت') : (isEn ? 'Type or speech' : 'تایپ یا صوت')}
+                    {isTitleVoiceTyping ? (
+                      titleInterimTranscript ? (
+                        <span className="text-amber-300 font-medium">«{titleInterimTranscript}»</span>
+                      ) : (
+                        isEn ? 'Stops in 5s' : 'توقف با ۵ثانیه سکوت'
+                      )
+                    ) : (
+                      isEn ? 'Type or speech' : 'تایپ یا صوت'
+                    )}
                   </span>
                 </div>
               </div>
@@ -966,7 +1044,17 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                     }`}
                   >
                     {isVoiceTyping ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-amber-400" />}
-                    <span>{isVoiceTyping ? (isEn ? 'Waiting (stops in 5s)' : 'منتظر صوت (خاموشی در ۵ ثانیه)') : (isEn ? 'Voice Typing' : 'شروع تایپ صوتی')}</span>
+                    <span>
+                      {isVoiceTyping ? (
+                        contentInterimTranscript ? (
+                          <span className="text-amber-200 font-medium">«{contentInterimTranscript}»</span>
+                        ) : (
+                          isEn ? 'Waiting (stops in 5s)' : 'منتظر صوت (خاموشی در ۵ ثانیه)'
+                        )
+                      ) : (
+                        isEn ? 'Voice Typing' : 'شروع تایپ صوتی'
+                      )}
+                    </span>
                   </button>
                 </div>
               </div>

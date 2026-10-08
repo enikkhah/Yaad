@@ -17,6 +17,7 @@ import { parseSmsOrText } from '../utils/smsParser';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { requestMicrophonePermission } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
+import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 import { 
   Mic, 
   MicOff, 
@@ -103,12 +104,18 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [speechTranscript, setSpeechTranscript] = useState('');
   const recognitionRef = useRef<any>(null);
   const shouldKeepListeningRef = useRef<boolean>(false);
-  const baseVoiceTextRef = useRef<string>('');
-  const sessionFinalTextRef = useRef<string>('');
+  const lastFinalTranscriptRef = useRef<string>('');
+  const processedFinalIndicesRef = useRef<Set<number>>(new Set());
+  const titleRef = useRef<string>('');
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const speechStartTimeRef = useRef<number>(0);
   const lastSpeechTimeRef = useRef<number>(0);
   const [voiceErrorMsg, setVoiceErrorMsg] = useState<string | null>(null);
+
+  // Keep titleRef synchronized with current title state to prevent stale closures
+  useEffect(() => {
+    titleRef.current = title;
+  }, [title]);
 
   // Camera & SMS states
   const [isCameraOpen, setIsCameraOpen] = useState(false);
@@ -215,19 +222,21 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       silenceTimerRef.current = null;
     }
     if (recognitionRef.current) {
-      try {
-        recognitionRef.current.abort();
-      } catch {
-        // Ignore
-      }
+      safeAbortSpeechRecognition(recognitionRef.current);
       recognitionRef.current = null;
     }
     setIsListening(false);
     setSpeechTranscript('');
+    lastFinalTranscriptRef.current = '';
+    processedFinalIndicesRef.current.clear();
   };
 
   const startVoiceListening = async (forcedLang?: 'fa' | 'en') => {
     setVoiceErrorMsg(null);
+    setSpeechTranscript('');
+    lastFinalTranscriptRef.current = '';
+    processedFinalIndicesRef.current.clear();
+
     const win = window as unknown as IWindow;
     const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
 
@@ -241,6 +250,16 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       return;
     }
 
+    // Strip previous listeners and abort prior instance
+    if (recognitionRef.current) {
+      safeAbortSpeechRecognition(recognitionRef.current);
+      recognitionRef.current = null;
+    }
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
     // Request mic access gracefully
     try {
       await requestMicrophonePermission();
@@ -249,31 +268,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     }
 
     try {
-      if (recognitionRef.current) {
-        try {
-          recognitionRef.current.abort();
-        } catch {
-          // Ignore
-        }
-        recognitionRef.current = null;
-      }
-      if (silenceTimerRef.current) {
-        clearTimeout(silenceTimerRef.current);
-        silenceTimerRef.current = null;
-      }
-
       const activeLang = forcedLang || voiceLang;
       shouldKeepListeningRef.current = true;
-      baseVoiceTextRef.current = title.trim();
-      sessionFinalTextRef.current = '';
       speechStartTimeRef.current = Date.now();
       lastSpeechTimeRef.current = 0;
       setIsListening(true);
-
-      // Start initial 5-second silence timer: if no voice arrives within 5 seconds, turn off
-      silenceTimerRef.current = setTimeout(() => {
-        stopVoiceListening();
-      }, 5000);
 
       const resetSilenceTimer = (durationMs = 5000) => {
         if (silenceTimerRef.current) {
@@ -284,6 +283,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
           stopVoiceListening();
         }, durationMs);
       };
+
+      // Start initial 5-second silence timer: if no voice arrives within 5 seconds, turn off
+      resetSilenceTimer(5000);
 
       const createAndRunRecognition = () => {
         if (!shouldKeepListeningRef.current) return;
@@ -297,53 +299,69 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         }
 
         try {
+          if (recognitionRef.current) {
+            safeAbortSpeechRecognition(recognitionRef.current);
+            recognitionRef.current = null;
+          }
+
           const rec = new SpeechRec();
           rec.lang = activeLang === 'en' ? 'en-US' : 'fa-IR';
           rec.continuous = true;
           rec.interimResults = true;
+          processedFinalIndicesRef.current.clear();
 
           rec.onstart = () => {
             setIsListening(true);
           };
 
           rec.onresult = (event: any) => {
-            let currentFinal = '';
-            let currentInterim = '';
+            let interimText = '';
 
-            for (let i = 0; i < event.results.length; ++i) {
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
               const res = event.results[i];
               if (res.isFinal) {
-                currentFinal += res[0].transcript + ' ';
+                if (!processedFinalIndicesRef.current.has(i)) {
+                  processedFinalIndicesRef.current.add(i);
+                  const finalChunk = res[0]?.transcript?.trim();
+                  if (finalChunk && finalChunk !== lastFinalTranscriptRef.current) {
+                    lastFinalTranscriptRef.current = finalChunk;
+                    lastSpeechTimeRef.current = Date.now();
+
+                    const currentTitle = titleRef.current || '';
+                    const updatedTitle = appendWithoutDuplicate(currentTitle, finalChunk);
+
+                    if (updatedTitle !== currentTitle) {
+                      titleRef.current = updatedTitle;
+                      setTitle(updatedTitle);
+
+                      const parsed = parseSmsOrText(updatedTitle);
+                      if (parsed.suggestedTimestamp) {
+                        const j = getJalaliComponents(parsed.suggestedTimestamp);
+                        setSelectedHour(j.hour);
+                        setSelectedMinute(j.minute);
+                        setSelectedDay(j.day);
+                        setSelectedMonth(j.month);
+                        setSelectedYear(j.year);
+                      }
+                      if (parsed.category) {
+                        setCategory(parsed.category);
+                        setRingTune(parsed.category);
+                      }
+                    }
+                  }
+                }
               } else {
-                currentInterim += res[0].transcript;
+                interimText += res[0]?.transcript || '';
               }
             }
 
-            sessionFinalTextRef.current = currentFinal.trim();
-            const currentSpoken = [sessionFinalTextRef.current, currentInterim].filter(Boolean).join(' ').trim();
-            const combined = [baseVoiceTextRef.current, currentSpoken].filter(Boolean).join(' ').trim();
-
-            setSpeechTranscript(currentSpoken);
-
-            if (combined) {
+            // Interim results are used ONLY for live feedback and never appended directly to title
+            const cleanInterim = interimText.trim();
+            setSpeechTranscript(cleanInterim);
+            if (cleanInterim) {
               lastSpeechTimeRef.current = Date.now();
-              const parsed = parseSmsOrText(combined);
-              setTitle(parsed.title || combined);
-              if (parsed.suggestedTimestamp) {
-                const j = getJalaliComponents(parsed.suggestedTimestamp);
-                setSelectedHour(j.hour);
-                setSelectedMinute(j.minute);
-                setSelectedDay(j.day);
-                setSelectedMonth(j.month);
-                setSelectedYear(j.year);
-              }
-              if (parsed.category) {
-                setCategory(parsed.category);
-                setRingTune(parsed.category);
-              }
             }
 
-            // Voice received: reset silence timer to wait 5 seconds after speech ends
             resetSilenceTimer(5000);
           };
 
@@ -383,29 +401,23 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
           rec.onend = () => {
             if (!shouldKeepListeningRef.current) {
               setIsListening(false);
+              setSpeechTranscript('');
               return;
             }
 
             const now = Date.now();
             const refTime = lastSpeechTimeRef.current || speechStartTimeRef.current;
             if (now - refTime >= 4800) {
-              // 5 seconds elapsed without speech -> stop cleanly
               stopVoiceListening();
               return;
             }
 
-            // Keep base text accumulated
-            if (sessionFinalTextRef.current) {
-              baseVoiceTextRef.current = [baseVoiceTextRef.current, sessionFinalTextRef.current].filter(Boolean).join(' ').trim();
-              sessionFinalTextRef.current = '';
-            }
-
-            // Seamlessly resume only if still inside 5-second window
+            // Safe pause before reconnecting to let the OS mic pipeline clear
             setTimeout(() => {
               if (shouldKeepListeningRef.current) {
                 createAndRunRecognition();
               }
-            }, 80);
+            }, 150);
           };
 
           recognitionRef.current = rec;
@@ -723,10 +735,16 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   </button>
 
                   {isListening && (
-                    <span className="text-[11px] font-bold text-amber-400 animate-pulse flex items-center gap-1">
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-400">
                       <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
-                      <span>{isEn ? 'Waiting for voice (stops in 5s)...' : 'منتظر صوت (خاموشی بعد از ۵ ثانیه)...'}</span>
-                    </span>
+                      {speechTranscript ? (
+                        <span className="text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded-md border border-amber-500/30 font-medium max-w-[180px] sm:max-w-xs truncate">
+                          «{speechTranscript}»
+                        </span>
+                      ) : (
+                        <span>{isEn ? 'Waiting for voice (stops in 5s)...' : 'منتظر صوت (خاموشی بعد از ۵ ثانیه)...'}</span>
+                      )}
+                    </div>
                   )}
                 </div>
               </div>
