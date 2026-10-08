@@ -49,6 +49,7 @@ import {
 } from '../utils/nativePermissions';
 import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
 import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume } from '../utils/audio';
+import { syncNotificationSoundAndVolume } from '../utils/nativeLocalNotifications';
 import { User } from 'firebase/auth';
 import yaadAppIcon from '../assets/images/yaad_pwa_icon_1790941867734.jpg';
 
@@ -174,10 +175,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
+  const handleSelectSound = (soundId: PhoneAlarmSound) => {
+    onUpdateSettings({ alarmSound: soundId });
+    syncNotificationSoundAndVolume(soundId, settings.alarmVolume).catch(() => {});
+  };
+
   const handleVolumeChange = (newVolume: number) => {
     const clamped = Math.max(0.0, Math.min(1.0, newVolume));
     onUpdateSettings({ alarmVolume: clamped });
     setGlobalVolume(clamped);
+    syncNotificationSoundAndVolume(settings.alarmSound || 'digital-beep', clamped).catch(() => {});
   };
 
   const handleTestTorch = async () => {
@@ -343,14 +350,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           
           {/* 0. APP LANGUAGE (فارسی / ENGLISH) */}
           <section className="space-y-3 p-3 sm:p-4 rounded-2xl bg-stone-950/70 border border-stone-800">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center">
               <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
                 <Globe className="w-4 h-4 text-amber-400" />
                 <span>زبان برنامه / App Language</span>
               </div>
-              <span className="text-xs px-2.5 py-0.5 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">
-                {(settings.language || 'fa') === 'fa' ? 'فارسی (Persian)' : 'English'}
-              </span>
             </div>
 
             <div className="grid grid-cols-2 gap-2 sm:gap-3">
@@ -584,16 +588,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
           {/* 3.5. ALARM SOUND TYPE & VOLUME CONFIGURATION */}
           <section className="space-y-4 pt-3 border-t border-stone-800">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center">
               <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-amber-300">
                 <Volume2 className="w-4 h-4 text-amber-400" />
                 <span>{isFa ? 'تنظیمات نوع صدای آلارم و ولوم' : 'Alarm Sound & Volume Settings'}</span>
               </div>
-              <span className="text-[11px] px-2.5 py-0.5 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold">
-                {isFa 
-                  ? PHONE_ALARM_SOUNDS.find(s => s.id === (settings.alarmSound || 'digital-beep'))?.label || 'استاندارد'
-                  : settings.alarmSound || 'digital-beep'}
-              </span>
             </div>
 
             {/* A. Volume Slider and Presets */}
@@ -698,7 +697,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   return (
                     <div
                       key={soundItem.id}
-                      onClick={() => onUpdateSettings({ alarmSound: soundItem.id })}
+                      onClick={() => handleSelectSound(soundItem.id)}
                       className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 cursor-pointer ${
                         isSelected
                           ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/40 shadow-md shadow-amber-500/10'
@@ -728,7 +727,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          onUpdateSettings({ alarmSound: soundItem.id });
+                          handleSelectSound(soundItem.id);
                           handlePreviewSound(soundItem.id);
                         }}
                         className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 flex-shrink-0 ${

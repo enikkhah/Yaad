@@ -8,6 +8,135 @@ export const NOTIFICATION_ACTION_TYPE_ID = 'YAAD_REMINDER_ACTIONS';
 
 let isChannelInitialized = false;
 
+export const SOUND_FILE_MAP: Record<string, string> = {
+  'digital-beep': 'digital_beep.wav',
+  'radar': 'radar.wav',
+  'marimba': 'marimba.wav',
+  'morning-chime': 'morning_chime.wav',
+  'urgent-bell': 'urgent_bell.wav',
+};
+
+export function getSoundFileName(soundType?: string): string {
+  if (!soundType) return 'digital_beep.wav';
+  return SOUND_FILE_MAP[soundType] || 'digital_beep.wav';
+}
+
+export function getChannelIdForConfig(soundType?: string, volume: number = 0.85): string {
+  if (volume <= 0.01) {
+    return 'yaad_channel_silent';
+  }
+  const soundFile = getSoundFileName(soundType);
+  const key = soundFile.replace('.wav', '');
+  return `yaad_channel_${key}`;
+}
+
+export function getSavedAppSettings(): any {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('fa_settings_app_data_v1');
+    if (raw) return JSON.parse(raw);
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Initializes Android Notification Channels (Android 8.0+ / Oreo to Android 15+)
+ * with Heads-Up Banner, user-selected sound, volume sensitivity, vibration, and lock screen visibility.
+ */
+export async function initNotificationChannel(): Promise<void> {
+  if (!isNativeApp()) return;
+  if (isChannelInitialized) return;
+
+  try {
+    // 1. Default fallback channel
+    await LocalNotifications.createChannel({
+      id: NOTIFICATION_CHANNEL_ID,
+      name: 'یادآورهای YAAD (پیش‌فرض)',
+      description: 'اعلان‌های صوتی، لرزش و بنر بالای صفحه یادآورها در زمان مقرر',
+      importance: 5, // 5 = IMPORTANCE_HIGH (heads-up popup over other apps)
+      visibility: 1, // 1 = VISIBILITY_PUBLIC (shows on lock screen)
+      sound: 'digital_beep.wav',
+      vibration: true,
+      lights: true,
+      lightColor: '#8b5cf6',
+    });
+
+    // 2. Silent channel (for volume = 0% / mute)
+    await LocalNotifications.createChannel({
+      id: 'yaad_channel_silent',
+      name: 'یادآورهای YAAD (بی‌صدا)',
+      description: 'اعلان‌های بدون صدا و بدون لرزش در حالت سکوت',
+      importance: 2, // 2 = IMPORTANCE_LOW (no sound, no vibration, silent in notification shade)
+      visibility: 1,
+      vibration: false,
+      lights: false,
+    });
+
+    // 3. Channels for each sound type so Android notification manager plays the exact selected tone
+    const soundChannels = [
+      { id: 'yaad_channel_digital_beep', name: 'یادآورهای YAAD (دیجیتال)', sound: 'digital_beep.wav' },
+      { id: 'yaad_channel_radar', name: 'یادآورهای YAAD (رادار)', sound: 'radar.wav' },
+      { id: 'yaad_channel_marimba', name: 'یادآورهای YAAD (ماریمبا)', sound: 'marimba.wav' },
+      { id: 'yaad_channel_morning_chime', name: 'یادآورهای YAAD (صبحگاهی)', sound: 'morning_chime.wav' },
+      { id: 'yaad_channel_urgent_bell', name: 'یادآورهای YAAD (زنگ فوری)', sound: 'urgent_bell.wav' },
+    ];
+
+    for (const sc of soundChannels) {
+      await LocalNotifications.createChannel({
+        id: sc.id,
+        name: sc.name,
+        description: 'اعلان‌های صوتی یادآور با صدای تنظیم‌شده در برنامه',
+        importance: 5, // IMPORTANCE_HIGH (heads-up banner with sound & vibration)
+        visibility: 1,
+        sound: sc.sound,
+        vibration: true,
+        lights: true,
+        lightColor: '#8b5cf6',
+      });
+    }
+
+    // Register quick notification actions (Done, Snooze 15m)
+    await LocalNotifications.registerActionTypes({
+      types: [
+        {
+          id: NOTIFICATION_ACTION_TYPE_ID,
+          actions: [
+            {
+              id: 'complete',
+              title: '✓ انجام شد',
+              foreground: false,
+            },
+            {
+              id: 'snooze',
+              title: '⏱ تعویق ۱۵ دقیقه',
+              foreground: false,
+            },
+          ],
+        },
+      ],
+    });
+
+    isChannelInitialized = true;
+  } catch (err) {
+    console.warn('Could not initialize Android notification channels:', err);
+  }
+}
+
+/**
+ * Syncs Android notification channels and settings when sound or volume is changed.
+ */
+export async function syncNotificationSoundAndVolume(soundType?: string, volume?: number): Promise<void> {
+  if (!isNativeApp()) return;
+  try {
+    isChannelInitialized = false;
+    await initNotificationChannel();
+  } catch (err) {
+    console.warn('Error syncing notification sound/volume:', err);
+  }
+}
+
 export interface PendingNotificationInfo {
   id: number;
   title?: string;
@@ -170,53 +299,6 @@ export function getNotificationId(reminderId: string | number): number {
   return hash === 0 ? 1 : hash;
 }
 
-/**
- * Initializes Android high-importance Notification Channel (Android 8.0+ / Oreo to Android 15+)
- * with Heads-Up Banner, sound, vibration, and lock screen visibility.
- */
-export async function initNotificationChannel(): Promise<void> {
-  if (!isNativeApp()) return;
-  if (isChannelInitialized) return;
-
-  try {
-    await LocalNotifications.createChannel({
-      id: NOTIFICATION_CHANNEL_ID,
-      name: 'یادآورهای YAAD',
-      description: 'اعلان‌های صوتی، لرزش و بنر بالای صفحه یادآورها در زمان مقرر',
-      importance: 5, // 5 = IMPORTANCE_HIGH (enables heads-up banner popup over other apps)
-      visibility: 1, // 1 = VISIBILITY_PUBLIC (shows on lock screen)
-      sound: 'beep.wav',
-      vibration: true,
-      lights: true,
-      lightColor: '#8b5cf6',
-    });
-
-    // Register quick notification actions (Done, Snooze 15m)
-    await LocalNotifications.registerActionTypes({
-      types: [
-        {
-          id: NOTIFICATION_ACTION_TYPE_ID,
-          actions: [
-            {
-              id: 'complete',
-              title: '✓ انجام شد',
-              foreground: false,
-            },
-            {
-              id: 'snooze',
-              title: '⏱ تعویق ۱۵ دقیقه',
-              foreground: false,
-            },
-          ],
-        },
-      ],
-    });
-
-    isChannelInitialized = true;
-  } catch (err) {
-    console.warn('Could not initialize Android notification channel:', err);
-  }
-}
 
 /**
  * Checks if notification permission is currently granted on Android.
@@ -345,6 +427,15 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
       await initNotificationChannel();
     }
 
+    // Resolve user-configured alarm sound and volume from app settings
+    const appSettings = getSavedAppSettings();
+    const soundType = (reminder.ringTune as string) || appSettings?.alarmSound || 'digital-beep';
+    const volume = appSettings?.alarmVolume !== undefined ? appSettings.alarmVolume : 0.85;
+
+    const isSilent = volume <= 0.01;
+    const targetChannelId = getChannelIdForConfig(soundType, volume);
+    const soundFile = isSilent ? undefined : getSoundFileName(soundType);
+
     // Call LocalNotifications.schedule with allowWhileIdle: true
     const scheduleResult = await LocalNotifications.schedule({
       notifications: [
@@ -352,16 +443,18 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
           id: notifId,
           title,
           body,
-          channelId: NOTIFICATION_CHANNEL_ID,
+          channelId: targetChannelId,
           schedule: {
             at: scheduledDate,
             allowWhileIdle: true, // Crucial for Android Doze mode / Exact alarms
           },
-          sound: 'beep.wav',
+          sound: soundFile,
           actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
           extra: {
             reminderId: reminder.id,
             dueTimestamp: reminder.dueTimestamp,
+            sound: soundType,
+            volume,
           },
         },
       ],

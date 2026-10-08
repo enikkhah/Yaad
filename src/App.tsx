@@ -7,7 +7,6 @@ import { TimelineWidget } from './components/TimelineWidget';
 import { ReminderForm } from './components/ReminderForm';
 import { ReminderCard } from './components/ReminderCard';
 import { AlarmModal } from './components/AlarmModal';
-import { HeadsUpNotificationBanner } from './components/HeadsUpNotificationBanner';
 import { StatisticsModal } from './components/StatisticsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { IdeaCaptureModal } from './components/IdeaCaptureModal';
@@ -33,6 +32,7 @@ import {
   cancelReminderNotification, 
   rescheduleReminderNotification, 
   syncAllRemindersWithLocalNotifications, 
+  syncNotificationSoundAndVolume,
   setupNotificationListeners,
   getNotificationId
 } from './utils/nativeLocalNotifications';
@@ -131,12 +131,17 @@ export default function App() {
     }
   }, [settings.fontSize]);
 
-  // Keep audio volume in sync with settings
+  // Keep audio volume in sync with settings and sync Android Notification Channels
   useEffect(() => {
     if (settings.alarmVolume !== undefined) {
       setGlobalVolume(settings.alarmVolume);
     }
-  }, [settings.alarmVolume]);
+    syncNotificationSoundAndVolume(settings.alarmSound, settings.alarmVolume)
+      .then(() => {
+        syncAllRemindersWithLocalNotifications(reminders).catch(() => {});
+      })
+      .catch(() => {});
+  }, [settings.alarmSound, settings.alarmVolume]);
 
   // Reminders state: Default seed reminders are removed per user request
   const [reminders, setReminders] = useState<Reminder[]>(() => {
@@ -218,7 +223,6 @@ export default function App() {
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null);
   const [isAppInstalled, setIsAppInstalled] = useState<boolean>(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState<boolean>(false);
-  const [isAlarmDetailsOpen, setIsAlarmDetailsOpen] = useState<boolean>(false);
   const [undoToast, setUndoToast] = useState<{
     reminder: Reminder;
     index: number;
@@ -1617,7 +1621,6 @@ export default function App() {
         onRestoreData={handleRestoreData}
         onTestHeadsUpBanner={(testRem) => {
           setActiveAlarmReminder(testRem);
-          setIsAlarmDetailsOpen(false);
         }}
       />
 
@@ -1641,36 +1644,8 @@ export default function App() {
         language={settings.language}
       />
 
-      {/* HEADS-UP NOTIFICATION BANNER (Top-of-screen alert over app - matching Android Reminder) */}
-      {activeAlarmReminder && !isAlarmDetailsOpen && (
-        <HeadsUpNotificationBanner
-          reminder={activeAlarmReminder}
-          settings={settings}
-          language={settings.language}
-          onComplete={(id) => {
-            handleCompleteReminder(id);
-            setActiveAlarmReminder(null);
-            setIsAlarmDetailsOpen(false);
-          }}
-          onPostpone={(id, mins) => {
-            handlePostpone(id, mins);
-            setActiveAlarmReminder(null);
-            setIsAlarmDetailsOpen(false);
-          }}
-          onDismiss={() => {
-            stopAlarmRinging();
-            stopFlashlightStrobe();
-            setActiveAlarmReminder(null);
-            setIsAlarmDetailsOpen(false);
-          }}
-          onOpenDetails={() => {
-            setIsAlarmDetailsOpen(true);
-          }}
-        />
-      )}
-
-      {/* ACTIVE FULL ALARM MODAL (Opened if user clicks Details on the Heads-Up banner) */}
-      {activeAlarmReminder && isAlarmDetailsOpen && (
+      {/* FULL-SCREEN MINIMAL IN-APP NOTIFICATION POPUP */}
+      {activeAlarmReminder && (
         <AlarmModal
           reminder={activeAlarmReminder}
           settings={settings}
@@ -1679,21 +1654,18 @@ export default function App() {
             stopAlarmRinging();
             stopFlashlightStrobe();
             setActiveAlarmReminder(null);
-            setIsAlarmDetailsOpen(false);
             setActiveMainTab('reminders');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onComplete={(id) => {
             handleCompleteReminder(id);
             setActiveAlarmReminder(null);
-            setIsAlarmDetailsOpen(false);
             setActiveMainTab('reminders');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}
           onPostpone={(id, mins) => {
             handlePostpone(id, mins);
             setActiveAlarmReminder(null);
-            setIsAlarmDetailsOpen(false);
           }}
         />
       )}
@@ -1722,15 +1694,13 @@ export default function App() {
 
       </div>
       
-      {/* APP STARTUP SPLASH SCREEN (FADE IN/OUT IN <= 2 SECONDS) */}
+      {/* APP STARTUP SPLASH SCREEN (FADE OUT IN 2 SECONDS WITH NEW LOGO) */}
       {showSplash && (
         <SplashScreen 
           onStartExit={handleStartExitSplash} 
           onFinish={handleFinishSplash} 
-          matteDelayMs={0}
-          logoDisplayMs={1400}
-          fadeOutMs={350}
-          language={settings.language}
+          totalDurationMs={2000}
+          fadeOutMs={700}
         />
       )}
     </>
