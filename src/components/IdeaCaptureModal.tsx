@@ -1316,11 +1316,11 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         </div>
 
         {/* Sticky Footer - Pinned directly above keyboard */}
-        <div className="sticky bottom-0 z-20 shrink-0 px-2.5 sm:px-5 py-3 border-t border-stone-800 flex items-center justify-between bg-stone-900/95 backdrop-blur shadow-2xl">
+        <div className="sticky bottom-0 z-20 shrink-0 px-3 sm:px-5 py-3 border-t border-stone-800 flex items-center justify-between bg-stone-900/95 backdrop-blur shadow-2xl">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 rounded-xl text-stone-400 hover:text-white text-xs font-medium cursor-pointer"
+            className="px-4 sm:px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
           >
             {isEn ? 'Cancel' : 'انصراف'}
           </button>
@@ -1328,14 +1328,14 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             id="save-idea-submit-btn"
             type="button"
             onClick={handleSave}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-bold text-xs shadow-md transition-all active:scale-95 cursor-pointer ${
+            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black shadow-md transition-all active:scale-95 cursor-pointer ${
               !title.trim()
                 ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                : 'bg-stone-950 border-2 border-yellow-400 text-yellow-300 font-black shadow-lg shadow-yellow-500/20'
+                : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/25'
             }`}
           >
-            <Save className={`w-4 h-4 ${!title.trim() ? 'text-amber-300' : 'text-yellow-300'}`} />
-            <span className={!title.trim() ? 'text-amber-300 font-bold' : 'text-yellow-300 font-black'}>
+            <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-amber-300' : 'text-stone-950'}`} />
+            <span className={!title.trim() ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
               {editingIdea 
                 ? (isEn ? 'Save Changes' : 'ذخیره تغییرات ایده') 
                 : (isEn ? 'Save Idea' : 'ثبت نهایی ایده')}

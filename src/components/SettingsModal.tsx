@@ -387,13 +387,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </section>
 
           {/* 2. FONT SIZE SLIDER */}
-          <section className="space-y-3 p-3 sm:p-4 rounded-2xl bg-stone-950/70 border border-teal-500/25">
+          <section className="space-y-3 p-3 sm:p-4 rounded-2xl bg-stone-950/70 border border-stone-800">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-bold text-teal-300">
-                <Type className="w-4 h-4 text-teal-400" />
+              <div className="flex items-center gap-2 text-sm font-bold text-stone-100">
+                <Type className="w-4 h-4 text-amber-400" />
                 <span>{isFa ? 'اندازه فونت' : 'Font Size'}</span>
               </div>
-              <span className="font-mono text-xs text-teal-300 font-black bg-stone-900 px-2 py-0.5 rounded border border-teal-500/30">
+              <span className="font-mono text-xs text-amber-300 font-black bg-stone-900 px-2 py-0.5 rounded-lg border border-amber-500/30">
                 {isFa ? toPersianDigits(
                   typeof settings.fontSize === 'number'
                     ? settings.fontSize
@@ -1123,7 +1123,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="px-6 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-xs sm:text-sm shadow-md active:scale-95"
+            className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
           >
             {settings.language === 'en' ? t.confirm : 'تأیید'}
           </button>

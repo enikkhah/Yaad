@@ -36,20 +36,20 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
     switch (idea.category) {
       case 'work':
         return (
-          <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-800">
-            <Briefcase className="w-3 h-3" /> {language === 'en' ? 'Work' : 'کاری'}
+          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-bold">
+            <Briefcase className="w-3.5 h-3.5 text-cyan-400" /> {language === 'en' ? 'Work' : 'کاری'}
           </span>
         );
       case 'family':
         return (
-          <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-rose-950 text-rose-300 border border-rose-800">
-            <Heart className="w-3 h-3" /> {language === 'en' ? 'Family' : 'خانواده'}
+          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/30 font-bold">
+            <Heart className="w-3.5 h-3.5 text-rose-400" /> {language === 'en' ? 'Family' : 'خانواده'}
           </span>
         );
       default:
         return (
-          <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-800">
-            <Tag className="w-3 h-3" /> {language === 'en' ? 'Personal/Other' : 'شخصی/سایر'}
+          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 font-bold">
+            <Tag className="w-3.5 h-3.5 text-emerald-400" /> {language === 'en' ? 'Personal/Other' : 'شخصی/سایر'}
           </span>
         );
     }
@@ -57,17 +57,17 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
 
   return (
     <div 
-      className="p-4 rounded-2xl bg-stone-900/90 border border-stone-800 hover:border-teal-500/50 transition-all shadow-md flex flex-col justify-between space-y-3"
+      className="p-4 sm:p-5 rounded-2xl bg-stone-900 border border-stone-800 hover:border-amber-500/40 transition-all shadow-md flex flex-col justify-between space-y-3"
       dir={language === 'en' ? 'ltr' : 'rtl'}
     >
       {/* Header */}
       <div>
-        <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 flex-wrap">
             {getCategoryBadge()}
             {idea.googleSynced && (
-              <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-sky-950 text-sky-300 border border-sky-800">
-                <Cloud className="w-3 h-3" /> {language === 'en' ? 'Google Tasks' : 'گوگل Tasks'}
+              <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-sky-500/10 text-sky-300 border border-sky-500/30 font-bold">
+                <Cloud className="w-3.5 h-3.5 text-sky-400" /> {language === 'en' ? 'Google Tasks' : 'گوگل Tasks'}
               </span>
             )}
           </div>
@@ -76,7 +76,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
               <button
                 type="button"
                 onClick={() => onEdit(idea)}
-                className="p-1.5 rounded-lg text-stone-400 hover:text-amber-400 hover:bg-stone-800 transition-colors"
+                className="p-2 rounded-xl text-stone-400 hover:text-amber-400 hover:bg-stone-800 transition-colors cursor-pointer"
                 title={language === 'en' ? 'Edit idea' : 'ویرایش ایده'}
               >
                 <Pencil className="w-4 h-4" />
@@ -85,7 +85,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
             <button
               type="button"
               onClick={() => onDelete(idea.id)}
-              className="p-1.5 rounded-lg text-stone-500 hover:text-red-400 hover:bg-stone-800 transition-colors"
+              className="p-2 rounded-xl text-stone-400 hover:text-red-400 hover:bg-stone-800 transition-colors cursor-pointer"
               title={language === 'en' ? 'Delete idea' : 'حذف ایده'}
             >
               <Trash2 className="w-4 h-4" />

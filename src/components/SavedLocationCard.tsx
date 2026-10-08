@@ -48,21 +48,21 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
 
   return (
     <div 
-      className="bg-stone-900 border border-stone-800 hover:border-teal-500/50 rounded-2xl p-4 shadow-lg space-y-3 transition-all group flex flex-col justify-between" 
+      className="bg-stone-900 border border-stone-800 hover:border-emerald-500/40 rounded-2xl p-4 sm:p-5 shadow-md space-y-3 transition-all group flex flex-col justify-between" 
       dir={language === 'en' ? 'ltr' : 'rtl'}
     >
       <div className="space-y-3">
         {/* Header: Title, Date, Actions */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-start gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-teal-500/15 border border-teal-500/30 text-teal-400 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center flex-shrink-0 mt-0.5">
               <MapPin className="w-4 h-4" />
             </div>
             <div>
-              <h4 className="font-bold text-white text-sm leading-snug line-clamp-2">
+              <h4 className="font-bold text-white text-sm sm:text-base leading-snug line-clamp-2">
                 {location.title}
               </h4>
-              <div className="flex items-center gap-1.5 text-[10px] text-stone-400 mt-0.5">
+              <div className="flex items-center gap-1.5 text-[11px] text-stone-400 mt-0.5">
                 <Calendar className="w-3 h-3 text-stone-500" />
                 <span>{formattedDate}</span>
               </div>
@@ -74,7 +74,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               <button
                 type="button"
                 onClick={() => onEdit(location)}
-                className="p-1.5 rounded-lg text-stone-400 hover:text-amber-400 hover:bg-stone-800 transition-colors"
+                className="p-2 rounded-xl text-stone-400 hover:text-amber-400 hover:bg-stone-800 transition-colors cursor-pointer"
                 title={language === 'en' ? 'Edit place' : 'ویرایش مکان'}
               >
                 <Pencil className="w-4 h-4" />
@@ -83,7 +83,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
             <button
               type="button"
               onClick={() => onDelete(location.id)}
-              className="p-1.5 rounded-lg text-stone-500 hover:text-rose-400 hover:bg-stone-800 transition-colors"
+              className="p-2 rounded-xl text-stone-400 hover:text-rose-400 hover:bg-stone-800 transition-colors cursor-pointer"
               title={language === 'en' ? 'Delete place' : 'حذف مکان'}
             >
               <Trash2 className="w-4 h-4" />

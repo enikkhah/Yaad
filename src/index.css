@@ -20,66 +20,24 @@
   }
 }
 
-/* Theme-adaptive vibrant turquoise variables (رنگ فیروزه‌ای زنده‌تر) */
+/* Theme-adaptive subtle brand accent variables */
 :root {
-  --turquoise-tint-btn: rgba(13, 148, 136, 0.22);
-  --turquoise-tint-btn-hover: rgba(20, 184, 166, 0.38);
-  --turquoise-tint-border: rgba(45, 212, 191, 0.55);
-  --turquoise-tint-border-hover: rgba(94, 234, 212, 0.9);
-  --turquoise-tint-box: rgba(13, 148, 136, 0.12);
-  --turquoise-tint-glow: rgba(45, 212, 191, 0.3);
+  --brand-accent-border: rgba(45, 212, 191, 0.3);
+  --brand-accent-hover: rgba(45, 212, 191, 0.5);
+  --brand-accent-glow: rgba(45, 212, 191, 0.12);
 }
 
-/* Apply vibrant turquoise tint to buttons and boxes (except FAB +) */
-button:not(.fab-add-btn):not([data-keep-color="true"]) {
-  border-color: var(--turquoise-tint-border) !important;
-  background-color: var(--turquoise-tint-btn);
-  transition: all 0.15s ease-in-out;
-}
-
-button:not(.fab-add-btn):not([data-keep-color="true"]):hover {
-  border-color: var(--turquoise-tint-border-hover) !important;
-  background-color: var(--turquoise-tint-btn-hover);
-  box-shadow: 0 0 16px var(--turquoise-tint-glow);
-}
-
-/* Ensure font color inside all form input fields, textareas, and selects is crisp pure white */
-/* (فونت درون کادرهای ثبت رنگ سفید باشد) */
+/* Ensure font color inside all form input fields, textareas, and selects is crisp and readable */
 input,
 textarea,
 select {
-  color: #ffffff !important;
-  border-color: var(--turquoise-tint-border);
+  color: #ffffff;
 }
 
 input:focus,
 textarea:focus,
 select:focus {
-  color: #ffffff !important;
-  border-color: var(--turquoise-tint-border-hover) !important;
-  box-shadow: 0 0 14px var(--turquoise-tint-glow);
-}
-
-/* Ensure high contrast on all buttons and ensure button text is NEVER black */
-/* (در همه دکمه ها کنتراست رنگی بین نوشته‌ها و پس زمینه آنها وجود داشته باشد و نوشته ها مشکی نباشد) */
-button,
-button * {
-  /* Override any accidental black/dark text inside buttons */
-}
-
-button:is([class*="text-stone-950"], [class*="text-black"], [class*="text-stone-900"], [class*="text-gray-900"], [class*="text-slate-900"]),
-button *:is([class*="text-stone-950"], [class*="text-black"], [class*="text-stone-900"], [class*="text-gray-900"], [class*="text-slate-900"]) {
-  color: #ffffff !important;
-  fill: #ffffff !important;
-}
-
-/* Ensure all modal primary save/action buttons have crisp white text */
-/* (فونت "ثبت نهایی یادآور"، "ثبت سریع یادآور"، "ثبت سریع ایده"، "ذخیره لوکیشن و اطلاعات" و مشابه آنها سفید باشد) */
-button[type="submit"],
-button#save-idea-submit-btn,
-button.btn-primary,
-button:has(span:is([class*="text-white"])) {
-  color: #ffffff !important;
+  outline: none;
 }
 
 /* Modal header titles */
@@ -90,32 +48,23 @@ h4 {
   color: #ffffff;
 }
 
-/* Theme variations adapting the turquoise tint */
+/* Theme variations */
 [data-theme="dark-slate"] {
-  --turquoise-tint-btn: rgba(6, 182, 212, 0.25);
-  --turquoise-tint-btn-hover: rgba(6, 182, 212, 0.42);
-  --turquoise-tint-border: rgba(34, 211, 238, 0.6);
-  --turquoise-tint-border-hover: rgba(103, 232, 249, 0.95);
-  --turquoise-tint-box: rgba(6, 182, 212, 0.14);
-  --turquoise-tint-glow: rgba(34, 211, 238, 0.35);
+  --brand-accent-border: rgba(34, 211, 238, 0.35);
+  --brand-accent-hover: rgba(103, 232, 249, 0.6);
+  --brand-accent-glow: rgba(34, 211, 238, 0.15);
 }
 
 [data-theme="light-clean"] {
-  --turquoise-tint-btn: rgba(15, 118, 110, 0.15);
-  --turquoise-tint-btn-hover: rgba(15, 118, 110, 0.25);
-  --turquoise-tint-border: rgba(13, 148, 136, 0.5);
-  --turquoise-tint-border-hover: rgba(15, 118, 110, 0.85);
-  --turquoise-tint-box: rgba(15, 118, 110, 0.08);
-  --turquoise-tint-glow: rgba(13, 148, 136, 0.2);
+  --brand-accent-border: rgba(13, 148, 136, 0.3);
+  --brand-accent-hover: rgba(15, 118, 110, 0.6);
+  --brand-accent-glow: rgba(13, 148, 136, 0.1);
 }
 
 [data-theme="sketch-contrast"] {
-  --turquoise-tint-btn: rgba(45, 212, 191, 0.24);
-  --turquoise-tint-btn-hover: rgba(45, 212, 191, 0.4);
-  --turquoise-tint-border: rgba(45, 212, 191, 0.7);
-  --turquoise-tint-border-hover: rgba(94, 234, 212, 1);
-  --turquoise-tint-box: rgba(45, 212, 191, 0.12);
-  --turquoise-tint-glow: rgba(45, 212, 191, 0.4);
+  --brand-accent-border: rgba(45, 212, 191, 0.4);
+  --brand-accent-hover: rgba(94, 234, 212, 0.8);
+  --brand-accent-glow: rgba(45, 212, 191, 0.2);
 }
 
 /* Custom Zoom-Out entrance animation for the FAB 3-action choice modal */

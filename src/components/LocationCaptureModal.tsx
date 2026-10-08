@@ -538,11 +538,11 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer ${
                 !title.trim() || latitude === null || longitude === null
                   ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                  : 'bg-stone-950 border-2 border-yellow-400 text-yellow-300 font-black shadow-lg shadow-yellow-500/20 active:scale-95'
+                  : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/25 active:scale-95'
               }`}
             >
-              <Check className={`w-4 h-4 stroke-[3] ${!title.trim() || latitude === null || longitude === null ? 'text-amber-300' : 'text-yellow-300'}`} />
-              <span className={!title.trim() || latitude === null || longitude === null ? 'text-amber-300 font-bold' : 'text-yellow-300 font-black'}>
+              <Check className={`w-4 h-4 stroke-[3] ${!title.trim() || latitude === null || longitude === null ? 'text-amber-300' : 'text-stone-950'}`} />
+              <span className={!title.trim() || latitude === null || longitude === null ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
                 {editingLocation 
                   ? (isEn ? 'Save Changes' : 'ذخیره تغییرات مکان') 
                   : (isEn ? 'Save Location & Info' : 'ذخیره لوکیشن و اطلاعات')}

@@ -76,25 +76,25 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
       case 'work':
         return {
           label: isEn ? 'Work' : 'کار',
-          border: 'border-cyan-500/30 hover:border-cyan-500/60',
-          bg: 'bg-stone-900/90',
-          badgeBg: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/20',
+          border: 'border-stone-800 hover:border-cyan-500/40',
+          bg: 'bg-stone-900',
+          badgeBg: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
           icon: <Briefcase className="w-3.5 h-3.5 text-cyan-400" />,
         };
       case 'family':
         return {
           label: isEn ? 'Family' : 'خانواده',
-          border: 'border-rose-500/30 hover:border-rose-500/60',
-          bg: 'bg-stone-900/90',
-          badgeBg: 'bg-rose-500/10 text-rose-300 border-rose-500/20',
+          border: 'border-stone-800 hover:border-rose-500/40',
+          bg: 'bg-stone-900',
+          badgeBg: 'bg-rose-500/10 text-rose-300 border-rose-500/30',
           icon: <Heart className="w-3.5 h-3.5 text-rose-400" />,
         };
       default:
         return {
           label: isEn ? 'Other' : 'سایر',
-          border: 'border-teal-500/30 hover:border-teal-500/60',
-          bg: 'bg-stone-900/90',
-          badgeBg: 'bg-teal-500/10 text-teal-300 border-teal-500/20',
+          border: 'border-stone-800 hover:border-teal-500/40',
+          bg: 'bg-stone-900',
+          badgeBg: 'bg-teal-500/10 text-teal-300 border-teal-500/30',
           icon: <Tag className="w-3.5 h-3.5 text-teal-400" />,
         };
     }
@@ -137,10 +137,10 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
         Math.abs(swipeOffset) > 40 ? 'border-red-500/80 bg-red-950/20' : ''
       } ${
         isCompleted
-          ? 'bg-stone-900/40 border-stone-800/80 opacity-75'
+          ? 'bg-stone-900/50 border-stone-800/80 opacity-75'
           : isNext
-          ? 'bg-stone-900/95 border-2 border-emerald-500/80 shadow-xl shadow-emerald-950/40 ring-1 ring-emerald-500/30'
-          : `${catMeta.bg} ${catMeta.border} shadow-lg shadow-black/20`
+          ? 'bg-stone-900 border-2 border-emerald-500/70 shadow-lg shadow-emerald-950/30 ring-1 ring-emerald-500/20'
+          : `${catMeta.bg} ${catMeta.border} shadow-md shadow-black/10`
       }`}
       dir={isEn ? 'ltr' : 'rtl'}
     >
@@ -242,7 +242,7 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
 
             {/* Integrated Live Countdown Clock directly inside next reminder card */}
             {isNext && !isCompleted && countdown && (
-              <div className="flex items-center gap-2 mt-2.5 px-2.5 py-1 rounded-xl border border-emerald-400/60 bg-stone-950/90 shadow-[0_0_12px_rgba(16,185,129,0.3)] w-fit shrink-0">
+              <div className="flex items-center gap-2 mt-2.5 px-2.5 py-1 rounded-xl border border-emerald-500/40 bg-stone-950/90 shadow-sm w-fit shrink-0">
                 <span className="text-[11px] font-bold text-emerald-400">
                   {isEn ? 'Remaining:' : 'زمان مانده:'}
                 </span>
