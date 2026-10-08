@@ -81,7 +81,49 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.YAAD_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/yaad-release.jks
 
+      - name: Configure release signing
+        env:
+          STORE_PASSWORD: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle")
+          text = path.read_text()
+
+          signing = """
+              signingConfigs {
+                  release {
+                      storeFile file("yaad-release.jks")
+                      storePassword System.getenv("STORE_PASSWORD")
+                      keyAlias System.getenv("KEY_ALIAS")
+                      keyPassword System.getenv("KEY_PASSWORD")
+                  }
+              }
+          """
+
+          text = text.replace(
+              "android {",
+              "android {" + signing,
+              1
+          )
+
+          text = text.replace(
+              "signingConfig signingConfigs.debug",
+              "signingConfig signingConfigs.release"
+          )
+
+          path.write_text(text)
+          PY
+          
       - name: Build APK
         working-directory: android
         run: ./gradlew assembleDebug
@@ -91,3 +133,17 @@ jobs:
         with:
           name: Yaad-APK
           path: android/app/build/outputs/apk/debug/app-debug.apk
+          
+      - name: Build Release APK
+        working-directory: android
+        env:
+          STORE_PASSWORD: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yaad-Release-APK
+          path: android/app/build/outputs/apk/release/app-release.apk
