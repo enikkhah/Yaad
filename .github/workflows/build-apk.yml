@@ -116,7 +116,7 @@ jobs:
               1
           )
 
-                    import re
+          import re
 
           pattern = r'(buildTypes\s*\{\s*release\s*\{)'
           replacement = r'\1\n            signingConfig signingConfigs.release'
