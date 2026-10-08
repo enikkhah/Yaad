@@ -116,10 +116,15 @@ jobs:
               1
           )
 
-          text = text.replace(
-              "signingConfig signingConfigs.debug",
-              "signingConfig signingConfigs.release"
-          )
+                    import re
+
+          pattern = r'(buildTypes\s*\{\s*release\s*\{)'
+          replacement = r'\1\n            signingConfig signingConfigs.release'
+
+          text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count != 1:
+              raise RuntimeError("Release build type not found")
 
           path.write_text(text)
           PY
