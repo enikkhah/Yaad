@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Download, X, Check, Smartphone, Monitor, Copy } from 'lucide-react';
-import yaadAppIcon from '../assets/images/yaad_pwa_icon_1790941867734.jpg';
+import appIcon from '../assets/images/icon.png';
 import { AppLanguage } from '../utils/i18n';
 
 interface InstallModalProps {
@@ -54,8 +54,8 @@ export const InstallModal: React.FC<InstallModalProps> = ({
         {/* Header */}
         <div className="px-5 py-4 border-b border-stone-800 flex items-center justify-between bg-stone-950/60">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-2xl overflow-hidden border border-teal-500/40 p-0.5 bg-black shadow-inner">
-              <img src={yaadAppIcon} alt="YAAD" className="w-full h-full object-cover rounded-xl" />
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl overflow-hidden border border-teal-500/40 p-0.5 bg-black shadow-inner flex-shrink-0">
+              <img src={appIcon} alt="YAAD" className="w-full h-full object-cover rounded-lg sm:rounded-xl" />
             </div>
             <div>
               <h3 className="font-black text-white text-base">

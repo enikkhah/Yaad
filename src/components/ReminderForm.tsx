@@ -130,21 +130,34 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const titleInputRef = useRef<HTMLInputElement>(null);
   const [showValidationModal, setShowValidationModal] = useState(false);
 
+  // Session tracking to ensure default time is only calculated once upon form opening,
+  // and never reset while user is editing
+  const initializedSessionRef = useRef<string | null>(null);
+
   // Sync state with initial data or defaults
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) {
+      initializedSessionRef.current = null;
+      stopVoiceListening();
+      return;
+    }
 
-    // Per user requirement: یادآورهای قبلی برای ادیت به تاریخ و ساعت زمان حال در دیفالت بیاید و بعد قابل تنظیم باشد
-    // Initialize date and time to the upcoming moment (2 minutes ahead for new reminders to avoid past timestamps)
-    const defaultTime = initialData ? Date.now() : Date.now() + 2 * 60000;
-    const nowJalali = getJalaliComponents(defaultTime);
-    setSelectedYear(nowJalali.year);
-    setSelectedMonth(nowJalali.month);
-    setSelectedDay(nowJalali.day);
-    setSelectedHour(nowJalali.hour);
-    setSelectedMinute(nowJalali.minute);
+    const sessionKey = initialData ? `edit_${initialData.id}_${initialData.dueTimestamp}` : 'new_reminder';
+    if (initializedSessionRef.current === sessionKey) {
+      return; // Already initialized for this open session, do not reset user manual edits!
+    }
+    initializedSessionRef.current = sessionKey;
 
     if (initialData) {
+      // Editing existing reminder: preserve the previously saved date and time exactly
+      const reminderTime = initialData.dueTimestamp;
+      const jalali = getJalaliComponents(reminderTime);
+      setSelectedYear(jalali.year);
+      setSelectedMonth(jalali.month);
+      setSelectedDay(jalali.day);
+      setSelectedHour(jalali.hour);
+      setSelectedMinute(jalali.minute);
+
       setTitle(initialData.title);
       setDescription(initialData.description || '');
       setCategory(initialData.category);
@@ -153,12 +166,20 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setUseFlash(initialData.useFlash);
       setVoiceReadAloud(initialData.voiceReadAloud);
       setRingTune(initialData.ringTune || initialData.category);
-      // Load recurrence in edit mode (ایش موضوع در ادیت هم باشد)
       setRecurrence(initialData.recurrence || 'none');
       setRecurrenceInterval(initialData.recurrenceInterval || 1);
       setRecurrenceDaysOfWeek(initialData.recurrenceDaysOfWeek || []);
       setRecurrenceCustomDates(initialData.recurrenceCustomDates || []);
     } else {
+      // Creating new reminder: default date & time is exactly current phone time + 2 minutes
+      const defaultTime = Date.now() + 2 * 60 * 1000;
+      const nowJalali = getJalaliComponents(defaultTime);
+      setSelectedYear(nowJalali.year);
+      setSelectedMonth(nowJalali.month);
+      setSelectedDay(nowJalali.day);
+      setSelectedHour(nowJalali.hour);
+      setSelectedMinute(nowJalali.minute);
+
       setTitle('');
       setDescription('');
       setCategory('work');
@@ -171,7 +192,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setRecurrenceInterval(1);
       setRecurrenceDaysOfWeek([]);
       setRecurrenceCustomDates([]);
-      // Voice input is disabled by default per user request, accessible via mic button next to title
     }
 
     return () => {

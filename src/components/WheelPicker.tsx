@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState, useCallback } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import { ChevronUp, ChevronDown, Keyboard } from 'lucide-react';
 
 interface WheelPickerProps {
@@ -12,34 +12,66 @@ interface WheelPickerProps {
   max?: number;
 }
 
+const CYCLE_COUNT = 7;
+const MID_CYCLE = 3;
+
 export const WheelPicker: React.FC<WheelPickerProps> = ({
   items,
   selectedValue,
   onChange,
   label,
-  itemHeight = 88,
+  itemHeight = 76,
   visibleCount = 3,
   min = 0,
   max = 59,
 }) => {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const isScrollingRef = useRef(false);
-  const scrollTimeoutRef = useRef<any>(null);
+  const scrollDebounceTimerRef = useRef<any>(null);
   const isProgrammaticScrollRef = useRef(false);
   const [isTypingMode, setIsTypingMode] = useState(false);
   const [typedInput, setTypedInput] = useState(selectedValue.toString().padStart(2, '0'));
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const selectedIndex = items.findIndex((item) => item.value === selectedValue);
-  const currentIndex = selectedIndex >= 0 ? selectedIndex : 0;
+  const itemCount = items.length;
 
-  // Scroll to index with high precision
-  const scrollToIndex = useCallback(
-    (index: number, smooth = true) => {
+  // Generate cyclical repeated items for seamless infinite wheel rolling
+  const repeatedItems = useMemo(() => {
+    const list: Array<{
+      key: string;
+      value: number;
+      label: string;
+      originalIndex: number;
+      globalIndex: number;
+    }> = [];
+
+    for (let c = 0; c < CYCLE_COUNT; c++) {
+      for (let i = 0; i < itemCount; i++) {
+        list.push({
+          key: `${c}-${items[i].value}`,
+          value: items[i].value,
+          label: items[i].label,
+          originalIndex: i,
+          globalIndex: c * itemCount + i,
+        });
+      }
+    }
+    return list;
+  }, [items, itemCount]);
+
+  // Find index in items for the currently selected value
+  const selectedOriginalIndex = useMemo(() => {
+    const idx = items.findIndex((it) => it.value === selectedValue);
+    return idx >= 0 ? idx : 0;
+  }, [items, selectedValue]);
+
+  // Scroll to a specific global index in the repeated list
+  const scrollToGlobalIndex = useCallback(
+    (globalIdx: number, smooth = true) => {
       const el = containerRef.current;
       if (!el) return;
       isProgrammaticScrollRef.current = true;
-      const targetScrollTop = index * itemHeight;
+      const targetScrollTop = globalIdx * itemHeight;
 
       if (smooth) {
         el.scrollTo({ top: targetScrollTop, behavior: 'smooth' });
@@ -47,22 +79,22 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
         el.scrollTop = targetScrollTop;
       }
 
-      // Reset programmatic flag after smooth transition completes
       setTimeout(() => {
         isProgrammaticScrollRef.current = false;
-      }, smooth ? 250 : 20);
+      }, smooth ? 260 : 20);
     },
     [itemHeight]
   );
 
-  // Sync scroll position when selectedValue changes externally
+  // Center scroll on selectedValue upon mount or when changed externally
   useEffect(() => {
     if (!isScrollingRef.current && !isTypingMode) {
-      scrollToIndex(currentIndex, false);
+      const targetGlobalIndex = MID_CYCLE * itemCount + selectedOriginalIndex;
+      scrollToGlobalIndex(targetGlobalIndex, false);
     }
-  }, [currentIndex, isTypingMode, scrollToIndex]);
+  }, [selectedOriginalIndex, itemCount, isTypingMode, scrollToGlobalIndex]);
 
-  // Focus input when typing mode enabled
+  // Handle typing mode autofocus
   useEffect(() => {
     if (isTypingMode) {
       setTypedInput(selectedValue.toString().padStart(2, '0'));
@@ -75,58 +107,84 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
     }
   }, [isTypingMode, selectedValue]);
 
-  // Handle user rolling / scrolling with active tracking and smooth snap
+  // Rolling / scrolling handler with cyclical wrap
   const handleScroll = () => {
     if (isProgrammaticScrollRef.current) return;
 
     isScrollingRef.current = true;
-    if (scrollTimeoutRef.current) {
-      clearTimeout(scrollTimeoutRef.current);
+    if (scrollDebounceTimerRef.current) {
+      clearTimeout(scrollDebounceTimerRef.current);
     }
 
     const el = containerRef.current;
     if (el) {
       const scrollTop = el.scrollTop;
-      const nearestIndex = Math.round(scrollTop / itemHeight);
-      const clampedIndex = Math.max(0, Math.min(items.length - 1, nearestIndex));
-      if (items[clampedIndex] && items[clampedIndex].value !== selectedValue) {
-        onChange(items[clampedIndex].value);
+      const nearestGlobalIndex = Math.round(scrollTop / itemHeight);
+      const wrappedIndex = ((nearestGlobalIndex % itemCount) + itemCount) % itemCount;
+      const targetItem = items[wrappedIndex];
+
+      if (targetItem && targetItem.value !== selectedValue) {
+        onChange(targetItem.value);
       }
     }
 
-    scrollTimeoutRef.current = setTimeout(() => {
+    // When scrolling stops, snap to exact item and silently normalize to center cycle if near edges
+    scrollDebounceTimerRef.current = setTimeout(() => {
       isScrollingRef.current = false;
       const currentEl = containerRef.current;
       if (!currentEl) return;
 
       const scrollTop = currentEl.scrollTop;
-      const targetIndex = Math.round(scrollTop / itemHeight);
-      const clamped = Math.max(0, Math.min(items.length - 1, targetIndex));
+      const nearestGlobalIndex = Math.round(scrollTop / itemHeight);
+      const wrappedIndex = ((nearestGlobalIndex % itemCount) + itemCount) % itemCount;
+      const targetItem = items[wrappedIndex];
 
-      if (items[clamped] && items[clamped].value !== selectedValue) {
-        onChange(items[clamped].value);
+      if (targetItem && targetItem.value !== selectedValue) {
+        onChange(targetItem.value);
       }
-      scrollToIndex(clamped, true);
-    }, 100);
+
+      // If user has scrolled far up into cycle 0 or far down into cycle 6, silently re-center
+      if (nearestGlobalIndex < 2 * itemCount || nearestGlobalIndex >= 5 * itemCount) {
+        const normalizedIndex = MID_CYCLE * itemCount + wrappedIndex;
+        isProgrammaticScrollRef.current = true;
+        currentEl.scrollTop = normalizedIndex * itemHeight;
+        setTimeout(() => {
+          isProgrammaticScrollRef.current = false;
+        }, 30);
+      } else {
+        // Snap smoothly to nearest index
+        scrollToGlobalIndex(nearestGlobalIndex, true);
+      }
+    }, 120);
   };
 
+  // Step up (previous number) or down (next number) with seamless circular wrap
   const handleStep = (direction: 'up' | 'down') => {
-    let nextIdx = currentIndex + (direction === 'up' ? -1 : 1);
-    if (nextIdx < 0) nextIdx = items.length - 1;
-    if (nextIdx >= items.length) nextIdx = 0;
-    onChange(items[nextIdx].value);
-    scrollToIndex(nextIdx, true);
+    const el = containerRef.current;
+    const currentScrollTop = el ? el.scrollTop : (MID_CYCLE * itemCount + selectedOriginalIndex) * itemHeight;
+    const currentGlobalIndex = Math.round(currentScrollTop / itemHeight);
+    
+    const delta = direction === 'up' ? -1 : 1;
+    const nextGlobalIndex = currentGlobalIndex + delta;
+    const nextWrappedIndex = ((nextGlobalIndex % itemCount) + itemCount) % itemCount;
+    const nextItem = items[nextWrappedIndex];
+
+    if (nextItem) {
+      onChange(nextItem.value);
+      scrollToGlobalIndex(nextGlobalIndex, true);
+    }
   };
 
-  // Submit typed number
+  // Submit direct typed number
   const handleTypedSubmit = () => {
     const parsed = parseInt(typedInput, 10);
     if (!isNaN(parsed)) {
       const clamped = Math.max(min, Math.min(max, parsed));
       onChange(clamped);
-      const newIdx = items.findIndex((it) => it.value === clamped);
-      if (newIdx >= 0) {
-        setTimeout(() => scrollToIndex(newIdx, false), 50);
+      const newOrigIdx = items.findIndex((it) => it.value === clamped);
+      if (newOrigIdx >= 0) {
+        const targetGlobalIdx = MID_CYCLE * itemCount + newOrigIdx;
+        setTimeout(() => scrollToGlobalIndex(targetGlobalIdx, false), 40);
       }
     }
     setIsTypingMode(false);
@@ -165,7 +223,7 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
               ? 'bg-teal-500/20 text-teal-300 font-bold border border-teal-500/30'
               : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
           }`}
-          title="تایپ مستقیم عدد"
+          title="تایپ مستقیم عدد با کیبورد"
         >
           <Keyboard className="w-3.5 h-3.5" />
           <span className="text-[10px] hidden sm:inline">
@@ -174,11 +232,12 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
         </button>
       </div>
 
-      {/* Up Button */}
+      {/* Up Button - Steps to previous number (e.g. 00 -> 23 or 00 -> 59 seamlessly) */}
       <button
         type="button"
         onClick={() => handleStep('up')}
-        className="w-full py-2.5 flex items-center justify-center text-teal-300 hover:text-white active:scale-95 transition-colors rounded-t-2xl bg-stone-900 hover:bg-stone-800 border-t border-x border-teal-500/30 shadow-sm"
+        className="w-full py-2.5 flex items-center justify-center text-teal-300 hover:text-white active:scale-95 transition-colors rounded-t-2xl bg-stone-900 hover:bg-stone-800 border-t border-x border-teal-500/30 shadow-sm cursor-pointer"
+        aria-label="عدد قبلی"
       >
         <ChevronUp className="w-5 h-5" />
       </button>
@@ -200,7 +259,7 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
           }}
         />
 
-        {/* Direct typing overlay input: No checkmark button, auto-submits on blur or clicking outside */}
+        {/* Direct typing overlay input: auto-submits on blur or clicking outside */}
         {isTypingMode ? (
           <div 
             className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-stone-950/95 backdrop-blur-md p-2"
@@ -228,7 +287,7 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
           </div>
         ) : null}
 
-        {/* Scrollable List with Smooth Rolling and Large Top/Bottom Numbers */}
+        {/* Scrollable List with Smooth Infinite Looped Rolling */}
         <div
           ref={containerRef}
           onScroll={handleScroll}
@@ -241,35 +300,26 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
           }}
           className="overflow-y-auto no-scrollbar relative w-full touch-pan-y"
         >
-          {items.map((item, idx) => {
+          {repeatedItems.map((item) => {
             const isSelected = item.value === selectedValue;
-            const diff = Math.abs(idx - currentIndex);
-            
-            // Scaled so numbers above and below are visibly large (طلب کاربر: اعداد بالا و پایین در رول فونت بزرگتری داشته باشند)
-            // Center is dominant (text-6xl/7xl), adjacent numbers are text-4xl/5xl
-            const scale = isSelected ? 1 : Math.max(0.85, 1 - diff * 0.12);
-            const opacity = isSelected ? 1 : Math.max(0.4, 0.75 - diff * 0.25);
 
             return (
               <div
-                key={item.value}
+                key={item.key}
                 onClick={() => {
                   onChange(item.value);
-                  scrollToIndex(idx, true);
+                  scrollToGlobalIndex(item.globalIndex, true);
                 }}
                 style={{
                   height: itemHeight,
                   scrollSnapAlign: 'center',
-                  transform: `scale(${scale})`,
-                  opacity,
                 }}
                 className={`flex items-center justify-center cursor-pointer transition-all duration-150 font-mono tracking-tight select-none w-full ${
                   isSelected
-                    ? 'text-white font-black text-6xl sm:text-7xl md:text-8xl leading-none drop-shadow-md'
-                    : 'text-stone-300 font-extrabold text-4xl sm:text-5xl hover:text-white'
+                    ? 'text-white font-black text-5xl sm:text-6xl md:text-7xl leading-none drop-shadow-md scale-100 opacity-100'
+                    : 'text-stone-400 hover:text-stone-200 font-extrabold text-3xl sm:text-4xl scale-90 opacity-60'
                 }`}
               >
-                {/* 2-digit format */}
                 {item.label}
               </div>
             );
@@ -280,11 +330,12 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
         <div className="absolute bottom-0 inset-x-0 h-10 bg-gradient-to-t from-stone-950 via-stone-950/70 to-transparent pointer-events-none z-10" />
       </div>
 
-      {/* Down Button */}
+      {/* Down Button - Steps to next number (e.g. 23 -> 00 or 59 -> 00 seamlessly) */}
       <button
         type="button"
         onClick={() => handleStep('down')}
-        className="w-full py-2.5 flex items-center justify-center text-teal-300 hover:text-white active:scale-95 transition-colors rounded-b-2xl bg-stone-900 hover:bg-stone-800 border-b border-x border-teal-500/30 shadow-sm"
+        className="w-full py-2.5 flex items-center justify-center text-teal-300 hover:text-white active:scale-95 transition-colors rounded-b-2xl bg-stone-900 hover:bg-stone-800 border-b border-x border-teal-500/30 shadow-sm cursor-pointer"
+        aria-label="عدد بعدی"
       >
         <ChevronDown className="w-5 h-5" />
       </button>

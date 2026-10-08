@@ -24,7 +24,7 @@ import {
 } from './utils/googleSync';
 import { User } from 'firebase/auth';
 import confetti from 'canvas-confetti';
-import nikAppIcon from './assets/images/nik_reminder_icon_1790104279557.jpg';
+import appIcon from './assets/images/icon.png';
 import { getNextRecurrenceTimestamp } from './utils/recurrence';
 import { 
   initNotificationChannel, 
@@ -990,7 +990,7 @@ export default function App() {
           : 'bg-stone-900/90 border-stone-800 text-stone-100'
       }`}>
         <div className="w-full px-2 sm:px-4 md:px-6 h-15 sm:h-16 flex items-center justify-between gap-2.5">
-          {/* Logo Icon Button (لمس آیکون برنامه برای بازگشت به صفحه اصلی - شکل زنگوله قبلی) */}
+          {/* Main App Logo Button (لمس آیکون برنامه برای بازگشت به صفحه اصلی) */}
           <div className="flex items-center gap-2 flex-shrink-0">
             <button
               type="button"
@@ -1003,10 +1003,15 @@ export default function App() {
                 setIsSettingsOpen(false);
                 window.scrollTo({ top: 0, behavior: 'smooth' });
               }}
-              className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center flex-shrink-0 group cursor-pointer active:scale-95 transition-all shadow-md shadow-amber-500/20 hover:bg-amber-500/30"
-              title={settings.language === 'en' ? 'Go to Home' : 'بازگشت به صفحه اصلی'}
+              className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl p-0.5 bg-stone-950 border border-amber-500/40 flex items-center justify-center flex-shrink-0 group cursor-pointer active:scale-95 transition-all shadow-md shadow-amber-500/10 hover:border-amber-400"
+              title={settings.language === 'en' ? 'YAAD - Go to Home' : 'یاد • بازگشت به صفحه اصلی'}
             >
-              <Bell className="w-4.5 h-4.5 sm:w-5 sm:h-5 text-amber-400 transition-transform duration-300 group-hover:scale-110" />
+              <img
+                src={appIcon}
+                alt="YAAD"
+                className="w-full h-full object-cover rounded-[10px] sm:rounded-xl transition-transform duration-300 group-hover:scale-105"
+                draggable={false}
+              />
             </button>
             {googleUser && (
               <span className="hidden md:flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold">
@@ -1694,13 +1699,14 @@ export default function App() {
 
       </div>
       
-      {/* APP STARTUP SPLASH SCREEN (FADE OUT IN 2 SECONDS WITH NEW LOGO) */}
+      {/* APP STARTUP SPLASH SCREEN (FADE OUT IN 2 SECONDS WITH LOGO & DYNAMIC VERSION) */}
       {showSplash && (
         <SplashScreen 
           onStartExit={handleStartExitSplash} 
           onFinish={handleFinishSplash} 
           totalDurationMs={2000}
           fadeOutMs={700}
+          language={settings.language}
         />
       )}
     </>

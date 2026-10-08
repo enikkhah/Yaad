@@ -51,7 +51,7 @@ import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
 import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume } from '../utils/audio';
 import { syncNotificationSoundAndVolume } from '../utils/nativeLocalNotifications';
 import { User } from 'firebase/auth';
-import yaadAppIcon from '../assets/images/yaad_pwa_icon_1790941867734.jpg';
+import appIcon from '../assets/images/icon.png';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -324,12 +324,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Header */}
         <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl overflow-hidden border border-amber-500/30 flex-shrink-0 bg-stone-950 shadow-sm">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden border border-amber-500/30 flex-shrink-0 bg-stone-950 shadow-sm p-0.5">
               <img
-                src={yaadAppIcon}
+                src={appIcon}
                 alt="YAAD"
-                referrerPolicy="no-referrer"
-                className="w-full h-full object-cover"
+                className="w-full h-full object-cover rounded-[10px]"
+                draggable={false}
               />
             </div>
             <h3 className="font-black text-base sm:text-lg text-white">
@@ -1100,7 +1100,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <div className="p-3.5 rounded-2xl bg-stone-950 border border-stone-800 space-y-2.5 text-xs">
               <div className="flex items-center justify-between border-b border-stone-800/80 pb-2">
                 <span className="text-stone-400">{isFa ? 'نام برنامه' : 'App Name'}</span>
-                <span className="font-bold text-white">{APP_VERSION_INFO.name}</span>
+                <div className="flex items-center gap-2">
+                  <img src={appIcon} alt="YAAD" className="w-4.5 h-4.5 rounded-md object-cover" />
+                  <span className="font-bold text-white">{APP_VERSION_INFO.name}</span>
+                </div>
               </div>
               <div className="flex items-center justify-between border-b border-stone-800/80 pb-2">
                 <span className="text-stone-400">{isFa ? 'نسخه فعلی' : 'Current Version'}</span>
