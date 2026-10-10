@@ -74,6 +74,7 @@ export interface Translations {
   tabReminders: string;
   tabIdeas: string;
   tabLocations: string;
+  tabOccasions: string;
   installApp: string;
   addReminderTitle: string;
   addReminderDesc: string;
@@ -81,6 +82,8 @@ export interface Translations {
   addIdeaDesc: string;
   addLocationTitle: string;
   addLocationDesc: string;
+  addOccasionTitle: string;
+  addOccasionDesc: string;
   titlePlaceholder: string;
   descriptionPlaceholder: string;
   importFromSms: string;
@@ -189,13 +192,16 @@ export const translations: Record<AppLanguage, Translations> = {
     tabReminders: 'یادآورها',
     tabIdeas: 'ایده‌ها',
     tabLocations: 'مکان‌ها',
+    tabOccasions: 'مناسبت‌ها',
     installApp: 'نصب برنامه',
     addReminderTitle: 'ثبت یادآور',
     addReminderDesc: 'با آلارم، صوت و تقویم شمسی',
     addIdeaTitle: 'ثبت ایده',
     addIdeaDesc: 'متن، ویس، ویدیو و نقاشی',
-    addLocationTitle: 'ثبت لوکیشن (GPS)',
+    addLocationTitle: 'ثبت مکان (GPS)',
     addLocationDesc: 'مختصات، عکس دوربین و نقشه',
+    addOccasionTitle: 'ثبت مناسبت',
+    addOccasionDesc: 'تولد، سالگرد ازدواج و رویدادهای مهم',
     titlePlaceholder: 'عنوان یادآور (مثلاً: تماس با همکار، نوبت دندانپزشکی...)',
     descriptionPlaceholder: 'توضیحات و جزئیات تکمیلی یادآور...',
     importFromSms: 'ورود از پیامک',
@@ -302,13 +308,16 @@ export const translations: Record<AppLanguage, Translations> = {
     tabReminders: 'Reminders',
     tabIdeas: 'Ideas',
     tabLocations: 'Places',
+    tabOccasions: 'Occasions',
     installApp: 'Install App',
     addReminderTitle: 'Add Reminder',
     addReminderDesc: 'With alarm, audio & recurrence',
     addIdeaTitle: 'Capture Idea',
     addIdeaDesc: 'Text, voice memo, video & sketch',
-    addLocationTitle: 'Save GPS Place',
+    addLocationTitle: 'Save Place (GPS)',
     addLocationDesc: 'Coordinates, photo & maps',
+    addOccasionTitle: 'Add Occasion',
+    addOccasionDesc: 'Birthdays, anniversaries & milestones',
     titlePlaceholder: 'Reminder title (e.g., Call colleague, Dentist appointment...)',
     descriptionPlaceholder: 'Additional notes and details...',
     importFromSms: 'Import from SMS',

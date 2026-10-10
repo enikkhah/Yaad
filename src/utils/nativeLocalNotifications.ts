@@ -915,6 +915,49 @@ export async function cancelTestNotification(): Promise<void> {
 }
 
 /**
+ * Fires an immediate Android local notification (used for Geofence entry/exit events).
+ */
+export async function fireImmediateLocalNotification(
+  title: string,
+  body: string,
+  extraData?: any
+): Promise<void> {
+  if (!isNativeApp()) {
+    // In web environment, log or trigger HTML5 notification if granted
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(title, { body, icon: '/icon-192.png' });
+      } catch {
+        // ignore
+      }
+    }
+    return;
+  }
+
+  try {
+    const notifId = Math.floor(Math.random() * 100000) + 100000;
+    const settings = getSavedAppSettings();
+    const channelId = getChannelIdForConfig(settings?.alarmSound, settings?.alarmVolume ?? 0.85);
+
+    await LocalNotifications.schedule({
+      notifications: [
+        {
+          id: notifId,
+          title,
+          body,
+          channelId,
+          smallIcon: 'ic_stat_notification',
+          largeIcon: 'ic_stat_notification',
+          extra: extraData || {},
+        },
+      ],
+    });
+  } catch (err) {
+    console.warn('Failed to fire immediate local notification:', err);
+  }
+}
+
+/**
  * Reschedules notification when a reminder is updated or postponed:
  * cancels the previous notification and schedules the new one.
  */

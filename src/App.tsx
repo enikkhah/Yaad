@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Reminder, Category, Priority, IdeaNote, AppSettings, AppTheme, SavedLocation } from './types';
+import { Reminder, Category, Priority, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
 import { getJalaliComponents, formatJalaliFull, toPersianDigits } from './utils/jalali';
 import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { stopFlashlightStrobe } from './utils/torch';
@@ -13,6 +13,11 @@ import { IdeaCaptureModal } from './components/IdeaCaptureModal';
 import { IdeaCard } from './components/IdeaCard';
 import { LocationCaptureModal } from './components/LocationCaptureModal';
 import { SavedLocationCard } from './components/SavedLocationCard';
+import { LocationReminderModal } from './components/LocationReminderModal';
+import { OccasionsView } from './components/OccasionsView';
+import { OccasionFormModal } from './components/OccasionFormModal';
+import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
+import { performAutoBackup, retrieveLatestBackup } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
 import { 
@@ -34,8 +39,18 @@ import {
   syncAllRemindersWithLocalNotifications, 
   syncNotificationSoundAndVolume,
   setupNotificationListeners,
-  getNotificationId
+  getNotificationId,
+  fireImmediateLocalNotification
 } from './utils/nativeLocalNotifications';
+import { 
+  evaluateGeofences, 
+  getAdaptivePollingInterval, 
+  isGeofenceTrackingEnabled, 
+  saveLastKnownPosition, 
+  getLastKnownPosition,
+  UserPosition,
+  GeofenceTriggerEvent 
+} from './utils/geofenceManager';
 import { getT } from './utils/i18n';
 import { 
   Plus, 
@@ -61,7 +76,9 @@ import {
   MapPin,
   Download,
   RotateCcw,
-  Trash2
+  Trash2,
+  Cake,
+  CalendarHeart
 } from 'lucide-react';
 
 const REMINDERS_STORAGE_KEY = 'fa_reminder_app_data_v2';
@@ -200,8 +217,124 @@ export default function App() {
     }
   }, [savedLocations]);
 
-  // Main Active Tab: 'reminders', 'ideas', or 'locations'
-  const [activeMainTab, setActiveMainTab] = useState<'reminders' | 'ideas' | 'locations'>('reminders');
+  // Occasions state (مناسبت‌ها: تولد، سالگردها و رویدادهای مهم)
+  const [occasions, setOccasions] = useState<Occasion[]>(() => {
+    try {
+      const saved = localStorage.getItem(OCCASIONS_STORAGE_KEY);
+      if (saved) return JSON.parse(saved);
+    } catch {
+      // Fallback
+    }
+    return [
+      {
+        id: 'sample_occ_1',
+        title: 'تولد علی',
+        personName: 'علی',
+        type: 'birthday',
+        solarYear: 1374,
+        solarMonth: 1,
+        solarDay: 25,
+        notifyDaysBefore: 1,
+        notifyTime: '09:00',
+        customNote: 'علاقه‌مند به کتاب و ساعت',
+        createdAt: Date.now() - 86400000,
+      },
+      {
+        id: 'sample_occ_2',
+        title: 'سالگرد ازدواج',
+        personName: 'همسر',
+        type: 'wedding',
+        solarYear: 1398,
+        solarMonth: 6,
+        solarDay: 15,
+        notifyDaysBefore: 3,
+        notifyTime: '10:00',
+        customNote: 'رزرو رستوران و تهیه گل',
+        createdAt: Date.now() - 86400000,
+      }
+    ];
+  });
+
+  // Persistent occasions storage
+  useEffect(() => {
+    try {
+      localStorage.setItem(OCCASIONS_STORAGE_KEY, JSON.stringify(occasions));
+    } catch {
+      // Ignore
+    }
+  }, [occasions]);
+
+  // Auto-recall/restore from persistent local vault (IndexedDB / LocalStorage backup) upon app launch or re-installation
+  const [isVaultInitialized, setIsVaultInitialized] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    const autoRestoreFromVault = async () => {
+      try {
+        const backup = await retrieveLatestBackup();
+        if (backup && isMounted) {
+          const isRemindersEmpty = reminders.length === 0;
+          const isIdeasDefaultOrEmpty = ideas.length === 0 || (ideas.length === 1 && ideas[0].id === 'idea-1');
+          const isLocationsEmpty = savedLocations.length === 0;
+          const isOccasionsDefaultOrEmpty = occasions.length === 0 || (occasions.length === 2 && occasions[0].id === 'sample_occ_1');
+
+          let restoredAny = false;
+
+          if (isRemindersEmpty && backup.reminders && backup.reminders.length > 0) {
+            setReminders(backup.reminders);
+            restoredAny = true;
+          }
+          if (isIdeasDefaultOrEmpty && backup.ideas && backup.ideas.length > 0) {
+            setIdeas(backup.ideas);
+            restoredAny = true;
+          }
+          if (isLocationsEmpty && backup.savedLocations && backup.savedLocations.length > 0) {
+            setSavedLocations(backup.savedLocations);
+            restoredAny = true;
+          }
+          if (isOccasionsDefaultOrEmpty && backup.occasions && backup.occasions.length > 0) {
+            setOccasions(backup.occasions);
+            restoredAny = true;
+          }
+          if (backup.settings) {
+            setSettings((prev) => ({ ...prev, ...backup.settings }));
+          }
+
+          if (restoredAny) {
+            showSyncNotification('پشتیبان خودکار با موفقیت فراخوانی و بازیابی شد.');
+          }
+        }
+      } catch (err) {
+        console.warn('Auto restore vault check:', err);
+      } finally {
+        if (isMounted) {
+          setIsVaultInitialized(true);
+        }
+      }
+    };
+
+    autoRestoreFromVault();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  // Automatic local backup to persistent vault & IndexedDB after every registration/save
+  useEffect(() => {
+    if (isVaultInitialized) {
+      performAutoBackup({
+        reminders,
+        ideas,
+        savedLocations,
+        occasions,
+        settings,
+      });
+    }
+  }, [reminders, ideas, savedLocations, occasions, settings, isVaultInitialized]);
+
+  // Main Active Tab: 'reminders', 'ideas', 'locations', or 'occasions'
+  const [activeMainTab, setActiveMainTab] = useState<'reminders' | 'ideas' | 'locations' | 'occasions'>('reminders');
 
   // Google Auth & Sync state
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -217,6 +350,13 @@ export default function App() {
   const [editingIdea, setEditingIdea] = useState<IdeaNote | null>(null);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<SavedLocation | null>(null);
+  const [isLocationReminderModalOpen, setIsLocationReminderModalOpen] = useState(false);
+  const [targetLocationForReminder, setTargetLocationForReminder] = useState<SavedLocation | null>(null);
+  const [isOccasionModalOpen, setIsOccasionModalOpen] = useState(false);
+  const [editingOccasion, setEditingOccasion] = useState<Occasion | null>(null);
+  const [locationSearchQuery, setLocationSearchQuery] = useState('');
+  const [currentUserPosition, setCurrentUserPosition] = useState<UserPosition | null>(() => getLastKnownPosition());
+  const [isGeofenceActive, setIsGeofenceActive] = useState<boolean>(() => isGeofenceTrackingEnabled());
   const [isCreateChoiceOpen, setIsCreateChoiceOpen] = useState(false);
   const [activeAlarmReminder, setActiveAlarmReminder] = useState<Reminder | null>(null);
   const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
@@ -436,6 +576,84 @@ export default function App() {
     };
   }, [reminders]);
 
+  // Geofence Evaluation Engine: Monitors user coordinates and triggers location-based reminders
+  useEffect(() => {
+    if (!isGeofenceActive) return;
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+
+    // Check if there are any active location reminders
+    const hasActiveGeofences = reminders.some(
+      (r) => r.status === 'pending' && r.geofence && r.geofence.enabled
+    );
+    if (!hasActiveGeofences) return;
+
+    let isMounted = true;
+    let timerId: any = null;
+
+    const runGeofenceCheck = () => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          if (!isMounted) return;
+          const userPos: UserPosition = {
+            latitude: pos.coords.latitude,
+            longitude: pos.coords.longitude,
+            accuracy: pos.coords.accuracy,
+            timestamp: pos.timestamp || Date.now(),
+          };
+
+          setCurrentUserPosition(userPos);
+          saveLastKnownPosition(userPos);
+
+          // Evaluate all geofences
+          evaluateGeofences(userPos, reminders, (event: GeofenceTriggerEvent) => {
+            // 1. Trigger App alarm modal & sound
+            setActiveAlarmReminder(event.reminder);
+
+            // 2. Fire Native Android Notification banner immediately
+            const actionText = event.triggerType === 'enter' ? 'رسیدن به محدوده' : 'خروج از محدوده';
+            fireImmediateLocalNotification(
+              `📍 هشدار مکان: ${event.reminder.title}`,
+              `${actionText} ${event.reminder.geofence?.locationName || 'مکان ثبت‌شده'} (فاصله: ${event.distance} متر)`,
+              { reminderId: event.reminder.id, geofence: true }
+            );
+
+            // 3. Mark reminder geofence as triggered in state
+            setReminders((prev) =>
+              prev.map((item) =>
+                item.id === event.reminder.id
+                  ? {
+                      ...item,
+                      geofence: item.geofence
+                        ? { ...item.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
+                        : undefined,
+                    }
+                  : item
+              )
+            );
+          });
+
+          // Schedule next check with adaptive battery-saving interval
+          const nextInterval = getAdaptivePollingInterval(userPos, reminders);
+          timerId = setTimeout(runGeofenceCheck, nextInterval);
+        },
+        (err) => {
+          // Graceful fallback: retry in 60s if GPS temporarily fails
+          if (!isMounted) return;
+          timerId = setTimeout(runGeofenceCheck, 60000);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+      );
+    };
+
+    // Initial check
+    runGeofenceCheck();
+
+    return () => {
+      isMounted = false;
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [reminders, isGeofenceActive]);
+
   // Google sign in / out handlers
   const handleGoogleSignIn = async () => {
     try {
@@ -602,12 +820,54 @@ export default function App() {
     showSyncNotification('مکان با موفقیت حذف شد.');
   };
 
+  // Handler: Save / Edit Occasion (مناسبت‌ها: تولد، سالگردها و رویدادهای مهم)
+  const handleSaveOccasion = (
+    newOccData: Omit<Occasion, 'id' | 'createdAt'>,
+    alsoCreateReminder?: boolean
+  ) => {
+    if (editingOccasion) {
+      setOccasions((prev) =>
+        prev.map((o) => (o.id === editingOccasion.id ? { ...o, ...newOccData } : o))
+      );
+      setEditingOccasion(null);
+      showSyncNotification('مناسبت با موفقیت ویرایش شد.');
+    } else {
+      const newOccasion: Occasion = {
+        ...newOccData,
+        id: 'occ_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+        createdAt: Date.now(),
+      };
+      setOccasions((prev) => [newOccasion, ...prev]);
+      showSyncNotification('مناسبت جدید با موفقیت ثبت شد.');
+
+      // Automatically create a Reminder with alarm if requested
+      if (alsoCreateReminder) {
+        const reminderPayload = createReminderFromOccasion(newOccasion);
+        handleSaveReminder(reminderPayload);
+      }
+    }
+    setActiveMainTab('occasions');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleDeleteOccasion = (id: string) => {
+    setOccasions((prev) => prev.filter((o) => o.id !== id));
+    showSyncNotification('مناسبت با موفقیت حذف شد.');
+  };
+
+  const handleCreateReminderFromOccasion = (occasion: Occasion) => {
+    const reminderPayload = createReminderFromOccasion(occasion);
+    handleSaveReminder(reminderPayload);
+    showSyncNotification(`آلارم یادآور برای مناسبت «${occasion.title}» تنظیم شد.`);
+  };
+
   // Handler: Restore local backup data (پشتیبان‌گیری و بازیابی محلی)
   const handleRestoreData = (
     data: {
       reminders?: Reminder[];
       ideas?: IdeaNote[];
       savedLocations?: SavedLocation[];
+      occasions?: Occasion[];
       settings?: Partial<AppSettings>;
     },
     mode: 'replace' | 'merge'
@@ -616,6 +876,7 @@ export default function App() {
       if (data.reminders) setReminders(data.reminders);
       if (data.ideas) setIdeas(data.ideas);
       if (data.savedLocations) setSavedLocations(data.savedLocations);
+      if (data.occasions) setOccasions(data.occasions);
       if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
     } else {
       // Merge mode
@@ -623,6 +884,13 @@ export default function App() {
         setReminders((prev) => {
           const existingIds = new Set(prev.map((r) => r.id));
           const newItems = data.reminders!.filter((r) => !existingIds.has(r.id));
+          return [...newItems, ...prev];
+        });
+      }
+      if (data.occasions && data.occasions.length > 0) {
+        setOccasions((prev) => {
+          const existingIds = new Set(prev.map((o) => o.id));
+          const newItems = data.occasions!.filter((o) => !existingIds.has(o.id));
           return [...newItems, ...prev];
         });
       }
@@ -1071,6 +1339,22 @@ export default function App() {
                   ({settings.language === 'en' ? savedLocations.length : toPersianDigits(savedLocations.length)})
                 </span>
               </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveMainTab('occasions')}
+                className={`flex items-center gap-0.5 sm:gap-1 px-1.5 sm:px-2.5 py-1 sm:py-1.5 rounded-lg font-bold transition-all whitespace-nowrap ${
+                  activeMainTab === 'occasions'
+                    ? 'bg-stone-900 border border-pink-400/80 text-pink-300 font-black shadow-sm'
+                    : 'text-stone-300 hover:text-white'
+                }`}
+              >
+                <Cake className="w-3 h-3 text-pink-400 shrink-0" />
+                <span>{t.tabOccasions}</span>
+                <span className="opacity-80 text-[9px] sm:text-xs font-mono">
+                  ({settings.language === 'en' ? occasions.length : toPersianDigits(occasions.length)})
+                </span>
+              </button>
             </div>
 
             {/* Install App Button (Compact / Icon on mobile) */}
@@ -1107,17 +1391,30 @@ export default function App() {
                   setEditingReminder(null);
                   setIsFormOpen(true);
                 }}
-                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-amber-500/25 transition-all active:scale-95 flex-shrink-0"
+                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-amber-500/25 transition-all active:scale-95 flex-shrink-0 cursor-pointer"
               >
                 <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
                 <span>{t.newReminder}</span>
+              </button>
+            ) : activeMainTab === 'occasions' ? (
+              <button
+                id="header-create-occasion-btn"
+                type="button"
+                onClick={() => {
+                  setEditingOccasion(null);
+                  setIsOccasionModalOpen(true);
+                }}
+                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 text-white text-xs sm:text-sm font-black shadow-lg shadow-pink-500/25 transition-all active:scale-95 flex-shrink-0 cursor-pointer"
+              >
+                <Plus className="w-4 h-4 text-white stroke-[3]" />
+                <span>{t.addOccasionTitle}</span>
               </button>
             ) : activeMainTab === 'ideas' ? (
               <button
                 id="header-create-idea-btn"
                 type="button"
                 onClick={() => setIsIdeaModalOpen(true)}
-                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-sky-500/25 transition-all active:scale-95 flex-shrink-0"
+                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-500 hover:bg-sky-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-sky-500/25 transition-all active:scale-95 flex-shrink-0 cursor-pointer"
               >
                 <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
                 <span>{t.addIdeaTitle}</span>
@@ -1127,7 +1424,7 @@ export default function App() {
                 id="header-create-location-btn"
                 type="button"
                 onClick={() => setIsLocationModalOpen(true)}
-                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-emerald-500/25 transition-all active:scale-95 flex-shrink-0"
+                className="hidden md:flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-emerald-500/25 transition-all active:scale-95 flex-shrink-0 cursor-pointer"
               >
                 <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
                 <span>{t.addLocationTitle}</span>
@@ -1155,6 +1452,7 @@ export default function App() {
                 }}
                 timelineMode={settings.timelineMode}
                 language={settings.language}
+                countdown={upcomingCountdown}
               />
             </section>
 
@@ -1284,7 +1582,7 @@ export default function App() {
                       key={reminder.id}
                       reminder={reminder}
                       isNext={reminder.id === upcomingReminder?.id && reminder.status !== 'completed'}
-                      countdown={reminder.id === upcomingReminder?.id ? upcomingCountdown : null}
+                      countdown={null}
                       onToggleComplete={handleToggleComplete}
                       onPostpone={handlePostpone}
                       onDelete={handleDelete}
@@ -1400,38 +1698,108 @@ export default function App() {
                     </span>
                   </h3>
                   <p className="text-[11px] text-stone-400">
-                    {isEn ? 'Satellite coordinates, Google Maps preview, camera photo and notes' : 'ذخیره خودکار مختصات ماهواره‌ای، پیش‌نمایش در گوگل‌مپ، فیلد توضیحات و عکس زنده دوربین'}
+                    {isEn ? 'Satellite coordinates, Google Maps preview, camera photo and geofence alerts' : 'ذخیره خودکار مختصات ماهواره‌ای، پیش‌نمایش در گوگل‌مپ، عکاسی و هشدارهای ورود/خروج'}
                   </p>
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => setIsLocationModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 !text-white font-bold text-xs shadow-md shadow-emerald-500/20 transition-all self-stretch sm:self-auto justify-center cursor-pointer active:scale-95"
-              >
-                <Plus className="w-4 h-4 text-white stroke-[3]" />
-                <span className="text-white font-black">
-                  {isEn ? 'Save New Location' : 'ثبت لوکیشن جدید'}
-                </span>
-              </button>
+              <div className="flex items-center gap-2 self-stretch sm:self-auto">
+                <button
+                  type="button"
+                  onClick={() => setIsLocationModalOpen(true)}
+                  className="flex-1 sm:flex-initial flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 !text-white font-bold text-xs shadow-md shadow-emerald-500/20 transition-all justify-center cursor-pointer active:scale-95"
+                >
+                  <Plus className="w-4 h-4 text-white stroke-[3]" />
+                  <span className="text-white font-black">
+                    {isEn ? 'Save New Location' : 'ثبت لوکیشن جدید'}
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            {/* Location Search Bar & Geofence Active Indicator */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-stone-400 absolute start-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={locationSearchQuery}
+                  onChange={(e) => setLocationSearchQuery(e.target.value)}
+                  placeholder={isEn ? 'Search places by name or address...' : 'جست‌وجوی مکان بر اساس نام، آدرس یا توضیحات...'}
+                  className="w-full ps-9 pe-3 py-2 rounded-xl bg-stone-900 border border-stone-800 text-white placeholder-stone-500 text-xs focus:outline-none focus:border-emerald-500/60"
+                />
+                {locationSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setLocationSearchQuery('')}
+                    className="absolute end-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-white"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+
+              {/* Geofence Engine Status Toggle */}
+              <div className="flex items-center justify-between sm:justify-start gap-2 px-3 py-1.5 rounded-xl bg-stone-900 border border-stone-800 text-xs">
+                <div className="flex items-center gap-1.5 text-stone-300">
+                  <span className={`w-2 h-2 rounded-full ${isGeofenceActive ? 'bg-emerald-400 animate-pulse' : 'bg-stone-500'}`} />
+                  <span className="text-[11px] font-bold">
+                    {isEn ? 'Geofence Alerts:' : 'سرویس هشدار مکانی:'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsGeofenceActive(!isGeofenceActive)}
+                  className={`text-[10px] px-2 py-0.5 rounded-lg font-black transition-colors cursor-pointer ${
+                    isGeofenceActive
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                      : 'bg-stone-800 text-stone-400 border border-stone-700'
+                  }`}
+                >
+                  {isGeofenceActive ? (isEn ? 'ACTIVE' : 'فعال') : (isEn ? 'PAUSED' : 'غیرفعال')}
+                </button>
+              </div>
             </div>
 
             {savedLocations.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {savedLocations.map((loc) => (
-                  <SavedLocationCard
-                    key={loc.id}
-                    location={loc}
-                    onDelete={handleDeleteLocation}
-                    onEdit={(item) => {
-                      setEditingLocation(item);
-                      setIsLocationModalOpen(true);
-                    }}
-                    onViewPhoto={(url) => setViewingImageUrl(url)}
-                    language={settings.language}
-                  />
-                ))}
+                {savedLocations
+                  .filter((loc) => {
+                    if (!locationSearchQuery.trim()) return true;
+                    const q = locationSearchQuery.toLowerCase();
+                    return (
+                      loc.title.toLowerCase().includes(q) ||
+                      (loc.description && loc.description.toLowerCase().includes(q)) ||
+                      (loc.address && loc.address.toLowerCase().includes(q))
+                    );
+                  })
+                  .map((loc) => (
+                    <SavedLocationCard
+                      key={loc.id}
+                      location={loc}
+                      onDelete={handleDeleteLocation}
+                      onEdit={(item) => {
+                        setEditingLocation(item);
+                        setIsLocationModalOpen(true);
+                      }}
+                      onCreateReminderFromLocation={(targetLoc) => {
+                        setTargetLocationForReminder(targetLoc);
+                        setIsLocationReminderModalOpen(true);
+                      }}
+                      onCreateIdeaFromLocation={(targetLoc) => {
+                        setEditingIdea({
+                          id: 'temp_idea',
+                          title: `یادداشت درباره: ${targetLoc.title}`,
+                          content: `${targetLoc.description ? targetLoc.description + '\n' : ''}مختصات: ${targetLoc.latitude}, ${targetLoc.longitude}\nنقشه: ${targetLoc.googleMapsUrl}`,
+                          createdAt: Date.now(),
+                          category: 'work',
+                        });
+                        setIsIdeaModalOpen(true);
+                      }}
+                      onViewPhoto={(url) => setViewingImageUrl(url)}
+                      language={settings.language}
+                    />
+                  ))}
               </div>
             ) : (
               <div className="py-12 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-900/40 space-y-3">
@@ -1461,6 +1829,24 @@ export default function App() {
           </section>
         )}
 
+        {/* VIEW 4: OCCASIONS & MILESTONES (مناسبت‌ها: تولد، سالگردها و رویدادهای مهم) */}
+        {activeMainTab === 'occasions' && (
+          <OccasionsView
+            occasions={occasions}
+            onAddNew={() => {
+              setEditingOccasion(null);
+              setIsOccasionModalOpen(true);
+            }}
+            onEdit={(occ) => {
+              setEditingOccasion(occ);
+              setIsOccasionModalOpen(true);
+            }}
+            onDelete={handleDeleteOccasion}
+            onCreateReminder={handleCreateReminderFromOccasion}
+            language={settings.language}
+          />
+        )}
+
       </main>
 
       {/* FLOATING ACTION BUTTON (+) - POSITION ALWAYS FIXED ON THE RIGHT (NON-FLIPPING ACROSS LANGUAGES) */}
@@ -1481,7 +1867,7 @@ export default function App() {
               />
 
               {/* Popup Options: Fixed on the right side with zoom-out entrance effect */}
-              <div className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/95 border-2 border-teal-500/80 rounded-3xl p-3 sm:p-4 shadow-2xl shadow-black/95 backdrop-blur-2xl w-64 sm:w-72 space-y-2.5 animate-zoom-out">
+              <div className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/95 border-2 border-teal-500/80 rounded-3xl p-3 sm:p-4 shadow-2xl shadow-black/95 backdrop-blur-2xl w-64 sm:w-72 space-y-2 animate-zoom-out">
                 {/* Option 1: Reminder */}
                 <button
                   type="button"
@@ -1490,13 +1876,13 @@ export default function App() {
                     setEditingReminder(null);
                     setIsFormOpen(true);
                   }}
-                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-amber-500/15 text-left rtl:text-right text-stone-100 hover:text-amber-300 transition-all cursor-pointer group active:scale-95 border border-amber-500/30 hover:border-amber-500/60 shadow-md"
+                  className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-amber-500/15 text-left rtl:text-right text-stone-100 hover:text-amber-300 transition-all cursor-pointer group active:scale-95 border border-amber-500/30 hover:border-amber-500/60 shadow-md"
                 >
-                  <div className="w-11 h-11 rounded-xl bg-amber-500/20 border border-amber-500/50 text-amber-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/50 text-amber-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
                     <Bell className="w-5 h-5 stroke-[2.2]" />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm sm:text-base font-black text-white">
+                    <span className="text-sm font-black text-white">
                       {isEn ? 'New Reminder' : 'ثبت یادآور'}
                     </span>
                     <span className="text-[11px] text-stone-400 group-hover:text-amber-200">
@@ -1505,20 +1891,43 @@ export default function App() {
                   </div>
                 </button>
 
-                {/* Option 2: Idea */}
+                {/* Option 2: Occasion (مناسبت جدید) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCreateChoiceOpen(false);
+                    setEditingOccasion(null);
+                    setIsOccasionModalOpen(true);
+                  }}
+                  className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-pink-500/15 text-left rtl:text-right text-stone-100 hover:text-pink-300 transition-all cursor-pointer group active:scale-95 border border-pink-500/30 hover:border-pink-500/60 shadow-md"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-pink-500/20 border border-pink-500/50 text-pink-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
+                    <Cake className="w-5 h-5 stroke-[2.2]" />
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="text-sm font-black text-white">
+                      {isEn ? 'Add Occasion' : 'ثبت مناسبت'}
+                    </span>
+                    <span className="text-[11px] text-stone-400 group-hover:text-pink-200">
+                      {isEn ? 'Birthdays & anniversaries' : 'تولد، سالگرد ازدواج و رویدادها'}
+                    </span>
+                  </div>
+                </button>
+
+                {/* Option 3: Idea */}
                 <button
                   type="button"
                   onClick={() => {
                     setIsCreateChoiceOpen(false);
                     setIsIdeaModalOpen(true);
                   }}
-                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-sky-500/15 text-left rtl:text-right text-stone-100 hover:text-sky-300 transition-all cursor-pointer group active:scale-95 border border-sky-500/30 hover:border-sky-500/60 shadow-md"
+                  className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-sky-500/15 text-left rtl:text-right text-stone-100 hover:text-sky-300 transition-all cursor-pointer group active:scale-95 border border-sky-500/30 hover:border-sky-500/60 shadow-md"
                 >
-                  <div className="w-11 h-11 rounded-xl bg-sky-500/20 border border-sky-500/50 text-sky-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
+                  <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/50 text-sky-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
                     <Lightbulb className="w-5 h-5 stroke-[2.2]" />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm sm:text-base font-black text-white">
+                    <span className="text-sm font-black text-white">
                       {isEn ? 'Capture Idea' : 'ثبت ایده'}
                     </span>
                     <span className="text-[11px] text-stone-400 group-hover:text-sky-200">
@@ -1527,21 +1936,21 @@ export default function App() {
                   </div>
                 </button>
 
-                {/* Option 3: Location (GPS & Google Maps) */}
+                {/* Option 4: Location (ثبت مکان با GPS و نقشه) */}
                 <button
                   type="button"
                   onClick={() => {
                     setIsCreateChoiceOpen(false);
                     setIsLocationModalOpen(true);
                   }}
-                  className="w-full flex items-center gap-3.5 p-3 rounded-2xl hover:bg-teal-500/15 text-left rtl:text-right text-stone-100 hover:text-teal-300 transition-all cursor-pointer group active:scale-95 border border-teal-500/30 hover:border-teal-500/60 shadow-md"
+                  className="w-full flex items-center gap-3 p-2.5 rounded-2xl hover:bg-teal-500/15 text-left rtl:text-right text-stone-100 hover:text-teal-300 transition-all cursor-pointer group active:scale-95 border border-teal-500/30 hover:border-teal-500/60 shadow-md"
                 >
-                  <div className="w-11 h-11 rounded-xl bg-teal-500/20 border border-teal-500/50 text-teal-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
+                  <div className="w-10 h-10 rounded-xl bg-teal-500/20 border border-teal-500/50 text-teal-400 flex items-center justify-center flex-shrink-0 group-hover:scale-110 transition-transform shadow-inner">
                     <MapPin className="w-5 h-5 stroke-[2.2]" />
                   </div>
                   <div className="flex flex-col">
-                    <span className="text-sm sm:text-base font-black text-white">
-                      {isEn ? 'Save GPS Location' : 'ثبت لوکیشن (GPS)'}
+                    <span className="text-sm font-black text-white">
+                      {isEn ? 'Save Place (GPS)' : 'ثبت مکان (GPS)'}
                     </span>
                     <span className="text-[11px] text-stone-400 group-hover:text-teal-200">
                       {isEn ? 'Coordinates, photo & maps' : 'مختصات، عکس دوربین و نقشه'}
@@ -1562,7 +1971,7 @@ export default function App() {
             className={`fab-add-btn rounded-full !bg-gradient-to-r !from-amber-500 !to-amber-400 hover:!from-amber-400 hover:!to-amber-300 text-stone-950 flex items-center justify-center shadow-2xl shadow-amber-500/40 hover:scale-105 active:scale-95 transition-all !border-2 !border-amber-300 flex-shrink-0 cursor-pointer ${
               isCreateChoiceOpen ? 'rotate-45' : ''
             }`}
-            title={isEn ? 'Add New (Reminder, Idea, Place)' : 'ثبت جدید (یادآور، ایده یا لوکیشن)'}
+            title={isEn ? 'Add New (Reminder, Occasion, Idea, Place)' : 'ثبت جدید (یادآور، مناسبت، ایده یا مکان)'}
             aria-label={isEn ? 'Add New' : 'ثبت جدید'}
           >
             <Plus style={{ width: '35px', height: '35px' }} className="w-7 h-7 stroke-[3] transition-transform duration-200" />
@@ -1609,6 +2018,34 @@ export default function App() {
         language={settings.language}
       />
 
+      {/* GEOFENCE LOCATION-BASED REMINDER MODAL */}
+      <LocationReminderModal
+        isOpen={isLocationReminderModalOpen}
+        onClose={() => {
+          setIsLocationReminderModalOpen(false);
+          setTargetLocationForReminder(null);
+        }}
+        onSave={(newRem) => {
+          handleSaveReminder(newRem);
+          showSyncNotification('یادآور ورود/خروج به محدوده مکانی فعال شد.');
+        }}
+        savedLocations={savedLocations}
+        initialLocation={targetLocationForReminder}
+        language={settings.language}
+      />
+
+      {/* OCCASION CREATION & EDIT MODAL (مناسبت جدید) */}
+      <OccasionFormModal
+        isOpen={isOccasionModalOpen}
+        onClose={() => {
+          setIsOccasionModalOpen(false);
+          setEditingOccasion(null);
+        }}
+        onSave={handleSaveOccasion}
+        editingOccasion={editingOccasion}
+        language={settings.language}
+      />
+
       {/* SETTINGS MODAL */}
       <SettingsModal
         isOpen={isSettingsOpen}
@@ -1623,6 +2060,7 @@ export default function App() {
         reminders={reminders}
         ideas={ideas}
         savedLocations={savedLocations}
+        occasions={occasions}
         onRestoreData={handleRestoreData}
         onTestHeadsUpBanner={(testRem) => {
           setActiveAlarmReminder(testRem);

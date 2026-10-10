@@ -19,6 +19,7 @@ interface TimelineWidgetProps {
   onSelectReminder: (reminder: Reminder) => void;
   timelineMode?: 'modern' | 'sketch';
   language?: AppLanguage;
+  countdown?: { hours: number; minutes: number; seconds: number } | null;
 }
 
 export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
@@ -28,6 +29,7 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
   onSelectReminder,
   timelineMode = 'modern',
   language = 'fa',
+  countdown = null,
 }) => {
   const isEn = language === 'en';
   const [currentTime, setCurrentTime] = useState<Date>(new Date());
@@ -373,8 +375,24 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
                       </div>
                     </div>
 
-                    {/* Time & Quick Snooze (Clean & legible without redundant countdown) */}
-                    <div className="flex items-center gap-1.5 sm:gap-2 text-xs text-stone-300 self-end sm:self-center shrink-0">
+                    {/* Time & Quick Snooze and Live Countdown for Next Reminder */}
+                    <div className="flex items-center gap-1.5 sm:gap-2 text-xs text-stone-300 self-end sm:self-center shrink-0 flex-wrap justify-end">
+                      {/* Integrated Live Countdown Clock inside next reminder card in Timeline */}
+                      {isNext && countdown && (
+                        <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-lg border border-emerald-500/40 bg-stone-950/95 shadow-sm">
+                          <span className="text-[10px] font-bold text-emerald-400">
+                            {isEn ? 'Left:' : 'مانده:'}
+                          </span>
+                          <NeonClock
+                            hours={countdown.hours}
+                            minutes={countdown.minutes}
+                            seconds={countdown.seconds}
+                            size="xs"
+                            color="green"
+                          />
+                        </div>
+                      )}
+
                       <span className={`flex items-center gap-1 font-mono px-2 py-0.5 rounded-md text-[11px] sm:text-xs border ${
                         isNext 
                           ? 'bg-stone-950 text-amber-300 border-amber-500/40 font-bold' 

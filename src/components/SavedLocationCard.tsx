@@ -7,10 +7,11 @@ import {
   Copy, 
   Check, 
   Image as ImageIcon, 
-  Share2, 
   Calendar, 
   Loader2,
-  Pencil
+  Pencil,
+  BellRing,
+  Lightbulb
 } from 'lucide-react';
 import { SavedLocation } from '../types';
 import { formatJalaliFull, toPersianDigits } from '../utils/jalali';
@@ -20,6 +21,8 @@ interface SavedLocationCardProps {
   location: SavedLocation;
   onDelete: (id: string) => void;
   onEdit?: (location: SavedLocation) => void;
+  onCreateReminderFromLocation?: (location: SavedLocation) => void;
+  onCreateIdeaFromLocation?: (location: SavedLocation) => void;
   onViewPhoto?: (url: string) => void;
   language?: AppLanguage;
 }
@@ -28,6 +31,8 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   location,
   onDelete,
   onEdit,
+  onCreateReminderFromLocation,
+  onCreateIdeaFromLocation,
   onViewPhoto,
   language = 'fa',
 }) => {
@@ -152,52 +157,81 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
       </div>
 
       {/* Footer Quick Action Buttons */}
-      <div className="pt-2 border-t border-stone-800/80 flex items-center justify-between gap-2 text-xs">
-        <div className="flex items-center gap-1.5">
-          {/* Directions Button */}
-          <a
-            href={googleDirectionsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-teal-500/20 hover:bg-teal-600 text-teal-300 hover:text-white border border-teal-500/30 text-xs font-bold transition-all active:scale-95"
-            title={language === 'en' ? 'Open directions in Google Maps' : 'مسیریابی در نقشه گوگل'}
-          >
-            <Navigation className="w-3.5 h-3.5" />
-            <span>{language === 'en' ? 'Directions' : 'مسیریابی'}</span>
-          </a>
+      <div className="pt-2.5 border-t border-stone-800/80 flex flex-col gap-2 text-xs">
+        {/* Quick linking actions: Reminder or Idea */}
+        <div className="flex items-center gap-1.5 w-full">
+          {onCreateReminderFromLocation && (
+            <button
+              type="button"
+              onClick={() => onCreateReminderFromLocation(location)}
+              className="flex-1 flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 hover:text-amber-200 border border-amber-500/30 text-xs font-bold transition-all active:scale-95 cursor-pointer"
+              title={language === 'en' ? 'Create geofence reminder for this place' : 'ایجاد یادآوری مکان‌محور برای این نقطه'}
+            >
+              <BellRing className="w-3.5 h-3.5 text-amber-400" />
+              <span>{language === 'en' ? 'Location Reminder' : 'یادآور ورود/خروج مکان'}</span>
+            </button>
+          )}
 
-          {/* Copy Coordinates */}
-          <button
-            type="button"
-            onClick={copyToClipboard}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white border border-stone-700 text-xs font-medium transition-colors active:scale-95"
-            title={language === 'en' ? 'Copy coordinates and link' : 'کپی لینک و مشخصات'}
-          >
-            {copied ? (
-              <>
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-                <span className="text-emerald-400">{language === 'en' ? 'Copied' : 'کپی شد'}</span>
-              </>
-            ) : (
-              <>
-                <Copy className="w-3.5 h-3.5" />
-                <span>{language === 'en' ? 'Copy' : 'کپی'}</span>
-              </>
-            )}
-          </button>
+          {onCreateIdeaFromLocation && (
+            <button
+              type="button"
+              onClick={() => onCreateIdeaFromLocation(location)}
+              className="px-2.5 py-1.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 hover:text-sky-200 border border-sky-500/30 text-xs font-bold transition-all active:scale-95 cursor-pointer flex items-center gap-1"
+              title={language === 'en' ? 'Connect to new idea' : 'اتصال به یادداشت/ایده'}
+            >
+              <Lightbulb className="w-3.5 h-3.5 text-sky-400" />
+              <span>{language === 'en' ? 'Note' : 'یادداشت'}</span>
+            </button>
+          )}
         </div>
 
-        {/* View on Google Maps Link */}
-        <a
-          href={location.googleMapsUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-teal-300 transition-colors"
-          title={language === 'en' ? 'View on Google Maps' : 'مشاهده در گوگل‌مپ'}
-        >
-          <span>{language === 'en' ? 'View Map' : 'مشاهده'}</span>
-          <ExternalLink className="w-3 h-3" />
-        </a>
+        <div className="flex items-center justify-between gap-2 pt-1 border-t border-stone-800/40">
+          <div className="flex items-center gap-1.5">
+            {/* Directions Button */}
+            <a
+              href={googleDirectionsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-teal-500/20 hover:bg-teal-600 text-teal-300 hover:text-white border border-teal-500/30 text-xs font-bold transition-all active:scale-95"
+              title={language === 'en' ? 'Open directions in Google Maps' : 'مسیریابی در نقشه گوگل'}
+            >
+              <Navigation className="w-3.5 h-3.5" />
+              <span>{language === 'en' ? 'Directions' : 'مسیریابی'}</span>
+            </a>
+
+            {/* Copy Coordinates */}
+            <button
+              type="button"
+              onClick={copyToClipboard}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white border border-stone-700 text-xs font-medium transition-colors active:scale-95 cursor-pointer"
+              title={language === 'en' ? 'Copy coordinates and link' : 'کپی لینک و مشخصات'}
+            >
+              {copied ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-400" />
+                  <span className="text-emerald-400">{language === 'en' ? 'Copied' : 'کپی شد'}</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>{language === 'en' ? 'Copy' : 'کپی'}</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* View on Google Maps Link */}
+          <a
+            href={location.googleMapsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-teal-300 transition-colors"
+            title={language === 'en' ? 'View on Google Maps' : 'مشاهده در گوگل‌مپ'}
+          >
+            <span>{language === 'en' ? 'View Map' : 'مشاهده'}</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
       </div>
     </div>
   );

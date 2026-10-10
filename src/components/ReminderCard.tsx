@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Reminder } from '../types';
-import { formatJalaliFull, getPersianRelativeTime } from '../utils/jalali';
+import { formatJalaliFull, getPersianRelativeTime, toPersianDigits } from '../utils/jalali';
 import { getRecurrenceLabel } from '../utils/recurrence';
 import { AppLanguage } from '../utils/i18n';
 import { NeonClock } from './NeonClock';
@@ -17,7 +17,10 @@ import {
   Edit2,
   Repeat,
   Loader2,
-  X
+  X,
+  MapPin,
+  Navigation,
+  Compass
 } from 'lucide-react';
 
 interface ReminderCardProps {
@@ -205,6 +208,21 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                 </span>
               )}
 
+              {/* Geofence / Location Trigger Badge */}
+              {reminder.geofence && reminder.geofence.enabled && (
+                <span className="text-xs px-2.5 py-0.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 font-bold flex items-center gap-1 shadow-sm">
+                  <MapPin className="w-3 h-3 text-emerald-400" />
+                  <span>
+                    {reminder.geofence.triggerOn === 'enter'
+                      ? (isEn ? 'On Arrival' : 'هنگام ورود')
+                      : reminder.geofence.triggerOn === 'exit'
+                      ? (isEn ? 'On Departure' : 'هنگام خروج')
+                      : (isEn ? 'On Arrival/Departure' : 'ورود و خروج')}
+                    : {reminder.geofence.locationName}
+                  </span>
+                </span>
+              )}
+
               {/* Postponed indicator */}
               {isPostponed && (
                 <span className="text-xs px-2 py-0.5 rounded-md bg-stone-800 text-amber-300 border border-amber-500/20">
@@ -240,22 +258,6 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
               </p>
             )}
 
-            {/* Integrated Live Countdown Clock directly inside next reminder card */}
-            {isNext && !isCompleted && countdown && (
-              <div className="flex items-center gap-2 mt-2.5 px-2.5 py-1 rounded-xl border border-emerald-500/40 bg-stone-950/90 shadow-sm w-fit shrink-0">
-                <span className="text-[11px] font-bold text-emerald-400">
-                  {isEn ? 'Remaining:' : 'زمان مانده:'}
-                </span>
-                <NeonClock
-                  hours={countdown.hours}
-                  minutes={countdown.minutes}
-                  seconds={countdown.seconds}
-                  size="xs"
-                  color="green"
-                />
-              </div>
-            )}
-
             {/* Time Display */}
             <div className="flex items-center gap-2 mt-2.5 text-xs sm:text-sm text-stone-300 flex-wrap">
               <Clock className="w-4 h-4 text-amber-500 flex-shrink-0" />
@@ -265,6 +267,27 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                 {relativeTime}
               </span>
             </div>
+
+            {/* Geofence Area Details */}
+            {reminder.geofence && (
+              <div className="mt-2.5 flex items-center justify-between gap-2 p-2 rounded-xl bg-stone-950/60 border border-emerald-500/30 text-xs">
+                <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-medium">
+                  <Navigation className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                  <span>
+                    {isEn ? `Radius: ${reminder.geofence.radius}m` : `محدوده فعال: ${toPersianDigits(reminder.geofence.radius)} متر`}
+                  </span>
+                </div>
+                <a
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${reminder.geofence.latitude},${reminder.geofence.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="text-[11px] font-bold text-teal-400 hover:text-teal-300 underline underline-offset-2 flex items-center gap-1"
+                >
+                  <span>{isEn ? 'Navigate' : 'مسیریابی'}</span>
+                </a>
+              </div>
+            )}
           </div>
         </div>
 

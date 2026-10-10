@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react'
 import { ChevronUp, ChevronDown, Keyboard } from 'lucide-react';
 
 interface WheelPickerProps {
-  items: Array<{ value: number; label: string }>;
+  items?: Array<{ value: number; label: string }>;
   selectedValue: number;
   onChange: (value: number) => void;
   label?: string;
@@ -33,7 +33,19 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
   const [typedInput, setTypedInput] = useState(selectedValue.toString().padStart(2, '0'));
   const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const itemCount = items.length;
+  const effectiveItems = useMemo(() => {
+    if (items && items.length > 0) return items;
+    const count = Math.max(1, max - min + 1);
+    return Array.from({ length: count }, (_, i) => {
+      const val = min + i;
+      return {
+        value: val,
+        label: val.toString().padStart(2, '0'),
+      };
+    });
+  }, [items, min, max]);
+
+  const itemCount = effectiveItems.length;
 
   // Generate cyclical repeated items for seamless infinite wheel rolling
   const repeatedItems = useMemo(() => {
@@ -48,22 +60,22 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
     for (let c = 0; c < CYCLE_COUNT; c++) {
       for (let i = 0; i < itemCount; i++) {
         list.push({
-          key: `${c}-${items[i].value}`,
-          value: items[i].value,
-          label: items[i].label,
+          key: `${c}-${effectiveItems[i].value}`,
+          value: effectiveItems[i].value,
+          label: effectiveItems[i].label,
           originalIndex: i,
           globalIndex: c * itemCount + i,
         });
       }
     }
     return list;
-  }, [items, itemCount]);
+  }, [effectiveItems, itemCount]);
 
   // Find index in items for the currently selected value
   const selectedOriginalIndex = useMemo(() => {
-    const idx = items.findIndex((it) => it.value === selectedValue);
+    const idx = effectiveItems.findIndex((it) => it.value === selectedValue);
     return idx >= 0 ? idx : 0;
-  }, [items, selectedValue]);
+  }, [effectiveItems, selectedValue]);
 
   // Scroll to a specific global index in the repeated list
   const scrollToGlobalIndex = useCallback(
@@ -121,7 +133,7 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
       const scrollTop = el.scrollTop;
       const nearestGlobalIndex = Math.round(scrollTop / itemHeight);
       const wrappedIndex = ((nearestGlobalIndex % itemCount) + itemCount) % itemCount;
-      const targetItem = items[wrappedIndex];
+      const targetItem = effectiveItems[wrappedIndex];
 
       if (targetItem && targetItem.value !== selectedValue) {
         onChange(targetItem.value);
@@ -137,7 +149,7 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
       const scrollTop = currentEl.scrollTop;
       const nearestGlobalIndex = Math.round(scrollTop / itemHeight);
       const wrappedIndex = ((nearestGlobalIndex % itemCount) + itemCount) % itemCount;
-      const targetItem = items[wrappedIndex];
+      const targetItem = effectiveItems[wrappedIndex];
 
       if (targetItem && targetItem.value !== selectedValue) {
         onChange(targetItem.value);
@@ -167,7 +179,7 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
     const delta = direction === 'up' ? -1 : 1;
     const nextGlobalIndex = currentGlobalIndex + delta;
     const nextWrappedIndex = ((nextGlobalIndex % itemCount) + itemCount) % itemCount;
-    const nextItem = items[nextWrappedIndex];
+    const nextItem = effectiveItems[nextWrappedIndex];
 
     if (nextItem) {
       onChange(nextItem.value);
@@ -181,7 +193,7 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
     if (!isNaN(parsed)) {
       const clamped = Math.max(min, Math.min(max, parsed));
       onChange(clamped);
-      const newOrigIdx = items.findIndex((it) => it.value === clamped);
+      const newOrigIdx = effectiveItems.findIndex((it) => it.value === clamped);
       if (newOrigIdx >= 0) {
         const targetGlobalIdx = MID_CYCLE * itemCount + newOrigIdx;
         setTimeout(() => scrollToGlobalIndex(targetGlobalIdx, false), 40);

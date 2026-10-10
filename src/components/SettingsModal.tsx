@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AppSettings, AppTheme, PhoneAlarmSound, Reminder, IdeaNote, SavedLocation } from '../types';
+import { AppSettings, AppTheme, PhoneAlarmSound, Reminder, IdeaNote, SavedLocation, Occasion } from '../types';
 import { 
   X, 
   Palette, 
@@ -66,7 +66,8 @@ interface SettingsModalProps {
   reminders?: Reminder[];
   ideas?: IdeaNote[];
   savedLocations?: SavedLocation[];
-  onRestoreData?: (data: { reminders?: Reminder[]; ideas?: IdeaNote[]; savedLocations?: SavedLocation[]; settings?: Partial<AppSettings> }, mode: 'replace' | 'merge') => void;
+  occasions?: Occasion[];
+  onRestoreData?: (data: { reminders?: Reminder[]; ideas?: IdeaNote[]; savedLocations?: SavedLocation[]; occasions?: Occasion[]; settings?: Partial<AppSettings> }, mode: 'replace' | 'merge') => void;
   onTestHeadsUpBanner?: (reminder: Reminder) => void;
 }
 
@@ -83,6 +84,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   reminders = [],
   ideas = [],
   savedLocations = [],
+  occasions = [],
   onRestoreData,
   onTestHeadsUpBanner,
 }) => {
@@ -101,6 +103,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     reminders?: Reminder[];
     ideas?: IdeaNote[];
     savedLocations?: SavedLocation[];
+    occasions?: Occasion[];
     settings?: Partial<AppSettings>;
   } | null>(null);
 
@@ -222,6 +225,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         reminders: reminders || [],
         ideas: ideas || [],
         savedLocations: savedLocations || [],
+        occasions: occasions || [],
         settings,
       };
 
@@ -265,16 +269,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         const validReminders = Array.isArray(parsed.reminders) ? parsed.reminders : [];
         const validIdeas = Array.isArray(parsed.ideas) ? parsed.ideas : [];
         const validLocations = Array.isArray(parsed.savedLocations) ? parsed.savedLocations : [];
+        const validOccasions = Array.isArray(parsed.occasions) ? parsed.occasions : [];
         const validSettings = parsed.settings && typeof parsed.settings === 'object' ? parsed.settings : undefined;
 
-        if (validReminders.length === 0 && validIdeas.length === 0 && validLocations.length === 0 && !validSettings) {
-          throw new Error('در این فایل هیچ یادآور، ایده یا تنظیمی یافت نشد.');
+        if (
+          validReminders.length === 0 &&
+          validIdeas.length === 0 &&
+          validLocations.length === 0 &&
+          validOccasions.length === 0 &&
+          !validSettings
+        ) {
+          throw new Error('در این فایل هیچ یادآور، مناسبت، ایده یا تنظیمی یافت نشد.');
         }
 
         setPendingRestoreData({
           reminders: validReminders,
           ideas: validIdeas,
           savedLocations: validLocations,
+          occasions: validOccasions,
           settings: validSettings,
         });
         setBackupErrorMessage(null);
@@ -945,10 +957,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             </p>
 
             {/* Current items badge counters */}
-            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
               <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
                 <span className="text-[10px] text-stone-500 block">{isFa ? 'یادآورها' : 'Reminders'}</span>
                 <span className="font-bold text-amber-400 text-sm">{isFa ? toPersianDigits(reminders.length) : reminders.length}</span>
+              </div>
+              <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
+                <span className="text-[10px] text-stone-500 block">{isFa ? 'مناسبت‌ها' : 'Occasions'}</span>
+                <span className="font-bold text-pink-400 text-sm">{isFa ? toPersianDigits(occasions.length) : occasions.length}</span>
               </div>
               <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
                 <span className="text-[10px] text-stone-500 block">{isFa ? 'ایده‌ها' : 'Ideas'}</span>
@@ -1014,6 +1030,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 <div className="text-xs text-stone-300 space-y-1 pr-2">
                   <p>• {isFa ? 'تعداد یادآورها:' : 'Reminders count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.reminders?.length || 0) : (pendingRestoreData.reminders?.length || 0)}</strong></p>
+                  <p>• {isFa ? 'تعداد مناسبت‌ها:' : 'Occasions count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.occasions?.length || 0) : (pendingRestoreData.occasions?.length || 0)}</strong></p>
                   <p>• {isFa ? 'تعداد ایده‌ها:' : 'Ideas count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.ideas?.length || 0) : (pendingRestoreData.ideas?.length || 0)}</strong></p>
                   <p>• {isFa ? 'تعداد مکان‌های GPS:' : 'GPS Places count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.savedLocations?.length || 0) : (pendingRestoreData.savedLocations?.length || 0)}</strong></p>
                   {pendingRestoreData.settings && <p>• {isFa ? 'حاوی تنظیمات اختصاصی سفارشی' : 'Contains custom settings'}</p>}

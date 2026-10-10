@@ -13,18 +13,32 @@ import {
   AlertTriangle,
   FileText,
   Clock,
-  Share2
+  Share2,
+  BellRing,
+  Radio
 } from 'lucide-react';
-import { SavedLocation } from '../types';
+import { SavedLocation, GeofenceTriggerType } from '../types';
 import { toPersianDigits } from '../utils/jalali';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { ValidationAlertModal } from './ValidationAlertModal';
+import { LocationReminderModal } from './LocationReminderModal';
 import { AppLanguage } from '../utils/i18n';
+
+export interface LocationGeofenceFormConfig {
+  enabled: boolean;
+  triggerOn: GeofenceTriggerType;
+  radius: number;
+  customReminderTitle?: string;
+}
 
 interface LocationCaptureModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (location: Omit<SavedLocation, 'id' | 'createdAt'>, createReminder?: boolean) => void;
+  onSave: (
+    location: Omit<SavedLocation, 'id' | 'createdAt'>, 
+    createReminder?: boolean,
+    geofenceConfig?: LocationGeofenceFormConfig
+  ) => void;
   onUpdateLocation?: (id: string, location: Partial<SavedLocation>) => void;
   editingLocation?: SavedLocation | null;
   googleMapsApiKey?: string;
@@ -52,10 +66,16 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [alsoCreateReminder, setAlsoCreateReminder] = useState(false);
   const [showValidationModal, setShowValidationModal] = useState(false);
   const [validationFieldName, setValidationFieldName] = useState(isEn ? 'Location Name' : 'نام / عنوان مکان');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Sub-tabs in modal: 'details' (مشخصات و GPS) vs 'geofence' (یادآور ورود/خروج)
+  const [activeModalTab, setActiveModalTab] = useState<'details' | 'geofence'>('details');
+  const [enableGeofenceReminder, setEnableGeofenceReminder] = useState<boolean>(false);
+  const [geofenceRadius, setGeofenceRadius] = useState<number>(250);
+  const [geofenceTriggerOn, setGeofenceTriggerOn] = useState<GeofenceTriggerType>('enter');
+  const [geofenceCustomTitle, setGeofenceCustomTitle] = useState<string>('');
 
   // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
@@ -219,7 +239,15 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
           photoUrl: photoUrl || undefined,
           googleMapsUrl: mapsUrl,
         },
-        alsoCreateReminder
+        enableGeofenceReminder,
+        enableGeofenceReminder
+          ? {
+              enabled: true,
+              triggerOn: geofenceTriggerOn,
+              radius: geofenceRadius,
+              customReminderTitle: geofenceCustomTitle.trim() || undefined,
+            }
+          : undefined
       );
     }
 
@@ -277,8 +305,40 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             </button>
           </div>
 
+          {/* Sub-Tabs Selector: مشخصات مکان (GPS) vs یادآور مکان‌محور (ورود/خروج) */}
+          <div className="flex items-center gap-1.5 px-3 sm:px-6 py-2.5 bg-stone-950/90 border-b border-stone-800 shrink-0">
+            <button
+              type="button"
+              onClick={() => setActiveModalTab('details')}
+              className={`flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 sm:px-3 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                activeModalTab === 'details'
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50 shadow-sm'
+                  : 'text-stone-400 hover:text-white hover:bg-stone-800/60'
+              }`}
+            >
+              <MapPin className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{isEn ? '1. Place Info & GPS' : '۱. مشخصات و نقشه مکان'}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveModalTab('geofence')}
+              className={`flex-1 flex items-center justify-center gap-1.5 sm:gap-2 py-2 px-2 sm:px-3 rounded-xl text-xs font-black transition-all cursor-pointer ${
+                activeModalTab === 'geofence'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/50 shadow-sm'
+                  : 'text-stone-400 hover:text-white hover:bg-stone-800/60'
+              }`}
+            >
+              <BellRing className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>{isEn ? '2. Geofence Alert' : '۲. یادآور مکان‌محور (ورود/خروج)'}</span>
+              {enableGeofenceReminder && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              )}
+            </button>
+          </div>
+
           {/* Form Content */}
-          <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto">
+          <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto flex-1">
             {/* Required Field Validation Alert Banner */}
             {validationError && (
               <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-2">
@@ -287,8 +347,11 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               </div>
             )}
 
-            {/* GPS Status Box */}
-            <div className="p-3.5 rounded-2xl bg-stone-950 border border-stone-800/90 space-y-3">
+            {/* TAB 1: DETAILS & GPS LOCATION */}
+            {activeModalTab === 'details' && (
+              <>
+                {/* GPS Status Box */}
+                <div className="p-3.5 rounded-2xl bg-stone-950 border border-stone-800/90 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Navigation className={`w-4 h-4 ${isLocating ? 'text-amber-400 animate-spin' : 'text-emerald-400'}`} />
@@ -503,24 +566,207 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               )}
             </div>
 
-            {/* Also Create Reminder Toggle */}
+            {/* Quick Link: Also Create Reminder Toggle */}
             <label className="flex items-center gap-3 p-3 rounded-2xl bg-stone-950 border border-stone-800/80 cursor-pointer hover:border-amber-500/30 transition-colors">
               <input
                 type="checkbox"
-                checked={alsoCreateReminder}
-                onChange={(e) => setAlsoCreateReminder(e.target.checked)}
+                checked={enableGeofenceReminder}
+                onChange={(e) => setEnableGeofenceReminder(e.target.checked)}
                 className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
               />
               <div className="flex-1">
-                <span className="text-xs font-bold text-white block">
-                  {isEn ? 'Also add to Reminders list' : 'ثبت همزمان در لیست یادآورها'}
+                <span className="text-xs font-bold text-white flex items-center gap-2">
+                  <span>{isEn ? 'Also create location-based reminder' : 'تنظیم خودکار یادآور مکان‌محور (ورود/خروج)'}</span>
+                  {enableGeofenceReminder && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-bold">
+                      {isEn ? 'ON' : 'فعال'}
+                    </span>
+                  )}
                 </span>
                 <span className="text-[10px] text-stone-400 block">
-                  {isEn ? 'Creates a reminder with this place title & Google Maps link' : 'یک یادآور با عنوان همین مکان و لینک گوگل‌مپ ایجاد می‌کند'}
+                  {isEn ? 'Configure in Tab 2 or save now with standard 250m radius' : 'امکان تنظیم دقیق شعاع و شرط ورود/خروج در تب دوم'}
                 </span>
               </div>
             </label>
+          </>
+        )}
+
+        {/* TAB 2: GEOFENCE REMINDER SETTINGS (یادآوری مکان‌محور: ورود/خروج) */}
+        {activeModalTab === 'geofence' && (
+          <div className="space-y-4 animate-in fade-in">
+            {/* Geofence Master Toggle Card */}
+            <div 
+              onClick={() => setEnableGeofenceReminder(!enableGeofenceReminder)}
+              className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                enableGeofenceReminder
+                  ? 'bg-amber-500/15 border-amber-500/80 shadow-lg shadow-amber-500/10'
+                  : 'bg-stone-950/80 border-stone-800 hover:border-stone-700'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
+                  enableGeofenceReminder ? 'bg-amber-500 text-stone-950' : 'bg-stone-800 text-stone-400'
+                }`}>
+                  <BellRing className="w-5 h-5 stroke-[2.2]" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm text-white flex items-center gap-2">
+                    <span>{isEn ? 'Enable Location Geofence Alert' : 'فعال‌سازی هشدار هوشمند ورود/خروج'}</span>
+                    {enableGeofenceReminder && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold">
+                        {isEn ? 'ACTIVE' : 'فعال'}
+                      </span>
+                    )}
+                  </h4>
+                  <p className="text-[11px] text-stone-400">
+                    {isEn 
+                      ? 'Trigger phone alarm & native notification when near or leaving this GPS location'
+                      : 'پخش آلارم صوتی و اعلان گوشی به محض نزدیک‌شدن یا ترک این نقطه'}
+                  </p>
+                </div>
+              </div>
+
+              <input
+                type="checkbox"
+                checked={enableGeofenceReminder}
+                onChange={(e) => setEnableGeofenceReminder(e.target.checked)}
+                onClick={(e) => e.stopPropagation()}
+                className="w-5 h-5 rounded accent-amber-500 cursor-pointer shrink-0"
+              />
+            </div>
+
+            {enableGeofenceReminder ? (
+              <div className="space-y-4 p-4 rounded-2xl bg-stone-950 border border-amber-500/30">
+                {/* Trigger Condition: ورود vs خروج vs هر دو */}
+                <div>
+                  <label className="block text-xs font-bold text-stone-200 mb-2">
+                    {isEn ? 'Alert Trigger Condition:' : 'زمان به صدا درآمدن آلارم:'}
+                  </label>
+                  <div className="grid grid-cols-3 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setGeofenceTriggerOn('enter')}
+                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                        geofenceTriggerOn === 'enter'
+                          ? 'bg-emerald-500/20 border-emerald-500/80 text-emerald-300 font-bold shadow-sm'
+                          : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="text-xs block font-bold">{isEn ? 'On Arrival' : 'هنگام ورود'}</span>
+                      <span className="text-[10px] text-stone-400 block mt-0.5">{isEn ? 'When entering' : 'رسیدن به محدوده'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setGeofenceTriggerOn('exit')}
+                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                        geofenceTriggerOn === 'exit'
+                          ? 'bg-rose-500/20 border-rose-500/80 text-rose-300 font-bold shadow-sm'
+                          : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="text-xs block font-bold">{isEn ? 'On Departure' : 'هنگام خروج'}</span>
+                      <span className="text-[10px] text-stone-400 block mt-0.5">{isEn ? 'When leaving' : 'ترک این محل'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setGeofenceTriggerOn('both')}
+                      className={`p-2.5 rounded-xl border text-center transition-all cursor-pointer ${
+                        geofenceTriggerOn === 'both'
+                          ? 'bg-amber-500/20 border-amber-500/80 text-amber-300 font-bold shadow-sm'
+                          : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-white'
+                      }`}
+                    >
+                      <span className="text-xs block font-bold">{isEn ? 'Both' : 'ورود و خروج'}</span>
+                      <span className="text-[10px] text-stone-400 block mt-0.5">{isEn ? 'Arrival & Exit' : 'هر دو حالت'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Active Radius Selection */}
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-xs font-bold text-stone-200">
+                      {isEn ? 'Active Radius Distance:' : 'شعاع حساسیت محدوده مکانی:'}
+                    </label>
+                    <span className="text-xs font-mono font-bold text-amber-400">
+                      {toPersianDigits(geofenceRadius)} {isEn ? 'meters' : 'متر'}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { val: 100, labelFa: '۱۰۰ متر', descFa: 'مغازه / ساختمان' },
+                      { val: 250, labelFa: '۲۵۰ متر', descFa: 'کوچه / محله' },
+                      { val: 500, labelFa: '۵۰۰ متر', descFa: 'منطقه / میدان' },
+                      { val: 1000, labelFa: '۱۰۰۰ متر', descFa: '۱ کیلومتر' },
+                    ].map((item) => (
+                      <button
+                        key={item.val}
+                        type="button"
+                        onClick={() => setGeofenceRadius(item.val)}
+                        className={`p-2 rounded-xl border text-center transition-all cursor-pointer ${
+                          geofenceRadius === item.val
+                            ? 'bg-amber-500/20 border-amber-500/80 text-amber-300 font-bold shadow-sm'
+                            : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-white'
+                        }`}
+                      >
+                        <span className="text-xs font-bold block">{item.labelFa}</span>
+                        <span className="text-[10px] text-stone-500 block">{item.descFa}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Custom Reminder Title */}
+                <div>
+                  <label className="block text-xs font-bold text-stone-200 mb-1.5">
+                    {isEn ? 'Reminder Alert Message (Optional):' : 'متن پیام هشدار یادآور (اختیاری):'}
+                  </label>
+                  <input
+                    type="text"
+                    value={geofenceCustomTitle}
+                    onChange={(e) => setGeofenceCustomTitle(e.target.value)}
+                    placeholder={
+                      isEn 
+                        ? `e.g. Arrived at ${title || 'location'}, remember to...` 
+                        : `پیش‌فرض: ${geofenceTriggerOn === 'exit' ? 'خروج از' : 'رسیدن به'} ${title || 'مکان'}...`
+                    }
+                    className="w-full bg-stone-900 border border-stone-800 rounded-xl px-3.5 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+
+                {/* Summary Info */}
+                <div className="p-3 rounded-xl bg-stone-900/80 border border-stone-800 text-[11px] text-stone-300 flex items-start gap-2">
+                  <Radio className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5 animate-pulse" />
+                  <p className="leading-relaxed">
+                    {isEn 
+                      ? `When your phone GPS detects you are within ${geofenceRadius}m of this spot, YAAD will trigger full-screen alarms and ring audio.`
+                      : `به محض اینکه GPS گوشی شما تشخیص دهد در شعاع ${toPersianDigits(geofenceRadius)} متری این مکان قرار گرفته‌اید، زنگ هشدار رسا و اعلان یادآوری هوشمند به صدا درخواهد آمد.`}
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="p-8 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-950/40 space-y-2">
+                <BellRing className="w-8 h-8 text-stone-600 mx-auto" />
+                <p className="text-xs text-stone-400">
+                  {isEn 
+                    ? 'Geofence alert is currently turned off for this place.' 
+                    : 'یادآور مکان‌محور در حال حاضر برای این مکان غیرفعال است.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setEnableGeofenceReminder(true)}
+                  className="px-4 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold transition-all cursor-pointer active:scale-95"
+                >
+                  {isEn ? 'Turn On Geofence Alert' : 'روشن کردن هشدار ورود/خروج'}
+                </button>
+              </div>
+            )}
           </div>
+        )}
+      </div>
 
           {/* Sticky Footer - Pinned directly above keyboard */}
           <div className="sticky bottom-0 z-20 shrink-0 p-3 sm:p-5 border-t border-stone-800 bg-stone-900/95 backdrop-blur shadow-2xl flex items-center justify-between gap-3">
@@ -545,7 +791,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               <span className={!title.trim() || latitude === null || longitude === null ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
                 {editingLocation 
                   ? (isEn ? 'Save Changes' : 'ذخیره تغییرات مکان') 
-                  : (isEn ? 'Save Location & Info' : 'ذخیره لوکیشن و اطلاعات')}
+                  : (isEn ? 'Save Location & Info' : 'ذخیره مکان و اطلاعات')}
               </span>
             </button>
           </div>
