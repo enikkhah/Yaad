@@ -1,0 +1,152 @@
+name: Build Yaad Release APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check signing secrets
+        env:
+          KS: ${{ secrets.YAAD_KEYSTORE_BASE64 }}
+          SP: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
+          KA: ${{ secrets.YAAD_KEY_ALIAS }}
+          KP: ${{ secrets.YAAD_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS" ] || [ -z "$SP" ] || [ -z "$KA" ] || [ -z "$KP" ]; then
+            echo "::error::Signing secrets are missing. Build stopped."
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Install Capacitor
+        run: npm install @capacitor/core @capacitor/cli @capacitor/android --legacy-peer-deps
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Remove old Android folder
+        run: rm -rf android
+
+      - name: Add Android
+        run: npx cap add android
+
+      - name: Add Android Permissions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/src/main/AndroidManifest.xml")
+          text = path.read_text()
+
+          permissions = [
+              "android.permission.CAMERA",
+              "android.permission.RECORD_AUDIO",
+              "android.permission.MODIFY_AUDIO_SETTINGS",
+              "android.permission.ACCESS_COARSE_LOCATION",
+              "android.permission.ACCESS_FINE_LOCATION",
+          ]
+
+          marker = "<application"
+
+          for permission in permissions:
+              if permission not in text:
+                  text = text.replace(
+                      marker,
+                      f'<uses-permission android:name="{permission}" />\n\n    {marker}',
+                      1
+                  )
+
+          path.write_text(text)
+          PY
+
+      - name: Copy notification audio files to Android
+        run: |
+          mkdir -p android/app/src/main/res/raw
+          cp public/digital_beep.wav android/app/src/main/res/raw/
+          cp public/radar.wav android/app/src/main/res/raw/
+          cp public/marimba.wav android/app/src/main/res/raw/
+          cp public/morning_chime.wav android/app/src/main/res/raw/
+          cp public/urgent_bell.wav android/app/src/main/res/raw/
+          cp public/beep.wav android/app/src/main/res/raw/
+
+      - name: Generate Android App Icon
+        run: |
+          npm install @capacitor/assets --legacy-peer-deps
+          mkdir -p resources
+          cp public/icon.png resources/icon.png
+          npx capacitor-assets generate --android
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.YAAD_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/yaad-release.jks
+
+      - name: Configure release signing
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("android/app/build.gradle")
+          text = path.read_text()
+
+          signing = """
+              signingConfigs {
+                  release {
+                      storeFile file("yaad-release.jks")
+                      storePassword System.getenv("STORE_PASSWORD")
+                      keyAlias System.getenv("KEY_ALIAS")
+                      keyPassword System.getenv("KEY_PASSWORD")
+                  }
+              }
+          """
+
+          text = text.replace("android {", "android {" + signing, 1)
+
+          pattern = r'(buildTypes\s*\{\s*release\s*\{)'
+          replacement = r'\1\n            signingConfig signingConfigs.release'
+          text, count = re.subn(pattern, replacement, text, count=1)
+
+          if count != 1:
+              raise RuntimeError("Release build type not found")
+
+          path.write_text(text)
+          PY
+
+      - name: Build Release APK
+        working-directory: android
+        env:
+          STORE_PASSWORD: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
+        run: ./gradlew assembleRelease
+
+      - name: Upload Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yaad-Release-APK
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
