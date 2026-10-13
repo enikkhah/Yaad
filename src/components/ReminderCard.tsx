@@ -20,8 +20,13 @@ import {
   X,
   MapPin,
   Navigation,
-  Compass
+  Compass,
+  Radio,
+  Play,
+  Pause,
+  Crosshair
 } from 'lucide-react';
+import { calculateHaversineDistance } from '../utils/geofenceManager';
 
 interface ReminderCardProps {
   reminder: Reminder;
@@ -33,6 +38,10 @@ interface ReminderCardProps {
   onDelete: (id: string) => void;
   onEdit: (reminder: Reminder) => void;
   onViewImage: (url: string) => void;
+  onToggleGeofence?: (id: string) => void;
+  onSimulateGeofenceTrigger?: (reminder: Reminder) => void;
+  userPosition?: { latitude: number; longitude: number } | null;
+  isGeofenceServiceActive?: boolean;
 }
 
 export const ReminderCard: React.FC<ReminderCardProps> = ({
@@ -45,6 +54,10 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
   onDelete,
   onEdit,
   onViewImage,
+  onToggleGeofence,
+  onSimulateGeofenceTrigger,
+  userPosition = null,
+  isGeofenceServiceActive = true,
 }) => {
   const isEn = language === 'en';
   const [imgLoaded, setImgLoaded] = React.useState(false);
@@ -208,16 +221,19 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                 </span>
               )}
 
-              {/* Geofence / Location Trigger Badge */}
-              {reminder.geofence && reminder.geofence.enabled && (
-                <span className="text-xs px-2.5 py-0.5 rounded-lg border border-emerald-500/40 bg-emerald-500/15 text-emerald-300 font-bold flex items-center gap-1 shadow-sm">
+              {/* Geofence / Checkpoint Status Badge */}
+              {reminder.geofence && (
+                <span 
+                  className={`text-xs px-2.5 py-0.5 rounded-lg border font-bold flex items-center gap-1.5 shadow-sm transition-all ${
+                    reminder.geofence.enabled
+                      ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+                      : 'border-stone-700 bg-stone-800 text-stone-400'
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full ${reminder.geofence.enabled ? 'bg-emerald-400 animate-pulse' : 'bg-stone-500'}`} />
                   <MapPin className="w-3 h-3 text-emerald-400" />
                   <span>
-                    {reminder.geofence.triggerOn === 'enter'
-                      ? (isEn ? 'On Arrival' : 'هنگام ورود')
-                      : reminder.geofence.triggerOn === 'exit'
-                      ? (isEn ? 'On Departure' : 'هنگام خروج')
-                      : (isEn ? 'On Arrival/Departure' : 'ورود و خروج')}
+                    {reminder.geofence.enabled ? (isEn ? 'Active Geofence' : 'حصار مکانی فعال') : (isEn ? 'Paused Geofence' : 'حصار مکانی متوقف')}
                     : {reminder.geofence.locationName}
                   </span>
                 </span>
@@ -268,24 +284,127 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
               </span>
             </div>
 
-            {/* Geofence Area Details */}
+            {/* Geofence Checkpoint Control Box */}
             {reminder.geofence && (
-              <div className="mt-2.5 flex items-center justify-between gap-2 p-2 rounded-xl bg-stone-950/60 border border-emerald-500/30 text-xs">
-                <div className="flex items-center gap-1.5 text-emerald-400 text-[11px] font-medium">
-                  <Navigation className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                  <span>
-                    {isEn ? `Radius: ${reminder.geofence.radius}m` : `محدوده فعال: ${toPersianDigits(reminder.geofence.radius)} متر`}
-                  </span>
+              <div className="mt-3 p-3 rounded-2xl bg-stone-950/80 border border-emerald-500/30 text-xs space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+                      <MapPin className="w-3.5 h-3.5" />
+                    </div>
+                    <div>
+                      <span className="font-bold text-white text-xs block">
+                        {isEn ? 'Geofence Location:' : 'حصار مکانی:'} {reminder.geofence.locationName}
+                      </span>
+                      <span className="text-[10px] text-stone-400 font-mono">
+                        {reminder.geofence.latitude.toFixed(5)}, {reminder.geofence.longitude.toFixed(5)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Geofence Status Badge & Quick Toggle */}
+                  <div className="flex items-center gap-1.5">
+                    {onToggleGeofence && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleGeofence(reminder.id);
+                        }}
+                        className={`px-2.5 py-1 rounded-xl text-[11px] font-black border transition-all cursor-pointer flex items-center gap-1 active:scale-95 ${
+                          reminder.geofence.enabled
+                            ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/50 shadow-sm'
+                            : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700'
+                        }`}
+                        title={reminder.geofence.enabled ? (isEn ? 'Pause geofence' : 'توقف موقت هشدار حصار مکانی') : (isEn ? 'Activate geofence' : 'فعال‌سازی مجدد هشدار حصار مکانی')}
+                      >
+                        {reminder.geofence.enabled ? (
+                          <>
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                            <span>{isEn ? 'ACTIVE' : 'فعال'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <Play className="w-3 h-3 text-amber-400 fill-amber-400" />
+                            <span>{isEn ? 'PAUSED' : 'غیرفعال'}</span>
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <a
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${reminder.geofence.latitude},${reminder.geofence.longitude}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="text-[11px] font-bold text-teal-400 hover:text-teal-300 underline underline-offset-2 flex items-center gap-1"
-                >
-                  <span>{isEn ? 'Navigate' : 'مسیریابی'}</span>
-                </a>
+
+                {/* Sub details: Trigger Condition, Radius & Distance */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-stone-800/80 text-[11px]">
+                  <div className="flex items-center gap-2 text-stone-300 flex-wrap">
+                    <span className="text-stone-400">{isEn ? 'Condition:' : 'شرط آلارم:'}</span>
+                    <span className="font-bold text-amber-300">
+                      {reminder.geofence.triggerOn === 'enter'
+                        ? (isEn ? 'On Arrival' : 'هنگام ورود')
+                        : reminder.geofence.triggerOn === 'exit'
+                        ? (isEn ? 'On Departure' : 'هنگام خروج')
+                        : (isEn ? 'Arrival/Departure' : 'ورود و خروج')}
+                    </span>
+                    <span className="text-stone-500">•</span>
+                    <span className="text-emerald-400 font-mono font-bold">
+                      {toPersianDigits(reminder.geofence.radius)} {isEn ? 'm' : 'متر'}
+                    </span>
+                  </div>
+
+                  {/* Real-time distance if userPosition available */}
+                  {userPosition && (
+                    <div className="flex items-center gap-1.5 text-stone-300">
+                      <Crosshair className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                      <span className="text-stone-400">{isEn ? 'Your distance:' : 'فاصله شما:'}</span>
+                      {(() => {
+                        const dist = calculateHaversineDistance(
+                          userPosition.latitude,
+                          userPosition.longitude,
+                          reminder.geofence.latitude,
+                          reminder.geofence.longitude
+                        );
+                        const isInside = dist <= reminder.geofence.radius;
+                        return (
+                          <span className={`font-mono font-bold ${isInside ? 'text-emerald-400' : 'text-stone-200'}`}>
+                            {toPersianDigits(dist)} {isEn ? 'm' : 'متر'}
+                            <span className={`text-[10px] ms-1 px-1.5 py-0.2 rounded font-bold ${isInside ? 'bg-emerald-500/25 text-emerald-300' : 'bg-stone-800 text-stone-400'}`}>
+                              {isInside ? (isEn ? 'Inside' : 'داخل محدوده') : (isEn ? 'Outside' : 'خارج محدوده')}
+                            </span>
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  )}
+                </div>
+
+                {/* Action buttons: Navigation + Test Simulate Trigger */}
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-stone-800/60">
+                  {onSimulateGeofenceTrigger && reminder.geofence.enabled && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSimulateGeofenceTrigger(reminder);
+                      }}
+                      className="text-[11px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 rounded-lg border border-amber-500/30 flex items-center gap-1 transition-colors cursor-pointer active:scale-95"
+                      title={isEn ? 'Simulate arrival/departure alert' : 'شبیه‌سازی و تست آلارم ورود به حصار مکانی'}
+                    >
+                      <Radio className="w-3 h-3 animate-pulse" />
+                      <span>{isEn ? 'Test Alarm' : 'تست آلارم حصار مکانی'}</span>
+                    </button>
+                  )}
+
+                  <a
+                    href={`https://www.google.com/maps/dir/?api=1&destination=${reminder.geofence.latitude},${reminder.geofence.longitude}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={(e) => e.stopPropagation()}
+                    className="ms-auto text-[11px] font-bold text-teal-400 hover:text-teal-300 bg-teal-500/10 hover:bg-teal-500/20 px-2.5 py-1 rounded-lg border border-teal-500/30 flex items-center gap-1 transition-colors"
+                  >
+                    <Navigation className="w-3 h-3" />
+                    <span>{isEn ? 'Directions' : 'مسیریابی'}</span>
+                  </a>
+                </div>
               </div>
             )}
           </div>

@@ -166,29 +166,29 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
           ))}
         </div>
       ) : (
-        <div className="py-12 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-900/40 space-y-3">
-          <div className="w-12 h-12 rounded-full bg-pink-500/10 text-pink-400 border border-pink-500/20 flex items-center justify-center mx-auto">
-            <CalendarHeart className="w-6 h-6" />
+        <div className="py-12 px-4 text-center rounded-3xl border border-dashed border-stone-800/80 bg-stone-900/30 space-y-3.5 transition-all duration-200">
+          <div className="w-14 h-14 rounded-2xl bg-pink-500/10 text-pink-400 border border-pink-500/20 flex items-center justify-center mx-auto shadow-inner">
+            <CalendarHeart className="w-7 h-7" />
           </div>
-          <h4 className="font-bold text-sm text-white">
-            {occasions.length === 0 
-              ? (isEn ? 'No occasions registered yet' : 'هنوز مناسبتی ثبت نشده است') 
-              : (isEn ? 'No matching occasions found' : 'مناسبتی با این مشخصات یافت نشد')}
-          </h4>
-          <p className="text-xs text-stone-400 max-w-sm mx-auto leading-relaxed">
-            {isEn 
-              ? 'Keep track of birthdays, wedding anniversaries and special dates with automatic countdown and alarm reminders.'
-              : 'تاریخ تولد، سالگرد ازدواج، آشنایی و روزهای مهم را ثبت کنید تا با شمارش معکوس و آلارم هوشمند هرگز فراموش نشوند.'}
-          </p>
+          <div className="space-y-1">
+            <h4 className="font-bold text-base text-white">
+              {occasions.length === 0 
+                ? (isEn ? 'No occasions registered yet' : 'هنوز مناسبتی ثبت نکرده‌اید!') 
+                : (isEn ? 'No matching occasions found' : 'مناسبتی با این مشخصات یافت نشد')}
+            </h4>
+            <p className="text-xs text-stone-400 max-w-sm mx-auto leading-relaxed">
+              {isEn 
+                ? 'Keep track of birthdays, wedding anniversaries and special dates with automatic countdown and alarm reminders.'
+                : 'تاریخ تولدها، سالگرد ازدواج و روزهای مهم را ثبت کنید تا با یادآور و آلارم هوشمند هرگز فراموش نشوند.'}
+            </p>
+          </div>
           <button
             type="button"
             onClick={onAddNew}
-            className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 !text-white font-black text-xs shadow-md cursor-pointer active:scale-95 flex items-center gap-1.5 mx-auto"
+            className="min-h-[48px] px-6 py-3 rounded-2xl bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 !text-white font-black text-xs sm:text-sm shadow-lg shadow-pink-500/25 cursor-pointer active:scale-95 flex items-center justify-center gap-2 mx-auto transition-all duration-200"
           >
             <Plus className="w-4 h-4 text-white stroke-[3]" />
-            <span className="text-white font-black">
-              {isEn ? 'Add First Occasion' : 'ثبت اولین مناسبت'}
-            </span>
+            <span>{isEn ? 'Add First Occasion' : 'ثبت اولین مناسبت'}</span>
           </button>
         </div>
       )}

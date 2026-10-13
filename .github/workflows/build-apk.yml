@@ -1,7 +1,14 @@
 name: Build Android APK
 
 on:
+  push:
+    branches:
+      - main
+      - master
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -24,11 +31,13 @@ jobs:
 
       - name: Build web app
         run: npm run build
+
       - name: Remove old Android folder
         run: rm -rf android
 
       - name: Add Android
         run: npx cap add android
+
       - name: Add Android Permissions
         run: |
           python3 - <<'PY'
@@ -61,33 +70,95 @@ jobs:
       - name: Copy notification audio files to Android
         run: |
           mkdir -p android/app/src/main/res/raw
-          cp public/digital_beep.wav android/app/src/main/res/raw/
-          cp public/radar.wav android/app/src/main/res/raw/
-          cp public/marimba.wav android/app/src/main/res/raw/
-          cp public/morning_chime.wav android/app/src/main/res/raw/
-          cp public/urgent_bell.wav android/app/src/main/res/raw/
-          cp public/beep.wav android/app/src/main/res/raw/
-          
+          cp public/digital_beep.wav android/app/src/main/res/raw/ || true
+          cp public/radar.wav android/app/src/main/res/raw/ || true
+          cp public/marimba.wav android/app/src/main/res/raw/ || true
+          cp public/morning_chime.wav android/app/src/main/res/raw/ || true
+          cp public/urgent_bell.wav android/app/src/main/res/raw/ || true
+          cp public/beep.wav android/app/src/main/res/raw/ || true
+
       - name: Generate Android App Icon
         run: |
           npm install @capacitor/assets --legacy-peer-deps
           mkdir -p resources
-          cp public/icon.png resources/icon.png
-          npx capacitor-assets generate --android
+          cp public/icon.png resources/icon.png || true
+          npx capacitor-assets generate --android || true
+
       - name: Sync Capacitor
         run: npx cap sync android 
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
 
-      - name: Build APK
+      - name: Generate Release Keystore and Configure Release Signing
         working-directory: android
-        run: ./gradlew assembleDebug
+        run: |
+          keytool -genkey -v -keystore app/release.keystore -alias yaad_release -keyalg RSA -keysize 2048 -validity 10000 -storepass yaad123456 -keypass yaad123456 -dname "CN=Yaad, OU=Mobile, O=YaadApp, L=Tehran, C=IR"
+          python3 - <<'PY'
+          from pathlib import Path
+          gradle_file = Path("app/build.gradle")
+          if gradle_file.exists():
+              content = gradle_file.read_text()
+              signing_block = """
+    signingConfigs {
+        release {
+            storeFile file('release.keystore')
+            storePassword 'yaad123456'
+            keyAlias 'yaad_release'
+            keyPassword 'yaad123456'
+        }
+    }
+"""
+              if "signingConfigs {" not in content:
+                  content = content.replace("defaultConfig {", signing_block + "\n    defaultConfig {")
+              
+              old_release_block = """release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }"""
+              new_release_block = """release {
+            signingConfig signingConfigs.release
+            debuggable false
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }"""
+              if old_release_block in content:
+                  content = content.replace(old_release_block, new_release_block)
+              elif "signingConfig signingConfigs.debug" in content:
+                  content = content.replace("signingConfig signingConfigs.debug", "signingConfig signingConfigs.release\n            debuggable false")
+              elif "release {" in content and "signingConfig" not in content:
+                  content = content.replace("release {", "release {\n            signingConfig signingConfigs.release\n            debuggable false")
 
-      - name: Upload APK
+              gradle_file.write_text(content)
+          PY
+
+      - name: Build Release APK
+        working-directory: android
+        run: |
+          ./gradlew assembleRelease
+          mkdir -p ../dist-apk
+          cp app/build/outputs/apk/release/*.apk ../dist-apk/yaad-release.apk || true
+          cp app/build/outputs/apk/release/*.apk ../dist-apk/ || true
+
+      - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Yaad-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Yaad-Release-APK
+          path: |
+            android/app/build/outputs/apk/release/*.apk
+            dist-apk/*.apk
+
+      - name: Publish GitHub Release
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Yaad Release v${{ github.run_number }}
+          draft: false
+          prerelease: false
+          files: |
+            android/app/build/outputs/apk/release/*.apk
+            dist-apk/yaad-release.apk

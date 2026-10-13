@@ -9,7 +9,8 @@ import {
   Briefcase, 
   Heart, 
   Tag, 
-  Repeat 
+  Repeat,
+  MapPin
 } from 'lucide-react';
 
 interface TimelineWidgetProps {
@@ -249,6 +250,15 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
                             {r.title}
                           </span>
                           {getPriorityBadge(r.priority)}
+                          {r.geofence && r.geofence.enabled && (
+                            <span 
+                              title={`${isEn ? 'Geofence:' : 'حصار مکانی:'} ${r.geofence.locationName}`}
+                              className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                            >
+                              <MapPin className="w-2.5 h-2.5 text-emerald-400" />
+                              <span className="truncate max-w-[80px]">{r.geofence.locationName}</span>
+                            </span>
+                          )}
                           {r.recurrence && r.recurrence !== 'none' && (
                             <span title={isEn ? 'Recurring Reminder' : 'یادآور تکرارشونده'} className="flex items-center">
                               <Repeat className="w-3 h-3 text-indigo-400 flex-shrink-0" />
@@ -361,6 +371,15 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
                             {r.title}
                           </span>
                           {getPriorityBadge(r.priority)}
+                          {r.geofence && r.geofence.enabled && (
+                            <span 
+                              title={`${isEn ? 'Geofence:' : 'حصار مکانی:'} ${r.geofence.locationName}`}
+                              className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                            >
+                              <MapPin className="w-2.5 h-2.5 text-emerald-400" />
+                              <span className="truncate max-w-[80px]">{r.geofence.locationName}</span>
+                            </span>
+                          )}
                           {r.recurrence && r.recurrence !== 'none' && (
                             <span title={isEn ? 'Recurring Reminder' : 'یادآور تکرارشونده'} className="flex items-center">
                               <Repeat className="w-3 h-3 text-indigo-400 flex-shrink-0" />

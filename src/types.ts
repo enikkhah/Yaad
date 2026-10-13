@@ -1,7 +1,7 @@
 export type Category = 'work' | 'family' | 'other';
 export type Priority = 'high' | 'medium' | 'low';
 export type ReminderStatus = 'pending' | 'completed' | 'postponed' | 'cancelled';
-export type AppTheme = 'dark-gold' | 'dark-slate' | 'light-clean' | 'sketch-contrast';
+export type AppTheme = 'system' | 'dark-gold' | 'dark-slate' | 'light-clean' | 'sketch-contrast';
 
 export type PhoneAlarmSound = 'digital-beep' | 'radar' | 'marimba' | 'morning-chime' | 'urgent-bell';
 export type RecurrenceType = 'none' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'custom_dates';
@@ -50,6 +50,16 @@ export interface LocationGeofenceConfig {
   hasTriggered?: boolean;
 }
 
+export interface LocationCheckpointConfig {
+  enabled: boolean;
+  radius: number; // radius in meters (50, 100, 200, 500, 1000)
+  triggerOn: GeofenceTriggerType; // 'enter' | 'exit' | 'both'
+  customMessage?: string;
+  playAudio?: boolean;
+  lastTriggeredAt?: number;
+  hasTriggered?: boolean;
+}
+
 export interface SavedLocation {
   id: string;
   title: string;
@@ -64,6 +74,8 @@ export interface SavedLocation {
   // Associated note/idea or reminder linking
   linkedIdeaId?: string;
   linkedReminderId?: string;
+  // Geofence (حصار مکانی و محدوده شعاع)
+  geofence?: LocationCheckpointConfig;
 }
 
 export interface Reminder {

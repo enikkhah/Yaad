@@ -32,11 +32,21 @@ import {
   Play,
   Square,
   Music,
-  Loader2
+  Loader2,
+  Navigation,
+  Crosshair,
+  Radio,
+  Compass
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION, APP_VERSION_INFO } from '../utils/version';
 import { toPersianDigits } from '../utils/jalali';
+import { 
+  isGeofenceTrackingEnabled, 
+  setGeofenceTrackingEnabled, 
+  getLastKnownPosition,
+  UserPosition
+} from '../utils/geofenceManager';
 import { 
   isNativeAndroidApp,
   requestNotificationPermission,
@@ -69,6 +79,8 @@ interface SettingsModalProps {
   occasions?: Occasion[];
   onRestoreData?: (data: { reminders?: Reminder[]; ideas?: IdeaNote[]; savedLocations?: SavedLocation[]; occasions?: Occasion[]; settings?: Partial<AppSettings> }, mode: 'replace' | 'merge') => void;
   onTestHeadsUpBanner?: (reminder: Reminder) => void;
+  isGeofenceActive?: boolean;
+  onToggleGeofenceActive?: (active: boolean) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -87,6 +99,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   occasions = [],
   onRestoreData,
   onTestHeadsUpBanner,
+  isGeofenceActive = true,
+  onToggleGeofenceActive,
 }) => {
   const currentLanguage = settings?.language || 'fa';
   const isFa = currentLanguage === 'fa';
@@ -209,6 +223,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const themes: { id: AppTheme; name: string; preview: string }[] = [
+    { id: 'system', name: isFa ? 'خودکار (پیروی از گوشی)' : 'System (Auto)', preview: 'bg-gradient-to-r from-stone-900 to-stone-200 border-amber-400' },
     { id: 'dark-gold', name: isFa ? 'مشکی طلایی' : 'Dark Gold', preview: 'bg-stone-950 border-amber-500' },
     { id: 'dark-slate', name: isFa ? 'آبی تیره' : 'Dark Slate', preview: 'bg-slate-950 border-sky-500' },
     { id: 'light-clean', name: isFa ? 'روشن مدرن' : 'Light Clean', preview: 'bg-stone-100 border-stone-400' },
@@ -776,7 +791,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <Palette className="w-4 h-4 text-amber-400" />
               <span>{isFa ? 'پوسته‌ها و قالب ظاهری' : 'Appearance Themes'}</span>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5">
               {themes.map((themeItem) => {
                 const isSelected = settings.theme === themeItem.id;
                 return (
@@ -784,9 +799,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     key={themeItem.id}
                     type="button"
                     onClick={() => onUpdateSettings({ theme: themeItem.id })}
-                    className={`p-3 rounded-xl border text-center transition-all flex flex-col items-center gap-2 cursor-pointer active:scale-95 ${
+                    className={`min-h-[52px] p-3 rounded-2xl border text-center transition-all duration-200 flex flex-col items-center justify-center gap-2 cursor-pointer active:scale-95 ${
                       isSelected
-                        ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/30'
+                        ? 'border-amber-400 bg-amber-500/15 ring-2 ring-amber-400/30'
                         : 'border-stone-800 bg-stone-950/60 hover:border-stone-700'
                     }`}
                   >
@@ -911,6 +926,96 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   className="w-4 h-4 rounded accent-amber-500"
                 />
               </label>
+            </div>
+          </section>
+
+          {/* 7. GEOFENCE SETTINGS (تنظیمات حصار مکانی و رادار) */}
+          <section className="space-y-3 pt-3 border-t border-stone-800">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
+                <Radio className={`w-4 h-4 ${isGeofenceActive ? 'text-emerald-400 animate-pulse' : 'text-stone-400'}`} />
+                <span>{isFa ? 'رادار پایش حصار مکانی (Geofence)' : 'Geofence Radar'}</span>
+              </div>
+              <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
+                isGeofenceActive 
+                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
+                  : 'bg-stone-800 text-stone-400 border-stone-700'
+              }`}>
+                {isGeofenceActive ? (isFa ? 'رادار فعال' : 'Active Radar') : (isFa ? 'متوقف' : 'Paused')}
+              </span>
+            </div>
+
+            <p className="text-xs text-stone-400 leading-relaxed">
+              {isFa
+                ? 'سامانه پایش هوشمند GPS جهت پخش آلارم، صوت اختصاصی و اعلان هنگام ورود یا خروج از حصارهای مکانی تعریف‌شده (با مصرف بهینه باتری).'
+                : 'Smart GPS monitoring engine that triggers alarms, voice alerts and notifications when arriving at or leaving designated geofenced locations.'}
+            </p>
+
+            <div className="p-3 rounded-2xl bg-stone-950 border border-stone-800 space-y-3">
+              {/* Main Service Toggle Switch */}
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
+                    isGeofenceActive 
+                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400' 
+                      : 'bg-stone-900 border-stone-800 text-stone-500'
+                  }`}>
+                    <MapPin className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <span className="text-xs sm:text-sm font-bold text-white block">
+                      {isFa ? 'سرویس هشدار ورود/خروج حصار مکانی' : 'Background Geofence Monitoring'}
+                    </span>
+                    <span className="text-[11px] text-stone-400">
+                      {isGeofenceActive
+                        ? (isFa ? 'پایش فعال مختصات ماهواره‌ای دستگاه' : 'Monitoring active geofence areas')
+                        : (isFa ? 'پایش مختصات متوقف است' : 'Location tracking paused')}
+                    </span>
+                  </div>
+                </div>
+
+                <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={isGeofenceActive}
+                    onChange={(e) => {
+                      const next = e.target.checked;
+                      setGeofenceTrackingEnabled(next);
+                      if (onToggleGeofenceActive) onToggleGeofenceActive(next);
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                </label>
+              </div>
+
+              {/* Active Geofences Count & GPS Permission Button */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-stone-800/70 text-xs">
+                <div className="flex items-center justify-between p-2 rounded-xl bg-stone-900/80 border border-stone-800">
+                  <span className="text-stone-400 text-[11px]">{isFa ? 'حصارهای مکانی فعال:' : 'Active Geofences:'}</span>
+                  <span className="font-bold text-emerald-400">
+                    {isFa 
+                      ? `${toPersianDigits(reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length)} مکان` 
+                      : `${reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length} Places`}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const status = await requestLocationPermission();
+                    if (status) {
+                      alert(isFa ? 'مجوز موقعیت مکانی GPS فعال است.' : 'Location GPS permission is active.');
+                    } else {
+                      alert(isFa ? 'دسترسی GPS در مرورگر یا دستگاه شما مسدود است.' : 'Location permission is denied.');
+                    }
+                  }}
+                  className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white transition-colors cursor-pointer text-[11px] font-bold"
+                >
+                  <Crosshair className="w-3.5 h-3.5 text-teal-400" />
+                  <span>{isFa ? 'بررسی دسترسی GPS دستگاه' : 'Check GPS Permission'}</span>
+                </button>
+              </div>
             </div>
           </section>
 

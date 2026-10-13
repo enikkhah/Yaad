@@ -116,6 +116,16 @@ export interface Translations {
   dismissAction: string;
   completeAction: string;
   googleSynced: string;
+  geofenceCheckpoints: string;
+  activeCheckpoints: string;
+  checkpointActive: string;
+  checkpointPaused: string;
+  addCheckpointReminder: string;
+  addCheckpointDesc: string;
+  geofenceServiceActive: string;
+  geofenceServicePaused: string;
+  simulateCheckpointAlert: string;
+  checkpointSettings: string;
 }
 
 export const translations: Record<AppLanguage, Translations> = {
@@ -234,6 +244,16 @@ export const translations: Record<AppLanguage, Translations> = {
     dismissAction: '✕ بستن',
     completeAction: '✓ خاتمه (تیک انجام)',
     googleSynced: 'همگام با گوگل',
+    geofenceCheckpoints: 'حصارهای مکانی (Geofence)',
+    activeCheckpoints: 'حصارهای مکانی فعال',
+    checkpointActive: 'حصار مکانی فعال',
+    checkpointPaused: 'حصار مکانی متوقف',
+    addCheckpointReminder: 'ثبت حصار مکانی',
+    addCheckpointDesc: 'اعلام متناسب ورود یا خروج با رادار GPS',
+    geofenceServiceActive: 'رادار پایش حصار مکانی فعال است',
+    geofenceServicePaused: 'رادار حصار مکانی متوقف است',
+    simulateCheckpointAlert: 'شبیه‌سازی اعلام حصار مکانی',
+    checkpointSettings: 'تنظیمات حصار مکانی و رادار پایش',
   },
   en: {
     appTitle: 'YAAD Smart Reminder',
@@ -350,6 +370,16 @@ export const translations: Record<AppLanguage, Translations> = {
     dismissAction: '✕ Dismiss',
     completeAction: '✓ Done (Complete)',
     googleSynced: 'Google Synced',
+    geofenceCheckpoints: 'Location Checkpoints (Geofence)',
+    activeCheckpoints: 'Active Checkpoints',
+    checkpointActive: 'Active Checkpoint',
+    checkpointPaused: 'Paused Checkpoint',
+    addCheckpointReminder: 'Add Location Checkpoint',
+    addCheckpointDesc: 'Arrival & departure alert with GPS',
+    geofenceServiceActive: 'Checkpoint radar is active',
+    geofenceServicePaused: 'Location radar is paused',
+    simulateCheckpointAlert: 'Simulate Checkpoint Alert',
+    checkpointSettings: 'Checkpoint & Radar Settings',
   },
 };
 

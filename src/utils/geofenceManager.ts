@@ -1,4 +1,4 @@
-import { Reminder, LocationGeofenceConfig, GeofenceTriggerType } from '../types';
+import { Reminder, LocationGeofenceConfig, GeofenceTriggerType, SavedLocation } from '../types';
 
 // Storage key for user preference on background geofence tracking
 export const GEOFENCE_TRACKING_ENABLED_KEY = 'yaad_geofence_tracking_enabled_v1';
@@ -13,6 +13,13 @@ export interface UserPosition {
 
 export interface GeofenceTriggerEvent {
   reminder: Reminder;
+  triggerType: 'enter' | 'exit';
+  distance: number;
+  timestamp: number;
+}
+
+export interface SavedLocationTriggerEvent {
+  location: SavedLocation;
   triggerType: 'enter' | 'exit';
   distance: number;
   timestamp: number;
@@ -97,29 +104,63 @@ export function getLastKnownPosition(): UserPosition | null {
 }
 
 /**
+export function isReminderInGeofence(
+  userPos: { latitude: number; longitude: number },
+  reminder: Reminder
+): { isInside: boolean; distance: number } | null {
+  if (!reminder.geofence) return null;
+  const distance = calculateHaversineDistance(
+    userPos.latitude,
+    userPos.longitude,
+    reminder.geofence.latitude,
+    reminder.geofence.longitude
+  );
+  return {
+    isInside: distance <= (reminder.geofence.radius || 200),
+    distance,
+  };
+}
+
+/**
  * Calculates adaptive polling interval (in milliseconds) based on distance
  * to the nearest active location-based reminder to preserve battery.
  */
 export function getAdaptivePollingInterval(
   userPos: { latitude: number; longitude: number },
-  reminders: Reminder[]
+  reminders: Reminder[] = [],
+  locations: SavedLocation[] = []
 ): number {
-  const activeGeofences = reminders.filter(
-    (r) => r.status === 'pending' && r.geofence && r.geofence.enabled
+  const activeReminderGeofences = reminders.filter(
+    (r) => (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
+  );
+  const activeLocationGeofences = locations.filter(
+    (l) => l.geofence && l.geofence.enabled
   );
 
-  if (activeGeofences.length === 0) {
-    return 60000 * 5; // 5 minutes when no location reminders are active
+  if (activeReminderGeofences.length === 0 && activeLocationGeofences.length === 0) {
+    return 60000 * 5; // 5 minutes when no location checkpoints are active
   }
 
   let minDistance = Infinity;
-  for (const r of activeGeofences) {
+  for (const r of activeReminderGeofences) {
     if (!r.geofence) continue;
     const d = calculateHaversineDistance(
       userPos.latitude,
       userPos.longitude,
       r.geofence.latitude,
       r.geofence.longitude
+    );
+    if (d < minDistance) {
+      minDistance = d;
+    }
+  }
+
+  for (const l of activeLocationGeofences) {
+    const d = calculateHaversineDistance(
+      userPos.latitude,
+      userPos.longitude,
+      l.latitude,
+      l.longitude
     );
     if (d < minDistance) {
       minDistance = d;
@@ -150,7 +191,11 @@ export function evaluateGeofences(
   const now = Date.now();
 
   for (const reminder of reminders) {
-    if (reminder.status !== 'pending' || !reminder.geofence || !reminder.geofence.enabled) {
+    if (
+      (reminder.status !== 'pending' && reminder.status !== 'postponed') ||
+      !reminder.geofence ||
+      !reminder.geofence.enabled
+    ) {
       continue;
     }
 
@@ -223,4 +268,109 @@ export function evaluateGeofences(
   }
 
   return updatedReminders;
+}
+
+/**
+ * Checks all saved locations with active geofence checkpoints against current user coordinates.
+ */
+export function evaluateSavedLocationGeofences(
+  userPos: UserPosition,
+  locations: SavedLocation[],
+  onTrigger: (event: SavedLocationTriggerEvent) => void
+): SavedLocation[] {
+  const updatedLocations: SavedLocation[] = [];
+  const now = Date.now();
+
+  for (const location of locations) {
+    if (!location.geofence || !location.geofence.enabled) {
+      continue;
+    }
+
+    const { radius, triggerOn, lastTriggeredAt } = location.geofence;
+
+    // Minimum cooldown between repeated triggers for same location: 3 minutes
+    const COOLDOWN_MS = 3 * 60 * 1000;
+    if (lastTriggeredAt && now - lastTriggeredAt < COOLDOWN_MS) {
+      continue;
+    }
+
+    const distance = calculateHaversineDistance(
+      userPos.latitude,
+      userPos.longitude,
+      location.latitude,
+      location.longitude
+    );
+
+    const isInsideNow = distance <= radius;
+    const proximityKey = `loc_${location.id}`;
+    const wasInsideBefore = proximityStateMap.get(proximityKey);
+
+    // Save current status for future transitions
+    proximityStateMap.set(proximityKey, isInsideNow);
+
+    let shouldTrigger = false;
+    let eventType: 'enter' | 'exit' = 'enter';
+
+    if (triggerOn === 'enter') {
+      if (isInsideNow && (wasInsideBefore === false || wasInsideBefore === undefined)) {
+        shouldTrigger = true;
+        eventType = 'enter';
+      }
+    } else if (triggerOn === 'exit') {
+      if (!isInsideNow && wasInsideBefore === true) {
+        shouldTrigger = true;
+        eventType = 'exit';
+      }
+    } else if (triggerOn === 'both') {
+      if (wasInsideBefore !== undefined && isInsideNow !== wasInsideBefore) {
+        shouldTrigger = true;
+        eventType = isInsideNow ? 'enter' : 'exit';
+      } else if (wasInsideBefore === undefined && isInsideNow) {
+        shouldTrigger = true;
+        eventType = 'enter';
+      }
+    }
+
+    if (shouldTrigger) {
+      const updatedLoc: SavedLocation = {
+        ...location,
+        geofence: {
+          ...location.geofence,
+          lastTriggeredAt: now,
+          hasTriggered: true,
+        },
+      };
+
+      updatedLocations.push(updatedLoc);
+
+      onTrigger({
+        location: updatedLoc,
+        triggerType: eventType,
+        distance,
+        timestamp: now,
+      });
+    }
+  }
+
+  return updatedLocations;
+}
+
+/**
+ * Checks if user is inside a saved location's geofence radius
+ */
+export function isLocationInGeofence(
+  userPos: { latitude: number; longitude: number },
+  location: SavedLocation
+): { isInside: boolean; distance: number } | null {
+  if (!location.geofence) return null;
+  const distance = calculateHaversineDistance(
+    userPos.latitude,
+    userPos.longitude,
+    location.latitude,
+    location.longitude
+  );
+  return {
+    isInside: distance <= (location.geofence.radius || 200),
+    distance,
+  };
 }
