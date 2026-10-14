@@ -52,31 +52,32 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
   const anniversaryLabel = getOccasionAnniversaryLabel(occasion, yearsPassed, language);
 
   const renderIcon = () => {
+    const iconClass = "w-4 h-4 text-stone-400";
     switch (meta.iconName) {
       case 'Cake':
-        return <Cake className="w-5 h-5 text-rose-400" />;
+        return <Cake className={iconClass} />;
       case 'HeartHandshake':
-        return <HeartHandshake className="w-5 h-5 text-pink-400" />;
+        return <HeartHandshake className={iconClass} />;
       case 'Sparkles':
-        return <Sparkles className="w-5 h-5 text-purple-400" />;
+        return <Sparkles className={iconClass} />;
       case 'Flame':
-        return <Flame className="w-5 h-5 text-stone-300" />;
+        return <Flame className={iconClass} />;
       case 'Users':
-        return <Users className="w-5 h-5 text-emerald-400" />;
+        return <Users className={iconClass} />;
       case 'Briefcase':
-        return <Briefcase className="w-5 h-5 text-sky-400" />;
+        return <Briefcase className={iconClass} />;
       case 'CalendarHeart':
       default:
-        return <CalendarHeart className="w-5 h-5 text-amber-400" />;
+        return <CalendarHeart className={iconClass} />;
     }
   };
 
   return (
     <div 
-      className={`rounded-2xl border transition-all duration-200 flex flex-col justify-between overflow-hidden shadow-lg ${
+      className={`rounded-2xl border transition-all duration-200 flex flex-col justify-between overflow-hidden shadow-sm ${
         isToday
-          ? 'bg-gradient-to-br from-pink-950/70 via-stone-900 to-rose-950/70 border-pink-500/80 ring-2 ring-pink-500/30'
-          : 'bg-stone-900/90 border-stone-800/90 hover:border-stone-700/80 hover:bg-stone-900'
+          ? 'bg-stone-900 border-amber-500/50'
+          : 'bg-stone-900 border-stone-800 hover:border-stone-700'
       } p-3.5 sm:p-4 gap-3 text-right rtl:text-right ltr:text-left`}
       dir={isEn ? 'ltr' : 'rtl'}
     >
@@ -85,15 +86,15 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
         <div className="flex items-start justify-between gap-2 mb-2">
           {/* Type Badge & Icon */}
           <div className="flex items-center gap-2">
-            <div className={`w-9 h-9 rounded-xl ${meta.badgeBg} ${meta.borderCol} border flex items-center justify-center shrink-0`}>
+            <div className={`w-8 h-8 rounded-xl ${meta.badgeBg} ${meta.borderCol} border flex items-center justify-center shrink-0`}>
               {renderIcon()}
             </div>
             <div>
-              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${meta.badgeBg} ${meta.badgeText} ${meta.borderCol}`}>
+              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-md border ${meta.badgeBg} ${meta.badgeText} ${meta.borderCol}`}>
                 {isEn ? meta.labelEn : meta.labelFa}
               </span>
               {isToday && (
-                <span className="ms-1.5 inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-500 text-white animate-pulse">
+                <span className="ms-1.5 inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500 text-stone-950">
                   <PartyPopper className="w-3 h-3" />
                   {isEn ? 'TODAY!' : 'امروز!'}
                 </span>
@@ -126,13 +127,13 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
           </div>
         </div>
 
-        {/* Title & Person */}
-        <h4 className="font-black text-sm sm:text-base text-white leading-snug">
+        {/* Title - Prominent subject */}
+        <h4 className="font-black text-base sm:text-lg text-white leading-snug tracking-tight">
           {anniversaryLabel}
         </h4>
 
         {occasion.personName && occasion.title !== occasion.personName && (
-          <div className="flex items-center gap-1 text-xs text-stone-400 mt-0.5">
+          <div className="flex items-center gap-1 text-[11px] text-stone-400 mt-0.5 font-medium">
             <User className="w-3 h-3 text-stone-500" />
             <span>{occasion.personName}</span>
           </div>
@@ -143,7 +144,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
       <div className="bg-stone-950/60 p-2.5 rounded-xl border border-stone-800/80 flex items-center justify-between gap-2 text-xs">
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5 text-stone-300 font-bold">
-            <Calendar className="w-3.5 h-3.5 text-pink-400" />
+            <Calendar className="w-3.5 h-3.5 text-amber-400" />
             <span>{formattedTargetDate}</span>
           </div>
           <div className="flex items-center gap-1 text-[11px] text-stone-400">
@@ -155,7 +156,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
         {/* Countdown Badge */}
         <div className="text-center px-2.5 py-1 rounded-xl bg-stone-900 border border-stone-700/80">
           {isToday ? (
-            <span className="text-xs font-black text-rose-400">
+            <span className="text-xs font-black text-amber-400">
               {isEn ? 'Today' : 'امروز'}
             </span>
           ) : daysRemaining === 1 ? (
@@ -189,9 +190,9 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
           <button
             type="button"
             onClick={() => onCreateReminder(occasion)}
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-pink-500/15 hover:bg-pink-500/25 text-pink-300 hover:text-pink-200 border border-pink-500/30 text-xs font-bold transition-all active:scale-95 cursor-pointer"
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all active:scale-95 cursor-pointer"
           >
-            <BellRing className="w-3.5 h-3.5 text-pink-400" />
+            <BellRing className="w-3.5 h-3.5 text-amber-400" />
             <span>{isEn ? 'Set Alarm Reminder' : 'تنظیم یادآور و آلارم در تقویم'}</span>
           </button>
         </div>

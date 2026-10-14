@@ -1,32 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Reminder } from '../types';
-import { formatJalaliFull, getPersianRelativeTime, toPersianDigits } from '../utils/jalali';
-import { getRecurrenceLabel } from '../utils/recurrence';
+import { formatJalaliFull, getPersianRelativeTime } from '../utils/jalali';
 import { AppLanguage } from '../utils/i18n';
-import { NeonClock } from './NeonClock';
 import { 
-  CheckCircle2, 
+  Check, 
   Clock, 
+  MoreVertical, 
   Trash2, 
-  Image as ImageIcon, 
+  Edit2, 
   Briefcase, 
   Heart, 
   Tag, 
   RotateCcw,
-  Zap,
-  Edit2,
-  Repeat,
-  Loader2,
-  X,
-  MapPin,
-  Navigation,
-  Compass,
-  Radio,
-  Play,
-  Pause,
-  Crosshair
+  Image as ImageIcon,
+  Navigation
 } from 'lucide-react';
-import { calculateHaversineDistance } from '../utils/geofenceManager';
 
 interface ReminderCardProps {
   reminder: Reminder;
@@ -60,431 +48,241 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
   isGeofenceServiceActive = true,
 }) => {
   const isEn = language === 'en';
-  const [imgLoaded, setImgLoaded] = React.useState(false);
   const isCompleted = reminder.status === 'completed';
-  const isCancelled = reminder.status === 'cancelled';
-  const isPostponed = reminder.status === 'postponed';
-  const [touchStartX, setTouchStartX] = useState<number | null>(null);
-  const [swipeOffset, setSwipeOffset] = useState<number>(0);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
 
-  const handleTouchStart = (e: React.TouchEvent) => {
-    setTouchStartX(e.touches[0].clientX);
-  };
+  // Close menu when clicking outside
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    const handleClickOutside = (event: MouseEvent | TouchEvent) => {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setIsMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('touchstart', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('touchstart', handleClickOutside);
+    };
+  }, [isMenuOpen]);
 
-  const handleTouchMove = (e: React.TouchEvent) => {
-    if (touchStartX === null) return;
-    const diff = e.touches[0].clientX - touchStartX;
-    if (Math.abs(diff) < 130) {
-      setSwipeOffset(diff);
-    }
-  };
-
-  const handleTouchEnd = () => {
-    if (Math.abs(swipeOffset) > 80) {
-      onDelete(reminder.id);
-    }
-    setTouchStartX(null);
-    setSwipeOffset(0);
-  };
-
-  const getCategoryMeta = (cat: Reminder['category']) => {
-    switch (cat) {
+  // Category Icon (small gray icon)
+  const renderCategoryIcon = () => {
+    const iconClass = "w-4 h-4 text-stone-400 shrink-0";
+    switch (reminder.category) {
       case 'work':
-        return {
-          label: isEn ? 'Work' : 'کار',
-          border: 'border-stone-800 hover:border-cyan-500/40',
-          bg: 'bg-stone-900',
-          badgeBg: 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30',
-          icon: <Briefcase className="w-3.5 h-3.5 text-cyan-400" />,
-        };
+        return (
+          <span title={isEn ? 'Work' : 'کار'} className="flex items-center">
+            <Briefcase className={iconClass} />
+          </span>
+        );
       case 'family':
-        return {
-          label: isEn ? 'Family' : 'خانواده',
-          border: 'border-stone-800 hover:border-rose-500/40',
-          bg: 'bg-stone-900',
-          badgeBg: 'bg-rose-500/10 text-rose-300 border-rose-500/30',
-          icon: <Heart className="w-3.5 h-3.5 text-rose-400" />,
-        };
+        return (
+          <span title={isEn ? 'Family' : 'خانواده'} className="flex items-center">
+            <Heart className={iconClass} />
+          </span>
+        );
       default:
-        return {
-          label: isEn ? 'Other' : 'سایر',
-          border: 'border-stone-800 hover:border-teal-500/40',
-          bg: 'bg-stone-900',
-          badgeBg: 'bg-teal-500/10 text-teal-300 border-teal-500/30',
-          icon: <Tag className="w-3.5 h-3.5 text-teal-400" />,
-        };
+        return (
+          <span title={isEn ? 'Other' : 'سایر'} className="flex items-center">
+            <Tag className={iconClass} />
+          </span>
+        );
     }
   };
 
-  const getPriorityMeta = (p: Reminder['priority']) => {
-    switch (p) {
-      case 'high':
-        return {
-          label: isEn ? 'High' : 'فوری',
-          className: 'bg-red-500/10 text-red-400 border-red-500/20',
-        };
-      case 'medium':
-        return {
-          label: isEn ? 'Medium' : 'متوسط',
-          className: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-        };
-      default:
-        return {
-          label: isEn ? 'Normal' : 'عادی',
-          className: 'bg-blue-500/10 text-blue-400 border-blue-500/20',
-        };
+  // Priority Dot: red only for urgent/high priority
+  const renderPriorityDot = () => {
+    if (reminder.priority === 'high') {
+      return (
+        <span 
+          className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-sm shrink-0" 
+          title={isEn ? 'Urgent' : 'فوری'}
+        />
+      );
     }
+    if (reminder.priority === 'medium') {
+      return (
+        <span 
+          className="w-2.5 h-2.5 rounded-full bg-stone-500/70 shrink-0" 
+          title={isEn ? 'Medium' : 'متوسط'}
+        />
+      );
+    }
+    return (
+      <span 
+        className="w-2.5 h-2.5 rounded-full bg-stone-700/60 shrink-0" 
+        title={isEn ? 'Normal' : 'عادی'}
+      />
+    );
   };
 
-  const catMeta = getCategoryMeta(reminder.category);
-  const priMeta = getPriorityMeta(reminder.priority);
   const relativeTime = getPersianRelativeTime(reminder.dueTimestamp, language);
+  const formattedTime = formatJalaliFull(reminder.dueTimestamp, language);
+  const isOverdue = reminder.dueTimestamp < Date.now() && !isCompleted;
 
   return (
     <div
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
-      style={{
-        transform: swipeOffset !== 0 ? `translateX(${swipeOffset}px)` : undefined,
-        transition: swipeOffset === 0 ? 'transform 0.2s ease-out' : 'none',
-      }}
-      className={`rounded-2xl p-4 sm:p-5 border transition-all duration-200 relative group animate-in fade-in slide-in-from-bottom-2.5 duration-300 ${
-        Math.abs(swipeOffset) > 40 ? 'border-red-500/80 bg-red-950/20' : ''
-      } ${
+      className={`rounded-2xl p-4 sm:p-5 border transition-all duration-200 relative bg-stone-900 ${
         isCompleted
-          ? 'bg-stone-900/50 border-stone-800/80 opacity-75'
+          ? 'border-stone-800/80 bg-stone-900/60 opacity-70'
           : isNext
-          ? 'bg-stone-900 border-2 border-emerald-500/70 shadow-lg shadow-emerald-950/30 ring-1 ring-emerald-500/20'
-          : `${catMeta.bg} ${catMeta.border} shadow-md shadow-black/10`
+          ? 'border-stone-700 shadow-sm'
+          : 'border-stone-800 hover:border-stone-700 shadow-sm'
       }`}
       dir={isEn ? 'ltr' : 'rtl'}
     >
-      {/* Small 'x' Quick Delete Button inside card without opening menu */}
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onDelete(reminder.id);
-        }}
-        className="absolute top-2.5 end-2.5 p-1.5 rounded-full text-stone-500 hover:text-red-400 hover:bg-red-500/15 transition-all opacity-80 sm:opacity-0 group-hover:opacity-100 cursor-pointer z-10"
-        title={isEn ? 'Quick delete' : 'حذف سریع'}
-        aria-label={isEn ? 'Quick delete' : 'حذف سریع'}
-      >
-        <X className="w-3.5 h-3.5" />
-      </button>
+      <div className="flex items-start justify-between gap-3.5 sm:gap-4">
+        {/* Toggle completion button */}
+        <button
+          type="button"
+          onClick={() => onToggleComplete(reminder.id)}
+          className={`mt-0.5 w-6 h-6 rounded-lg border flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95 ${
+            isCompleted
+              ? 'bg-emerald-600 border-emerald-500 text-white'
+              : 'border-stone-700 bg-stone-800/90 text-transparent hover:border-stone-500 hover:text-stone-400'
+          }`}
+          title={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'علامت به عنوان انجام شده')}
+          aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'علامت به عنوان انجام شده')}
+        >
+          <Check className="w-4 h-4 stroke-[2.8]" />
+        </button>
 
-      <div className="flex items-start justify-between gap-3">
-        {/* Checkbox and Title */}
-        <div className="flex items-start gap-3 flex-1 min-w-0">
-          <button
-            type="button"
-            onClick={() => onToggleComplete(reminder.id)}
-            className={`mt-0.5 p-2 rounded-xl transition-all active:scale-95 cursor-pointer ${
+        {/* Card Main Body: Category Icon, Priority Dot, Title, Time */}
+        <div className="flex-1 min-w-0">
+          {/* Metadata Row: Category icon and Priority dot */}
+          <div className="flex items-center gap-2 mb-1.5">
+            {renderCategoryIcon()}
+            {renderPriorityDot()}
+          </div>
+
+          {/* Title - Prominent and bold subject */}
+          <h4
+            className={`font-black text-base sm:text-lg leading-snug tracking-tight transition-colors line-clamp-2 ${
               isCompleted
-                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                : isNext
-                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 hover:bg-emerald-500/30'
-                : 'bg-stone-800 text-stone-300 hover:text-white border border-stone-700 hover:border-amber-500/40'
+                ? 'line-through text-stone-500 font-medium'
+                : 'text-stone-100 hover:text-amber-400'
             }`}
-            title={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'علامت به عنوان انجام شده')}
           >
-            <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6" />
-          </button>
+            {reminder.title}
+          </h4>
 
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 flex-wrap mb-1.5">
-              {/* Next Reminder Badge */}
-              {isNext && !isCompleted && (
-                <span className="text-xs px-2.5 py-0.5 rounded-lg bg-emerald-500 text-stone-950 font-black flex items-center gap-1 shadow-sm">
-                  <span className="w-1.5 h-1.5 rounded-full bg-stone-950 animate-ping" />
-                  <span>{isEn ? 'Next Reminder' : 'یادآور بعدی'}</span>
-                </span>
-              )}
-
-              {/* Category Badge */}
-              <span className={`text-xs px-2.5 py-0.5 rounded-lg border flex items-center gap-1 font-bold ${catMeta.badgeBg}`}>
-                {catMeta.icon}
-                <span>{catMeta.label}</span>
-              </span>
-
-              {/* Priority Badge */}
-              <span className={`text-xs px-2.5 py-0.5 rounded-lg border font-semibold ${priMeta.className}`}>
-                {priMeta.label}
-              </span>
-
-              {/* Recurrence Badge */}
-              {reminder.recurrence && reminder.recurrence !== 'none' && (
-                <span className="text-xs px-2.5 py-0.5 rounded-lg border border-indigo-500/30 bg-indigo-500/10 text-indigo-300 font-bold flex items-center gap-1">
-                  <Repeat className="w-3 h-3 text-indigo-400" />
-                  <span>{getRecurrenceLabel(reminder, language)}</span>
-                </span>
-              )}
-
-              {/* Geofence / Checkpoint Status Badge */}
-              {reminder.geofence && (
-                <span 
-                  className={`text-xs px-2.5 py-0.5 rounded-lg border font-bold flex items-center gap-1.5 shadow-sm transition-all ${
-                    reminder.geofence.enabled
-                      ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-                      : 'border-stone-700 bg-stone-800 text-stone-400'
-                  }`}
-                >
-                  <span className={`w-2 h-2 rounded-full ${reminder.geofence.enabled ? 'bg-emerald-400 animate-pulse' : 'bg-stone-500'}`} />
-                  <MapPin className="w-3 h-3 text-emerald-400" />
-                  <span>
-                    {reminder.geofence.enabled ? (isEn ? 'Active Geofence' : 'حصار مکانی فعال') : (isEn ? 'Paused Geofence' : 'حصار مکانی متوقف')}
-                    : {reminder.geofence.locationName}
-                  </span>
-                </span>
-              )}
-
-              {/* Postponed indicator */}
-              {isPostponed && (
-                <span className="text-xs px-2 py-0.5 rounded-md bg-stone-800 text-amber-300 border border-amber-500/20">
-                  {isEn ? `Postponed (${reminder.postponeCount}x)` : `به تعویق افتاده (${reminder.postponeCount} بار)`}
-                </span>
-              )}
-
-              {/* Flash / voice badges */}
-              {reminder.useFlash && (
-                <span title={isEn ? 'LED Flash active' : 'فلش ال‌ای‌دی روشن'} className="p-1 rounded bg-amber-500/10 text-amber-400 text-xs">
-                  <Zap className="w-3 h-3" />
-                </span>
-              )}
-            </div>
-
-            {/* Title */}
-            <h3
-              className={`text-base sm:text-lg font-bold leading-snug transition-colors ${
-                isCompleted
-                  ? 'line-through text-stone-500 font-medium'
-                  : isNext
-                  ? 'text-white font-extrabold group-hover:text-emerald-300'
-                  : 'text-stone-100 group-hover:text-amber-400'
-              }`}
-            >
-              {reminder.title}
-            </h3>
-
-            {/* Description */}
-            {reminder.description && (
-              <p className="text-sm text-stone-300/90 mt-1.5 line-clamp-2 leading-relaxed">
-                {reminder.description}
-              </p>
-            )}
-
-            {/* Time Display */}
-            <div className="flex items-center gap-2 mt-2.5 text-xs sm:text-sm text-stone-300 flex-wrap">
-              <Clock className="w-4 h-4 text-amber-500 flex-shrink-0" />
-              <span className="font-medium text-stone-200">{formatJalaliFull(reminder.dueTimestamp, language)}</span>
-              <span className="text-stone-600">•</span>
-              <span className={`font-bold ${reminder.dueTimestamp < Date.now() && !isCompleted ? 'text-red-400 font-extrabold' : 'text-amber-400'}`}>
-                {relativeTime}
-              </span>
-            </div>
-
-            {/* Geofence Checkpoint Control Box */}
-            {reminder.geofence && (
-              <div className="mt-3 p-3 rounded-2xl bg-stone-950/80 border border-emerald-500/30 text-xs space-y-2">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2">
-                    <div className="w-6 h-6 rounded-lg bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
-                      <MapPin className="w-3.5 h-3.5" />
-                    </div>
-                    <div>
-                      <span className="font-bold text-white text-xs block">
-                        {isEn ? 'Geofence Location:' : 'حصار مکانی:'} {reminder.geofence.locationName}
-                      </span>
-                      <span className="text-[10px] text-stone-400 font-mono">
-                        {reminder.geofence.latitude.toFixed(5)}, {reminder.geofence.longitude.toFixed(5)}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Geofence Status Badge & Quick Toggle */}
-                  <div className="flex items-center gap-1.5">
-                    {onToggleGeofence && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          onToggleGeofence(reminder.id);
-                        }}
-                        className={`px-2.5 py-1 rounded-xl text-[11px] font-black border transition-all cursor-pointer flex items-center gap-1 active:scale-95 ${
-                          reminder.geofence.enabled
-                            ? 'bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border-emerald-500/50 shadow-sm'
-                            : 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700'
-                        }`}
-                        title={reminder.geofence.enabled ? (isEn ? 'Pause geofence' : 'توقف موقت هشدار حصار مکانی') : (isEn ? 'Activate geofence' : 'فعال‌سازی مجدد هشدار حصار مکانی')}
-                      >
-                        {reminder.geofence.enabled ? (
-                          <>
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                            <span>{isEn ? 'ACTIVE' : 'فعال'}</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play className="w-3 h-3 text-amber-400 fill-amber-400" />
-                            <span>{isEn ? 'PAUSED' : 'غیرفعال'}</span>
-                          </>
-                        )}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Sub details: Trigger Condition, Radius & Distance */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-stone-800/80 text-[11px]">
-                  <div className="flex items-center gap-2 text-stone-300 flex-wrap">
-                    <span className="text-stone-400">{isEn ? 'Condition:' : 'شرط آلارم:'}</span>
-                    <span className="font-bold text-amber-300">
-                      {reminder.geofence.triggerOn === 'enter'
-                        ? (isEn ? 'On Arrival' : 'هنگام ورود')
-                        : reminder.geofence.triggerOn === 'exit'
-                        ? (isEn ? 'On Departure' : 'هنگام خروج')
-                        : (isEn ? 'Arrival/Departure' : 'ورود و خروج')}
-                    </span>
-                    <span className="text-stone-500">•</span>
-                    <span className="text-emerald-400 font-mono font-bold">
-                      {toPersianDigits(reminder.geofence.radius)} {isEn ? 'm' : 'متر'}
-                    </span>
-                  </div>
-
-                  {/* Real-time distance if userPosition available */}
-                  {userPosition && (
-                    <div className="flex items-center gap-1.5 text-stone-300">
-                      <Crosshair className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                      <span className="text-stone-400">{isEn ? 'Your distance:' : 'فاصله شما:'}</span>
-                      {(() => {
-                        const dist = calculateHaversineDistance(
-                          userPosition.latitude,
-                          userPosition.longitude,
-                          reminder.geofence.latitude,
-                          reminder.geofence.longitude
-                        );
-                        const isInside = dist <= reminder.geofence.radius;
-                        return (
-                          <span className={`font-mono font-bold ${isInside ? 'text-emerald-400' : 'text-stone-200'}`}>
-                            {toPersianDigits(dist)} {isEn ? 'm' : 'متر'}
-                            <span className={`text-[10px] ms-1 px-1.5 py-0.2 rounded font-bold ${isInside ? 'bg-emerald-500/25 text-emerald-300' : 'bg-stone-800 text-stone-400'}`}>
-                              {isInside ? (isEn ? 'Inside' : 'داخل محدوده') : (isEn ? 'Outside' : 'خارج محدوده')}
-                            </span>
-                          </span>
-                        );
-                      })()}
-                    </div>
-                  )}
-                </div>
-
-                {/* Action buttons: Navigation + Test Simulate Trigger */}
-                <div className="flex items-center justify-between gap-2 pt-2 border-t border-stone-800/60">
-                  {onSimulateGeofenceTrigger && reminder.geofence.enabled && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSimulateGeofenceTrigger(reminder);
-                      }}
-                      className="text-[11px] font-bold text-amber-400 hover:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 rounded-lg border border-amber-500/30 flex items-center gap-1 transition-colors cursor-pointer active:scale-95"
-                      title={isEn ? 'Simulate arrival/departure alert' : 'شبیه‌سازی و تست آلارم ورود به حصار مکانی'}
-                    >
-                      <Radio className="w-3 h-3 animate-pulse" />
-                      <span>{isEn ? 'Test Alarm' : 'تست آلارم حصار مکانی'}</span>
-                    </button>
-                  )}
-
-                  <a
-                    href={`https://www.google.com/maps/dir/?api=1&destination=${reminder.geofence.latitude},${reminder.geofence.longitude}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                    className="ms-auto text-[11px] font-bold text-teal-400 hover:text-teal-300 bg-teal-500/10 hover:bg-teal-500/20 px-2.5 py-1 rounded-lg border border-teal-500/30 flex items-center gap-1 transition-colors"
-                  >
-                    <Navigation className="w-3 h-3" />
-                    <span>{isEn ? 'Directions' : 'مسیریابی'}</span>
-                  </a>
-                </div>
-              </div>
-            )}
+          {/* Time Display - Smaller font to contrast with prominent subject */}
+          <div className="flex items-center gap-1.5 mt-2 text-xs text-stone-400 flex-wrap font-medium">
+            <Clock className="w-3.5 h-3.5 text-amber-500/80 shrink-0" />
+            <span className="text-stone-300">{formattedTime}</span>
+            <span className="text-stone-600">•</span>
+            <span className={`font-bold ${isOverdue ? 'text-red-400' : 'text-amber-400/90'}`}>
+              {relativeTime}
+            </span>
           </div>
         </div>
 
-        {/* Thumbnail Image if exists - Optimized Lazy Loading */}
-        {reminder.imageUrl && (
+        {/* Three-dot menu button */}
+        <div className="relative shrink-0" ref={menuRef}>
           <button
             type="button"
-            onClick={() => onViewImage(reminder.imageUrl!)}
-            className="w-16 h-16 sm:w-18 sm:h-18 rounded-2xl overflow-hidden border border-stone-700 relative shrink-0 hover:scale-105 transition-transform bg-stone-950 cursor-pointer"
-            title={isEn ? 'View attached photo' : 'مشاهده تصویر پیوست'}
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-stone-800 transition-colors cursor-pointer"
+            title={isEn ? 'Actions menu' : 'منوی عملیات'}
+            aria-label={isEn ? 'Actions menu' : 'منوی عملیات'}
           >
-            {!imgLoaded && (
-              <div className="absolute inset-0 flex items-center justify-center text-stone-500">
-                <Loader2 className="w-4 h-4 animate-spin text-teal-400" />
-              </div>
-            )}
-            <img 
-              src={reminder.imageUrl} 
-              alt="attachment" 
-              loading="lazy"
-              decoding="async"
-              onLoad={() => setImgLoaded(true)}
-              className={`w-full h-full object-cover transition-opacity duration-300 ${
-                imgLoaded ? 'opacity-100' : 'opacity-0'
-              }`} 
-            />
-            <div className="absolute inset-0 bg-black/20 flex items-center justify-center">
-              <ImageIcon className="w-5 h-5 text-white drop-shadow" />
-            </div>
+            <MoreVertical className="w-5 h-5" />
           </button>
-        )}
-      </div>
 
-      {/* Action footer */}
-      <div className="flex items-center justify-between mt-3.5 pt-3 border-t border-stone-800 text-xs sm:text-sm flex-wrap gap-2">
-        <div className="flex items-center gap-2">
-          {!isCompleted && (
-            <div className="flex items-center gap-1.5">
+          {/* Dropdown Menu */}
+          {isMenuOpen && (
+            <div 
+              className={`absolute top-full ${isEn ? 'right-0' : 'left-0'} mt-1.5 w-48 bg-stone-900 border border-stone-700/80 rounded-2xl p-1.5 shadow-2xl z-50 space-y-1 animate-in fade-in zoom-in-95 duration-150`}
+            >
+              {/* +10 minutes */}
+              {!isCompleted && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onPostpone(reminder.id, 10);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4 text-stone-400" />
+                  <span>{isEn ? '+10 minutes' : '+۱۰ دقیقه'}</span>
+                </button>
+              )}
+
+              {/* +1 hour */}
+              {!isCompleted && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onPostpone(reminder.id, 60);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4 text-stone-400" />
+                  <span>{isEn ? '+1 hour' : '+۱ ساعت'}</span>
+                </button>
+              )}
+
+              {/* Edit */}
               <button
                 type="button"
-                onClick={() => onPostpone(reminder.id, 10)}
-                className="px-2.5 py-1.5 rounded-xl bg-stone-800/90 hover:bg-stone-700 text-stone-200 font-bold border border-stone-700/60 active:scale-95 cursor-pointer"
-                title={isEn ? '+10 minutes snooze' : '۱۰ دقیقه به تعویق انداختن'}
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  onEdit(reminder);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
               >
-                {isEn ? '+10 min' : '+۱۰ دقیقه'}
+                <Edit2 className="w-4 h-4 text-stone-400" />
+                <span>{isEn ? 'Edit' : 'ویرایش'}</span>
               </button>
+
+              {/* View Image if exists */}
+              {reminder.imageUrl && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsMenuOpen(false);
+                    onViewImage(reminder.imageUrl!);
+                  }}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                >
+                  <ImageIcon className="w-4 h-4 text-stone-400" />
+                  <span>{isEn ? 'View Photo' : 'مشاهده تصویر'}</span>
+                </button>
+              )}
+
+              {/* Directions if geofence exists */}
+              {reminder.geofence && (
+                <a
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${reminder.geofence.latitude},${reminder.geofence.longitude}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setIsMenuOpen(false)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                >
+                  <Navigation className="w-4 h-4 text-stone-400" />
+                  <span>{isEn ? 'Directions' : 'مسیریابی'}</span>
+                </a>
+              )}
+
+              {/* Delete */}
               <button
                 type="button"
-                onClick={() => onPostpone(reminder.id, 60)}
-                className="px-2.5 py-1.5 rounded-xl bg-stone-800/90 hover:bg-stone-700 text-stone-200 font-bold border border-stone-700/60 active:scale-95 cursor-pointer"
-                title={isEn ? '+1 hour snooze' : '۱ ساعت به تعویق انداختن'}
+                onClick={() => {
+                  setIsMenuOpen(false);
+                  onDelete(reminder.id);
+                }}
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-red-400 hover:bg-red-500/15 transition-colors text-start cursor-pointer"
               >
-                {isEn ? '+1 hour' : '+۱ ساعت'}
+                <Trash2 className="w-4 h-4 text-red-400" />
+                <span>{isEn ? 'Delete' : 'حذف'}</span>
               </button>
             </div>
           )}
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          {/* Edit Button */}
-          <button
-            type="button"
-            onClick={() => onEdit(reminder)}
-            className="p-1.5 sm:p-2 rounded-xl text-stone-400 hover:text-amber-400 hover:bg-stone-800 transition-colors cursor-pointer"
-            title={isEn ? 'Edit reminder' : 'ویرایش یادآور'}
-          >
-            <Edit2 className="w-4 h-4" />
-          </button>
-
-          {/* Delete Button */}
-          <button
-            type="button"
-            onClick={() => onDelete(reminder.id)}
-            className="p-1.5 sm:p-2 rounded-xl text-stone-400 hover:text-red-400 hover:bg-stone-800 transition-colors cursor-pointer"
-            title={isEn ? 'Delete reminder' : 'حذف یادآور'}
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
         </div>
       </div>
     </div>

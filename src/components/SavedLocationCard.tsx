@@ -93,32 +93,24 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
 
   return (
     <div 
-      className={`bg-stone-900 border rounded-2xl p-4 sm:p-5 shadow-md space-y-3 transition-all group flex flex-col justify-between ${
-        isCheckpointActive
-          ? 'border-emerald-500/40 hover:border-emerald-400/80 shadow-emerald-500/5 ring-1 ring-emerald-500/20'
-          : 'border-stone-800 hover:border-stone-700'
-      }`} 
+      className="bg-stone-900 border border-stone-800 hover:border-stone-700 rounded-2xl p-4 sm:p-5 shadow-sm space-y-3 transition-all group flex flex-col justify-between" 
       dir={isEn ? 'ltr' : 'rtl'}
     >
       <div className="space-y-3">
         {/* Header: Title, Date, Actions */}
         <div className="flex items-start justify-between gap-2">
           <div className="flex items-start gap-2.5">
-            <div className={`w-8 h-8 rounded-xl border flex items-center justify-center flex-shrink-0 mt-0.5 ${
-              isCheckpointActive
-                ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-400'
-                : 'bg-stone-800 border-stone-700 text-stone-400'
-            }`}>
+            <div className="w-8 h-8 rounded-xl border border-stone-700 bg-stone-800 text-stone-400 flex items-center justify-center flex-shrink-0 mt-0.5">
               <MapPin className="w-4 h-4" />
             </div>
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
-                <h4 className="font-bold text-white text-sm sm:text-base leading-snug line-clamp-2">
+                <h4 className="font-black text-base sm:text-lg text-white leading-snug tracking-tight line-clamp-2">
                   {location.title}
                 </h4>
                 {isCheckpointActive && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-stone-800 text-stone-300 font-bold border border-stone-700 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                     <span>{isEn ? 'Geofence Active' : 'حصار مکانی فعال'}</span>
                   </span>
                 )}
@@ -144,7 +136,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
             <button
               type="button"
               onClick={() => onDelete(location.id)}
-              className="p-2 rounded-xl text-stone-400 hover:text-rose-400 hover:bg-stone-800 transition-colors cursor-pointer"
+              className="p-2 rounded-xl text-stone-400 hover:text-red-400 hover:bg-stone-800 transition-colors cursor-pointer"
               title={isEn ? 'Delete place' : 'حذف مکان'}
             >
               <Trash2 className="w-4 h-4" />
@@ -319,9 +311,9 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
             <button
               type="button"
               onClick={() => onEdit(location)}
-              className="w-full py-1.5 px-2.5 rounded-xl border border-dashed border-emerald-500/40 bg-emerald-500/5 hover:bg-emerald-500/15 text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              className="w-full py-1.5 px-2.5 rounded-xl border border-dashed border-stone-700 bg-stone-950/60 hover:bg-stone-800 text-stone-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
             >
-              <Radio className="w-3.5 h-3.5 text-emerald-400" />
+              <Radio className="w-3.5 h-3.5 text-stone-400" />
               <span>{isEn ? '+ Configure Geofence' : '+ فعال‌سازی حصار مکانی و محدوده شعاع (Geofence)'}</span>
             </button>
           )
@@ -337,7 +329,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               href={googleDirectionsUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-teal-500/20 hover:bg-teal-600 text-teal-300 hover:text-white border border-teal-500/30 text-xs font-bold transition-all active:scale-95"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all active:scale-95"
               title={isEn ? 'Open directions in Google Maps' : 'مسیریابی در نقشه گوگل'}
             >
               <Navigation className="w-3.5 h-3.5" />
@@ -358,7 +350,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                 </>
               ) : (
                 <>
-                  <Copy className="w-3.5 h-3.5" />
+                  <Copy className="w-3.5 h-3.5 text-stone-400" />
                   <span>{isEn ? 'Copy' : 'کپی'}</span>
                 </>
               )}
@@ -372,7 +364,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                 className="px-2 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white border border-stone-700 text-xs font-medium transition-colors cursor-pointer"
                 title={isEn ? 'Create Idea note' : 'ایجاد یادداشت'}
               >
-                <Lightbulb className="w-3.5 h-3.5 text-sky-400" />
+                <Lightbulb className="w-3.5 h-3.5 text-stone-400" />
               </button>
             )}
           </div>
@@ -382,7 +374,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
             href={location.googleMapsUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-teal-300 transition-colors"
+            className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-amber-400 transition-colors"
             title={isEn ? 'View on Google Maps' : 'مشاهده در گوگل‌مپ'}
           >
             <span>{isEn ? 'View Map' : 'مشاهده'}</span>

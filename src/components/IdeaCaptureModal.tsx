@@ -963,48 +963,57 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             </div>
           </div>
 
-          {/* Mode Switch Tabs */}
-          <div className="flex bg-stone-950 p-1 rounded-xl border border-stone-800 text-xs">
-            <button
-              type="button"
-              onClick={() => setActiveTab('text')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all cursor-pointer ${
-                activeTab === 'text' ? 'bg-amber-500 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'
-              }`}
-            >
-              <FileText className="w-4 h-4" />
-              <span>{isEn ? 'Text & Voice' : 'متن و تایپ صوتی'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('voice')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all cursor-pointer ${
-                activeTab === 'voice' ? 'bg-amber-500 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'
-              }`}
-            >
-              <Mic className="w-4 h-4" />
-              <span>{isEn ? 'Voice Memo' : 'ضبط صدا'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('video')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all cursor-pointer ${
-                activeTab === 'video' ? 'bg-amber-500 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'
-              }`}
-            >
-              <Video className="w-4 h-4" />
-              <span>{isEn ? 'Video' : 'ضبط ویدیو'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveTab('sketch')}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg font-medium transition-all cursor-pointer ${
-                activeTab === 'sketch' ? 'bg-amber-500 text-stone-950 font-bold' : 'text-stone-400 hover:text-white'
-              }`}
-            >
-              <PenTool className="w-4 h-4" />
-              <span>{isEn ? 'Sketch' : 'رسم با قلم'}</span>
-            </button>
+          {/* Mode Switch Tabs - Only icons with header "امکانات ورود" */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-stone-300 block">
+              {isEn ? 'Input options' : 'امکانات ورود'}
+            </label>
+            <div className="flex bg-stone-950 p-1 rounded-xl border border-stone-800">
+              <button
+                type="button"
+                onClick={() => setActiveTab('text')}
+                className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
+                  activeTab === 'text' ? 'bg-amber-500 text-stone-950' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                }`}
+                title={isEn ? 'Text & Voice' : 'متن و تایپ صوتی'}
+                aria-label={isEn ? 'Text & Voice' : 'متن و تایپ صوتی'}
+              >
+                <FileText className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('voice')}
+                className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
+                  activeTab === 'voice' ? 'bg-amber-500 text-stone-950' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                }`}
+                title={isEn ? 'Voice Memo' : 'ضبط صدا'}
+                aria-label={isEn ? 'Voice Memo' : 'ضبط صدا'}
+              >
+                <Mic className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('video')}
+                className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
+                  activeTab === 'video' ? 'bg-amber-500 text-stone-950' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                }`}
+                title={isEn ? 'Video' : 'ضبط ویدیو'}
+                aria-label={isEn ? 'Video' : 'ضبط ویدیو'}
+              >
+                <Video className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('sketch')}
+                className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
+                  activeTab === 'sketch' ? 'bg-amber-500 text-stone-950' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                }`}
+                title={isEn ? 'Sketch' : 'رسم با قلم'}
+                aria-label={isEn ? 'Sketch' : 'رسم با قلم'}
+              >
+                <PenTool className="w-5 h-5" />
+              </button>
+            </div>
           </div>
 
           {/* TAB 1: TEXT & VOICE TYPING */}
@@ -1315,12 +1324,12 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           )}
         </div>
 
-        {/* Sticky Footer - Pinned directly above keyboard */}
-        <div className="sticky bottom-0 z-20 shrink-0 px-3 sm:px-5 py-3 border-t border-stone-800 flex items-center justify-between bg-stone-900/95 backdrop-blur shadow-2xl">
+        {/* Sticky Footer - Pinned directly above keyboard with min 48px buttons */}
+        <div className="sticky bottom-0 z-20 shrink-0 px-3 sm:px-4 py-3 border-t border-stone-800 flex items-center justify-between bg-stone-900 shadow-2xl">
           <button
             type="button"
             onClick={onClose}
-            className="px-4 sm:px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+            className="min-h-[48px] px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 active:scale-95 text-stone-300 hover:text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer flex items-center justify-center border border-stone-700/60"
           >
             {isEn ? 'Cancel' : 'انصراف'}
           </button>
@@ -1328,7 +1337,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             id="save-idea-submit-btn"
             type="button"
             onClick={handleSave}
-            className={`flex items-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black shadow-md transition-all active:scale-95 cursor-pointer ${
+            className={`min-h-[48px] flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black shadow-md transition-all active:scale-95 cursor-pointer ${
               !title.trim()
                 ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
                 : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/25'
@@ -1337,8 +1346,8 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-amber-300' : 'text-stone-950'}`} />
             <span className={!title.trim() ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
               {editingIdea 
-                ? (isEn ? 'Save Changes' : 'ذخیره تغییرات ایده') 
-                : (isEn ? 'Save Idea' : 'ثبت نهایی ایده')}
+                ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
+                : (isEn ? 'Save Idea' : 'ثبت ایده')}
             </span>
           </button>
         </div>

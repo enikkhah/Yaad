@@ -22,9 +22,8 @@
 
 /* Theme-adaptive subtle brand accent variables */
 :root {
-  --brand-accent-border: rgba(45, 212, 191, 0.3);
-  --brand-accent-hover: rgba(45, 212, 191, 0.5);
-  --brand-accent-glow: rgba(45, 212, 191, 0.12);
+  --brand-accent-border: rgba(245, 158, 11, 0.25);
+  --brand-accent-hover: rgba(245, 158, 11, 0.45);
 }
 
 /* Ensure font color inside all form input fields, textareas, and selects is crisp and readable */
@@ -50,21 +49,18 @@ h4 {
 
 /* Theme variations */
 [data-theme="dark-slate"] {
-  --brand-accent-border: rgba(34, 211, 238, 0.35);
-  --brand-accent-hover: rgba(103, 232, 249, 0.6);
-  --brand-accent-glow: rgba(34, 211, 238, 0.15);
+  --brand-accent-border: rgba(245, 158, 11, 0.25);
+  --brand-accent-hover: rgba(245, 158, 11, 0.45);
 }
 
 [data-theme="light-clean"] {
-  --brand-accent-border: rgba(13, 148, 136, 0.3);
-  --brand-accent-hover: rgba(15, 118, 110, 0.6);
-  --brand-accent-glow: rgba(13, 148, 136, 0.1);
+  --brand-accent-border: rgba(245, 158, 11, 0.25);
+  --brand-accent-hover: rgba(245, 158, 11, 0.45);
 }
 
 [data-theme="sketch-contrast"] {
-  --brand-accent-border: rgba(45, 212, 191, 0.4);
-  --brand-accent-hover: rgba(94, 234, 212, 0.8);
-  --brand-accent-glow: rgba(45, 212, 191, 0.2);
+  --brand-accent-border: rgba(245, 158, 11, 0.25);
+  --brand-accent-hover: rgba(245, 158, 11, 0.45);
 }
 
 /* Custom Zoom-Out entrance animation for the FAB 3-action choice modal */
@@ -103,10 +99,10 @@ h4 {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(45, 212, 191, 0.45);
+  background: rgba(245, 158, 11, 0.35);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(45, 212, 191, 0.85);
+  background: rgba(245, 158, 11, 0.7);
 }

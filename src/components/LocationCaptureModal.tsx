@@ -18,7 +18,8 @@ import {
   Volume2,
   VolumeX,
   Sliders,
-  Bell
+  Bell,
+  ChevronDown
 } from 'lucide-react';
 import { SavedLocation, GeofenceTriggerType, LocationCheckpointConfig } from '../types';
 import { toPersianDigits } from '../utils/jalali';
@@ -69,6 +70,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [geofenceTriggerOn, setGeofenceTriggerOn] = useState<GeofenceTriggerType>('both');
   const [geofenceCustomMessage, setGeofenceCustomMessage] = useState<string>('');
   const [geofencePlayAudio, setGeofencePlayAudio] = useState<boolean>(true);
+  const [showCollapsibleMediaAndGeofence, setShowCollapsibleMediaAndGeofence] = useState(false);
 
   // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
@@ -179,6 +181,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
           setGeofenceCustomMessage('');
           setGeofencePlayAudio(true);
         }
+        setShowCollapsibleMediaAndGeofence(!!(editingLocation.photoUrl || editingLocation.geofence?.enabled));
       } else {
         setTitle('');
         setDescription('');
@@ -189,6 +192,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         setGeofenceTriggerOn('both');
         setGeofenceCustomMessage('');
         setGeofencePlayAudio(true);
+        setShowCollapsibleMediaAndGeofence(false);
         if (latitude === null) {
           fetchCurrentLocation();
         }
@@ -294,8 +298,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
           className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col transition-all duration-150"
           style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '94dvh' }}
         >
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-stone-800 bg-stone-900/90 sticky top-0 z-10">
+          {/* Header - Fixed & Solid, no scroll bleed-through */}
+          <div className="shrink-0 flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-stone-800 bg-stone-900 z-10">
             <div className="flex items-center gap-2.5">
               <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center flex-shrink-0">
                 <MapPin className="w-5 h-5" />
@@ -322,8 +326,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             </button>
           </div>
 
-          {/* Form Content */}
-          <div className="p-4 sm:p-6 space-y-4 sm:space-y-5 overflow-y-auto">
+          {/* Form Content - Strictly bounded scroll container */}
+          <div className="flex-1 min-h-0 p-4 sm:p-5 space-y-4 overflow-y-auto overscroll-contain">
             {/* Required Field Validation Alert Banner */}
             {validationError && (
               <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-2">
@@ -450,7 +454,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   </div>
                 </div>
 
-                <div className="relative aspect-[16/9] w-full rounded-2xl overflow-hidden border border-stone-800 bg-black shadow-inner">
+                {/* Compact Map Preview (نقشه کوچکتر) */}
+                <div className="relative h-32 sm:h-36 w-full rounded-2xl overflow-hidden border border-stone-800 bg-black shadow-inner">
                   <iframe
                     title="Google Maps"
                     src={embedMapUrl}
@@ -504,8 +509,31 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               </div>
             </div>
 
-            {/* زیرمجموعه حصار مکانی و اعلام ورود/خروج (Geofence Sub-Feature) */}
-            <div className={`rounded-2xl border transition-all p-4 ${
+            {/* Collapsible Section: Photo & Geofence (عکس و حصار مکانی) */}
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setShowCollapsibleMediaAndGeofence(!showCollapsibleMediaAndGeofence)}
+                className="w-full min-h-[48px] py-2.5 px-3.5 rounded-2xl bg-stone-950/70 hover:bg-stone-900 border border-stone-800 hover:border-stone-700 text-stone-300 hover:text-white text-xs sm:text-sm font-bold flex items-center justify-between transition-all cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <div className="p-1 rounded-lg bg-emerald-500/10 text-emerald-400">
+                    <Radio className="w-4 h-4" />
+                  </div>
+                  <span>{isEn ? 'Photo & Geofence (Collapsible)' : 'عکس و حصار مکانی (Geofence)'}</span>
+                  {(photoUrl || enableGeofence) && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                      {photoUrl && enableGeofence ? (isEn ? 'Photo + Geofence' : 'عکس + حصار فعال') : photoUrl ? (isEn ? 'Photo attached' : 'عکس ثبت‌شده') : (isEn ? 'Geofence active' : 'حصار فعال')}
+                    </span>
+                  )}
+                </span>
+                <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 ${showCollapsibleMediaAndGeofence ? 'rotate-180 text-emerald-400' : ''}`} />
+              </button>
+
+              {showCollapsibleMediaAndGeofence && (
+                <div className="mt-3 space-y-4 animate-in fade-in duration-200">
+                  {/* زیرمجموعه حصار مکانی و اعلام ورود/خروج (Geofence Sub-Feature) */}
+                  <div className={`rounded-2xl border transition-all p-4 ${
               enableGeofence 
                 ? 'bg-stone-950/90 border-emerald-500/50 ring-1 ring-emerald-500/30' 
                 : 'bg-stone-950/40 border-stone-800'
@@ -747,6 +775,9 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 </div>
               )}
             </div>
+                </div>
+              )}
+            </div>
 
             {/* Also Create Reminder Toggle */}
             <label className="flex items-center gap-3 p-3 rounded-2xl bg-stone-950 border border-stone-800/80 cursor-pointer hover:border-amber-500/30 transition-colors">
@@ -767,12 +798,12 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             </label>
           </div>
 
-          {/* Sticky Footer - Pinned directly above keyboard */}
-          <div className="sticky bottom-0 z-20 shrink-0 p-3 sm:p-5 border-t border-stone-800 bg-stone-900/95 backdrop-blur shadow-2xl flex items-center justify-between gap-3">
+          {/* Sticky Footer - Always pinned at bottom with min-h-[48px] buttons */}
+          <div className="sticky bottom-0 z-20 shrink-0 p-3 sm:p-4 border-t border-stone-800 bg-stone-900 shadow-2xl flex items-center justify-between gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="min-h-[48px] px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 active:scale-95 text-stone-200 text-xs sm:text-sm font-semibold transition-all duration-200 cursor-pointer flex items-center justify-center border border-stone-700/60"
+              className="min-h-[48px] px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 active:scale-95 text-stone-200 hover:text-white text-xs sm:text-sm font-semibold transition-all duration-200 cursor-pointer flex items-center justify-center border border-stone-700/60"
             >
               {isEn ? 'Cancel' : 'انصراف'}
             </button>
@@ -780,17 +811,17 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
-              className={`flex-1 sm:flex-initial min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer ${
+              className={`flex-1 sm:flex-initial min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer active:scale-95 ${
                 !title.trim() || latitude === null || longitude === null
                   ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                  : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/25 active:scale-95'
+                  : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/25'
               }`}
             >
               <Check className={`w-4 h-4 stroke-[3] ${!title.trim() || latitude === null || longitude === null ? 'text-amber-300' : 'text-stone-950'}`} />
               <span className={!title.trim() || latitude === null || longitude === null ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
                 {editingLocation 
-                  ? (isEn ? 'Save Changes' : 'ذخیره تغییرات مکان') 
-                  : (isEn ? 'Save Location & Info' : 'ذخیره مکان و اطلاعات')}
+                  ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
+                  : (isEn ? 'Save Place' : 'ثبت مکان')}
               </span>
             </button>
           </div>

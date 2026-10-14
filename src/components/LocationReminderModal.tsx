@@ -440,12 +440,12 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
             </div>
           </div>
 
-          {/* Footer */}
-          <div className="p-4 sm:p-5 border-t border-stone-800 bg-stone-900 flex items-center justify-between gap-3">
+          {/* Footer - Sticky with min 48px buttons */}
+          <div className="sticky bottom-0 z-20 shrink-0 p-3 sm:p-4 border-t border-stone-800 bg-stone-900 shadow-2xl flex items-center justify-between gap-3">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+              className="min-h-[48px] px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 active:scale-95 text-stone-300 hover:text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer flex items-center justify-center border border-stone-700/60"
             >
               {isEn ? 'Cancel' : 'انصراف'}
             </button>
@@ -453,7 +453,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
-              className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs sm:text-sm font-black flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer"
+              className="min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs sm:text-sm font-black flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer"
             >
               <Check className="w-4 h-4 stroke-[3]" />
               <span>{isEn ? 'Activate Geofence Reminder' : 'فعال‌سازی یادآور مکان‌محور'}</span>

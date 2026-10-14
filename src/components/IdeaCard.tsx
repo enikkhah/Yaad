@@ -36,20 +36,20 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
     switch (idea.category) {
       case 'work':
         return (
-          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-cyan-500/10 text-cyan-300 border border-cyan-500/30 font-bold">
-            <Briefcase className="w-3.5 h-3.5 text-cyan-400" /> {language === 'en' ? 'Work' : 'کاری'}
+          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-stone-800/80 text-stone-300 border border-stone-700/60 font-medium">
+            <Briefcase className="w-3.5 h-3.5 text-stone-400" /> {language === 'en' ? 'Work' : 'کاری'}
           </span>
         );
       case 'family':
         return (
-          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/30 font-bold">
-            <Heart className="w-3.5 h-3.5 text-rose-400" /> {language === 'en' ? 'Family' : 'خانواده'}
+          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-stone-800/80 text-stone-300 border border-stone-700/60 font-medium">
+            <Heart className="w-3.5 h-3.5 text-stone-400" /> {language === 'en' ? 'Family' : 'خانواده'}
           </span>
         );
       default:
         return (
-          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 font-bold">
-            <Tag className="w-3.5 h-3.5 text-emerald-400" /> {language === 'en' ? 'Personal/Other' : 'شخصی/سایر'}
+          <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-stone-800/80 text-stone-300 border border-stone-700/60 font-medium">
+            <Tag className="w-3.5 h-3.5 text-stone-400" /> {language === 'en' ? 'Personal/Other' : 'شخصی/سایر'}
           </span>
         );
     }
@@ -57,7 +57,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
 
   return (
     <div 
-      className="p-4 sm:p-5 rounded-2xl bg-stone-900 border border-stone-800 hover:border-amber-500/40 transition-all shadow-md flex flex-col justify-between space-y-3"
+      className="p-4 sm:p-5 rounded-2xl bg-stone-900 border border-stone-800 hover:border-stone-700 transition-all shadow-sm flex flex-col justify-between space-y-3"
       dir={language === 'en' ? 'ltr' : 'rtl'}
     >
       {/* Header */}
@@ -66,8 +66,8 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
           <div className="flex items-center gap-2 flex-wrap">
             {getCategoryBadge()}
             {idea.googleSynced && (
-              <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-sky-500/10 text-sky-300 border border-sky-500/30 font-bold">
-                <Cloud className="w-3.5 h-3.5 text-sky-400" /> {language === 'en' ? 'Google Tasks' : 'گوگل Tasks'}
+              <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-stone-800/80 text-stone-300 border border-stone-700/60 font-medium">
+                <Cloud className="w-3.5 h-3.5 text-stone-400" /> {language === 'en' ? 'Google Tasks' : 'گوگل Tasks'}
               </span>
             )}
           </div>
@@ -93,9 +93,10 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
           </div>
         </div>
 
-        <h4 className="font-extrabold text-base text-stone-100 leading-snug">{idea.title}</h4>
+        {/* Title - Prominent subject */}
+        <h4 className="font-black text-base sm:text-lg text-white leading-snug tracking-tight">{idea.title}</h4>
         {idea.content && (
-          <p className="text-xs sm:text-sm text-stone-300 mt-2 leading-relaxed whitespace-pre-wrap">
+          <p className="text-xs text-stone-400 mt-2 leading-relaxed whitespace-pre-wrap">
             {idea.content}
           </p>
         )}
@@ -141,7 +142,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
             <div className="relative min-h-[100px] flex items-center justify-center bg-stone-900/50 rounded-lg overflow-hidden">
               {!drawingLoaded && (
                 <div className="absolute inset-0 flex items-center justify-center text-stone-500 gap-1.5 text-xs">
-                  <Loader2 className="w-4 h-4 animate-spin text-teal-400" />
+                  <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
                   <span>{language === 'en' ? 'Loading image...' : 'درحال بارگذاری تصویر...'}</span>
                 </div>
               )}

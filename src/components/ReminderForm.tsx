@@ -46,7 +46,9 @@ import {
   Navigation,
   Crosshair,
   Radio,
-  Compass
+  Compass,
+  ChevronDown,
+  Sliders
 } from 'lucide-react';
 import { WheelPicker } from './WheelPicker';
 import { AppLanguage, getT } from '../utils/i18n';
@@ -92,6 +94,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [ringTune, setRingTune] = useState<string>('work');
   const [syncWithGoogle, setSyncWithGoogle] = useState(!!googleToken);
   const [validationError, setValidationError] = useState<string | null>(null);
+  const [showMoreOptions, setShowMoreOptions] = useState(false);
 
   // Geofence / Location Checkpoint states (چک‌پوینت هشدار مکان‌محور)
   const [enableGeofence, setEnableGeofence] = useState(false);
@@ -204,6 +207,16 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         setGeofenceRadius(200);
         setGeofenceTriggerOn('enter');
       }
+
+      const hasExtraData = !!(
+        initialData.description ||
+        initialData.category !== 'work' ||
+        initialData.priority !== 'medium' ||
+        (initialData.recurrence && initialData.recurrence !== 'none') ||
+        initialData.imageUrl ||
+        initialData.geofence?.enabled
+      );
+      setShowMoreOptions(hasExtraData);
     } else {
       // Creating new reminder: default date & time is exactly current phone time + 2 minutes
       const defaultTime = Date.now() + 2 * 60 * 1000;
@@ -232,6 +245,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setGeofenceSavedLocId('');
       setGeofenceRadius(200);
       setGeofenceTriggerOn('enter');
+      setShowMoreOptions(false);
     }
 
     return () => {
@@ -890,112 +904,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               )}
             </div>
 
-            {/* Description / Notes */}
-            <div>
-              <label className="block text-xs font-semibold text-stone-300 mb-1.5">
-                {isEn ? 'Notes & Details (Optional)' : 'توضیحات و جزئیات (اختیاری)'}
-              </label>
-              <textarea
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder={isEn ? 'Additional details, address, phone number or key notes...' : 'توضیحات تکمیلی، آدرس، شماره یا نکته مهم...'}
-                rows={2}
-                className="w-full bg-stone-950 border border-stone-700 rounded-xl px-4 py-2.5 text-white placeholder-stone-500 focus:outline-none focus:border-amber-500 transition-colors text-xs resize-none"
-              />
-            </div>
-
-            {/* Category */}
-            <div>
-              <label className="block text-xs font-semibold text-stone-300 mb-2">
-                {isEn ? 'Reminder Category' : 'تقسیم‌بندی یادآور'}
-              </label>
-              <div className="grid grid-cols-3 gap-2.5">
-                {/* Work */}
-                <button
-                  type="button"
-                  onClick={() => handleCategoryChange('work')}
-                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
-                    category === 'work'
-                      ? 'bg-cyan-950/80 border-cyan-400 text-cyan-200 shadow-md shadow-cyan-950/50'
-                      : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
-                  }`}
-                >
-                  <Briefcase className="w-5 h-5 text-cyan-400" />
-                  <span className="text-xs font-bold">{isEn ? 'Work' : 'کار'}</span>
-                </button>
-
-                {/* Family */}
-                <button
-                  type="button"
-                  onClick={() => handleCategoryChange('family')}
-                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
-                    category === 'family'
-                      ? 'bg-rose-950/80 border-rose-400 text-rose-200 shadow-md shadow-rose-950/50'
-                      : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
-                  }`}
-                >
-                  <Heart className="w-5 h-5 text-rose-400" />
-                  <span className="text-xs font-bold">{isEn ? 'Family' : 'خانواده'}</span>
-                </button>
-
-                {/* Other */}
-                <button
-                  type="button"
-                  onClick={() => handleCategoryChange('other')}
-                  className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
-                    category === 'other'
-                      ? 'bg-emerald-950/80 border-emerald-400 text-emerald-200 shadow-md shadow-emerald-950/50'
-                      : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
-                  }`}
-                >
-                  <Tag className="w-5 h-5 text-emerald-400" />
-                  <span className="text-xs font-bold">{isEn ? 'Other' : 'سایر'}</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Priorities */}
-            <div>
-              <label className="block text-xs font-semibold text-stone-300 mb-2">
-                {isEn ? 'Reminder Priority' : 'اولویت یادآوری'}
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPriority('high')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                    priority === 'high'
-                      ? 'bg-red-950/80 border-red-500 text-red-300 shadow-sm'
-                      : 'bg-stone-950/50 border-stone-800 text-stone-400'
-                  }`}
-                >
-                  {isEn ? 'High (Urgent)' : 'بالا (فوری)'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPriority('medium')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                    priority === 'medium'
-                      ? 'bg-amber-950/80 border-amber-500 text-amber-300 shadow-sm'
-                      : 'bg-stone-950/50 border-stone-800 text-stone-400'
-                  }`}
-                >
-                  {isEn ? 'Medium' : 'متوسط'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPriority('low')}
-                  className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-                    priority === 'low'
-                      ? 'bg-blue-950/80 border-blue-500 text-blue-300 shadow-sm'
-                      : 'bg-stone-950/50 border-stone-800 text-stone-400'
-                  }`}
-                >
-                  {isEn ? 'Normal' : 'پایین (عادی)'}
-                </button>
-              </div>
-            </div>
-
             {/* Persian Jalali Date & Time Picker */}
             <div className="p-4 rounded-2xl bg-stone-950/60 border border-stone-800 space-y-3">
               <div className="flex items-center justify-between">
@@ -1005,57 +913,35 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 </div>
               </div>
 
-              {/* Quick Presets */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => applyPreset(1)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-teal-500/20 hover:bg-teal-500/30 text-teal-300 border border-teal-500/40 font-bold cursor-pointer"
-                  title={isEn ? 'Test alarm 1 min from now' : 'تست سریع آلارم برای ۱ دقیقه بعد'}
-                >
-                  {isEn ? '+1 min (Test)' : '+۱ دقیقه (تست)'}
-                </button>
+              {/* Quick Presets - Exactly 4 buttons */}
+              <div className="grid grid-cols-4 gap-1.5 pt-1">
                 <button
                   type="button"
                   onClick={() => applyPreset(5)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 font-bold cursor-pointer"
+                  className="min-h-[40px] px-2 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 font-bold text-xs text-center transition-all cursor-pointer active:scale-95"
                 >
-                  {isEn ? '+5 min' : '+۵ دقیقه'}
+                  {isEn ? '+5m' : '+۵ دقیقه'}
                 </button>
                 <button
                   type="button"
-                  onClick={() => applyPreset(10)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
+                  onClick={() => applyPreset(15)}
+                  className="min-h-[40px] px-2 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 font-bold text-xs text-center transition-all cursor-pointer active:scale-95"
                 >
-                  {isEn ? '+10 min' : '+۱۰ دقیقه'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => applyPreset(30)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
-                >
-                  {isEn ? '+30 min' : '+۳۰ دقیقه'}
+                  {isEn ? '+15m' : '+۱۵ دقیقه'}
                 </button>
                 <button
                   type="button"
                   onClick={() => applyPreset(60)}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
+                  className="min-h-[40px] px-2 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 font-bold text-xs text-center transition-all cursor-pointer active:scale-95"
                 >
-                  {isEn ? '+1 hour' : '+۱ ساعت'}
-                </button>
-                <button
-                  type="button"
-                  onClick={setTonight}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-amber-400 border border-stone-700 cursor-pointer"
-                >
-                  {isEn ? 'Tonight at 20:00' : 'امشب ساعت ۲۰:۰۰'}
+                  {isEn ? '+1h' : '+۱ ساعت'}
                 </button>
                 <button
                   type="button"
                   onClick={setTomorrowMorning}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-cyan-400 border border-stone-700 cursor-pointer"
+                  className="min-h-[40px] px-2 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs text-center transition-all cursor-pointer active:scale-95"
                 >
-                  {isEn ? 'Tomorrow at 09:00' : 'فردا ساعت ۹:۰۰'}
+                  {isEn ? 'Tomorrow' : 'فردا ۹ صبح'}
                 </button>
               </div>
 
@@ -1146,6 +1032,128 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 </div>
               </div>
             </div>
+
+            {/* Collapsible More Options Section (توضیحات، دسته و اولویت و سایر تنظیمات) */}
+            <div className="pt-1">
+              <button
+                type="button"
+                onClick={() => setShowMoreOptions(!showMoreOptions)}
+                className="w-full min-h-[48px] py-2.5 px-4 rounded-2xl bg-stone-950/70 hover:bg-stone-900 border border-stone-800 hover:border-stone-700 text-stone-300 hover:text-white text-xs sm:text-sm font-bold flex items-center justify-between transition-all cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <Sliders className="w-4 h-4 text-amber-400" />
+                  <span>{isEn ? 'More Options (Description, Category, Priority...)' : 'گزینه‌های بیشتر (توضیحات، دسته، اولویت...)'}</span>
+                </span>
+                <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 ${showMoreOptions ? 'rotate-180 text-amber-400' : ''}`} />
+              </button>
+
+              {showMoreOptions && (
+                <div className="mt-3 space-y-4 sm:space-y-5 animate-in fade-in duration-200">
+                  {/* Description / Notes */}
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-300 mb-1.5">
+                      {isEn ? 'Notes & Details (Optional)' : 'توضیحات و جزئیات (اختیاری)'}
+                    </label>
+                    <textarea
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder={isEn ? 'Additional details, address, phone number or key notes...' : 'توضیحات تکمیلی، آدرس، شماره یا نکته مهم...'}
+                      rows={2}
+                      className="w-full bg-stone-950 border border-stone-700 rounded-xl px-4 py-2.5 text-white placeholder-stone-500 focus:outline-none focus:border-amber-500 transition-colors text-xs resize-none"
+                    />
+                  </div>
+
+                  {/* Category */}
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-300 mb-2">
+                      {isEn ? 'Reminder Category' : 'تقسیم‌بندی یادآور'}
+                    </label>
+                    <div className="grid grid-cols-3 gap-2.5">
+                      {/* Work */}
+                      <button
+                        type="button"
+                        onClick={() => handleCategoryChange('work')}
+                        className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
+                          category === 'work'
+                            ? 'bg-stone-900 border-amber-500 text-amber-300 shadow-sm'
+                            : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
+                        }`}
+                      >
+                        <Briefcase className={`w-4.5 h-4.5 ${category === 'work' ? 'text-amber-400' : 'text-stone-400'}`} />
+                        <span className="text-xs font-bold">{isEn ? 'Work' : 'کار'}</span>
+                      </button>
+
+                      {/* Family */}
+                      <button
+                        type="button"
+                        onClick={() => handleCategoryChange('family')}
+                        className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
+                          category === 'family'
+                            ? 'bg-stone-900 border-amber-500 text-amber-300 shadow-sm'
+                            : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
+                        }`}
+                      >
+                        <Heart className={`w-4.5 h-4.5 ${category === 'family' ? 'text-amber-400' : 'text-stone-400'}`} />
+                        <span className="text-xs font-bold">{isEn ? 'Family' : 'خانواده'}</span>
+                      </button>
+
+                      {/* Other */}
+                      <button
+                        type="button"
+                        onClick={() => handleCategoryChange('other')}
+                        className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
+                          category === 'other'
+                            ? 'bg-stone-900 border-amber-500 text-amber-300 shadow-sm'
+                            : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
+                        }`}
+                      >
+                        <Tag className={`w-4.5 h-4.5 ${category === 'other' ? 'text-amber-400' : 'text-stone-400'}`} />
+                        <span className="text-xs font-bold">{isEn ? 'Other' : 'سایر'}</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Priorities */}
+                  <div>
+                    <label className="block text-xs font-semibold text-stone-300 mb-2">
+                      {isEn ? 'Reminder Priority' : 'اولویت یادآوری'}
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPriority('high')}
+                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                          priority === 'high'
+                            ? 'bg-red-950/80 border-red-500 text-red-300 shadow-sm'
+                            : 'bg-stone-950/50 border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        {isEn ? 'High (Urgent)' : 'بالا (فوری)'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPriority('medium')}
+                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                          priority === 'medium'
+                            ? 'bg-amber-950/80 border-amber-500 text-amber-300 shadow-sm'
+                            : 'bg-stone-950/50 border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        {isEn ? 'Medium' : 'متوسط'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPriority('low')}
+                        className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                          priority === 'low'
+                            ? 'bg-stone-800 border-stone-700 text-stone-200 shadow-sm'
+                            : 'bg-stone-950/50 border-stone-800 text-stone-400'
+                        }`}
+                      >
+                        {isEn ? 'Normal' : 'پایین (عادی)'}
+                      </button>
+                    </div>
+                  </div>
 
             {/* Recurrence Selection Section */}
             <div className="p-2.5 sm:p-5 rounded-2xl bg-stone-950/80 border border-stone-800 space-y-3 sm:space-y-4">
@@ -1379,28 +1387,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               )}
             </div>
 
-            {/* Alarm Features: Flash LED & Voice Read Aloud */}
-            <div className="space-y-2.5 pt-2 border-t border-stone-800">
-              {/* Flash LED toggle */}
-              <label className="flex items-center justify-between p-3 rounded-xl bg-stone-950/60 border border-stone-800/80 cursor-pointer hover:border-stone-700">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400">
-                    <Zap className="w-4 h-4" />
-                  </div>
-                  <span className="text-xs font-bold text-white">
-                    {isEn ? 'Flashlight LED during alarm' : 'استفاده از فلاش LED هنگام آلارم'}
-                  </span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={useFlash}
-                  onChange={(e) => setUseFlash(e.target.checked)}
-                  className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
-                />
-              </label>
-
-              {/* Google Sync Option */}
-              {googleToken && (
+            {/* Google Sync Option */}
+            {googleToken && (
+              <div className="pt-2 border-t border-stone-800">
                 <label className="flex items-center justify-between p-3 rounded-xl bg-stone-950/60 border border-stone-800/80 cursor-pointer hover:border-sky-500/50">
                   <div className="flex items-center gap-2.5">
                     <div className="p-1.5 rounded-lg bg-sky-500/10 text-sky-400">
@@ -1417,15 +1406,14 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
                   />
                 </label>
-              )}
-
-            </div>
+              </div>
+            )}
 
             {/* GEOFENCE LOCATION CHECKPOINT (چک‌پوینت هشدار مکان‌محور) */}
-            <div className="rounded-2xl border border-emerald-500/40 bg-emerald-950/20 p-3 sm:p-4 space-y-3.5">
+            <div className="rounded-2xl border border-stone-800 bg-stone-950/60 p-3 sm:p-4 space-y-3.5">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 flex items-center justify-center shrink-0">
+                  <div className="w-8 h-8 rounded-xl bg-stone-800 border border-stone-700 text-stone-400 flex items-center justify-center shrink-0">
                     <MapPin className="w-4 h-4" />
                   </div>
                   <div>
@@ -1435,7 +1423,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       </span>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
                         enableGeofence 
-                          ? 'bg-emerald-500/25 text-emerald-300 border-emerald-500/50 animate-pulse' 
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' 
                           : 'bg-stone-800 text-stone-400 border-stone-700'
                       }`}>
                         {enableGeofence ? (isEn ? 'ACTIVE' : 'فعال') : (isEn ? 'OFF' : 'غیرفعال')}
@@ -1457,7 +1445,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     onChange={(e) => setEnableGeofence(e.target.checked)}
                     className="sr-only peer"
                   />
-                  <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                  <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
                 </label>
               </div>
 
@@ -1575,7 +1563,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       <label className="text-[11px] font-bold text-stone-300">
                         {isEn ? 'Trigger Radius:' : 'شعاع محدوده حصار مکانی:'}
                       </label>
-                      <span className="text-xs font-mono font-bold text-emerald-400">
+                      <span className="text-xs font-mono font-bold text-amber-400">
                         {toPersianDigits(geofenceRadius)} {isEn ? 'meters' : 'متر'}
                       </span>
                     </div>
@@ -1587,7 +1575,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                           onClick={() => setGeofenceRadius(r)}
                           className={`py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
                             geofenceRadius === r
-                              ? 'bg-emerald-500 text-stone-950 font-black border-emerald-400'
+                              ? 'bg-amber-500 text-stone-950 font-black border-amber-400'
                               : 'bg-stone-900 border-stone-800 text-stone-300 hover:border-stone-700'
                           }`}
                         >
@@ -1599,20 +1587,23 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 </div>
               )}
             </div>
+                </div>
+              )}
+            </div>
             </div>
 
-            {/* Sticky Submit Footer - Always positioned right above virtual keyboard */}
+            {/* Sticky Submit Footer - Always positioned right above virtual keyboard with min 48px buttons */}
             <div className="sticky bottom-0 z-30 shrink-0 bg-stone-900/95 backdrop-blur-md border-t border-stone-800 p-3 sm:p-4 flex items-center justify-end gap-3 shadow-2xl">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-medium transition-colors"
+                className="min-h-[48px] px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 active:scale-95 text-stone-300 hover:text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer flex items-center justify-center border border-stone-700/60"
               >
                 {isEn ? 'Cancel' : 'انصراف'}
               </button>
               <button
                 type="submit"
-                className={`px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                className={`min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 ${
                   !title.trim()
                     ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
                     : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/20'
@@ -1790,8 +1781,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
             {smsRawText.trim() && (() => {
               const preview = parseSmsOrText(smsRawText);
               return (
-                <div className="p-3 rounded-2xl bg-stone-950 border border-cyan-500/25 space-y-1.5 text-xs">
-                  <div className="font-bold text-cyan-400 flex items-center gap-1">
+                <div className="p-3 rounded-2xl bg-stone-950 border border-amber-500/25 space-y-1.5 text-xs">
+                  <div className="font-bold text-amber-400 flex items-center gap-1">
                     <Sparkles className="w-3.5 h-3.5" />
                     <span>اطلاعات استخراج‌شده هوشمند:</span>
                   </div>
@@ -1823,7 +1814,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 type="button"
                 onClick={handleSmsImport}
                 disabled={!smsRawText.trim()}
-                className="px-5 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-stone-950 font-black text-xs shadow-lg shadow-cyan-500/25 active:scale-95 transition-all cursor-pointer"
+                className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-stone-950 font-black text-xs shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer"
               >
                 تأیید و درج در یادآور
               </button>

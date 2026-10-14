@@ -255,11 +255,6 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                     ? (isEn ? 'Edit Occasion' : 'ویرایش مناسبت') 
                     : (isEn ? 'New Occasion' : 'ثبت مناسبت جدید')}
                 </h3>
-                <p className="text-[11px] text-stone-400">
-                  {isEn 
-                    ? 'Birthdays, anniversaries & annual milestones' 
-                    : 'تولد، سالگرد ازدواج، آشنایی، یادبود و تاریخ‌های مهم'}
-                </p>
               </div>
             </div>
 
@@ -274,12 +269,12 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
 
           {/* Body */}
           <div className="p-4 sm:p-5 space-y-4 sm:space-y-5 overflow-y-auto flex-1 text-right rtl:text-right ltr:text-left">
-            {/* Occasion Types Grid */}
+            {/* Occasion Types - Small Horizontal List */}
             <div>
-              <label className="block text-xs font-bold text-stone-200 mb-2">
+              <label className="block text-xs font-bold text-stone-200 mb-1.5">
                 {isEn ? 'Occasion Type' : 'نوع مناسبت'}
               </label>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1.5 pt-0.5 no-scrollbar">
                 {OCCASION_TYPES.map((t) => {
                   const isSelected = type === t.type;
                   return (
@@ -287,16 +282,14 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                       key={t.type}
                       type="button"
                       onClick={() => handleTypeSelect(t.type)}
-                      className={`p-2.5 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
+                      className={`min-h-[40px] px-3 py-1.5 rounded-xl border flex items-center gap-1.5 transition-all whitespace-nowrap cursor-pointer text-xs font-bold shrink-0 ${
                         isSelected
-                          ? `${t.badgeBg} ${t.borderCol} shadow-md scale-[1.02]`
-                          : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
+                          ? `${t.badgeBg} ${t.borderCol} shadow-sm ring-1 ring-pink-500/40`
+                          : 'bg-stone-950/80 border-stone-800 text-stone-300 hover:border-stone-700 hover:text-white'
                       }`}
                     >
-                      <div className="p-1 rounded-xl bg-stone-900/80 border border-stone-800">
-                        {renderIcon(t.iconName)}
-                      </div>
-                      <span className={`text-[11px] font-bold ${isSelected ? t.badgeText : 'text-stone-300'}`}>
+                      <span className="shrink-0">{renderIcon(t.iconName)}</span>
+                      <span className={`text-xs ${isSelected ? t.badgeText : 'text-stone-300'}`}>
                         {isEn ? t.labelEn : t.labelFa}
                       </span>
                     </button>
@@ -543,12 +536,12 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
             )}
           </div>
 
-          {/* Footer */}
-          <div className="p-3 sm:p-5 border-t border-stone-800 bg-stone-900/95 backdrop-blur flex items-center justify-between gap-3 shrink-0">
+          {/* Footer - Sticky at bottom with min 48px buttons */}
+          <div className="sticky bottom-0 z-20 p-3 sm:p-4 border-t border-stone-800 bg-stone-900 shadow-2xl flex items-center justify-between gap-3 shrink-0">
             <button
               type="button"
               onClick={onClose}
-              className="px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs sm:text-sm font-semibold transition-colors cursor-pointer"
+              className="min-h-[48px] px-5 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 active:scale-95 text-stone-300 hover:text-white text-xs sm:text-sm font-semibold transition-colors cursor-pointer flex items-center justify-center border border-stone-700/60"
             >
               {isEn ? 'Cancel' : 'انصراف'}
             </button>
@@ -556,16 +549,16 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
-              className={`flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              className={`min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95 ${
                 !title.trim()
                   ? 'bg-pink-500/20 border border-pink-500/40 text-pink-300'
-                  : 'bg-pink-500 hover:bg-pink-400 text-stone-950 font-black shadow-lg shadow-pink-500/25 active:scale-95'
+                  : 'bg-pink-500 hover:bg-pink-400 text-stone-950 font-black shadow-lg shadow-pink-500/25'
               }`}
             >
               <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-pink-300' : 'text-stone-950'}`} />
               <span className={!title.trim() ? 'text-pink-300 font-bold' : 'text-stone-950 font-black'}>
                 {editingOccasion 
-                  ? (isEn ? 'Save Changes' : 'ذخیره تغییرات مناسبت') 
+                  ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
                   : (isEn ? 'Save Occasion' : 'ثبت نهایی مناسبت')}
               </span>
             </button>

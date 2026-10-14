@@ -36,7 +36,11 @@ import {
   Navigation,
   Crosshair,
   Radio,
-  Compass
+  Compass,
+  ChevronDown,
+  ChevronUp,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION, APP_VERSION_INFO } from '../utils/version';
@@ -133,6 +137,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     location: false,
   });
   const [isRequestingAllPerms, setIsRequestingAllPerms] = useState(false);
+
+  // 5 Collapsible groups state: ظاهر، صدا، دسترسی‌ها، همگام‌سازی، پشتیبان
+  const [openSections, setOpenSections] = useState<{
+    appearance: boolean;
+    sound: boolean;
+    permissions: boolean;
+    sync: boolean;
+    backup: boolean;
+  }>({
+    appearance: true,
+    sound: false,
+    permissions: false,
+    sync: false,
+    backup: false,
+  });
+
+  const toggleSection = (section: keyof typeof openSections) => {
+    setOpenSections((prev) => ({
+      ...prev,
+      [section]: !prev[section],
+    }));
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -373,879 +399,953 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         </div>
 
         {/* Settings Body */}
-        <div className="flex-1 overflow-y-auto px-2.5 py-4 sm:p-5 space-y-4 sm:space-y-5">
+        <div className="flex-1 overflow-y-auto px-2.5 py-4 sm:p-5 space-y-3.5">
           
-          {/* 0. APP LANGUAGE (فارسی / ENGLISH) */}
-          <section className="space-y-3 p-3 sm:p-4 rounded-2xl bg-stone-950/70 border border-stone-800">
-            <div className="flex items-center">
-              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
-                <Globe className="w-4 h-4 text-amber-400" />
-                <span>زبان برنامه / App Language</span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-2 sm:gap-3">
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ language: 'fa' })}
-                className={`p-3 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
-                  (settings.language || 'fa') === 'fa'
-                    ? 'border-amber-500 bg-amber-500/15 ring-1 ring-amber-500/30 shadow-md shadow-amber-500/10'
-                    : 'border-stone-800 bg-stone-900/60 hover:text-white hover:bg-stone-900'
-                }`}
-              >
-                <span className="font-bold text-xs sm:text-sm text-white">فارسی (Persian)</span>
-                {(settings.language || 'fa') === 'fa' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
-              </button>
-
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ language: 'en' })}
-                className={`p-3 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
-                  settings.language === 'en'
-                    ? 'border-amber-500 bg-amber-500/15 ring-1 ring-amber-500/30 shadow-md shadow-amber-500/10'
-                    : 'border-stone-800 bg-stone-900/60 hover:text-white hover:bg-stone-900'
-                }`}
-              >
-                <span className="font-bold text-xs sm:text-sm text-white">English (انگلیسی)</span>
-                {settings.language === 'en' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
-              </button>
-            </div>
-          </section>
-
-          {/* 2. FONT SIZE SLIDER */}
-          <section className="space-y-3 p-3 sm:p-4 rounded-2xl bg-stone-950/70 border border-stone-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-bold text-stone-100">
-                <Type className="w-4 h-4 text-amber-400" />
-                <span>{isFa ? 'اندازه فونت' : 'Font Size'}</span>
-              </div>
-              <span className="font-mono text-xs text-amber-300 font-black bg-stone-900 px-2 py-0.5 rounded-lg border border-amber-500/30">
-                {isFa ? toPersianDigits(
-                  typeof settings.fontSize === 'number'
-                    ? settings.fontSize
-                    : settings.fontSize === 'small'
-                    ? 14
-                    : settings.fontSize === 'large'
-                    ? 18
-                    : settings.fontSize === 'xlarge'
-                    ? 21
-                    : 16
-                ) : (
-                  typeof settings.fontSize === 'number'
-                    ? settings.fontSize
-                    : settings.fontSize === 'small'
-                    ? 14
-                    : settings.fontSize === 'large'
-                    ? 18
-                    : settings.fontSize === 'xlarge'
-                    ? 21
-                    : 16
-                )}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <span className="text-xs font-bold text-stone-400">{isFa ? 'الف' : 'A'}</span>
-              <input
-                type="range"
-                min="13"
-                max="23"
-                step="1"
-                value={
-                  typeof settings.fontSize === 'number'
-                    ? settings.fontSize
-                    : settings.fontSize === 'small'
-                    ? 14
-                    : settings.fontSize === 'large'
-                    ? 18
-                    : settings.fontSize === 'xlarge'
-                    ? 21
-                    : 16
-                }
-                onChange={(e) => onUpdateSettings({ fontSize: parseInt(e.target.value, 10) })}
-                className="w-full accent-teal-500 h-2 bg-stone-800 rounded-lg cursor-pointer"
-              />
-              <span className="text-base font-black text-white">{isFa ? 'الف' : 'A'}</span>
-            </div>
-          </section>
-
-          {/* 3. PERMISSIONS HUB (مدیریت دسترسی‌های میکروفون، دوربین و GPS برای تایپ صوتی و پیوست‌ها) */}
-          <section className="space-y-3 pt-3 border-t border-stone-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-sky-400">
-                <ShieldCheck className="w-4 h-4 text-sky-400" />
-                <span>{isFa ? 'مدیریت دسترسی‌های برنامه (Permissions Hub)' : 'App Permissions Hub'}</span>
-              </div>
-              {isNativeAndroidApp() && (
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                  Android APK
-                </span>
-              )}
-            </div>
-
-            <p className="text-[11px] text-stone-400 leading-relaxed">
-              {isFa
-                ? 'برای کارکرد صحیح اعلان یادآورها در پس‌زمینه و هنگام بسته بودن برنامه، تبدیل گفتار به متن (تایپ صوتی)، عکاسی و ثبت لوکیشن، دسترسی‌های زیر را فعال کنید:'
-                : 'Grant permissions for out-of-app reminder notifications, voice typing, camera, and GPS location:'}
-            </p>
-
-            {/* Request All Permissions at Once */}
+          {/* ========================================================= */}
+          {/* 1. APPEARANCE & THEMES (ظاهر و پوسته‌ها) */}
+          {/* ========================================================= */}
+          <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
             <button
               type="button"
-              disabled={isRequestingAllPerms}
-              onClick={handleRequestAllPerms}
-              className="w-full py-2.5 px-3 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-black transition-all shadow-md shadow-sky-950/40 active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+              onClick={() => toggleSection('appearance')}
+              className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
             >
-              <ShieldCheck className="w-4 h-4" />
-              <span>
-                {isRequestingAllPerms
-                  ? (isFa ? 'در حال ثبت درخواست‌ها...' : 'Requesting permissions...')
-                  : (isFa ? 'درخواست یکجای تمامی دسترسی‌های لازم اندروید' : 'Grant All Required Android Permissions')}
-              </span>
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <Palette className="w-4.5 h-4.5" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-xs sm:text-sm font-black text-white truncate">
+                    {isFa ? '۱. ظاهر و تم برنامه' : '1. Appearance & Theme'}
+                  </h4>
+                  <p className="text-[11px] text-stone-400 truncate">
+                    {isFa
+                      ? `پوسته: ${themes.find((th) => th.id === settings.theme)?.name || 'پیش‌فرض'} • اندازه فونت • زبان`
+                      : `Theme: ${settings.theme} • Font Size • Language`}
+                  </p>
+                </div>
+              </div>
+              <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 shrink-0 ${openSections.appearance ? 'rotate-180 text-amber-400' : ''}`} />
             </button>
 
-            {/* Individual Permissions Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-              {/* 1. Notification (Local Notifications) */}
-              <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="p-1.5 rounded-lg bg-indigo-500/15 text-indigo-400">
-                    <Bell className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-stone-200 truncate">
-                      {isFa ? 'اعلان‌ها و آلارم اندروید' : 'Android Notifications'}
-                    </p>
-                    <span className={`text-[10px] font-bold ${nativePerms.notifications ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {nativePerms.notifications ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}
-                    </span>
-                  </div>
-                </div>
-                {!nativePerms.notifications && (
-                  <button
-                    type="button"
-                    onClick={() => handleRequestPerm('notifications')}
-                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-[11px] font-bold cursor-pointer"
-                  >
-                    {isFa ? 'تایید' : 'Allow'}
-                  </button>
-                )}
-              </div>
-
-              {/* 2. Microphone & Voice Typing */}
-              <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="p-1.5 rounded-lg bg-amber-500/15 text-amber-400">
-                    <Mic className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-stone-200 truncate">
-                      {isFa ? 'میکروفون و تایپ صوتی' : 'Microphone (Voice)'}
-                    </p>
-                    <span className={`text-[10px] font-bold ${nativePerms.microphone ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {nativePerms.microphone ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}
-                    </span>
-                  </div>
-                </div>
-                {!nativePerms.microphone && (
-                  <button
-                    type="button"
-                    onClick={() => handleRequestPerm('microphone')}
-                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-[11px] font-bold cursor-pointer"
-                  >
-                    {isFa ? 'تایید' : 'Allow'}
-                  </button>
-                )}
-              </div>
-
-              {/* 3. Camera */}
-              <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="p-1.5 rounded-lg bg-rose-500/15 text-rose-400">
-                    <Camera className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-stone-200 truncate">
-                      {isFa ? 'دوربین و عکس پیوست' : 'Camera Capture'}
-                    </p>
-                    <span className={`text-[10px] font-bold ${nativePerms.camera ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {nativePerms.camera ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}
-                    </span>
-                  </div>
-                </div>
-                {!nativePerms.camera && (
-                  <button
-                    type="button"
-                    onClick={() => handleRequestPerm('camera')}
-                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-[11px] font-bold cursor-pointer"
-                  >
-                    {isFa ? 'تایید' : 'Allow'}
-                  </button>
-                )}
-              </div>
-
-              {/* 4. GPS / Geolocation */}
-              <div className="p-3 rounded-xl bg-stone-950/70 border border-stone-800 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="p-1.5 rounded-lg bg-emerald-500/15 text-emerald-400">
-                    <MapPin className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-bold text-stone-200 truncate">
-                      {isFa ? 'موقعیت مکانی و GPS' : 'GPS Location'}
-                    </p>
-                    <span className={`text-[10px] font-bold ${nativePerms.location ? 'text-emerald-400' : 'text-amber-400'}`}>
-                      {nativePerms.location ? (isFa ? 'تایید شده ✓' : 'Granted ✓') : (isFa ? 'نیاز به تایید' : 'Not Granted')}
-                    </span>
-                  </div>
-                </div>
-                {!nativePerms.location && (
-                  <button
-                    type="button"
-                    onClick={() => handleRequestPerm('location')}
-                    className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 hover:text-white text-[11px] font-bold cursor-pointer"
-                  >
-                    {isFa ? 'تایید' : 'Allow'}
-                  </button>
-                )}
-              </div>
-            </div>
-          </section>
-
-          {/* 3.5. ALARM SOUND TYPE & VOLUME CONFIGURATION */}
-          <section className="space-y-4 pt-3 border-t border-stone-800">
-            <div className="flex items-center">
-              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-amber-300">
-                <Volume2 className="w-4 h-4 text-amber-400" />
-                <span>{isFa ? 'تنظیمات نوع صدای آلارم و ولوم' : 'Alarm Sound & Volume Settings'}</span>
-              </div>
-            </div>
-
-            {/* A. Volume Slider and Presets */}
-            <div className="p-3.5 sm:p-4 rounded-2xl bg-stone-950/80 border border-stone-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-stone-200">
-                  {((settings.alarmVolume ?? 0.85) <= 0.01) ? (
-                    <VolumeX className="w-4 h-4 text-stone-500" />
-                  ) : ((settings.alarmVolume ?? 0.85) < 0.5) ? (
-                    <Volume1 className="w-4 h-4 text-amber-400" />
-                  ) : (
-                    <Volume2 className="w-4 h-4 text-amber-400" />
-                  )}
-                  <span>{isFa ? 'میزان بلندی صدا (ولوم)' : 'Alarm Volume'}</span>
-                </div>
-                <span className="font-mono text-xs font-black text-amber-300 bg-stone-900 px-2.5 py-0.5 rounded-lg border border-amber-500/30">
-                  {isFa ? `${toPersianDigits(Math.round((settings.alarmVolume ?? 0.85) * 100))}٪` : `${Math.round((settings.alarmVolume ?? 0.85) * 100)}%`}
-                </span>
-              </div>
-
-              {/* Slider */}
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={() => handleVolumeChange(0)}
-                  title={isFa ? 'بی‌صدا' : 'Mute'}
-                  className="p-1 rounded hover:bg-stone-800 transition-colors"
-                >
-                  <VolumeX 
-                    className={`w-4 h-4 transition-colors ${
-                      (settings.alarmVolume ?? 0.85) <= 0.01 ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
-                    }`} 
-                  />
-                </button>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  step="5"
-                  value={Math.round((settings.alarmVolume ?? 0.85) * 100)}
-                  onChange={(e) => handleVolumeChange(parseInt(e.target.value, 10) / 100)}
-                  className="w-full accent-amber-500 h-2.5 bg-stone-800 rounded-lg cursor-pointer"
-                />
-                <button
-                  type="button"
-                  onClick={() => handleVolumeChange(1.0)}
-                  title={isFa ? 'حداکثر صدا' : 'Max Volume'}
-                  className="p-1 rounded hover:bg-stone-800 transition-colors"
-                >
-                  <Volume2 
-                    className={`w-4 h-4 transition-colors ${
-                      (settings.alarmVolume ?? 0.85) >= 0.95 ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
-                    }`} 
-                  />
-                </button>
-              </div>
-
-              {/* Quick Volume Preset Chips */}
-              <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                {[
-                  { label: isFa ? 'بی‌صدا (۰٪)' : 'Mute (0%)', val: 0 },
-                  { label: isFa ? 'آرام (۳۰٪)' : 'Low (30%)', val: 0.3 },
-                  { label: isFa ? 'متوسط (۶۰٪)' : 'Medium (60%)', val: 0.6 },
-                  { label: isFa ? 'بلند (۸۵٪)' : 'High (85%)', val: 0.85 },
-                  { label: isFa ? 'حداکثر (۱۰۰٪)' : 'Max (100%)', val: 1.0 },
-                ].map((chip) => {
-                  const isActive = Math.abs((settings.alarmVolume ?? 0.85) - chip.val) < 0.05;
-                  return (
-                    <button
-                      key={chip.val}
-                      type="button"
-                      onClick={() => handleVolumeChange(chip.val)}
-                      className={`text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all cursor-pointer active:scale-95 ${
-                        isActive
-                          ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
-                          : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
-                      }`}
-                    >
-                      {chip.label}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* B. Alarm Sound Selection */}
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-stone-200">
-                  {isFa ? 'انتخاب ملودی و نوع صدای آلارم:' : 'Select Alarm Tone:'}
-                </span>
-                <span className="text-[11px] text-stone-400">
-                  {isFa ? 'برای شنیدن روی دکمه پخش کلیک کنید' : 'Click play to preview tone'}
-                </span>
-              </div>
-
-              <div className="space-y-2">
-                {PHONE_ALARM_SOUNDS.map((soundItem) => {
-                  const isSelected = (settings.alarmSound || 'digital-beep') === soundItem.id;
-                  const isPlaying = playingSoundId === soundItem.id;
-
-                  return (
-                    <div
-                      key={soundItem.id}
-                      onClick={() => handleSelectSound(soundItem.id)}
-                      className={`p-3 rounded-2xl border transition-all flex items-center justify-between gap-3 cursor-pointer ${
-                        isSelected
-                          ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/40 shadow-md shadow-amber-500/10'
-                          : 'border-stone-800/90 bg-stone-950/60 hover:border-stone-700 hover:bg-stone-900/50'
-                      }`}
-                    >
-                      {/* Radio & Title */}
-                      <div className="flex items-center gap-3 min-w-0 flex-1">
-                        <div className={`w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0 transition-colors ${
-                          isSelected ? 'border-amber-500 bg-amber-500' : 'border-stone-600 bg-transparent'
-                        }`}>
-                          {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-stone-950" />}
-                        </div>
-
-                        <div className="min-w-0">
-                          <p className={`text-xs sm:text-sm font-bold truncate ${isSelected ? 'text-amber-300' : 'text-stone-200'}`}>
-                            {soundItem.label}
-                          </p>
-                          <p className="text-[11px] text-stone-400 truncate">
-                            {soundItem.desc}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Interactive Preview Button */}
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSelectSound(soundItem.id);
-                          handlePreviewSound(soundItem.id);
-                        }}
-                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 flex-shrink-0 ${
-                          isPlaying
-                            ? 'bg-amber-500 text-stone-950 shadow-md shadow-amber-500/30 font-black animate-pulse'
-                            : isSelected
-                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
-                            : 'bg-stone-900 text-stone-300 border border-stone-700/80 hover:bg-stone-800 hover:text-white'
-                        }`}
-                        title={isPlaying ? (isFa ? 'توقف پخش' : 'Stop') : (isFa ? 'پخش نمونه صدا' : 'Play preview')}
-                      >
-                        {isPlaying ? (
-                          <>
-                            <Square className="w-3 h-3 fill-current" />
-                            <span>{isFa ? 'توقف' : 'Stop'}</span>
-                          </>
-                        ) : (
-                          <>
-                            <Play className="w-3 h-3 fill-current text-amber-400" />
-                            <span>{isFa ? 'پخش تست' : 'Preview'}</span>
-                          </>
-                        )}
-                      </button>
+            {openSections.appearance && (
+              <div className="p-3 sm:p-4 space-y-4 animate-in fade-in">
+                {/* 1.1 Phone System Theme Toggle (انتقال‌یافته از هدر به داخل تنظیمات) */}
+                <div className="p-3 sm:p-3.5 rounded-2xl bg-stone-900/90 border border-amber-500/30 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                    <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                      <Smartphone className="w-5 h-5" />
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-          </section>
-
-          {/* 4. THEME SELECTION */}
-          <section className="space-y-2.5 pt-2 border-t border-stone-800">
-            <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
-              <Palette className="w-4 h-4 text-amber-400" />
-              <span>{isFa ? 'پوسته‌ها و قالب ظاهری' : 'Appearance Themes'}</span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5">
-              {themes.map((themeItem) => {
-                const isSelected = settings.theme === themeItem.id;
-                return (
+                    <div className="min-w-0">
+                      <h5 className="text-xs sm:text-sm font-bold text-white truncate">
+                        {isFa ? 'هماهنگی خودکار با تم گوشی' : 'Follow Phone Theme'}
+                      </h5>
+                      <p className="text-[11px] text-stone-400 truncate">
+                        {settings.theme === 'system'
+                          ? (isFa ? 'فعال (تاریک/روشن خودکار متناسب با گوشی)' : 'Active (Matches phone dark/light)')
+                          : (isFa ? 'پوسته دستی انتخاب شده است' : 'Custom theme selected')}
+                      </p>
+                    </div>
+                  </div>
                   <button
-                    key={themeItem.id}
                     type="button"
-                    onClick={() => onUpdateSettings({ theme: themeItem.id })}
-                    className={`min-h-[52px] p-3 rounded-2xl border text-center transition-all duration-200 flex flex-col items-center justify-center gap-2 cursor-pointer active:scale-95 ${
-                      isSelected
-                        ? 'border-amber-400 bg-amber-500/15 ring-2 ring-amber-400/30'
-                        : 'border-stone-800 bg-stone-950/60 hover:border-stone-700'
+                    onClick={() => {
+                      const nextTheme: AppTheme = settings.theme === 'system' ? 'dark-gold' : 'system';
+                      onUpdateSettings({ theme: nextTheme });
+                    }}
+                    className={`min-h-[48px] px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 flex items-center gap-1.5 shrink-0 ${
+                      settings.theme === 'system'
+                        ? 'bg-amber-500 text-stone-950 font-black shadow-md shadow-amber-500/20'
+                        : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700'
                     }`}
                   >
-                    <span className={`w-5 h-5 rounded-full border ${themeItem.preview}`} />
-                    <span className="font-bold text-xs text-white">{themeItem.name}</span>
+                    <Smartphone className="w-4 h-4" />
+                    <span>{settings.theme === 'system' ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'فعال‌سازی' : 'Enable')}</span>
                   </button>
-                );
-              })}
-            </div>
-          </section>
+                </div>
 
-          {/* 5. TIMELINE STYLE (MODERN vs SKETCH) */}
-          <section className="space-y-2.5 pt-2 border-t border-stone-800">
-            <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
-              <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>{isFa ? 'سبک نمایش تایم‌لاین' : 'Timeline Display Style'}</span>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ timelineMode: 'modern' })}
-                className={`p-3 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
-                  (settings.timelineMode || 'modern') === 'modern'
-                    ? 'border-amber-500 bg-amber-500/15 text-white ring-1 ring-amber-500/30'
-                    : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
-                }`}
-              >
-                <div className="font-black text-xs sm:text-sm text-amber-300">{isFa ? 'مدرن طلایی' : 'Modern Gold'}</div>
-              </button>
-              <button
-                type="button"
-                onClick={() => onUpdateSettings({ timelineMode: 'sketch' })}
-                className={`p-3 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
-                  settings.timelineMode === 'sketch'
-                    ? 'border-white bg-white/15 text-white ring-1 ring-white/40'
-                    : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
-                }`}
-              >
-                <div className="font-black text-xs sm:text-sm text-white font-mono">{isFa ? 'اسکچ خط‌چین' : 'Sketch Border'}</div>
-              </button>
-            </div>
-          </section>
-
-          {/* 6. GOOGLE WORKSPACE SYNC */}
-          <section className="space-y-2.5 pt-2 border-t border-stone-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
-                <Cloud className="w-4 h-4 text-sky-400" />
-                <span>{isFa ? 'همگام‌سازی گوگل (Calendar & Tasks)' : 'Google Workspace Sync (Calendar & Tasks)'}</span>
-              </div>
-              {googleUser && (
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-bold">
-                  {isFa ? 'متصل' : 'Connected'}
-                </span>
-              )}
-            </div>
-
-            <div className="p-3 rounded-xl bg-stone-950 border border-stone-800 flex items-center justify-between gap-3">
-              <div className="truncate">
-                {googleUser ? (
-                  <p className="text-xs font-semibold text-white truncate">{googleUser.email}</p>
-                ) : (
-                  <p className="text-xs text-stone-400">{isFa ? 'اتصال به تقویم و تسک‌های گوگل' : 'Connect to Google Calendar & Tasks'}</p>
-                )}
-              </div>
-
-              {googleUser ? (
-                <button
-                  type="button"
-                  onClick={onGoogleSignOut}
-                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold cursor-pointer active:scale-95 shadow-sm"
-                >
-                  <LogOut className="w-3.5 h-3.5 text-white" />
-                  <span className="text-white">{isFa ? 'خروج' : 'Sign Out'}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setIsSigningIn(true);
-                    try {
-                      await onGoogleSignIn();
-                    } finally {
-                      setIsSigningIn(false);
-                    }
-                  }}
-                  disabled={isSigningIn}
-                  className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/30 disabled:opacity-50"
-                >
-                  <span>{isSigningIn ? (settings.language === 'en' ? 'Connecting...' : 'اتصال...') : (settings.language === 'en' ? 'Sign in with Google' : 'ورود با گوگل')}</span>
-                </button>
-              )}
-            </div>
-          </section>
-
-          {/* 6. GENERAL PREFERENCES */}
-          <section className="space-y-2 pt-2 border-t border-stone-800">
-            <div className="flex items-center gap-2 text-sm font-bold text-stone-200">
-              <Sliders className="w-4 h-4 text-amber-400" />
-              <span>{settings.language === 'en' ? 'General Preferences' : 'سایر گزینه‌ها'}</span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <label className="flex items-center justify-between p-2.5 rounded-xl bg-stone-950 border border-stone-800 cursor-pointer self-start">
-                <span className="text-xs font-bold text-white block">
-                  {isFa ? 'فلاش چراغ دوربین پشت گوشی' : 'Camera LED Flashlight'}
-                </span>
-                <input
-                  type="checkbox"
-                  checked={settings.enableFlash}
-                  onChange={(e) => onUpdateSettings({ enableFlash: e.target.checked })}
-                  className="w-4 h-4 rounded accent-amber-500"
-                />
-              </label>
-
-              <label className="flex items-center justify-between p-2.5 rounded-xl bg-stone-950 border border-stone-800 cursor-pointer self-start">
-                <span className="text-xs font-bold text-white">{settings.language === 'en' ? t.autoMicInput : 'میکروفون خودکار فرم'}</span>
-                <input
-                  type="checkbox"
-                  checked={settings.autoVoiceInput}
-                  onChange={(e) => onUpdateSettings({ autoVoiceInput: e.target.checked })}
-                  className="w-4 h-4 rounded accent-amber-500"
-                />
-              </label>
-            </div>
-          </section>
-
-          {/* 7. GEOFENCE SETTINGS (تنظیمات حصار مکانی و رادار) */}
-          <section className="space-y-3 pt-3 border-t border-stone-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
-                <Radio className={`w-4 h-4 ${isGeofenceActive ? 'text-emerald-400 animate-pulse' : 'text-stone-400'}`} />
-                <span>{isFa ? 'رادار پایش حصار مکانی (Geofence)' : 'Geofence Radar'}</span>
-              </div>
-              <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
-                isGeofenceActive 
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
-                  : 'bg-stone-800 text-stone-400 border-stone-700'
-              }`}>
-                {isGeofenceActive ? (isFa ? 'رادار فعال' : 'Active Radar') : (isFa ? 'متوقف' : 'Paused')}
-              </span>
-            </div>
-
-            <p className="text-xs text-stone-400 leading-relaxed">
-              {isFa
-                ? 'سامانه پایش هوشمند GPS جهت پخش آلارم، صوت اختصاصی و اعلان هنگام ورود یا خروج از حصارهای مکانی تعریف‌شده (با مصرف بهینه باتری).'
-                : 'Smart GPS monitoring engine that triggers alarms, voice alerts and notifications when arriving at or leaving designated geofenced locations.'}
-            </p>
-
-            <div className="p-3 rounded-2xl bg-stone-950 border border-stone-800 space-y-3">
-              {/* Main Service Toggle Switch */}
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5">
-                  <div className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 border ${
-                    isGeofenceActive 
-                      ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-400' 
-                      : 'bg-stone-900 border-stone-800 text-stone-500'
-                  }`}>
-                    <MapPin className="w-4 h-4" />
+                {/* 1.2 Theme Selection Cards */}
+                <div className="space-y-2">
+                  <span className="text-xs font-bold text-stone-300 block">
+                    {isFa ? 'انتخاب قالب ظاهری:' : 'Select Theme:'}
+                  </span>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                    {themes.map((themeItem) => {
+                      const isSelected = settings.theme === themeItem.id;
+                      return (
+                        <button
+                          key={themeItem.id}
+                          type="button"
+                          onClick={() => onUpdateSettings({ theme: themeItem.id })}
+                          className={`min-h-[50px] p-2.5 rounded-2xl border text-center transition-all duration-200 flex flex-col items-center justify-center gap-1.5 cursor-pointer active:scale-95 ${
+                            isSelected
+                              ? 'border-amber-400 bg-amber-500/15 ring-2 ring-amber-400/30'
+                              : 'border-stone-800 bg-stone-950/60 hover:border-stone-700'
+                          }`}
+                        >
+                          <span className={`w-4 h-4 rounded-full border ${themeItem.preview}`} />
+                          <span className="font-bold text-[11px] text-white truncate max-w-full">{themeItem.name}</span>
+                        </button>
+                      );
+                    })}
                   </div>
-                  <div>
-                    <span className="text-xs sm:text-sm font-bold text-white block">
-                      {isFa ? 'سرویس هشدار ورود/خروج حصار مکانی' : 'Background Geofence Monitoring'}
+                </div>
+
+                {/* 1.3 App Language */}
+                <div className="space-y-2 pt-2 border-t border-stone-800/80">
+                  <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
+                    <Globe className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{isFa ? 'زبان برنامه (App Language)' : 'Language'}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSettings({ language: 'fa' })}
+                      className={`min-h-[48px] p-2.5 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
+                        (settings.language || 'fa') === 'fa'
+                          ? 'border-amber-500 bg-amber-500/15 ring-1 ring-amber-500/30 font-bold'
+                          : 'border-stone-800 bg-stone-900/60 hover:bg-stone-900'
+                      }`}
+                    >
+                      <span className="text-xs font-bold">فارسی (Persian)</span>
+                      {(settings.language || 'fa') === 'fa' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSettings({ language: 'en' })}
+                      className={`min-h-[48px] p-2.5 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
+                        settings.language === 'en'
+                          ? 'border-amber-500 bg-amber-500/15 ring-1 ring-amber-500/30 font-bold'
+                          : 'border-stone-800 bg-stone-900/60 hover:bg-stone-900'
+                      }`}
+                    >
+                      <span className="text-xs font-bold">English (انگلیسی)</span>
+                      {settings.language === 'en' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* 1.4 Font Size Slider */}
+                <div className="space-y-2 pt-2 border-t border-stone-800/80">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
+                      <Type className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{isFa ? 'اندازه قلم و فونت متن‌ها' : 'Font Size'}</span>
+                    </div>
+                    <span className="font-mono text-xs text-amber-300 font-black bg-stone-900 px-2 py-0.5 rounded-lg border border-amber-500/30">
+                      {isFa ? toPersianDigits(
+                        typeof settings.fontSize === 'number'
+                          ? settings.fontSize
+                          : settings.fontSize === 'small'
+                          ? 14
+                          : settings.fontSize === 'large'
+                          ? 18
+                          : settings.fontSize === 'xlarge'
+                          ? 21
+                          : 16
+                      ) : (
+                        typeof settings.fontSize === 'number'
+                          ? settings.fontSize
+                          : settings.fontSize === 'small'
+                          ? 14
+                          : settings.fontSize === 'large'
+                          ? 18
+                          : settings.fontSize === 'xlarge'
+                          ? 21
+                          : 16
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-bold text-stone-400">{isFa ? 'الف' : 'A'}</span>
+                    <input
+                      type="range"
+                      min="13"
+                      max="23"
+                      step="1"
+                      value={
+                        typeof settings.fontSize === 'number'
+                          ? settings.fontSize
+                          : settings.fontSize === 'small'
+                          ? 14
+                          : settings.fontSize === 'large'
+                          ? 18
+                          : settings.fontSize === 'xlarge'
+                          ? 21
+                          : 16
+                      }
+                      onChange={(e) => onUpdateSettings({ fontSize: parseInt(e.target.value, 10) })}
+                      className="w-full accent-teal-500 h-2 bg-stone-800 rounded-lg cursor-pointer"
+                    />
+                    <span className="text-base font-black text-white">{isFa ? 'الف' : 'A'}</span>
+                  </div>
+                </div>
+
+                {/* 1.5 Timeline Style */}
+                <div className="space-y-2 pt-2 border-t border-stone-800/80">
+                  <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
+                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <span>{isFa ? 'سبک نمایش تایم‌لاین' : 'Timeline Style'}</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSettings({ timelineMode: 'modern' })}
+                      className={`min-h-[48px] p-2.5 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
+                        (settings.timelineMode || 'modern') === 'modern'
+                          ? 'border-amber-500 bg-amber-500/15 text-white ring-1 ring-amber-500/30'
+                          : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
+                      }`}
+                    >
+                      <div className="font-black text-xs text-amber-300">{isFa ? 'مدرن طلایی' : 'Modern Gold'}</div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onUpdateSettings({ timelineMode: 'sketch' })}
+                      className={`min-h-[48px] p-2.5 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
+                        settings.timelineMode === 'sketch'
+                          ? 'border-white bg-white/15 text-white ring-1 ring-white/40'
+                          : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
+                      }`}
+                    >
+                      <div className="font-black text-xs text-white font-mono">{isFa ? 'اسکچ خط‌چین' : 'Sketch Border'}</div>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ========================================================= */}
+          {/* 2. SOUND & ALERTS (صدا و هشدارها) */}
+          {/* ========================================================= */}
+          <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
+            <button
+              type="button"
+              onClick={() => toggleSection('sound')}
+              className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                  <Volume2 className="w-4.5 h-4.5" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-xs sm:text-sm font-black text-white truncate">
+                    {isFa ? '۲. صدا و هشدارها' : '2. Sound & Alerts'}
+                  </h4>
+                  <p className="text-[11px] text-stone-400 truncate">
+                    {isFa
+                      ? `بلندی: ${toPersianDigits(Math.round((settings.alarmVolume ?? 0.85) * 100))}٪ • ملودی آلارم`
+                      : `Volume: ${Math.round((settings.alarmVolume ?? 0.85) * 100)}% • Alarm Melody`}
+                  </p>
+                </div>
+              </div>
+              <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 shrink-0 ${openSections.sound ? 'rotate-180 text-amber-400' : ''}`} />
+            </button>
+
+            {openSections.sound && (
+              <div className="p-3 sm:p-4 space-y-4 animate-in fade-in">
+                {/* 2.1 Volume Slider and Presets */}
+                <div className="p-3.5 rounded-2xl bg-stone-900/70 border border-stone-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-bold text-stone-200">
+                      {((settings.alarmVolume ?? 0.85) <= 0.01) ? (
+                        <VolumeX className="w-4 h-4 text-stone-500" />
+                      ) : ((settings.alarmVolume ?? 0.85) < 0.5) ? (
+                        <Volume1 className="w-4 h-4 text-amber-400" />
+                      ) : (
+                        <Volume2 className="w-4 h-4 text-amber-400" />
+                      )}
+                      <span>{isFa ? 'میزان بلندی صدا (ولوم)' : 'Alarm Volume'}</span>
+                    </div>
+                    <span className="font-mono text-xs font-black text-amber-300 bg-stone-900 px-2.5 py-0.5 rounded-lg border border-amber-500/30">
+                      {isFa ? `${toPersianDigits(Math.round((settings.alarmVolume ?? 0.85) * 100))}٪` : `${Math.round((settings.alarmVolume ?? 0.85) * 100)}%`}
+                    </span>
+                  </div>
+
+                  {/* Slider */}
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleVolumeChange(0)}
+                      title={isFa ? 'بی‌صدا' : 'Mute'}
+                      className="p-1 rounded hover:bg-stone-800 transition-colors"
+                    >
+                      <VolumeX 
+                        className={`w-4 h-4 transition-colors ${
+                          (settings.alarmVolume ?? 0.85) <= 0.01 ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
+                        }`} 
+                      />
+                    </button>
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="5"
+                      value={Math.round((settings.alarmVolume ?? 0.85) * 100)}
+                      onChange={(e) => handleVolumeChange(parseInt(e.target.value, 10) / 100)}
+                      className="w-full accent-amber-500 h-2.5 bg-stone-800 rounded-lg cursor-pointer"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleVolumeChange(1.0)}
+                      title={isFa ? 'حداکثر صدا' : 'Max Volume'}
+                      className="p-1 rounded hover:bg-stone-800 transition-colors"
+                    >
+                      <Volume2 
+                        className={`w-4 h-4 transition-colors ${
+                          (settings.alarmVolume ?? 0.85) >= 0.95 ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
+                        }`} 
+                      />
+                    </button>
+                  </div>
+
+                  {/* Quick Volume Preset Chips */}
+                  <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                    {[
+                      { label: isFa ? 'بی‌صدا (۰٪)' : 'Mute (0%)', val: 0 },
+                      { label: isFa ? 'آرام (۳۰٪)' : 'Low (30%)', val: 0.3 },
+                      { label: isFa ? 'متوسط (۶۰٪)' : 'Med (60%)', val: 0.6 },
+                      { label: isFa ? 'بلند (۸۵٪)' : 'High (85%)', val: 0.85 },
+                      { label: isFa ? 'حداکثر (۱۰۰٪)' : 'Max (100%)', val: 1.0 },
+                    ].map((chip) => {
+                      const isActive = Math.abs((settings.alarmVolume ?? 0.85) - chip.val) < 0.05;
+                      return (
+                        <button
+                          key={chip.val}
+                          type="button"
+                          onClick={() => handleVolumeChange(chip.val)}
+                          className={`min-h-[36px] text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all cursor-pointer active:scale-95 ${
+                            isActive
+                              ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                              : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
+                          }`}
+                        >
+                          {chip.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2.2 Alarm Sound Selection */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-stone-200">
+                      {isFa ? 'انتخاب ملودی و صدای زنگ:' : 'Select Alarm Tone:'}
                     </span>
                     <span className="text-[11px] text-stone-400">
-                      {isGeofenceActive
-                        ? (isFa ? 'پایش فعال مختصات ماهواره‌ای دستگاه' : 'Monitoring active geofence areas')
-                        : (isFa ? 'پایش مختصات متوقف است' : 'Location tracking paused')}
+                      {isFa ? 'برای شنیدن دکمه پخش را بزنید' : 'Play to test tone'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
+                    {PHONE_ALARM_SOUNDS.map((soundItem) => {
+                      const isSelected = (settings.alarmSound || 'digital-beep') === soundItem.id;
+                      const isPlaying = playingSoundId === soundItem.id;
+
+                      return (
+                        <div
+                          key={soundItem.id}
+                          onClick={() => handleSelectSound(soundItem.id)}
+                          className={`p-2.5 rounded-xl border transition-all flex items-center justify-between gap-3 cursor-pointer ${
+                            isSelected
+                              ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/40 shadow-sm'
+                              : 'border-stone-800/90 bg-stone-950/60 hover:border-stone-700 hover:bg-stone-900/50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                            <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center shrink-0 ${
+                              isSelected ? 'border-amber-500 bg-amber-500' : 'border-stone-600 bg-transparent'
+                            }`}>
+                              {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-stone-950" />}
+                            </div>
+
+                            <div className="min-w-0">
+                              <p className={`text-xs font-bold truncate ${isSelected ? 'text-amber-300' : 'text-stone-200'}`}>
+                                {soundItem.label}
+                              </p>
+                              <p className="text-[10px] text-stone-400 truncate">
+                                {soundItem.desc}
+                              </p>
+                            </div>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSelectSound(soundItem.id);
+                              handlePreviewSound(soundItem.id);
+                            }}
+                            className={`min-h-[40px] flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 shrink-0 ${
+                              isPlaying
+                                ? 'bg-amber-500 text-stone-950 font-black animate-pulse'
+                                : isSelected
+                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                : 'bg-stone-900 text-stone-300 border border-stone-700/80 hover:bg-stone-800'
+                            }`}
+                          >
+                            {isPlaying ? (
+                              <>
+                                <Square className="w-3 h-3 fill-current" />
+                                <span>{isFa ? 'توقف' : 'Stop'}</span>
+                              </>
+                            ) : (
+                              <>
+                                <Play className="w-3 h-3 fill-current text-amber-400" />
+                                <span>{isFa ? 'پخش' : 'Play'}</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* 2.3 Additional Alarm Preferences */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-stone-800/80">
+                  <label className="min-h-[48px] flex items-center justify-between p-2.5 rounded-xl bg-stone-900/70 border border-stone-800 cursor-pointer">
+                    <span className="text-xs font-bold text-white">
+                      {isFa ? 'فلاش چراغ دوربین پشت گوشی' : 'Camera LED Flash'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={settings.enableFlash}
+                      onChange={(e) => onUpdateSettings({ enableFlash: e.target.checked })}
+                      className="w-4 h-4 rounded accent-amber-500"
+                    />
+                  </label>
+
+                  <label className="min-h-[48px] flex items-center justify-between p-2.5 rounded-xl bg-stone-900/70 border border-stone-800 cursor-pointer">
+                    <span className="text-xs font-bold text-white">
+                      {settings.language === 'en' ? t.autoMicInput : 'میکروفون خودکار فرم'}
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={settings.autoVoiceInput}
+                      onChange={(e) => onUpdateSettings({ autoVoiceInput: e.target.checked })}
+                      className="w-4 h-4 rounded accent-amber-500"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ========================================================= */}
+          {/* 3. PERMISSIONS HUB (دسترسی‌ها - ردیف فشرده) */}
+          {/* ========================================================= */}
+          <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
+            <button
+              type="button"
+              onClick={() => toggleSection('permissions')}
+              className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 shrink-0">
+                  <ShieldCheck className="w-4.5 h-4.5" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-xs sm:text-sm font-black text-white truncate">
+                    {isFa ? '۳. مدیریت دسترسی‌ها' : '3. App Permissions'}
+                  </h4>
+                  <p className="text-[11px] text-stone-400 truncate">
+                    {isFa
+                      ? `${toPersianDigits(Object.values(nativePerms).filter(Boolean).length)} از ۴ دسترسی تایید شده است`
+                      : `${Object.values(nativePerms).filter(Boolean).length} of 4 permissions granted`}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {isNativeAndroidApp() && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+                    Android APK
+                  </span>
+                )}
+                <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 ${openSections.permissions ? 'rotate-180 text-sky-400' : ''}`} />
+              </div>
+            </button>
+
+            {openSections.permissions && (
+              <div className="p-3 sm:p-4 space-y-3 animate-in fade-in">
+                {/* 3.1 وضعیت دسترسی‌ها توی یه ردیف فشرده (COMPACT PERMISSIONS ROW) */}
+                <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
+                  {/* 1. Notifications */}
+                  <div
+                    onClick={() => !nativePerms.notifications && handleRequestPerm('notifications')}
+                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
+                      nativePerms.notifications
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-amber-500/50 cursor-pointer active:scale-95'
+                    }`}
+                    title={isFa ? 'دسترسی اعلان‌ها' : 'Notifications'}
+                  >
+                    <div className="relative mb-1">
+                      <Bell className={`w-4 h-4 ${nativePerms.notifications ? 'text-emerald-400' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.notifications ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                    </div>
+                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                      {isFa ? 'اعلان' : 'Alert'}
+                    </span>
+                    <span className={`text-[9px] font-bold ${nativePerms.notifications ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {nativePerms.notifications ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
+                    </span>
+                  </div>
+
+                  {/* 2. Microphone */}
+                  <div
+                    onClick={() => !nativePerms.microphone && handleRequestPerm('microphone')}
+                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
+                      nativePerms.microphone
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-amber-500/50 cursor-pointer active:scale-95'
+                    }`}
+                    title={isFa ? 'دسترسی میکروفون و صوت' : 'Microphone'}
+                  >
+                    <div className="relative mb-1">
+                      <Mic className={`w-4 h-4 ${nativePerms.microphone ? 'text-emerald-400' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.microphone ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                    </div>
+                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                      {isFa ? 'میکروفون' : 'Mic'}
+                    </span>
+                    <span className={`text-[9px] font-bold ${nativePerms.microphone ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {nativePerms.microphone ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
+                    </span>
+                  </div>
+
+                  {/* 3. Camera */}
+                  <div
+                    onClick={() => !nativePerms.camera && handleRequestPerm('camera')}
+                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
+                      nativePerms.camera
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-amber-500/50 cursor-pointer active:scale-95'
+                    }`}
+                    title={isFa ? 'دسترسی دوربین' : 'Camera'}
+                  >
+                    <div className="relative mb-1">
+                      <Camera className={`w-4 h-4 ${nativePerms.camera ? 'text-emerald-400' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.camera ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                    </div>
+                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                      {isFa ? 'دوربین' : 'Camera'}
+                    </span>
+                    <span className={`text-[9px] font-bold ${nativePerms.camera ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {nativePerms.camera ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
+                    </span>
+                  </div>
+
+                  {/* 4. GPS / Location */}
+                  <div
+                    onClick={() => !nativePerms.location && handleRequestPerm('location')}
+                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
+                      nativePerms.location
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-amber-500/50 cursor-pointer active:scale-95'
+                    }`}
+                    title={isFa ? 'دسترسی موقعیت مکانی GPS' : 'GPS Location'}
+                  >
+                    <div className="relative mb-1">
+                      <MapPin className={`w-4 h-4 ${nativePerms.location ? 'text-emerald-400' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.location ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                    </div>
+                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                      {isFa ? 'موقعیت' : 'GPS'}
+                    </span>
+                    <span className={`text-[9px] font-bold ${nativePerms.location ? 'text-emerald-400' : 'text-amber-400'}`}>
+                      {nativePerms.location ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
                     </span>
                   </div>
                 </div>
 
-                <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={isGeofenceActive}
-                    onChange={(e) => {
-                      const next = e.target.checked;
-                      setGeofenceTrackingEnabled(next);
-                      if (onToggleGeofenceActive) onToggleGeofenceActive(next);
-                    }}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                </label>
-              </div>
-
-              {/* Active Geofences Count & GPS Permission Button */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-stone-800/70 text-xs">
-                <div className="flex items-center justify-between p-2 rounded-xl bg-stone-900/80 border border-stone-800">
-                  <span className="text-stone-400 text-[11px]">{isFa ? 'حصارهای مکانی فعال:' : 'Active Geofences:'}</span>
-                  <span className="font-bold text-emerald-400">
-                    {isFa 
-                      ? `${toPersianDigits(reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length)} مکان` 
-                      : `${reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length} Places`}
+                {/* 3.2 Request All Permissions at Once Button */}
+                <button
+                  type="button"
+                  disabled={isRequestingAllPerms}
+                  onClick={handleRequestAllPerms}
+                  className="w-full min-h-[48px] py-2.5 px-3 rounded-xl bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-black transition-all shadow-md shadow-sky-950/40 active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <ShieldCheck className="w-4 h-4 shrink-0" />
+                  <span>
+                    {isRequestingAllPerms
+                      ? (isFa ? 'در حال ثبت درخواست‌ها...' : 'Requesting...')
+                      : (isFa ? 'درخواست یکجای تمامی دسترسی‌های لازم' : 'Grant All Required Permissions')}
                   </span>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const status = await requestLocationPermission();
-                    if (status) {
-                      alert(isFa ? 'مجوز موقعیت مکانی GPS فعال است.' : 'Location GPS permission is active.');
-                    } else {
-                      alert(isFa ? 'دسترسی GPS در مرورگر یا دستگاه شما مسدود است.' : 'Location permission is denied.');
-                    }
-                  }}
-                  className="flex items-center justify-center gap-1.5 p-2 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white transition-colors cursor-pointer text-[11px] font-bold"
-                >
-                  <Crosshair className="w-3.5 h-3.5 text-teal-400" />
-                  <span>{isFa ? 'بررسی دسترسی GPS دستگاه' : 'Check GPS Permission'}</span>
                 </button>
               </div>
-            </div>
-          </section>
+            )}
+          </div>
 
-          {/* 7. PERFORMANCE STATISTICS (MOVED TO SETTINGS) */}
-          {onOpenStats && (
-            <section className="space-y-2 pt-2 border-t border-stone-800">
-              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-stone-950/80 border border-stone-800 hover:border-amber-500/40 transition-all">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center flex-shrink-0">
-                    <BarChart3 className="w-5 h-5" />
+          {/* ========================================================= */}
+          {/* 4. SYNC & CLOUD SERVICES (همگام‌سازی) */}
+          {/* ========================================================= */}
+          <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
+            <button
+              type="button"
+              onClick={() => toggleSection('sync')}
+              className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 shrink-0">
+                  <Cloud className="w-4.5 h-4.5" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-xs sm:text-sm font-black text-white truncate">
+                    {isFa ? '۴. همگام‌سازی و سرویس‌ها' : '4. Sync & Services'}
+                  </h4>
+                  <p className="text-[11px] text-stone-400 truncate">
+                    {googleUser
+                      ? (isFa ? `گوگل: ${googleUser.email}` : `Google: ${googleUser.email}`)
+                      : (isFa ? 'اتصال به تقویم گوگل، نقشه و حصار مکانی' : 'Google Calendar, Maps & Geofence')}
+                  </p>
+                </div>
+              </div>
+              <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 shrink-0 ${openSections.sync ? 'rotate-180 text-sky-400' : ''}`} />
+            </button>
+
+            {openSections.sync && (
+              <div className="p-3 sm:p-4 space-y-4 animate-in fade-in">
+                {/* 4.1 Google Workspace Sync */}
+                <div className="p-3.5 rounded-2xl bg-stone-900/70 border border-stone-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-bold text-stone-200">
+                      <Cloud className="w-4 h-4 text-sky-400" />
+                      <span>{isFa ? 'همگام‌سازی تقویم گوگل (Google Calendar)' : 'Google Calendar Sync'}</span>
+                    </div>
+                    {googleUser && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-bold">
+                        {isFa ? 'متصل' : 'Connected'}
+                      </span>
+                    )}
                   </div>
-                  <h5 className="text-xs sm:text-sm font-black text-white">{settings.language === 'en' ? t.statsTitle : 'آمار و گزارش عملکرد'}</h5>
+
+                  <div className="p-3 rounded-xl bg-stone-950 border border-stone-800 flex items-center justify-between gap-3">
+                    <div className="truncate">
+                      {googleUser ? (
+                        <p className="text-xs font-semibold text-white truncate">{googleUser.email}</p>
+                      ) : (
+                        <p className="text-xs text-stone-400">{isFa ? 'اتصال به تقویم و تسک‌های گوگل' : 'Connect to Google Calendar & Tasks'}</p>
+                      )}
+                    </div>
+
+                    {googleUser ? (
+                      <button
+                        type="button"
+                        onClick={onGoogleSignOut}
+                        className="min-h-[40px] flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold cursor-pointer active:scale-95 shadow-sm"
+                      >
+                        <LogOut className="w-3.5 h-3.5 text-white" />
+                        <span className="text-white">{isFa ? 'خروج' : 'Sign Out'}</span>
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setIsSigningIn(true);
+                          try {
+                            await onGoogleSignIn();
+                          } finally {
+                            setIsSigningIn(false);
+                          }
+                        }}
+                        disabled={isSigningIn}
+                        className="min-h-[44px] flex items-center gap-2 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/30 disabled:opacity-50"
+                      >
+                        <span>{isSigningIn ? (settings.language === 'en' ? 'Connecting...' : 'اتصال...') : (settings.language === 'en' ? 'Sign in with Google' : 'ورود با گوگل')}</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onOpenStats();
-                  }}
-                  className="px-3.5 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer whitespace-nowrap"
-                >
-                  {settings.language === 'en' ? t.viewStats : 'مشاهده آمار'}
-                </button>
-              </div>
-            </section>
-          )}
 
-          {/* 8. LOCAL BACKUP & RESTORE */}
-          <section className="space-y-3 pt-3 border-t border-stone-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
-                <Database className="w-4 h-4 text-emerald-400" />
-                <span>{isFa ? 'پشتیبان‌گیری محلی (دانلود و بازیابی JSON)' : 'Local Backup & Restore (JSON)'}</span>
-              </div>
-              <span className="text-[11px] px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-medium">
-                {isFa ? 'ذخیره آفلاین' : 'Offline Save'}
-              </span>
-            </div>
+                {/* 4.2 Geofence Radar */}
+                <div className="p-3.5 rounded-2xl bg-stone-900/70 border border-stone-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-xs font-bold text-stone-200">
+                      <Radio className={`w-4 h-4 ${isGeofenceActive ? 'text-emerald-400 animate-pulse' : 'text-stone-400'}`} />
+                      <span>{isFa ? 'رادار پایش حصار مکانی (Geofence)' : 'Geofence Radar'}</span>
+                    </div>
+                    <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
+                      isGeofenceActive 
+                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
+                        : 'bg-stone-800 text-stone-400 border-stone-700'
+                    }`}>
+                      {isGeofenceActive ? (isFa ? 'فعال' : 'Active') : (isFa ? 'متوقف' : 'Paused')}
+                    </span>
+                  </div>
 
-            <p className="text-xs text-stone-400 leading-relaxed">
-              {isFa 
-                ? 'شما می‌توانید تمام یادآورها، ایده‌ها، لوکیشن‌های ثبت‌شده و تنظیمات برنامه را به صورت فایل JSON در حافظه دستگاه خود ذخیره کرده یا از فایل قبلی بازیابی نمایید.'
-                : 'Export all reminders, ideas, GPS places and settings to a JSON backup file or restore from a previously exported file.'}
-            </p>
+                  <div className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-stone-950 border border-stone-800/80">
+                    <div>
+                      <span className="text-xs font-bold text-white block">
+                        {isFa ? 'پایش ورود/خروج حصارها' : 'Background Geofencing'}
+                      </span>
+                      <span className="text-[11px] text-stone-400">
+                        {isFa ? 'پایش هوشمند GPS با مصرف بهینه باتری' : 'Low-battery GPS tracking'}
+                      </span>
+                    </div>
 
-            {/* Current items badge counters */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
-              <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
-                <span className="text-[10px] text-stone-500 block">{isFa ? 'یادآورها' : 'Reminders'}</span>
-                <span className="font-bold text-amber-400 text-sm">{isFa ? toPersianDigits(reminders.length) : reminders.length}</span>
-              </div>
-              <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
-                <span className="text-[10px] text-stone-500 block">{isFa ? 'مناسبت‌ها' : 'Occasions'}</span>
-                <span className="font-bold text-pink-400 text-sm">{isFa ? toPersianDigits(occasions.length) : occasions.length}</span>
-              </div>
-              <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
-                <span className="text-[10px] text-stone-500 block">{isFa ? 'ایده‌ها' : 'Ideas'}</span>
-                <span className="font-bold text-sky-400 text-sm">{isFa ? toPersianDigits(ideas.length) : ideas.length}</span>
-              </div>
-              <div className="p-2 rounded-xl bg-stone-950 border border-stone-800/80">
-                <span className="text-[10px] text-stone-500 block">{isFa ? 'مکان‌های GPS' : 'GPS Places'}</span>
-                <span className="font-bold text-emerald-400 text-sm">{isFa ? toPersianDigits(savedLocations.length) : savedLocations.length}</span>
-              </div>
-            </div>
+                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={isGeofenceActive}
+                        onChange={(e) => {
+                          const next = e.target.checked;
+                          setGeofenceTrackingEnabled(next);
+                          if (onToggleGeofenceActive) onToggleGeofenceActive(next);
+                        }}
+                        className="sr-only peer"
+                      />
+                      <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                    </label>
+                  </div>
 
-            {/* Success / Error alerts */}
-            {backupSuccessMessage && (
-              <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in">
-                <Check className="w-4 h-4 flex-shrink-0 text-emerald-400" />
-                <span>{backupSuccessMessage}</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                    <div className="flex items-center justify-between p-2 rounded-xl bg-stone-950 border border-stone-800">
+                      <span className="text-stone-400 text-[11px]">{isFa ? 'حصارهای فعال:' : 'Active:'}</span>
+                      <span className="font-bold text-emerald-400">
+                        {isFa 
+                          ? `${toPersianDigits(reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length)} مکان` 
+                          : `${reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length} Places`}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const status = await requestLocationPermission();
+                        if (status) {
+                          alert(isFa ? 'مجوز موقعیت مکانی GPS فعال است.' : 'Location GPS permission is active.');
+                        } else {
+                          alert(isFa ? 'دسترسی GPS در مرورگر یا دستگاه شما مسدود است.' : 'Location permission is denied.');
+                        }
+                      }}
+                      className="min-h-[40px] flex items-center justify-center gap-1.5 p-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white transition-colors cursor-pointer text-[11px] font-bold"
+                    >
+                      <Crosshair className="w-3.5 h-3.5 text-teal-400" />
+                      <span>{isFa ? 'بررسی GPS' : 'Check GPS'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* 4.3 Google Maps API Settings */}
+                <div className="p-3.5 rounded-2xl bg-stone-900/70 border border-stone-800 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-stone-200">
+                      {settings.language === 'en' ? t.mapsServiceTitle : 'تنظیمات کلید Google Maps'}
+                    </span>
+                    <span className="text-[10px] text-stone-400">{settings.language === 'en' ? 'Optional' : 'اختیاری'}</span>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="text"
+                      value={mapsKeyInput}
+                      onChange={(e) => setMapsKeyInput(e.target.value)}
+                      placeholder="Google Maps API Key"
+                      className="flex-1 min-h-[44px] px-3 py-2 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-600 text-xs font-mono focus:outline-none focus:border-emerald-500/70"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveMapsKey}
+                      className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 active:scale-95 transition-all cursor-pointer"
+                    >
+                      {keySavedMessage ? <Check className="w-4 h-4 text-white" /> : null}
+                      <span>{keySavedMessage ? (settings.language === 'en' ? t.saved : 'ذخیره شد') : (settings.language === 'en' ? t.save : 'ذخیره')}</span>
+                    </button>
+                  </div>
+                </div>
               </div>
             )}
+          </div>
 
-            {backupErrorMessage && (
-              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2 animate-in fade-in">
-                <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
-                <span>{backupErrorMessage}</span>
+          {/* ========================================================= */}
+          {/* 5. BACKUP & SYSTEM (پشتیبان‌گیری و سیستم) */}
+          {/* ========================================================= */}
+          <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
+            <button
+              type="button"
+              onClick={() => toggleSection('backup')}
+              className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                  <Database className="w-4.5 h-4.5" />
+                </div>
+                <div className="min-w-0">
+                  <h4 className="text-xs sm:text-sm font-black text-white truncate">
+                    {isFa ? '۵. پشتیبان‌گیری و اطلاعات' : '5. Backup & Data'}
+                  </h4>
+                  <p className="text-[11px] text-stone-400 truncate">
+                    {isFa ? 'دانلود و بازیابی فایل JSON • اطلاعات نسخه' : 'JSON Export/Import • Version Info'}
+                  </p>
+                </div>
               </div>
-            )}
+              <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 shrink-0 ${openSections.backup ? 'rotate-180 text-emerald-400' : ''}`} />
+            </button>
 
-            {/* Download & Upload Buttons */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={handleDownloadBackup}
-                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-700/80 text-white font-bold text-xs shadow-sm hover:border-emerald-500/50 transition-all cursor-pointer active:scale-95"
-              >
-                <Download className="w-4 h-4 text-emerald-400" />
-                <span>{isFa ? 'دانلود فایل پشتیبان (JSON)' : 'Download Backup (JSON)'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="flex items-center justify-center gap-2 p-3 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-700/80 text-white font-bold text-xs shadow-sm hover:border-sky-500/50 transition-all cursor-pointer active:scale-95"
-              >
-                <Upload className="w-4 h-4 text-sky-400" />
-                <span>{isFa ? 'بازیابی از فایل JSON' : 'Restore from JSON File'}</span>
-              </button>
-
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept=".json,application/json"
-                onChange={handleFileChange}
-                className="hidden"
-              />
-            </div>
-
-            {/* Pending Restore Confirmation Box */}
-            {pendingRestoreData && (
-              <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
-                <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
-                  <FileJson className="w-4 h-4" />
-                  <span>{isFa ? 'فایل پشتیبان با موفقیت شناسایی شد:' : 'Backup file successfully parsed:'}</span>
+            {openSections.backup && (
+              <div className="p-3 sm:p-4 space-y-4 animate-in fade-in">
+                {/* 5.1 Item Count Badges */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
+                  <div className="p-2 rounded-xl bg-stone-900/80 border border-stone-800">
+                    <span className="text-[10px] text-stone-500 block">{isFa ? 'یادآورها' : 'Reminders'}</span>
+                    <span className="font-bold text-amber-400 text-sm">{isFa ? toPersianDigits(reminders.length) : reminders.length}</span>
+                  </div>
+                  <div className="p-2 rounded-xl bg-stone-900/80 border border-stone-800">
+                    <span className="text-[10px] text-stone-500 block">{isFa ? 'مناسبت‌ها' : 'Occasions'}</span>
+                    <span className="font-bold text-pink-400 text-sm">{isFa ? toPersianDigits(occasions.length) : occasions.length}</span>
+                  </div>
+                  <div className="p-2 rounded-xl bg-stone-900/80 border border-stone-800">
+                    <span className="text-[10px] text-stone-500 block">{isFa ? 'ایده‌ها' : 'Ideas'}</span>
+                    <span className="font-bold text-sky-400 text-sm">{isFa ? toPersianDigits(ideas.length) : ideas.length}</span>
+                  </div>
+                  <div className="p-2 rounded-xl bg-stone-900/80 border border-stone-800">
+                    <span className="text-[10px] text-stone-500 block">{isFa ? 'مکان‌های GPS' : 'GPS Places'}</span>
+                    <span className="font-bold text-emerald-400 text-sm">{isFa ? toPersianDigits(savedLocations.length) : savedLocations.length}</span>
+                  </div>
                 </div>
 
-                <div className="text-xs text-stone-300 space-y-1 pr-2">
-                  <p>• {isFa ? 'تعداد یادآورها:' : 'Reminders count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.reminders?.length || 0) : (pendingRestoreData.reminders?.length || 0)}</strong></p>
-                  <p>• {isFa ? 'تعداد مناسبت‌ها:' : 'Occasions count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.occasions?.length || 0) : (pendingRestoreData.occasions?.length || 0)}</strong></p>
-                  <p>• {isFa ? 'تعداد ایده‌ها:' : 'Ideas count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.ideas?.length || 0) : (pendingRestoreData.ideas?.length || 0)}</strong></p>
-                  <p>• {isFa ? 'تعداد مکان‌های GPS:' : 'GPS Places count:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.savedLocations?.length || 0) : (pendingRestoreData.savedLocations?.length || 0)}</strong></p>
-                  {pendingRestoreData.settings && <p>• {isFa ? 'حاوی تنظیمات اختصاصی سفارشی' : 'Contains custom settings'}</p>}
-                </div>
+                {/* Alerts */}
+                {backupSuccessMessage && (
+                  <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in">
+                    <Check className="w-4 h-4 flex-shrink-0 text-emerald-400" />
+                    <span>{backupSuccessMessage}</span>
+                  </div>
+                )}
+                {backupErrorMessage && (
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+                    <span>{backupErrorMessage}</span>
+                  </div>
+                )}
 
-                <p className="text-[11px] text-amber-200/80">
-                  {isFa ? 'نحوه بازیابی را مشخص کنید:' : 'Choose how to restore your data:'}
-                </p>
-
-                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                {/* 5.2 Download & Upload Buttons (min 48px) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <button
                     type="button"
-                    onClick={() => handleConfirmRestore('replace')}
-                    className="flex-1 py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95"
+                    onClick={handleDownloadBackup}
+                    className="min-h-[48px] flex items-center justify-center gap-2 p-3 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-700/80 text-white font-bold text-xs shadow-sm hover:border-emerald-500/50 transition-all cursor-pointer active:scale-95"
                   >
-                    {isFa ? 'جایگزینی داده‌ها (Overwrite)' : 'Overwrite Data'}
+                    <Download className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <span>{isFa ? 'دانلود فایل پشتیبان (JSON)' : 'Download Backup (JSON)'}</span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => handleConfirmRestore('merge')}
-                    className="flex-1 py-2 px-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95 border border-stone-700"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="min-h-[48px] flex items-center justify-center gap-2 p-3 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-700/80 text-white font-bold text-xs shadow-sm hover:border-sky-500/50 transition-all cursor-pointer active:scale-95"
                   >
-                    {isFa ? 'افزودن و ادغام (Merge)' : 'Merge Data'}
+                    <Upload className="w-4 h-4 text-sky-400 shrink-0" />
+                    <span>{isFa ? 'بازیابی از فایل JSON' : 'Restore from JSON File'}</span>
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={() => setPendingRestoreData(null)}
-                    className="py-2 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs cursor-pointer active:scale-95 border border-stone-800"
-                  >
-                    {isFa ? 'انصراف' : 'Cancel'}
-                  </button>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={handleFileChange}
+                    className="hidden"
+                  />
+                </div>
+
+                {/* Pending Restore Confirmation Box */}
+                {pendingRestoreData && (
+                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
+                    <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                      <FileJson className="w-4 h-4 shrink-0" />
+                      <span>{isFa ? 'فایل پشتیبان با موفقیت شناسایی شد:' : 'Backup file parsed:'}</span>
+                    </div>
+
+                    <div className="text-xs text-stone-300 space-y-1 pr-2">
+                      <p>• {isFa ? 'تعداد یادآورها:' : 'Reminders:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.reminders?.length || 0) : (pendingRestoreData.reminders?.length || 0)}</strong></p>
+                      <p>• {isFa ? 'تعداد مناسبت‌ها:' : 'Occasions:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.occasions?.length || 0) : (pendingRestoreData.occasions?.length || 0)}</strong></p>
+                      <p>• {isFa ? 'تعداد ایده‌ها:' : 'Ideas:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.ideas?.length || 0) : (pendingRestoreData.ideas?.length || 0)}</strong></p>
+                      <p>• {isFa ? 'تعداد مکان‌های GPS:' : 'GPS Places:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.savedLocations?.length || 0) : (pendingRestoreData.savedLocations?.length || 0)}</strong></p>
+                    </div>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmRestore('replace')}
+                        className="min-h-[44px] flex-1 py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95"
+                      >
+                        {isFa ? 'جایگزینی داده‌ها (Overwrite)' : 'Overwrite Data'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleConfirmRestore('merge')}
+                        className="min-h-[44px] flex-1 py-2 px-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95 border border-stone-700"
+                      >
+                        {isFa ? 'افزودن و ادغام (Merge)' : 'Merge Data'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setPendingRestoreData(null)}
+                        className="min-h-[44px] py-2 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs cursor-pointer active:scale-95 border border-stone-800"
+                      >
+                        {isFa ? 'انصراف' : 'Cancel'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5.3 Performance Statistics Modal Trigger */}
+                {onOpenStats && (
+                  <div className="pt-2 border-t border-stone-800/80">
+                    <div className="flex items-center justify-between p-3 rounded-2xl bg-stone-900/80 border border-stone-800 hover:border-amber-500/40 transition-all">
+                      <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center flex-shrink-0">
+                        <BarChart3 className="w-5 h-5" />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenStats();
+                        }}
+                        className="min-h-[44px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-sm active:scale-95 transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5"
+                      >
+                        <span>{settings.language === 'en' ? t.viewStats : 'مشاهده آمار'}</span>
+                        <span className="text-amber-200">←</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* 5.4 App Specifications & Version */}
+                <div className="p-3 rounded-2xl bg-stone-900/60 border border-stone-800/80 space-y-2 text-xs">
+                  <div className="flex items-center justify-between border-b border-stone-800/60 pb-2">
+                    <span className="text-stone-400">{isFa ? 'نام برنامه' : 'App Name'}</span>
+                    <div className="flex items-center gap-2">
+                      <img src={appIcon} alt="YAAD" className="w-4.5 h-4.5 rounded-md object-cover" />
+                      <span className="font-bold text-white">{APP_VERSION_INFO.name}</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between border-b border-stone-800/60 pb-2">
+                    <span className="text-stone-400">{isFa ? 'نسخه فعلی' : 'Current Version'}</span>
+                    <span className="font-mono font-bold text-amber-400">{isFa ? `نسخه ${toPersianDigits(APP_VERSION)}` : `Version ${APP_VERSION}`}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-stone-400">{isFa ? 'نوع پلتفرم' : 'Platform Type'}</span>
+                    <span className="text-stone-200">{isFa ? 'اپلیکیشن تحت وب پیشرونده (PWA)' : 'Progressive Web App (PWA)'}</span>
+                  </div>
                 </div>
               </div>
             )}
-          </section>
-
-          {/* 9. GOOGLE MAPS API SETTINGS */}
-          <section className="space-y-3 pt-3 border-t border-stone-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
-                <MapPin className="w-4 h-4 text-emerald-400" />
-                <span>{settings.language === 'en' ? t.mapsServiceTitle : 'تنظیمات خدمات Google Maps'}</span>
-              </div>
-              <span className="text-[10px] text-stone-400">{settings.language === 'en' ? 'Optional' : 'اختیاری'}</span>
-            </div>
-
-            <p className="text-xs text-stone-400">
-              {settings.language === 'en' ? t.mapsKeyLabel : 'کلید اختصاصی Google Maps (پیش‌فرض سرویس استاندارد فعال است):'}
-            </p>
-
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={mapsKeyInput}
-                onChange={(e) => setMapsKeyInput(e.target.value)}
-                placeholder="Google Maps API Key"
-                className="flex-1 px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-600 text-xs font-mono focus:outline-none focus:border-emerald-500/70"
-              />
-              <button
-                type="button"
-                onClick={handleSaveMapsKey}
-                className="px-3.5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 active:scale-95 transition-all"
-              >
-                {keySavedMessage ? <Check className="w-4 h-4 text-white" /> : null}
-                <span>{keySavedMessage ? (settings.language === 'en' ? t.saved : 'ذخیره شد') : (settings.language === 'en' ? t.save : 'ذخیره')}</span>
-              </button>
-            </div>
-          </section>
-
-          {/* 10. APP SPECIFICATIONS & VERSION (مشخصات اپلیکیشن) */}
-          <section className="space-y-3 pt-3 border-t border-stone-800">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm sm:text-base font-bold text-stone-100">
-                <Info className="w-4 h-4 text-amber-400" />
-                <span>{isFa ? 'مشخصات و نسخه اپلیکیشن' : 'App Specifications & Version'}</span>
-              </div>
-              <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-xs font-bold">
-                v{APP_VERSION}
-              </span>
-            </div>
-
-            <div className="p-3.5 rounded-2xl bg-stone-950 border border-stone-800 space-y-2.5 text-xs">
-              <div className="flex items-center justify-between border-b border-stone-800/80 pb-2">
-                <span className="text-stone-400">{isFa ? 'نام برنامه' : 'App Name'}</span>
-                <div className="flex items-center gap-2">
-                  <img src={appIcon} alt="YAAD" className="w-4.5 h-4.5 rounded-md object-cover" />
-                  <span className="font-bold text-white">{APP_VERSION_INFO.name}</span>
-                </div>
-              </div>
-              <div className="flex items-center justify-between border-b border-stone-800/80 pb-2">
-                <span className="text-stone-400">{isFa ? 'نسخه فعلی' : 'Current Version'}</span>
-                <span className="font-mono font-bold text-amber-400">{isFa ? `نسخه ${toPersianDigits(APP_VERSION)}` : `Version ${APP_VERSION}`}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-stone-400">{isFa ? 'نوع پلتفرم' : 'Platform Type'}</span>
-                <span className="text-stone-200">{isFa ? 'اپلیکیشن تحت وب پیشرونده (PWA)' : 'Progressive Web App (PWA)'}</span>
-              </div>
-            </div>
-          </section>
+          </div>
 
         </div>
 
-        {/* Footer - Sticky above keyboard */}
+        {/* Footer - Sticky above keyboard (دکمه تأیید همیشه پایین و ثابت، حداقل ۴۸ پیکسل) */}
         <div className="sticky bottom-0 z-20 shrink-0 px-3 sm:px-5 py-3 border-t border-stone-800 flex justify-end bg-stone-900/95 backdrop-blur shadow-2xl">
           <button
             type="button"
             onClick={onClose}
-            className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer"
+            className="w-full sm:w-auto min-h-[48px] px-8 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2"
           >
             {settings.language === 'en' ? t.confirm : 'تأیید'}
           </button>
