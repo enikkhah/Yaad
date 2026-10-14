@@ -87,6 +87,8 @@ jobs:
           npm install @capacitor/assets --legacy-peer-deps
           mkdir -p resources
           cp public/icon.png resources/icon.png
+          cp public/splash.png resources/splash.png
+          cp public/splash.png resources/splash-dark.png
           npx capacitor-assets generate --android
 
       - name: Sync Capacitor
