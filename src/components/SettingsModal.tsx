@@ -40,11 +40,15 @@ import {
   ChevronDown,
   ChevronUp,
   Sun,
-  Moon
+  Moon,
+  Trash2,
+  RotateCcw,
+  Calendar,
+  Lightbulb
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION, APP_VERSION_INFO } from '../utils/version';
-import { toPersianDigits } from '../utils/jalali';
+import { toPersianDigits, formatJalaliFull } from '../utils/jalali';
 import { 
   isGeofenceTrackingEnabled, 
   setGeofenceTrackingEnabled, 
@@ -63,7 +67,7 @@ import {
 } from '../utils/nativePermissions';
 import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
 import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume } from '../utils/audio';
-import { syncNotificationSoundAndVolume } from '../utils/nativeLocalNotifications';
+import { syncNotificationSoundAndVolume, syncAllRemindersWithLocalNotifications } from '../utils/nativeLocalNotifications';
 import { User } from 'firebase/auth';
 import appIcon from '../assets/images/icon.png';
 
@@ -85,6 +89,9 @@ interface SettingsModalProps {
   onTestHeadsUpBanner?: (reminder: Reminder) => void;
   isGeofenceActive?: boolean;
   onToggleGeofenceActive?: (active: boolean) => void;
+  onRestoreItem?: (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => void;
+  onPermanentDeleteItem?: (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => void;
+  onEmptyRecycleBin?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -105,6 +112,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onTestHeadsUpBanner,
   isGeofenceActive = true,
   onToggleGeofenceActive,
+  onRestoreItem,
+  onPermanentDeleteItem,
+  onEmptyRecycleBin,
 }) => {
   const currentLanguage = settings?.language || 'fa';
   const isFa = currentLanguage === 'fa';
@@ -129,6 +139,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [playingSoundId, setPlayingSoundId] = useState<PhoneAlarmSound | null>(null);
   const soundTimeoutRef = useRef<number | null>(null);
 
+  // Recycle Bin state
+  const [isConfirmingEmptyBin, setIsConfirmingEmptyBin] = useState<boolean>(false);
+
   // Native permissions state (for Android APK / PWA)
   const [nativePerms, setNativePerms] = useState<NativePermissionsStatus>({
     notifications: false,
@@ -138,19 +151,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   });
   const [isRequestingAllPerms, setIsRequestingAllPerms] = useState(false);
 
-  // 5 Collapsible groups state: ظاهر، صدا، دسترسی‌ها، همگام‌سازی، پشتیبان
+  // 6 Collapsible groups state: ظاهر، صدا، دسترسی‌ها، همگام‌سازی، پشتیبان، سطل بازیافت
   const [openSections, setOpenSections] = useState<{
     appearance: boolean;
     sound: boolean;
     permissions: boolean;
     sync: boolean;
     backup: boolean;
+    recycleBin: boolean;
   }>({
     appearance: true,
     sound: false,
     permissions: false,
     sync: false,
     backup: false,
+    recycleBin: false,
   });
 
   const toggleSection = (section: keyof typeof openSections) => {
@@ -159,6 +174,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       [section]: !prev[section],
     }));
   };
+
+  const deletedReminders = (reminders || []).filter((r) => !!r.deletedAt);
+  const deletedIdeas = (ideas || []).filter((i) => !!i.deletedAt);
+  const deletedLocations = (savedLocations || []).filter((l) => !!l.deletedAt);
+  const deletedOccasions = (occasions || []).filter((o) => !!o.deletedAt);
+
+  const allDeletedItems = [
+    ...deletedReminders.map((r) => ({ id: r.id, type: 'reminder' as const, title: r.title, deletedAt: r.deletedAt! })),
+    ...deletedIdeas.map((i) => ({ id: i.id, type: 'idea' as const, title: i.title, deletedAt: i.deletedAt! })),
+    ...deletedLocations.map((l) => ({ id: l.id, type: 'location' as const, title: l.title, deletedAt: l.deletedAt! })),
+    ...deletedOccasions.map((o) => ({ id: o.id, type: 'occasion' as const, title: o.title, deletedAt: o.deletedAt! })),
+  ].sort((a, b) => b.deletedAt - a.deletedAt);
 
   useEffect(() => {
     if (isOpen) {
@@ -219,8 +246,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleSelectSound = (soundId: PhoneAlarmSound) => {
+    const updatedSettings = { ...settings, alarmSound: soundId };
     onUpdateSettings({ alarmSound: soundId });
     syncNotificationSoundAndVolume(soundId, settings.alarmVolume).catch(() => {});
+    syncAllRemindersWithLocalNotifications(reminders, updatedSettings).catch(() => {});
   };
 
   const handleVolumeChange = (newVolume: number) => {
@@ -1334,6 +1363,183 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span className="text-stone-200">{isFa ? 'اپلیکیشن تحت وب پیشرونده (PWA)' : 'Progressive Web App (PWA)'}</span>
                   </div>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* ========================================================= */}
+          {/* 6. RECYCLE BIN (سطل بازیافت) */}
+          {/* ========================================================= */}
+          <div className="border border-stone-800 rounded-2xl overflow-hidden bg-stone-900/40">
+            <button
+              type="button"
+              onClick={() => toggleSection('recycleBin')}
+              className="w-full flex items-center justify-between p-3.5 sm:p-4 bg-stone-900/80 hover:bg-stone-800/80 transition-colors text-right cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-400 border border-rose-500/30 flex items-center justify-center shrink-0">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div className="text-right">
+                  <span className="font-bold text-sm text-white block">
+                    {isFa ? 'سطل بازیافت' : 'Recycle Bin'}
+                  </span>
+                  <span className="text-[11px] text-stone-400 block">
+                    {allDeletedItems.length > 0
+                      ? (isFa ? `${toPersianDigits(allDeletedItems.length)} مورد در سطل بازیافت` : `${allDeletedItems.length} items in bin`)
+                      : (isFa ? 'خالی' : 'Empty')}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {allDeletedItems.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+                    {isFa ? toPersianDigits(allDeletedItems.length) : allDeletedItems.length}
+                  </span>
+                )}
+                {openSections.recycleBin ? (
+                  <ChevronUp className="w-4 h-4 text-stone-400" />
+                ) : (
+                  <ChevronDown className="w-4 h-4 text-stone-400" />
+                )}
+              </div>
+            </button>
+
+            {openSections.recycleBin && (
+              <div className="p-3.5 sm:p-4 border-t border-stone-800/80 space-y-3.5 animate-in fade-in">
+                {/* Header note & Empty Bin button */}
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 pb-2 border-b border-stone-800/80">
+                  <span className="text-xs text-stone-400 leading-relaxed">
+                    {isFa 
+                      ? 'موارد حذف‌شده (یادآور، مکان، مناسبت، ایده) تا زمان خالی کردن در این بخش نگهداری می‌شوند.' 
+                      : 'Deleted items are kept here until permanently emptied.'}
+                  </span>
+
+                  {allDeletedItems.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setIsConfirmingEmptyBin(true)}
+                      className="min-h-[44px] px-3.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs font-bold border border-rose-500/30 transition-all flex items-center gap-1.5 cursor-pointer shrink-0"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                      <span>{isFa ? 'خالی کردن سطل' : 'Empty Bin'}</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Empty Bin Confirmation Dialog */}
+                {isConfirmingEmptyBin && (
+                  <div className="p-3.5 rounded-2xl bg-rose-950/40 border border-rose-500/40 space-y-2.5 animate-in fade-in">
+                    <p className="text-xs text-rose-200 font-bold leading-relaxed">
+                      {isFa 
+                        ? 'آیا از حذف دائمی تمام موارد موجود در سطل بازیافت اطمینان دارید؟ این عملیات قابل بازگشت نیست.'
+                        : 'Are you sure you want to permanently delete all items in the Recycle Bin? This cannot be undone.'}
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onEmptyRecycleBin?.();
+                          setIsConfirmingEmptyBin(false);
+                        }}
+                        className="min-h-[44px] flex-1 py-2 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition-colors cursor-pointer"
+                      >
+                        {isFa ? 'بله، خالی کن' : 'Yes, Empty'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setIsConfirmingEmptyBin(false)}
+                        className="min-h-[44px] py-2 px-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        {isFa ? 'انصراف' : 'Cancel'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Items List */}
+                {allDeletedItems.length === 0 ? (
+                  <div className="py-8 text-center text-xs text-stone-500 font-medium space-y-1">
+                    <Trash2 className="w-6 h-6 mx-auto text-stone-600" />
+                    <p>{isFa ? 'سطل بازیافت خالی است' : 'Recycle bin is empty'}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-1">
+                    {allDeletedItems.map((item) => {
+                      const getTypeIcon = () => {
+                        switch (item.type) {
+                          case 'reminder':
+                            return <Bell className="w-3.5 h-3.5 text-amber-400" />;
+                          case 'location':
+                            return <MapPin className="w-3.5 h-3.5 text-cyan-400" />;
+                          case 'occasion':
+                            return <Calendar className="w-3.5 h-3.5 text-rose-400" />;
+                          case 'idea':
+                            return <Lightbulb className="w-3.5 h-3.5 text-amber-300" />;
+                        }
+                      };
+
+                      const getTypeName = () => {
+                        switch (item.type) {
+                          case 'reminder':
+                            return isFa ? 'یادآور' : 'Reminder';
+                          case 'location':
+                            return isFa ? 'مکان' : 'Location';
+                          case 'occasion':
+                            return isFa ? 'مناسبت' : 'Occasion';
+                          case 'idea':
+                            return isFa ? 'ایده' : 'Idea';
+                        }
+                      };
+
+                      return (
+                        <div
+                          key={`${item.type}-${item.id}`}
+                          className="p-3 rounded-xl bg-stone-900 border border-stone-800 flex items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1 min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              {getTypeIcon()}
+                              <span className="text-[11px] font-bold text-stone-400">
+                                {getTypeName()}
+                              </span>
+                            </div>
+                            <h4 className="text-xs font-bold text-white truncate">
+                              {item.title}
+                            </h4>
+                            <span className="text-[10px] text-stone-500 block">
+                              {isFa ? 'حذف در:' : 'Deleted:'} {formatJalaliFull(item.deletedAt, isFa ? 'fa' : 'en')}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            {/* Restore Button */}
+                            <button
+                              type="button"
+                              onClick={() => onRestoreItem?.(item.id, item.type)}
+                              className="min-h-[44px] min-w-[44px] px-2.5 py-1.5 rounded-xl bg-emerald-600/15 hover:bg-emerald-600/25 text-emerald-300 border border-emerald-500/25 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+                              title={isFa ? 'بازیابی' : 'Restore'}
+                            >
+                              <RotateCcw className="w-3.5 h-3.5" />
+                              <span className="hidden sm:inline">{isFa ? 'بازیابی' : 'Restore'}</span>
+                            </button>
+
+                            {/* Permanent Delete Button */}
+                            <button
+                              type="button"
+                              onClick={() => onPermanentDeleteItem?.(item.id, item.type)}
+                              className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-bold flex items-center justify-center transition-all cursor-pointer"
+                              title={isFa ? 'حذف دائمی' : 'Permanent Delete'}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -259,3 +259,48 @@ export function getJalaliWeekdayIndex(jy: number, jm: number, jd: number): numbe
   return (d.getDay() + 1) % 7;
 }
 
+/**
+ * Returns a stable string key representing the calendar date of the timestamp.
+ */
+export function getDateKey(timestamp: number): string {
+  const d = new Date(timestamp);
+  return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+/**
+ * Returns a clean day label for timeline sectioning: "امروز", "فردا", "دیروز", or full Jalali/Gregorian date.
+ */
+export function getDayHeaderLabel(timestamp: number, language: string = 'fa'): string {
+  const isEn = language === 'en';
+  const now = new Date();
+  const target = new Date(timestamp);
+
+  const nowDateKey = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
+  const targetDateKey = `${target.getFullYear()}-${target.getMonth() + 1}-${target.getDate()}`;
+
+  const tomorrow = new Date(now.getTime() + 86400000);
+  const tomorrowDateKey = `${tomorrow.getFullYear()}-${tomorrow.getMonth() + 1}-${tomorrow.getDate()}`;
+
+  const yesterday = new Date(now.getTime() - 86400000);
+  const yesterdayDateKey = `${yesterday.getFullYear()}-${yesterday.getMonth() + 1}-${yesterday.getDate()}`;
+
+  if (targetDateKey === nowDateKey) {
+    return isEn ? 'Today' : 'امروز';
+  }
+  if (targetDateKey === tomorrowDateKey) {
+    return isEn ? 'Tomorrow' : 'فردا';
+  }
+  if (targetDateKey === yesterdayDateKey) {
+    return isEn ? 'Yesterday' : 'دیروز';
+  }
+
+  if (isEn) {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${target.toLocaleDateString('en-US', { weekday: 'short' })}, ${months[target.getMonth()]} ${target.getDate()}`;
+  }
+
+  const { weekday, day, monthName } = getJalaliComponents(timestamp);
+  return `${weekday} ${toPersianDigits(day)} ${monthName}`;
+}
+
+

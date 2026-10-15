@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliFull, formatJalaliTime } from '../utils/jalali';
 import { getRecurrenceLabel } from '../utils/recurrence';
-import { startAlarmRinging, stopAlarmRinging } from '../utils/audio';
+import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound } from '../utils/audio';
+import { dismissDeliveredNotifications } from '../utils/nativeLocalNotifications';
 import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
 import { 
   Bell, 
@@ -43,8 +44,11 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       return;
     }
 
-    // Play alarm sound with volume configured in app settings
-    const sound: PhoneAlarmSound = (reminder.ringTune as PhoneAlarmSound) || settings?.alarmSound || 'digital-beep';
+    // Requirement 4: Close system notification so two sounds don't play simultaneously
+    dismissDeliveredNotifications(reminder.id).catch(() => {});
+
+    // Requirement 1 & 2: Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital-beep)
+    const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
 

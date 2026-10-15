@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliTime } from '../utils/jalali';
-import { startAlarmRinging, stopAlarmRinging } from '../utils/audio';
+import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound } from '../utils/audio';
+import { dismissDeliveredNotifications } from '../utils/nativeLocalNotifications';
 import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
 import { 
   Bell, 
@@ -43,8 +44,11 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
       return;
     }
 
-    // Play alarm audio sound & vibration
-    const sound: PhoneAlarmSound = (reminder.ringTune as PhoneAlarmSound) || settings?.alarmSound || 'digital-beep';
+    // Dismiss system notification so two sounds don't play simultaneously
+    dismissDeliveredNotifications(reminder.id).catch(() => {});
+
+    // Play alarm audio sound & vibration using resolved sound
+    const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
 

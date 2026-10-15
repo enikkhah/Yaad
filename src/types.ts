@@ -17,6 +17,7 @@ export interface IdeaNote {
   videoRecordUrl?: string;     // Recorded video memo blob/data URL
   drawingDataUrl?: string;     // Hand-drawn sketch canvas data URL
   googleSynced?: boolean;
+  deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 
 export interface AppSettings {
@@ -76,6 +77,7 @@ export interface SavedLocation {
   linkedReminderId?: string;
   // Geofence (حصار مکانی و محدوده شعاع)
   geofence?: LocationCheckpointConfig;
+  deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 
 export interface Reminder {
@@ -105,6 +107,7 @@ export interface Reminder {
   googleTaskId?: string;
   // Geofencing and location-based reminder fields
   geofence?: LocationGeofenceConfig;
+  deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 
 export interface StatsData {
@@ -150,5 +153,16 @@ export interface Occasion {
   ringTune?: string;            // صدای زنگ اختصاصی
   color?: string;               // تم رنگی
   createdAt: number;
+  deletedAt?: number;           // Recycle Bin deletion timestamp
+}
+
+export type RecycleBinItemType = 'reminder' | 'location' | 'occasion' | 'idea';
+
+export interface RecycleBinItem {
+  id: string;
+  type: RecycleBinItemType;
+  title: string;
+  deletedAt: number;
+  originalItem: Reminder | SavedLocation | Occasion | IdeaNote;
 }
 

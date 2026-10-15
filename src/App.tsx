@@ -1,8 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Reminder, Category, Priority, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
 import { getJalaliComponents, formatJalaliFull, toPersianDigits } from './utils/jalali';
 import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { stopFlashlightStrobe } from './utils/torch';
+import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { TimelineWidget } from './components/TimelineWidget';
 import { ReminderForm } from './components/ReminderForm';
 import { ReminderCard } from './components/ReminderCard';
@@ -41,7 +42,8 @@ import {
   syncNotificationSoundAndVolume,
   setupNotificationListeners,
   getNotificationId,
-  fireImmediateLocalNotification
+  fireImmediateLocalNotification,
+  dismissDeliveredNotifications
 } from './utils/nativeLocalNotifications';
 import { 
   evaluateGeofences, 
@@ -158,18 +160,6 @@ export default function App() {
     }
   }, [settings.fontSize]);
 
-  // Keep audio volume in sync with settings and sync Android Notification Channels
-  useEffect(() => {
-    if (settings.alarmVolume !== undefined) {
-      setGlobalVolume(settings.alarmVolume);
-    }
-    syncNotificationSoundAndVolume(settings.alarmSound, settings.alarmVolume)
-      .then(() => {
-        syncAllRemindersWithLocalNotifications(reminders).catch(() => {});
-      })
-      .catch(() => {});
-  }, [settings.alarmSound, settings.alarmVolume]);
-
   // Reminders state: Default seed reminders are removed per user request
   const [reminders, setReminders] = useState<Reminder[]>(() => {
     try {
@@ -187,6 +177,19 @@ export default function App() {
 
     return [];
   });
+
+  // Keep audio volume in sync with settings, sync Android Notification Channels,
+  // and reschedule all upcoming pending reminders with the correct sound on app startup and whenever alarmSound changes
+  useEffect(() => {
+    if (settings.alarmVolume !== undefined) {
+      setGlobalVolume(settings.alarmVolume);
+    }
+    syncNotificationSoundAndVolume(settings.alarmSound, settings.alarmVolume)
+      .then(() => {
+        syncAllRemindersWithLocalNotifications(reminders, settings).catch(() => {});
+      })
+      .catch(() => {});
+  }, [settings.alarmSound, settings.alarmVolume, reminders]);
 
   // Ideas & Thoughts state
   const [ideas, setIdeas] = useState<IdeaNote[]>(() => {
@@ -273,6 +276,12 @@ export default function App() {
       // Ignore
     }
   }, [occasions]);
+
+  // Active (non-deleted) collections for display in all tabs, timelines, counters, and background alarms
+  const activeReminders = useMemo(() => reminders.filter((r) => !r.deletedAt), [reminders]);
+  const activeIdeas = useMemo(() => ideas.filter((i) => !i.deletedAt), [ideas]);
+  const activeSavedLocations = useMemo(() => savedLocations.filter((l) => !l.deletedAt), [savedLocations]);
+  const activeOccasions = useMemo(() => occasions.filter((o) => !o.deletedAt), [occasions]);
 
   // Auto-recall/restore from persistent local vault (IndexedDB / LocalStorage backup) upon app launch or re-installation
   const [isVaultInitialized, setIsVaultInitialized] = useState(false);
@@ -1024,7 +1033,7 @@ export default function App() {
       };
 
       // Reschedule Android Local Notification
-      rescheduleReminderNotification(editingReminder.id, updatedReminder).catch(() => {});
+      rescheduleReminderNotification(editingReminder.id, updatedReminder, settings).catch(() => {});
 
       setReminders((prev) =>
         prev.map((r) =>
@@ -1045,7 +1054,7 @@ export default function App() {
       };
 
       // Schedule Android Local Notification
-      scheduleReminderNotification(newReminder).catch(() => {});
+      scheduleReminderNotification(newReminder, settings).catch(() => {});
 
       setReminders((prev) => [newReminder, ...prev]);
     }
@@ -1075,7 +1084,10 @@ export default function App() {
   };
 
   const handleDeleteIdea = (id: string) => {
-    setIdeas((prev) => prev.filter((i) => i.id !== id));
+    setIdeas((prev) =>
+      prev.map((i) => (i.id === id ? { ...i, deletedAt: Date.now() } : i))
+    );
+    showSyncNotification(settings.language === 'en' ? 'Idea moved to recycle bin.' : 'ایده به سطل بازیافت منتقل شد.');
   };
 
   // Handler: Save / Edit Location (ثبت لوکیشن با تکیه بر GPS و گوگل مپ)
@@ -1123,8 +1135,10 @@ export default function App() {
   };
 
   const handleDeleteLocation = (id: string) => {
-    setSavedLocations((prev) => prev.filter((loc) => loc.id !== id));
-    showSyncNotification('مکان با موفقیت حذف شد.');
+    setSavedLocations((prev) =>
+      prev.map((loc) => (loc.id === id ? { ...loc, deletedAt: Date.now() } : loc))
+    );
+    showSyncNotification(settings.language === 'en' ? 'Location moved to recycle bin.' : 'مکان به سطل بازیافت منتقل شد.');
   };
 
   // Handler: Save / Edit Occasion (مناسبت‌ها: تولد، سالگردها و رویدادهای مهم)
@@ -1158,8 +1172,10 @@ export default function App() {
   };
 
   const handleDeleteOccasion = (id: string) => {
-    setOccasions((prev) => prev.filter((o) => o.id !== id));
-    showSyncNotification('مناسبت با موفقیت حذف شد.');
+    setOccasions((prev) =>
+      prev.map((o) => (o.id === id ? { ...o, deletedAt: Date.now() } : o))
+    );
+    showSyncNotification(settings.language === 'en' ? 'Occasion moved to recycle bin.' : 'مناسبت به سطل بازیافت منتقل شد.');
   };
 
   const handleCreateReminderFromOccasion = (occasion: Occasion) => {
@@ -1248,7 +1264,7 @@ export default function App() {
                 postponeCount: 0,
               };
               // Schedule next recurrence in Android Local Notifications
-              scheduleReminderNotification(recurringUpdated).catch(() => {});
+              scheduleReminderNotification(recurringUpdated, settings).catch(() => {});
 
               confetti({
                 particleCount: 50,
@@ -1309,7 +1325,7 @@ export default function App() {
               completedAt: undefined,
               postponeCount: 0,
             };
-            scheduleReminderNotification(recurringNext).catch(() => {});
+            scheduleReminderNotification(recurringNext, settings).catch(() => {});
 
             showSyncNotification(`✓ انجام شد! نوبت بعدی برای ${formatJalaliFull(nextDue)} زمان‌بندی شد.`);
             return prev.map((r) => (r.id === id ? recurringNext : r));
@@ -1330,7 +1346,7 @@ export default function App() {
       // If user deliberately un-completes a completed reminder in the list
       triggeredAlarmsRef.current.delete(id);
       if (target.dueTimestamp > Date.now()) {
-        scheduleReminderNotification({ ...target, status: 'pending' }).catch(() => {});
+        scheduleReminderNotification({ ...target, status: 'pending' }, settings).catch(() => {});
       }
       return prev.map((r) =>
         r.id === id
@@ -1362,7 +1378,7 @@ export default function App() {
             postponeCount: r.postponeCount + 1,
           };
           // Reschedule notification for the new postponed time
-          rescheduleReminderNotification(id, postponedRem).catch(() => {});
+          rescheduleReminderNotification(id, postponedRem, settings).catch(() => {});
           return postponedRem;
         }
         return r;
@@ -1372,7 +1388,7 @@ export default function App() {
 
   handlePostponeRef.current = handlePostpone;
 
-  // Handler: Delete reminder with 5-second Undo capability
+  // Handler: Delete reminder (soft delete into Recycle Bin)
   const handleDelete = (id: string) => {
     stopAlarmRinging();
     stopFlashlightStrobe();
@@ -1401,7 +1417,11 @@ export default function App() {
       });
     }
 
-    setReminders((prev) => prev.filter((r) => r.id !== id));
+    // Soft delete: keep in storage with deletedAt timestamp for Recycle Bin
+    setReminders((prev) =>
+      prev.map((r) => (r.id === id ? { ...r, deletedAt: Date.now() } : r))
+    );
+    showSyncNotification(settings.language === 'en' ? 'Reminder moved to recycle bin.' : 'یادآور به سطل بازیافت منتقل شد.');
   };
 
   const handleUndoDelete = () => {
@@ -1409,22 +1429,81 @@ export default function App() {
     if (undoToast.timer) clearTimeout(undoToast.timer);
 
     const restored = undoToast.reminder;
-    const restoreIdx = undoToast.index;
 
     // Reschedule restored reminder if pending and in the future
     if (restored.status === 'pending' && restored.dueTimestamp > Date.now()) {
-      scheduleReminderNotification(restored).catch(() => {});
+      scheduleReminderNotification(restored, settings).catch(() => {});
     }
 
-    setReminders((prev) => {
-      const copy = [...prev];
-      const validIndex = Math.min(Math.max(0, restoreIdx), copy.length);
-      copy.splice(validIndex, 0, restored);
-      return copy;
-    });
+    setReminders((prev) =>
+      prev.map((r) => (r.id === restored.id ? { ...r, deletedAt: undefined } : r))
+    );
 
     setUndoToast(null);
     showSyncNotification(settings.language === 'en' ? 'Reminder restored' : 'یادآور با موفقیت بازگردانده شد');
+  };
+
+  // Handler: Restore item from Recycle Bin
+  const handleRestoreItem = (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => {
+    if (type === 'reminder') {
+      setReminders((prev) =>
+        prev.map((r) => {
+          if (r.id === id) {
+            const restored: Reminder = { ...r, deletedAt: undefined };
+            if (restored.status === 'pending' && restored.dueTimestamp > Date.now()) {
+              scheduleReminderNotification(restored, settings).catch(() => {});
+            }
+            return restored;
+          }
+          return r;
+        })
+      );
+      showSyncNotification(settings.language === 'en' ? 'Reminder restored' : 'یادآور با موفقیت بازیابی شد');
+    } else if (type === 'location') {
+      setSavedLocations((prev) =>
+        prev.map((l) => (l.id === id ? { ...l, deletedAt: undefined } : l))
+      );
+      showSyncNotification(settings.language === 'en' ? 'Location restored' : 'مکان با موفقیت بازیابی شد');
+    } else if (type === 'occasion') {
+      setOccasions((prev) =>
+        prev.map((o) => (o.id === id ? { ...o, deletedAt: undefined } : o))
+      );
+      showSyncNotification(settings.language === 'en' ? 'Occasion restored' : 'مناسبت با موفقیت بازیابی شد');
+    } else if (type === 'idea') {
+      setIdeas((prev) =>
+        prev.map((i) => (i.id === id ? { ...i, deletedAt: undefined } : i))
+      );
+      showSyncNotification(settings.language === 'en' ? 'Idea restored' : 'ایده با موفقیت بازیابی شد');
+    }
+  };
+
+  // Handler: Permanent delete item from Recycle Bin
+  const handlePermanentDeleteItem = (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => {
+    if (type === 'reminder') {
+      cancelReminderNotification(id).catch(() => {});
+      setReminders((prev) => prev.filter((r) => r.id !== id));
+    } else if (type === 'location') {
+      setSavedLocations((prev) => prev.filter((l) => l.id !== id));
+    } else if (type === 'occasion') {
+      setOccasions((prev) => prev.filter((o) => o.id !== id));
+    } else if (type === 'idea') {
+      setIdeas((prev) => prev.filter((i) => i.id !== id));
+    }
+    showSyncNotification(settings.language === 'en' ? 'Permanently deleted' : 'مورد به صورت دائمی حذف شد');
+  };
+
+  // Handler: Empty Recycle Bin
+  const handleEmptyRecycleBin = () => {
+    reminders.forEach((r) => {
+      if (r.deletedAt) {
+        cancelReminderNotification(r.id).catch(() => {});
+      }
+    });
+    setReminders((prev) => prev.filter((r) => !r.deletedAt));
+    setIdeas((prev) => prev.filter((i) => !i.deletedAt));
+    setSavedLocations((prev) => prev.filter((l) => !l.deletedAt));
+    setOccasions((prev) => prev.filter((o) => !o.deletedAt));
+    showSyncNotification(settings.language === 'en' ? 'Recycle bin emptied' : 'سطل بازیافت خالی شد');
   };
 
   // Handler: Install PWA
@@ -1626,7 +1705,7 @@ export default function App() {
             >
               <span>{t.tabReminders}</span>
               <span className="opacity-80 text-xs font-mono mr-1 ml-1">
-                ({settings.language === 'en' ? reminders.length : toPersianDigits(reminders.length)})
+                ({settings.language === 'en' ? activeReminders.length : toPersianDigits(activeReminders.length)})
               </span>
             </button>
 
@@ -1642,7 +1721,7 @@ export default function App() {
               <Cake className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'occasions' ? 'text-amber-400' : 'text-stone-400'}`} />
               <span>{t.tabOccasions}</span>
               <span className="opacity-80 text-xs font-mono mr-1 ml-1">
-                ({settings.language === 'en' ? occasions.length : toPersianDigits(occasions.length)})
+                ({settings.language === 'en' ? activeOccasions.length : toPersianDigits(activeOccasions.length)})
               </span>
             </button>
 
@@ -1658,7 +1737,7 @@ export default function App() {
               <MapPin className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'locations' ? 'text-amber-400' : 'text-stone-400'}`} />
               <span>{t.tabLocations}</span>
               <span className="opacity-80 text-xs font-mono mr-1 ml-1">
-                ({settings.language === 'en' ? savedLocations.length : toPersianDigits(savedLocations.length)})
+                ({settings.language === 'en' ? activeSavedLocations.length : toPersianDigits(activeSavedLocations.length)})
               </span>
             </button>
 
@@ -1674,7 +1753,7 @@ export default function App() {
               <Lightbulb className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'ideas' ? 'text-amber-400' : 'text-stone-400'}`} />
               <span>{t.tabIdeas}</span>
               <span className="opacity-80 text-xs font-mono mr-1 ml-1">
-                ({settings.language === 'en' ? ideas.length : toPersianDigits(ideas.length)})
+                ({settings.language === 'en' ? activeIdeas.length : toPersianDigits(activeIdeas.length)})
               </span>
             </button>
           </div>
@@ -1730,208 +1809,25 @@ export default function App() {
       <main className="flex-1 w-full px-3 sm:px-6 py-4 sm:py-6 space-y-6 pb-36 sm:pb-44">
         
         {/* VIEW 1: REMINDERS TAB */}
+        {/* VIEW 1: REMINDERS TAB - SINGLE VERTICAL TIMELINE */}
         {activeMainTab === 'reminders' && (
-          <>
-            {/* SECTION 1: COMPACT NEXT REMINDER WIDGET WITH LIVE COUNTDOWN TIMER */}
-            <section aria-label={isEn ? 'Next Reminder Widget' : 'ویجت یادآور بعدی'}>
-              <TimelineWidget
-                reminders={reminders}
-                onToggleComplete={handleToggleComplete}
-                onPostpone={handlePostpone}
-                onSelectReminder={(rem) => {
-                  setEditingReminder(rem);
-                  setIsFormOpen(true);
-                }}
-                timelineMode={settings.timelineMode}
-                language={settings.language}
-                countdown={upcomingCountdown}
-              />
-            </section>
-
-            {/* SECTION 2: SEARCH, QUICK FILTERS & CATEGORY BUTTONS */}
-            <section className="space-y-4">
-              <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 sm:gap-4">
-                {/* Category Tabs: کار، خانواده، سایر، انجام شده */}
-                <div className="flex items-center gap-2 p-1.5 bg-stone-900 rounded-2xl border border-stone-800 overflow-x-auto text-sm font-bold no-scrollbar">
-                  <button
-                    id="filter-cat-all"
-                    type="button"
-                    onClick={() => setCategoryFilter('all')}
-                    className={`px-4 py-2.5 rounded-xl transition-all duration-200 whitespace-nowrap active:scale-95 cursor-pointer text-sm ${
-                      categoryFilter === 'all'
-                        ? 'bg-amber-500 text-stone-950 font-black shadow-sm'
-                        : 'text-stone-300 hover:text-white'
-                    }`}
-                  >
-                    {t.filterAll} ({formatNumber(reminders.length)})
-                  </button>
-
-                  <button
-                    id="filter-cat-work"
-                    type="button"
-                    onClick={() => setCategoryFilter('work')}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all duration-200 whitespace-nowrap active:scale-95 cursor-pointer text-sm ${
-                      categoryFilter === 'work'
-                        ? 'bg-amber-500 text-stone-950 font-black shadow-sm'
-                        : 'text-stone-300 hover:text-white'
-                    }`}
-                  >
-                    <Briefcase className={`w-4 h-4 ${categoryFilter === 'work' ? 'text-stone-950' : 'text-stone-400'}`} />
-                    <span>{t.categoryWork} ({formatNumber(reminders.filter((r) => r.category === 'work').length)})</span>
-                  </button>
-
-                  <button
-                    id="filter-cat-family"
-                    type="button"
-                    onClick={() => setCategoryFilter('family')}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all duration-200 whitespace-nowrap active:scale-95 cursor-pointer text-sm ${
-                      categoryFilter === 'family'
-                        ? 'bg-amber-500 text-stone-950 font-black shadow-sm'
-                        : 'text-stone-300 hover:text-white'
-                    }`}
-                  >
-                    <Heart className={`w-4 h-4 ${categoryFilter === 'family' ? 'text-stone-950' : 'text-stone-400'}`} />
-                    <span>{t.categoryFamily} ({formatNumber(reminders.filter((r) => r.category === 'family').length)})</span>
-                  </button>
-
-                  <button
-                    id="filter-cat-other"
-                    type="button"
-                    onClick={() => setCategoryFilter('other')}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all duration-200 whitespace-nowrap active:scale-95 cursor-pointer text-sm ${
-                      categoryFilter === 'other'
-                        ? 'bg-amber-500 text-stone-950 font-black shadow-sm'
-                        : 'text-stone-300 hover:text-white'
-                    }`}
-                  >
-                    <Tag className={`w-4 h-4 ${categoryFilter === 'other' ? 'text-stone-950' : 'text-stone-400'}`} />
-                    <span>{t.categoryOther} ({formatNumber(reminders.filter((r) => r.category === 'other').length)})</span>
-                  </button>
-
-                  <button
-                    id="filter-cat-completed"
-                    type="button"
-                    onClick={() => setCategoryFilter('completed')}
-                    className={`flex items-center gap-2 px-4 py-2.5 rounded-xl transition-all duration-200 whitespace-nowrap active:scale-95 cursor-pointer text-sm ${
-                      categoryFilter === 'completed'
-                        ? 'bg-emerald-600 text-white font-black shadow-sm'
-                        : 'text-stone-300 hover:text-white'
-                    }`}
-                  >
-                    <CheckCircle2 className={`w-4 h-4 ${categoryFilter === 'completed' ? 'text-white' : 'text-emerald-400'}`} />
-                    <span>{t.done} ({formatNumber(reminders.filter((r) => r.status === 'completed').length)})</span>
-                  </button>
-                </div>
-
-                {/* Search Input & Priority Filter */}
-                <div className="flex items-center gap-2.5">
-                  <div className="relative flex-1 sm:w-64">
-                    <Search className="w-4 h-4 text-stone-400 absolute right-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                    <input
-                      type="text"
-                      value={searchQuery}
-                      onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder={t.searchPlaceholder}
-                      className="w-full bg-stone-900 border border-stone-800 rounded-2xl pr-10 pl-3.5 py-2.5 text-sm text-white placeholder-stone-400 focus:outline-none focus:border-amber-500 transition-colors"
-                    />
-                    {searchQuery && (
-                      <button
-                        onClick={() => setSearchQuery('')}
-                        className="absolute left-3 top-1/2 -translate-y-1/2 text-stone-400 hover:text-white"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    )}
-                  </div>
-
-                  <select
-                    value={priorityFilter}
-                    onChange={(e) => setPriorityFilter(e.target.value as any)}
-                    className="bg-stone-900 border border-stone-800 rounded-2xl px-3.5 py-2.5 text-sm text-stone-200 focus:outline-none focus:border-amber-500 font-medium cursor-pointer transition-colors"
-                  >
-                    <option value="all">{isEn ? 'All Priorities' : 'همه اولویت‌ها'}</option>
-                    <option value="high">{isEn ? 'High (Urgent)' : 'فقط فوری'}</option>
-                    <option value="medium">{isEn ? 'Medium' : 'متوسط'}</option>
-                    <option value="low">{isEn ? 'Normal' : 'عادی'}</option>
-                  </select>
-                </div>
-              </div>
-            </section>
-
-            {/* SECTION 3: REMINDERS LIST */}
-            <section className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="font-bold text-base text-stone-300">
-                  {isEn ? 'Reminders List' : 'فهرست یادآورها'} ({formatNumber(sortedReminders.length)})
-                </h3>
-              </div>
-
-              {sortedReminders.length > 0 ? (
-                <>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 sm:gap-5">
-                    {sortedReminders.map((reminder) => (
-                      <ReminderCard
-                        key={reminder.id}
-                        reminder={reminder}
-                        isNext={reminder.id === upcomingReminder?.id && reminder.status !== 'completed'}
-                        countdown={null}
-                        onToggleComplete={handleToggleComplete}
-                        onPostpone={handlePostpone}
-                        onDelete={handleDelete}
-                        onEdit={(r) => {
-                          setEditingReminder(r);
-                          setIsFormOpen(true);
-                        }}
-                        onViewImage={(url) => setViewingImageUrl(url)}
-                        onToggleGeofence={handleToggleReminderGeofence}
-                        onSimulateGeofenceTrigger={handleSimulateGeofenceTrigger}
-                        userPosition={currentUserPosition}
-                        isGeofenceServiceActive={isGeofenceActive}
-                        language={settings.language}
-                      />
-                    ))}
-                  </div>
-
-                  {/* Bottom spacer so FAB (+) and navigation never overlap the last card */}
-                  <div className="h-20 sm:h-24 w-full shrink-0" aria-hidden="true" />
-                </>
-              ) : (
-                <>
-                  <div className="py-14 px-4 text-center rounded-2xl border border-dashed border-stone-800/80 bg-stone-900/30 space-y-4 transition-all duration-200">
-                    <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center mx-auto shadow-inner">
-                      <Bell className="w-7 h-7" />
-                    </div>
-                    <div className="space-y-1.5">
-                      <h4 className="font-bold text-base text-white">
-                        {reminders.length === 0 
-                          ? (isEn ? 'No reminders yet!' : 'هنوز یادآوری ثبت نکرده‌اید!') 
-                          : (isEn ? 'No matching reminders found' : 'یادآوری با این مشخصات یافت نشد')}
-                      </h4>
-                      <p className="text-sm text-stone-400 max-w-sm mx-auto leading-relaxed">
-                        {isEn 
-                          ? 'Keep your tasks and daily events on track with sound and voice alerts.' 
-                          : 'کارهای مهم و روزمره را بنویسید تا با آلارم هوشمند و گوینده صوتی به موقع به شما یادآوری شوند.'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingReminder(null);
-                        setIsFormOpen(true);
-                      }}
-                      className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-sm transition-all duration-200 shadow-lg shadow-amber-500/25 active:scale-95 cursor-pointer mx-auto"
-                    >
-                      <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
-                      <span>{isEn ? 'Create New Reminder' : 'ثبت اولین یادآور'}</span>
-                    </button>
-                  </div>
-
-                  {/* Bottom spacer for empty state */}
-                  <div className="h-20 sm:h-24 w-full shrink-0" aria-hidden="true" />
-                </>
-              )}
-            </section>
-          </>
+          <VerticalTimelineView
+            reminders={reminders}
+            categoryFilter={categoryFilter === 'completed' ? 'all' : categoryFilter}
+            onSetCategoryFilter={(filter) => setCategoryFilter(filter)}
+            onToggleComplete={handleToggleComplete}
+            onPostpone={handlePostpone}
+            onEdit={(rem) => {
+              setEditingReminder(rem);
+              setIsFormOpen(true);
+            }}
+            onDelete={handleDelete}
+            onCreateNew={() => {
+              setEditingReminder(null);
+              setIsFormOpen(true);
+            }}
+            language={settings.language}
+          />
         )}
 
         {/* VIEW 2: IDEAS & THOUGHTS SECTION */}
@@ -1955,9 +1851,9 @@ export default function App() {
               </button>
             </div>
 
-            {ideas.length > 0 ? (
+            {activeIdeas.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {ideas.map((idea) => (
+                {activeIdeas.map((idea) => (
                   <IdeaCard
                     key={idea.id}
                     idea={idea}
@@ -2001,7 +1897,7 @@ export default function App() {
 
         {/* VIEW 3: LOCATIONS TAB (ثبت لوکیشن با تکیه بر GPS و گوگل مپ) */}
         {activeMainTab === 'locations' && (() => {
-          const activeGeofencesCount = savedLocations.filter((l) => l.geofence && l.geofence.enabled).length;
+          const activeGeofencesCount = activeSavedLocations.filter((l) => l.geofence && l.geofence.enabled).length;
 
           return (
             <section className="space-y-4 animate-in fade-in">
@@ -2014,7 +1910,7 @@ export default function App() {
                     <h3 className="font-bold text-base sm:text-lg text-white flex items-center gap-2 flex-wrap">
                       <span>{isEn ? 'Saved Places with GPS & Google Maps' : 'مکان‌های ثبت‌شده با GPS و Google Maps'}</span>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-stone-800 text-stone-300 border border-stone-700 font-mono">
-                        {formatNumber(savedLocations.length)}
+                        {formatNumber(activeSavedLocations.length)}
                       </span>
                       {activeGeofencesCount > 0 && (
                         <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
@@ -2057,7 +1953,7 @@ export default function App() {
                   }`}
                 >
                   <span>{isEn ? 'All Places' : 'همه مکان‌ها'}</span>
-                  <span className="ms-1 opacity-80 font-mono">({formatNumber(savedLocations.length)})</span>
+                  <span className="ms-1 opacity-80 font-mono">({formatNumber(activeSavedLocations.length)})</span>
                 </button>
 
                 <button
@@ -2119,9 +2015,9 @@ export default function App() {
                 </div>
               </div>
 
-              {savedLocations.length > 0 ? (
+              {activeSavedLocations.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {savedLocations
+                  {activeSavedLocations
                     .filter((loc) => {
                       if (locationFilter === 'checkpoints' && (!loc.geofence || !loc.geofence.enabled)) {
                         return false;
@@ -2198,7 +2094,7 @@ export default function App() {
         {/* VIEW 4: OCCASIONS & MILESTONES (مناسبت‌ها: تولد، سالگردها و رویدادهای مهم) */}
         {activeMainTab === 'occasions' && (
           <OccasionsView
-            occasions={occasions}
+            occasions={activeOccasions}
             onAddNew={() => {
               setEditingOccasion(null);
               setIsOccasionModalOpen(true);
@@ -2346,9 +2242,9 @@ export default function App() {
           >
             <div className="relative">
               <Bell className={`w-5 h-5 ${activeMainTab === 'reminders' ? 'stroke-[2.4] text-amber-400' : 'stroke-[1.8] text-stone-400'}`} />
-              {reminders.length > 0 && (
+              {activeReminders.length > 0 && (
                 <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
-                  {formatNumber(reminders.length)}
+                  {formatNumber(activeReminders.length)}
                 </span>
               )}
             </div>
@@ -2367,9 +2263,9 @@ export default function App() {
           >
             <div className="relative">
               <Cake className={`w-5 h-5 ${activeMainTab === 'occasions' ? 'stroke-[2.4] text-amber-400' : 'stroke-[1.8] text-stone-400'}`} />
-              {occasions.length > 0 && (
+              {activeOccasions.length > 0 && (
                 <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
-                  {formatNumber(occasions.length)}
+                  {formatNumber(activeOccasions.length)}
                 </span>
               )}
             </div>
@@ -2388,9 +2284,9 @@ export default function App() {
           >
             <div className="relative">
               <MapPin className={`w-5 h-5 ${activeMainTab === 'locations' ? 'stroke-[2.4] text-amber-400' : 'stroke-[1.8] text-stone-400'}`} />
-              {savedLocations.length > 0 && (
+              {activeSavedLocations.length > 0 && (
                 <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
-                  {formatNumber(savedLocations.length)}
+                  {formatNumber(activeSavedLocations.length)}
                 </span>
               )}
             </div>
@@ -2409,9 +2305,9 @@ export default function App() {
           >
             <div className="relative">
               <Lightbulb className={`w-5 h-5 ${activeMainTab === 'ideas' ? 'stroke-[2.4] text-amber-400' : 'stroke-[1.8] text-stone-400'}`} />
-              {ideas.length > 0 && (
+              {activeIdeas.length > 0 && (
                 <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
-                  {formatNumber(ideas.length)}
+                  {formatNumber(activeIdeas.length)}
                 </span>
               )}
             </div>
@@ -2509,6 +2405,9 @@ export default function App() {
         }}
         isGeofenceActive={isGeofenceActive}
         onToggleGeofenceActive={handleToggleGeofenceService}
+        onRestoreItem={handleRestoreItem}
+        onPermanentDeleteItem={handlePermanentDeleteItem}
+        onEmptyRecycleBin={handleEmptyRecycleBin}
       />
 
       {/* INSTALL MODAL */}
@@ -2527,7 +2426,7 @@ export default function App() {
       <StatisticsModal
         isOpen={isStatsOpen}
         onClose={() => setIsStatsOpen(false)}
-        reminders={reminders}
+        reminders={activeReminders}
         language={settings.language}
       />
 

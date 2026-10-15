@@ -1,12 +1,28 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications, PermissionStatus } from '@capacitor/local-notifications';
-import { Reminder } from '../types';
+import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliTime } from './jalali';
+import { resolveAlarmSound } from './audio';
 
 export const NOTIFICATION_CHANNEL_ID = 'yaad_reminders_channel';
 export const NOTIFICATION_ACTION_TYPE_ID = 'YAAD_REMINDER_ACTIONS';
 
 let isChannelInitialized = false;
+
+/**
+ * Dismisses delivered system notifications when the in-app alarm screen opens,
+ * preventing duplicate alarm sounds/banners from ringing simultaneously.
+ * (Calls LocalNotifications.removeAllDeliveredNotifications)
+ */
+export async function dismissDeliveredNotifications(_reminderId?: string | number): Promise<void> {
+  if (!isNativeApp()) return;
+  try {
+    // Close all delivered notifications per user requirement
+    await LocalNotifications.removeAllDeliveredNotifications().catch(() => {});
+  } catch (err) {
+    console.warn('Could not remove delivered notifications:', err);
+  }
+}
 
 export const SOUND_FILE_MAP: Record<string, string> = {
   'digital-beep': 'digital_beep.wav',
@@ -343,7 +359,10 @@ export async function requestNotificationPermission(): Promise<boolean> {
  * Web compatibility:
  * When executed in Web browser, records simulation state without throwing errors.
  */
-export async function scheduleReminderNotification(reminder: Reminder): Promise<boolean> {
+export async function scheduleReminderNotification(
+  reminder: Reminder,
+  currentSettings?: AppSettings
+): Promise<boolean> {
   // Only pending reminders in the future should be scheduled
   const now = Date.now();
   if (reminder.status !== 'pending' || reminder.dueTimestamp <= now) {
@@ -358,6 +377,13 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
   const body = reminder.description
     ? `${reminder.description} • ساعت ${timeFormatted}`
     : `زمان انجام یادآور: ${timeFormatted}`;
+
+  // 1. Resolve user-configured alarm sound and volume according to rule:
+  // Only if reminder.ringTune is one of the 5 valid IDs (digital-beep, radar, marimba, morning-chime, urgent-bell), use it;
+  // otherwise use settings.alarmSound, and if none, fallback to digital-beep.
+  const appSettings = currentSettings || getSavedAppSettings();
+  const soundType: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, appSettings?.alarmSound);
+  const volume = appSettings?.alarmVolume !== undefined ? appSettings.alarmVolume : 0.85;
 
   // Web Browser Handling: simulate queue in debug panel without triggering unsupported browser error
   if (!isNativeApp()) {
@@ -376,7 +402,7 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
       title,
       body,
       schedule: { at: scheduledDate.toString(), allowWhileIdle: true },
-      extra: { reminderId: reminder.id, dueTimestamp: reminder.dueTimestamp },
+      extra: { reminderId: reminder.id, dueTimestamp: reminder.dueTimestamp, sound: soundType, volume },
     };
 
     const existingList = (currentDebugState.pendingList || []).filter((n) => n.id !== notifId);
@@ -402,7 +428,7 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
     });
 
     console.log(
-      `[YAAD Debug] Reminder #${notifId} recorded in Web Preview. Native AlarmManager runs inside Android APK.`
+      `[YAAD Debug] Reminder #${notifId} recorded in Web Preview. Sound: ${soundType}, Volume: ${volume}`
     );
     return true;
   }
@@ -426,11 +452,6 @@ export async function scheduleReminderNotification(reminder: Reminder): Promise<
     } else {
       await initNotificationChannel();
     }
-
-    // Resolve user-configured alarm sound and volume from app settings
-    const appSettings = getSavedAppSettings();
-    const soundType = (reminder.ringTune as string) || appSettings?.alarmSound || 'digital-beep';
-    const volume = appSettings?.alarmVolume !== undefined ? appSettings.alarmVolume : 0.85;
 
     const isSilent = volume <= 0.01;
     const targetChannelId = getChannelIdForConfig(soundType, volume);
@@ -963,25 +984,29 @@ export async function fireImmediateLocalNotification(
  */
 export async function rescheduleReminderNotification(
   previousId: string,
-  updatedReminder: Reminder
+  updatedReminder: Reminder,
+  currentSettings?: AppSettings
 ): Promise<boolean> {
   await cancelReminderNotification(previousId);
-  return scheduleReminderNotification(updatedReminder);
+  return scheduleReminderNotification(updatedReminder, currentSettings);
 }
 
 /**
  * Synchronizes all upcoming pending reminders with Android Local Notifications.
+ * Reschedules all pending reminders using the correct resolved sound.
  */
-export async function syncAllRemindersWithLocalNotifications(reminders: Reminder[]): Promise<void> {
-  if (!isNativeApp()) return;
-
+export async function syncAllRemindersWithLocalNotifications(
+  reminders: Reminder[],
+  currentSettings?: AppSettings
+): Promise<void> {
+  const appSettings = currentSettings || getSavedAppSettings();
   const now = Date.now();
-  const upcomingPending = reminders.filter(
+  const upcomingPending = (reminders || []).filter(
     (r) => r.status === 'pending' && r.dueTimestamp > now
   );
 
   for (const reminder of upcomingPending) {
-    await scheduleReminderNotification(reminder);
+    await scheduleReminderNotification(reminder, appSettings);
   }
 }
 

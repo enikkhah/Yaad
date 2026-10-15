@@ -35,8 +35,11 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<OccasionType | 'all'>('all');
 
+  // Filter out deleted occasions (سطل بازیافت)
+  const nonDeletedOccasions = occasions.filter((o) => !o.deletedAt);
+
   // Sort occasions by nearest days remaining
-  const sortedOccasions = [...occasions].sort((a, b) => {
+  const sortedOccasions = [...nonDeletedOccasions].sort((a, b) => {
     const nextA = calculateNextOccasionOccurrence(a).daysRemaining;
     const nextB = calculateNextOccasionOccurrence(b).daysRemaining;
     return nextA - nextB;
@@ -55,7 +58,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
     );
   });
 
-  const todayCount = occasions.filter((o) => calculateNextOccasionOccurrence(o).isToday).length;
+  const todayCount = nonDeletedOccasions.filter((o) => calculateNextOccasionOccurrence(o).isToday).length;
 
   return (
     <section className="space-y-4 animate-in fade-in" dir={isEn ? 'ltr' : 'rtl'}>

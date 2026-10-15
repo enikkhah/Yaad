@@ -95,11 +95,43 @@ export const PHONE_ALARM_SOUNDS: { id: PhoneAlarmSound; label: string; labelEn: 
   { id: 'urgent-bell', label: 'زنگ پرانرژی (Urgent Bell)', labelEn: 'Urgent Bell', desc: 'هشدار سریع با فرکانس بالا برای کارهای فوری', descEn: 'High-frequency pulse for urgent tasks' },
 ];
 
+export const VALID_PHONE_ALARM_SOUNDS: readonly PhoneAlarmSound[] = [
+  'digital-beep',
+  'radar',
+  'marimba',
+  'morning-chime',
+  'urgent-bell',
+] as const;
+
+export function isPhoneAlarmSound(sound: unknown): sound is PhoneAlarmSound {
+  return typeof sound === 'string' && (VALID_PHONE_ALARM_SOUNDS as readonly string[]).includes(sound);
+}
+
+/**
+ * Resolves the effective alarm sound ID according to user rules:
+ * 1. Only if reminderRingTune is one of the 5 valid sound IDs (digital-beep, radar, marimba, morning-chime, urgent-bell), use it.
+ * 2. Otherwise use settingsAlarmSound if valid.
+ * 3. If neither is valid, fallback to 'digital-beep'.
+ */
+export function resolveAlarmSound(
+  reminderRingTune?: unknown,
+  settingsAlarmSound?: unknown
+): PhoneAlarmSound {
+  if (isPhoneAlarmSound(reminderRingTune)) {
+    return reminderRingTune;
+  }
+  if (isPhoneAlarmSound(settingsAlarmSound)) {
+    return settingsAlarmSound;
+  }
+  return 'digital-beep';
+}
+
 /**
  * Play authentic default phone alarm sounds (Standard Clean Volume)
  */
 export function playPhoneAlarmSound(soundType: PhoneAlarmSound = 'digital-beep', customVol?: number): void {
   try {
+    const effectiveSound: PhoneAlarmSound = isPhoneAlarmSound(soundType) ? soundType : 'digital-beep';
     const ctx = getAudioContext();
     const now = ctx.currentTime;
     const vol = customVol !== undefined ? customVol : globalVolume;
@@ -107,7 +139,7 @@ export function playPhoneAlarmSound(soundType: PhoneAlarmSound = 'digital-beep',
 
     const masterDest = getMasterOutput(ctx);
 
-    if (soundType === 'digital-beep') {
+    if (effectiveSound === 'digital-beep') {
       // Classic electronic digital alarm: Standard clear BEEP-BEEP with balanced tone
       const beeps = [0, 0.12, 0.35, 0.47];
       beeps.forEach((startTime) => {
@@ -127,7 +159,7 @@ export function playPhoneAlarmSound(soundType: PhoneAlarmSound = 'digital-beep',
         osc1.start(now + startTime);
         osc1.stop(now + startTime + 0.09);
       });
-    } else if (soundType === 'radar') {
+    } else if (effectiveSound === 'radar') {
       // Radar alarm: Sharp high punch accent + rich resonant chime
       const radarHits = [
         { time: 0, freq: 1760, duration: 0.12 },
@@ -151,7 +183,7 @@ export function playPhoneAlarmSound(soundType: PhoneAlarmSound = 'digital-beep',
         osc.start(now + time);
         osc.stop(now + time + duration + 0.05);
       });
-    } else if (soundType === 'marimba') {
+    } else if (effectiveSound === 'marimba') {
       // Marimba: rich amplified acoustic percussion
       const notes = [
         { time: 0, freq: 523.25 },     // C5
@@ -176,7 +208,7 @@ export function playPhoneAlarmSound(soundType: PhoneAlarmSound = 'digital-beep',
         osc.start(now + time);
         osc.stop(now + time + 0.3);
       });
-    } else if (soundType === 'morning-chime') {
+    } else if (effectiveSound === 'morning-chime') {
       // Morning chime: rich warm high-output bells
       const notes = [
         { time: 0, freq: 440 },       // A4
@@ -304,12 +336,10 @@ export function startAlarmRinging(category?: Category, soundType: PhoneAlarmSoun
   stopAlarmRinging();
   unlockAudio();
 
+  const effectiveSound: PhoneAlarmSound = isPhoneAlarmSound(soundType) ? soundType : 'digital-beep';
+
   const ring = () => {
-    if (soundType) {
-      playPhoneAlarmSound(soundType, volume);
-    } else {
-      playRingTune(category || 'work', 1, volume);
-    }
+    playPhoneAlarmSound(effectiveSound, volume);
     // Also trigger mobile device vibration
     if (typeof window !== 'undefined' && 'vibrate' in navigator) {
       try {
