@@ -4,7 +4,11 @@ import {
   toPersianDigits, 
   getDaysInJalaliMonth, 
   getJalaliWeekdayIndex, 
-  getJalaliComponents 
+  getJalaliComponents,
+  GREGORIAN_MONTHS,
+  GREGORIAN_WEEKDAYS_SHORT,
+  getDaysInGregorianMonth,
+  getGregorianComponents
 } from '../utils/jalali';
 import { PERSIAN_WEEK_DAYS } from '../utils/recurrence';
 import { ChevronRight, ChevronLeft, Calendar as CalendarIcon, Check, X, RotateCcw } from 'lucide-react';
@@ -14,6 +18,7 @@ interface JalaliMultiDatePickerProps {
   onChange: (dates: string[]) => void;
   baseYear?: number;
   baseMonth?: number;
+  language?: 'fa' | 'en';
 }
 
 export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
@@ -21,13 +26,27 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
   onChange,
   baseYear,
   baseMonth,
+  language = 'fa',
 }) => {
+  const isEn = language === 'en';
   const currentJalali = getJalaliComponents(Date.now());
-  const [viewYear, setViewYear] = useState<number>(baseYear || currentJalali.year);
-  const [viewMonth, setViewMonth] = useState<number>(baseMonth || currentJalali.month);
+  const currentGregorian = getGregorianComponents(Date.now());
 
-  const daysInMonth = getDaysInJalaliMonth(viewYear, viewMonth);
-  const startWeekday = getJalaliWeekdayIndex(viewYear, viewMonth, 1); // 0=شنبه, ..., 6=جمعه
+  const [viewYear, setViewYear] = useState<number>(
+    baseYear || (isEn ? currentGregorian.year : currentJalali.year)
+  );
+  const [viewMonth, setViewMonth] = useState<number>(
+    baseMonth || (isEn ? currentGregorian.month : currentJalali.month)
+  );
+
+  const daysInMonth = isEn 
+    ? getDaysInGregorianMonth(viewYear, viewMonth) 
+    : getDaysInJalaliMonth(viewYear, viewMonth);
+
+  // In Gregorian, 0=Sunday, 6=Saturday. In Jalali, 0=Saturday (شنبه), 6=Friday (جمعه)
+  const startWeekday = isEn
+    ? new Date(viewYear, viewMonth - 1, 1).getDay()
+    : getJalaliWeekdayIndex(viewYear, viewMonth, 1);
 
   // Prev / Next Month
   const handlePrevMonth = () => {
@@ -74,68 +93,89 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
   // Quick preset: Select next 7 days or next 14 days
   const handleAddNextDays = (count: number) => {
     const datesSet = new Set(selectedDates);
-    let curComp = getJalaliComponents(Date.now());
-    let y = curComp.year;
-    let m = curComp.month;
-    let d = curComp.day;
-
-    for (let i = 0; i < count; i++) {
-      d += 1;
-      const maxDays = getDaysInJalaliMonth(y, m);
-      if (d > maxDays) {
-        d = 1;
-        m += 1;
-        if (m > 12) {
-          m = 1;
-          y += 1;
-        }
+    if (isEn) {
+      const now = new Date();
+      for (let i = 1; i <= count; i++) {
+        const d = new Date(now.getTime() + i * 86400000);
+        datesSet.add(formatDateStr(d.getFullYear(), d.getMonth() + 1, d.getDate()));
       }
-      datesSet.add(formatDateStr(y, m, d));
+    } else {
+      let curComp = getJalaliComponents(Date.now());
+      let y = curComp.year;
+      let m = curComp.month;
+      let d = curComp.day;
+
+      for (let i = 0; i < count; i++) {
+        d += 1;
+        const maxDays = getDaysInJalaliMonth(y, m);
+        if (d > maxDays) {
+          d = 1;
+          m += 1;
+          if (m > 12) {
+            m = 1;
+            y += 1;
+          }
+        }
+        datesSet.add(formatDateStr(y, m, d));
+      }
     }
     onChange(Array.from(datesSet).sort());
   };
 
   return (
-    <div className="bg-stone-950/95 border border-stone-800 rounded-2xl p-3 sm:p-4 space-y-3">
+    <div className="bg-stone-950/95 border border-stone-800 rounded-2xl p-3 sm:p-4 space-y-3" dir={isEn ? 'ltr' : 'rtl'}>
       {/* Calendar Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <CalendarIcon className="w-4 h-4 text-amber-400" />
           <span className="font-extrabold text-sm text-stone-200">
-            {PERSIAN_MONTHS[viewMonth - 1]} {toPersianDigits(viewYear)}
+            {isEn 
+              ? `${GREGORIAN_MONTHS[viewMonth - 1]} ${viewYear}` 
+              : `${PERSIAN_MONTHS[viewMonth - 1]} ${toPersianDigits(viewYear)}`}
           </span>
         </div>
 
         <div className="flex items-center gap-1">
           <button
             type="button"
-            onClick={handlePrevMonth}
+            onClick={isEn ? handlePrevMonth : handlePrevMonth}
             className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-amber-400 border border-stone-800 transition-colors"
-            title="ماه قبل"
+            title={isEn ? 'Previous month' : 'ماه قبل'}
           >
-            <ChevronRight className="w-4 h-4" />
+            {isEn ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
           </button>
           <button
             type="button"
-            onClick={handleNextMonth}
+            onClick={isEn ? handleNextMonth : handleNextMonth}
             className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-amber-400 border border-stone-800 transition-colors"
-            title="ماه بعد"
+            title={isEn ? 'Next month' : 'ماه بعد'}
           >
-            <ChevronLeft className="w-4 h-4" />
+            {isEn ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </button>
         </div>
       </div>
 
-      {/* Weekday headers (ش تا ج) */}
+      {/* Weekday headers */}
       <div className="grid grid-cols-7 gap-1 text-center border-b border-stone-800 pb-1.5">
-        {PERSIAN_WEEK_DAYS.map((w) => (
-          <span
-            key={w.index}
-            className={`text-xs font-bold ${w.index === 6 ? 'text-rose-400' : 'text-stone-400'}`}
-          >
-            {w.short}
-          </span>
-        ))}
+        {isEn ? (
+          GREGORIAN_WEEKDAYS_SHORT.map((short, idx) => (
+            <span
+              key={short}
+              className={`text-xs font-bold ${idx === 0 ? 'text-rose-400' : 'text-stone-400'}`}
+            >
+              {short}
+            </span>
+          ))
+        ) : (
+          PERSIAN_WEEK_DAYS.map((w) => (
+            <span
+              key={w.index}
+              className={`text-xs font-bold ${w.index === 6 ? 'text-rose-400' : 'text-stone-400'}`}
+            >
+              {w.short}
+            </span>
+          ))
+        )}
       </div>
 
       {/* Days Grid */}
@@ -150,13 +190,16 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
           const day = i + 1;
           const dateStr = formatDateStr(viewYear, viewMonth, day);
           const isSelected = selectedDates.includes(dateStr);
-          const isToday =
-            viewYear === currentJalali.year &&
-            viewMonth === currentJalali.month &&
-            day === currentJalali.day;
+          const isToday = isEn
+            ? viewYear === currentGregorian.year &&
+              viewMonth === currentGregorian.month &&
+              day === currentGregorian.day
+            : viewYear === currentJalali.year &&
+              viewMonth === currentJalali.month &&
+              day === currentJalali.day;
 
           const weekdayIndex = (startWeekday + i) % 7;
-          const isFriday = weekdayIndex === 6;
+          const isHighlightDay = isEn ? (weekdayIndex === 0 || weekdayIndex === 6) : (weekdayIndex === 6);
 
           return (
             <button
@@ -168,12 +211,12 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
                   ? 'bg-amber-600 text-white font-black shadow-md shadow-amber-600/30 ring-2 ring-amber-400'
                   : isToday
                   ? 'border border-amber-400/80 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20'
-                  : isFriday
+                  : isHighlightDay
                   ? 'text-rose-400 hover:bg-stone-800/80'
                   : 'text-stone-300 hover:bg-stone-800/80 hover:text-white'
               }`}
             >
-              <span>{toPersianDigits(day)}</span>
+              <span>{isEn ? day : toPersianDigits(day)}</span>
               {isSelected && (
                 <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-white" />
               )}
@@ -185,20 +228,22 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
       {/* Quick selection presets */}
       <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-stone-800/80 text-xs">
         <div className="flex items-center gap-1.5">
-          <span className="text-[11px] text-stone-400">انتخاب سریع:</span>
+          <span className="text-[11px] text-stone-400">
+            {isEn ? 'Quick Select:' : 'انتخاب سریع:'}
+          </span>
           <button
             type="button"
             onClick={() => handleAddNextDays(7)}
             className="px-2 py-0.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-amber-400 border border-stone-800 text-[11px] transition-colors"
           >
-            ۷ روز بعد
+            {isEn ? '+7 Days' : '۷ روز بعد'}
           </button>
           <button
             type="button"
             onClick={() => handleAddNextDays(14)}
             className="px-2 py-0.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-amber-400 border border-stone-800 text-[11px] transition-colors"
           >
-            ۱۴ روز بعد
+            {isEn ? '+14 Days' : '۱۴ روز بعد'}
           </button>
         </div>
 
@@ -209,7 +254,9 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
             className="flex items-center gap-1 text-[11px] text-rose-400 hover:text-rose-300 px-2 py-0.5 rounded-lg hover:bg-rose-500/10 transition-colors"
           >
             <RotateCcw className="w-3 h-3" />
-            <span>پاک کردن همه ({toPersianDigits(selectedDates.length)})</span>
+            <span>
+              {isEn ? `Clear all (${selectedDates.length})` : `پاک کردن همه (${toPersianDigits(selectedDates.length)})`}
+            </span>
           </button>
         )}
       </div>
@@ -218,13 +265,19 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
       {selectedDates.length > 0 && (
         <div className="space-y-1.5 pt-2 border-t border-stone-800/80">
           <div className="flex items-center justify-between text-[11px] text-stone-400 font-medium">
-            <span>روزهای انتخاب شده ({toPersianDigits(selectedDates.length)} روز):</span>
+            <span>
+              {isEn 
+                ? `Selected Dates (${selectedDates.length} days):` 
+                : `روزهای انتخاب شده (${toPersianDigits(selectedDates.length)} روز):`}
+            </span>
           </div>
           <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-1 rounded-xl bg-stone-900/60 border border-stone-800/60">
             {selectedDates.map((dateStr) => {
               const parts = dateStr.split('/');
               const mIdx = parseInt(parts[1], 10) - 1;
-              const display = `${toPersianDigits(parseInt(parts[2], 10))} ${PERSIAN_MONTHS[mIdx]}`;
+              const display = isEn
+                ? `${GREGORIAN_MONTHS[mIdx] || ''} ${parseInt(parts[2], 10)}`
+                : `${toPersianDigits(parseInt(parts[2], 10))} ${PERSIAN_MONTHS[mIdx]}`;
               return (
                 <span
                   key={dateStr}

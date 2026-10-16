@@ -303,4 +303,100 @@ export function getDayHeaderLabel(timestamp: number, language: string = 'fa'): s
   return `${weekday} ${toPersianDigits(day)} ${monthName}`;
 }
 
+export const GREGORIAN_MONTHS: readonly string[] = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+] as const;
 
+export const GREGORIAN_MONTHS_SHORT: readonly string[] = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+] as const;
+
+export const GREGORIAN_WEEKDAYS: readonly string[] = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const;
+
+export const GREGORIAN_WEEKDAYS_SHORT: readonly string[] = [
+  'Sun',
+  'Mon',
+  'Tue',
+  'Wed',
+  'Thu',
+  'Fri',
+  'Sat',
+] as const;
+
+/**
+ * Returns number of days in a Gregorian month (month: 1-12)
+ */
+export function getDaysInGregorianMonth(year: number, month: number): number {
+  return new Date(year, month, 0).getDate();
+}
+
+/**
+ * Extracts Gregorian date/time components for standard English mode
+ */
+export function getGregorianComponents(timestamp: number) {
+  const d = new Date(timestamp);
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1; // 1-12
+  const day = d.getDate();
+  const hour = d.getHours();
+  const minute = d.getMinutes();
+  const weekday = GREGORIAN_WEEKDAYS[d.getDay()];
+  const monthName = GREGORIAN_MONTHS[month - 1];
+
+  const timeString = `${hour.toString().padStart(2, '0')}:${minute.toString().padStart(2, '0')}`;
+  const dateString = `${monthName} ${day}, ${year}`;
+
+  return {
+    year,
+    month,
+    monthName,
+    day,
+    hour,
+    minute,
+    weekday,
+    timeString,
+    dateString,
+  };
+}
+
+/**
+ * Formats date string respecting user language (Jalali for Persian, Gregorian for English)
+ */
+export function formatDateByLanguage(timestamp: number, language: string = 'fa'): string {
+  if (language === 'en') {
+    const comp = getGregorianComponents(timestamp);
+    return `${comp.monthName} ${comp.day}, ${comp.year}`;
+  }
+  const comp = getJalaliComponents(timestamp);
+  return comp.dateString;
+}

@@ -1,6 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Reminder, Category } from '../types';
-import { formatJalaliTime, getDayHeaderLabel, getDateKey, formatJalaliFull } from '../utils/jalali';
+import { 
+  formatJalaliTime, 
+  getDayHeaderLabel, 
+  getDateKey, 
+  formatJalaliFull,
+  toPersianDigits 
+} from '../utils/jalali';
 import { 
   Filter, 
   Check, 
@@ -14,7 +20,8 @@ import {
   Heart, 
   Tag, 
   RotateCcw,
-  Sparkles
+  Sparkles,
+  Search
 } from 'lucide-react';
 
 interface VerticalTimelineViewProps {
@@ -27,6 +34,8 @@ interface VerticalTimelineViewProps {
   onDelete: (id: string) => void;
   onCreateNew: () => void;
   language?: 'fa' | 'en';
+  searchQuery?: string;
+  onClearSearch?: () => void;
 }
 
 export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
@@ -39,6 +48,8 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   onDelete,
   onCreateNew,
   language = 'fa',
+  searchQuery = '',
+  onClearSearch,
 }) => {
   const isEn = language === 'en';
   const [nowMs, setNowMs] = useState<number>(Date.now());
@@ -49,7 +60,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   const nowMarkerRef = useRef<HTMLDivElement>(null);
   const hasAutoScrolledRef = useRef<boolean>(false);
 
-  // Live clock: update current time every second for live 'NOW' line
+  // Live clock: update current time every second for live 'NOW' line and next reminder countdown
   useEffect(() => {
     const timer = setInterval(() => {
       setNowMs(Date.now());
@@ -60,13 +71,59 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   // Filter out any deleted reminders (سطل بازیافت)
   const nonDeleted = reminders.filter((r) => !r.deletedAt);
 
+  // Search filter
+  const searchFiltered = searchQuery.trim()
+    ? nonDeleted.filter((r) => {
+        const q = searchQuery.trim().toLowerCase();
+        return (
+          r.title.toLowerCase().includes(q) ||
+          r.description?.toLowerCase().includes(q) ||
+          r.geofence?.locationName?.toLowerCase().includes(q)
+        );
+      })
+    : nonDeleted;
+
   // Apply category filter
   const filteredReminders = categoryFilter === 'all'
-    ? nonDeleted
-    : nonDeleted.filter((r) => r.category === categoryFilter);
+    ? searchFiltered
+    : searchFiltered.filter((r) => r.category === categoryFilter);
 
   // Sort chronologically ascending (oldest to newest)
   const sortedReminders = [...filteredReminders].sort((a, b) => a.dueTimestamp - b.dueTimestamp);
+
+  // Find next reminder: earliest uncompleted reminder occurring at or after nowMs
+  const nextReminder = sortedReminders.find(
+    (r) => r.dueTimestamp >= nowMs && r.status !== 'completed'
+  );
+
+  // Countdown formatter for next reminder
+  const formatNextCountdown = (dueMs: number, currentMs: number, isEnglish: boolean): string => {
+    const diff = dueMs - currentMs;
+    if (diff <= 0) {
+      return isEnglish ? '00:00:00' : '۰۰:۰۰:۰۰';
+    }
+    const totalSecs = Math.floor(diff / 1000);
+    const days = Math.floor(totalSecs / 86400);
+    const hours = Math.floor((totalSecs % 86400) / 3600);
+    const minutes = Math.floor((totalSecs % 3600) / 60);
+    const seconds = totalSecs % 60;
+
+    const hh = hours.toString().padStart(2, '0');
+    const mm = minutes.toString().padStart(2, '0');
+    const ss = seconds.toString().padStart(2, '0');
+
+    if (days > 0) {
+      if (isEnglish) {
+        return `${days}d ${hh}:${mm}:${ss}`;
+      }
+      return `${toPersianDigits(days)} روز و ${toPersianDigits(hh)}:${toPersianDigits(mm)}:${toPersianDigits(ss)}`;
+    }
+
+    if (isEnglish) {
+      return `${hh}:${mm}:${ss}`;
+    }
+    return `${toPersianDigits(hh)}:${toPersianDigits(mm)}:${toPersianDigits(ss)}`;
+  };
 
   // Auto-scroll to 'NOW' marker once mounted and whenever filter changes
   useEffect(() => {
@@ -181,28 +238,43 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             {/* Empty State Card */}
             <div className="py-14 px-5 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-900/30 space-y-4">
               <div className="w-12 h-12 rounded-2xl bg-stone-800/80 border border-stone-700/60 text-stone-400 flex items-center justify-center mx-auto">
-                <Clock className="w-6 h-6" />
+                {searchQuery.trim() ? <Search className="w-6 h-6 text-amber-400" /> : <Clock className="w-6 h-6" />}
               </div>
               <div className="space-y-1">
                 <h4 className="font-bold text-base text-white">
-                  {categoryFilter === 'all'
+                  {searchQuery.trim()
+                    ? (isEn ? `No reminders match "${searchQuery}"` : `یادآوری مطابق با «${searchQuery}» پیدا نشد`)
+                    : categoryFilter === 'all'
                     ? (isEn ? 'No reminders in timeline' : 'هیچ یادآوری در خط زمانی ثبت نشده است')
                     : (isEn ? 'No reminders in this category' : 'هیچ یادآوری در این دسته‌بندی یافت نشد')}
                 </h4>
                 <p className="text-xs sm:text-sm text-stone-400 max-w-md mx-auto">
-                  {isEn
+                  {searchQuery.trim()
+                    ? (isEn ? 'Try another keyword or clear search.' : 'کلمه کلیدی دیگری را جستجو کنید یا جستجو را پاک کنید.')
+                    : isEn
                     ? 'Tap the button below or the + button to create a new reminder.'
                     : 'برای شروع، دکمه ثبت یادآور جدید یا دکمه + پایین صفحه را لمس کنید.'}
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={onCreateNew}
-                className="min-h-[48px] px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm transition-all shadow-md active:scale-95 cursor-pointer inline-flex items-center gap-2"
-              >
-                <Plus className="w-4 h-4 stroke-[3]" />
-                <span>{isEn ? 'New Reminder' : 'ثبت یادآور جدید'}</span>
-              </button>
+              {searchQuery.trim() && onClearSearch ? (
+                <button
+                  type="button"
+                  onClick={onClearSearch}
+                  className="min-h-[44px] px-5 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 hover:text-white font-bold text-xs transition-all cursor-pointer inline-flex items-center gap-2"
+                >
+                  <X className="w-4 h-4" />
+                  <span>{isEn ? 'Clear Search' : 'پاک کردن جستجو'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={onCreateNew}
+                  className="min-h-[48px] px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm transition-all shadow-md active:scale-95 cursor-pointer inline-flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4 stroke-[3]" />
+                  <span>{isEn ? 'New Reminder' : 'ثبت یادآور جدید'}</span>
+                </button>
+              )}
             </div>
           </div>
         ) : (
@@ -259,17 +331,21 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
               const isPast = reminder.dueTimestamp < nowMs;
               const isCompleted = reminder.status === 'completed';
               const isOverdueUncompleted = isPast && !isCompleted;
+              const isNext = reminder.id === nextReminder?.id;
 
               // Card minimal styling according to rules:
               // - انجام شده: کمرنگ با خط خورده
               // - گذشته و انجام نشده: رنگ هشدار ملایم
               // - گذشته: بالای خط اکنون (کمرنگ‌تر)
               // - آینده: پایین خط اکنون
+              // - یادآوری بعدی: بیرون زدگی هلالی متصل به کارت با شمارش معکوس سبز
               let cardStyle = '';
               if (isCompleted) {
                 cardStyle = 'bg-stone-900/40 border-stone-800/50 text-stone-500 opacity-60';
               } else if (isOverdueUncompleted) {
                 cardStyle = 'bg-rose-950/20 border-rose-500/30 text-rose-100 hover:border-rose-500/50 shadow-sm';
+              } else if (isNext) {
+                cardStyle = 'relative bg-stone-900 border-emerald-500/80 text-stone-100 hover:border-emerald-400 shadow-xl shadow-emerald-500/15 ring-1 ring-emerald-500/35 pt-5 sm:pt-6 mt-3.5';
               } else if (isPast) {
                 cardStyle = 'bg-stone-900/60 border-stone-800/60 text-stone-300 opacity-75';
               } else {
@@ -304,6 +380,34 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                     }
                   }}
                 >
+                  {/* بیرون زدگی هلالی متصل به کارت برای یادآوری بعدی (Crescent Protrusion for Next Reminder) */}
+                  {isNext && (
+                    <div className="absolute -top-3.5 inset-x-0 flex items-center justify-center z-10 pointer-events-none">
+                      <div className="relative flex items-center">
+                        {/* Left crescent wing (fillet curve) connecting card border to badge */}
+                        <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0 fill-current -mr-[1px] translate-y-1.5" viewBox="0 0 16 16">
+                          <path d="M16,0 C16,8 8,16 0,16 L16,16 Z" />
+                        </svg>
+
+                        {/* Green Counter Badge */}
+                        <div className="px-3 sm:px-4 py-1 rounded-full bg-emerald-500 text-stone-950 font-black text-xs shadow-lg shadow-emerald-500/35 flex items-center gap-2 border border-emerald-300 pointer-events-auto">
+                          <span className="w-2 h-2 rounded-full bg-stone-950 animate-pulse shrink-0" />
+                          <span className="tracking-wide uppercase text-[10px] sm:text-[11px]">
+                            {isEn ? 'NEXT' : 'یادآوری بعدی'}
+                          </span>
+                          <span className="font-mono font-extrabold text-xs sm:text-sm">
+                            {formatNextCountdown(reminder.dueTimestamp, nowMs, isEn)}
+                          </span>
+                        </div>
+
+                        {/* Right crescent wing (fillet curve) connecting card border to badge */}
+                        <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0 fill-current -ml-[1px] translate-y-1.5" viewBox="0 0 16 16">
+                          <path d="M0,0 C0,8 8,16 16,16 L0,16 Z" />
+                        </svg>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Title & Small Dot */}
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <span 

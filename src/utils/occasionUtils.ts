@@ -4,6 +4,7 @@ import {
   jalaliToTimestamp, 
   toPersianDigits, 
   PERSIAN_MONTHS, 
+  GREGORIAN_MONTHS,
   getDaysInJalaliMonth 
 } from './jalali';
 
@@ -102,7 +103,8 @@ export function getOccasionTypeMeta(type: OccasionType): OccasionTypeMeta {
  */
 export function calculateNextOccasionOccurrence(
   occasion: Occasion,
-  referenceTimestamp = Date.now()
+  referenceTimestamp = Date.now(),
+  language: string = 'fa'
 ): {
   nextTimestamp: number;
   daysRemaining: number;
@@ -111,6 +113,7 @@ export function calculateNextOccasionOccurrence(
   isToday: boolean;
   formattedTargetDate: string;
 } {
+  const isEn = language === 'en';
   const currentJalali = getJalaliComponents(referenceTimestamp);
   const curYear = currentJalali.year;
 
@@ -153,8 +156,11 @@ export function calculateNextOccasionOccurrence(
 
   const yearsPassed = occasion.solarYear ? occurrenceYear - occasion.solarYear : null;
 
-  const monthName = PERSIAN_MONTHS[occasion.solarMonth - 1] || 'فروردین';
-  const formattedTargetDate = `${toPersianDigits(occasion.solarDay)} ${monthName}`;
+  const monthNameFa = PERSIAN_MONTHS[occasion.solarMonth - 1] || 'فروردین';
+  const monthNameEn = GREGORIAN_MONTHS[occasion.solarMonth - 1] || 'January';
+  const formattedTargetDate = isEn 
+    ? `${monthNameEn} ${occasion.solarDay}`
+    : `${toPersianDigits(occasion.solarDay)} ${monthNameFa}`;
 
   return {
     nextTimestamp,

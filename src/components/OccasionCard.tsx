@@ -47,7 +47,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
     yearsPassed, 
     isToday, 
     formattedTargetDate 
-  } = calculateNextOccasionOccurrence(occasion);
+  } = calculateNextOccasionOccurrence(occasion, undefined, language);
 
   const anniversaryLabel = getOccasionAnniversaryLabel(occasion, yearsPassed, language);
 

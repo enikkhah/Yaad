@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Reminder, Category, Priority, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
-import { getJalaliComponents, formatJalaliFull, toPersianDigits } from './utils/jalali';
+import { getJalaliComponents, getGregorianComponents, formatJalaliFull, toPersianDigits } from './utils/jalali';
 import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { stopFlashlightStrobe } from './utils/torch';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
@@ -17,6 +17,8 @@ import { SavedLocationCard } from './components/SavedLocationCard';
 import { LocationReminderModal } from './components/LocationReminderModal';
 import { OccasionsView } from './components/OccasionsView';
 import { OccasionFormModal } from './components/OccasionFormModal';
+import { AndroidPermissionModal } from './components/AndroidPermissionModal';
+import { AndroidPermissionType, openAndroidSettings, requestNotificationPermission, requestLocationPermission } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
 import { performAutoBackup, retrieveLatestBackup } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
@@ -556,8 +558,20 @@ export default function App() {
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [categoryFilter, setCategoryFilter] = useState<'all' | Category | 'completed'>('all');
   const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
+
+  // Android Permission Directing Modal
+  const [androidPermissionModal, setAndroidPermissionModal] = useState<{
+    isOpen: boolean;
+    type: AndroidPermissionType;
+    onRetry?: () => void;
+  }>({
+    isOpen: false,
+    type: 'notifications',
+  });
 
   // Live Time & Alarm Checker
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -1004,6 +1018,32 @@ export default function App() {
     syncGoogle?: boolean
   ) => {
     let calendarEventId: string | undefined = undefined;
+
+    // Check native notification permission on Android/browser
+    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+      requestNotificationPermission().then((granted) => {
+        if (!granted) {
+          setAndroidPermissionModal({
+            isOpen: true,
+            type: 'notifications',
+            onRetry: () => requestNotificationPermission(),
+          });
+        }
+      });
+    }
+
+    // If geofence is enabled, ensure location permission is active
+    if (data.geofence?.enabled) {
+      requestLocationPermission().then((locGranted) => {
+        if (!locGranted) {
+          setAndroidPermissionModal({
+            isOpen: true,
+            type: 'location',
+            onRetry: () => requestLocationPermission(),
+          });
+        }
+      });
+    }
 
     // Optional Google Calendar sync
     if (syncGoogle && googleToken) {
@@ -1571,6 +1611,7 @@ export default function App() {
     : null;
 
   const todayJalali = getJalaliComponents(currentTime);
+  const todayGregorian = getGregorianComponents(currentTime);
 
   // Dynamic Theme CSS container styling
   const getThemeClass = (theme: AppTheme) => {
@@ -1687,7 +1728,9 @@ export default function App() {
                 )}
               </div>
               <span className="text-[10px] sm:text-xs text-stone-400 font-medium">
-                {toPersianDigits(`${todayJalali.weekday} ${todayJalali.day} ${todayJalali.monthName}`)}
+                {isEn
+                  ? `${todayGregorian.weekday}, ${todayGregorian.monthName} ${todayGregorian.day}`
+                  : toPersianDigits(`${todayJalali.weekday} ${todayJalali.day} ${todayJalali.monthName}`)}
               </span>
             </div>
           </div>
@@ -1774,6 +1817,32 @@ export default function App() {
               </button>
             )}
 
+            {/* Search Button in Header - minimal magnifying glass beside Settings Button */}
+            <button
+              id="header-toggle-search-btn"
+              type="button"
+              onClick={() => {
+                setIsSearchOpen((prev) => {
+                  const next = !prev;
+                  if (!next) {
+                    setSearchQuery('');
+                  } else {
+                    setTimeout(() => searchInputRef.current?.focus(), 80);
+                  }
+                  return next;
+                });
+              }}
+              className={`min-h-[48px] min-w-[48px] p-2.5 rounded-2xl border flex items-center justify-center cursor-pointer shadow-md active:scale-95 transition-all duration-200 ${
+                isSearchOpen || searchQuery.trim()
+                  ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm shadow-amber-500/20'
+                  : 'bg-stone-800/95 hover:bg-stone-700 text-stone-100 hover:text-white border-stone-700/90'
+              }`}
+              title={isEn ? 'Search Reminders' : 'جستجوی یادآورها'}
+              aria-label={isEn ? 'Search' : 'جستجو'}
+            >
+              <Search className={`w-5 h-5 shrink-0 ${isSearchOpen || searchQuery.trim() ? 'text-amber-400' : 'text-stone-300'}`} />
+            </button>
+
             {/* Settings Button in Header - PROMINENT, ACCESSIBLE, MIN 48px TOUCH TARGET (فقط آیکون) */}
             <button
               id="header-open-settings-btn"
@@ -1803,6 +1872,38 @@ export default function App() {
             ) : null}
           </div>
         </div>
+
+        {/* Expandable Search Input Bar (ظاهر شدن فیلد تایپ و جستجو بعد از کلیک ذره‌بین) */}
+        {isSearchOpen && (
+          <div className="w-full px-3 sm:px-6 py-2.5 bg-stone-900 border-t border-stone-800/90 animate-in slide-in-from-top-2 duration-150">
+            <div className="relative max-w-2xl mx-auto flex items-center" dir={isEn ? 'ltr' : 'rtl'}>
+              <Search className={`absolute ${isEn ? 'left-3.5' : 'right-3.5'} w-4 h-4 text-stone-400 pointer-events-none`} />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder={isEn ? 'Search reminders by title, note, or place...' : 'جستجو در یادآورها، متن یا مکان...'}
+                className={`w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-2xl ${
+                  isEn ? 'pl-10 pr-10' : 'pr-10 pl-10'
+                } py-2.5 text-xs sm:text-sm text-white placeholder-stone-500 focus:outline-none transition-all shadow-inner`}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchQuery('');
+                    searchInputRef.current?.focus();
+                  }}
+                  className={`absolute ${isEn ? 'right-3' : 'left-3'} p-1 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition-colors cursor-pointer`}
+                  title={isEn ? 'Clear' : 'پاک کردن'}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </header>
 
       {/* Main Container - Maximum Width coverage across screen with ample padding for bottom nav and FAB */}
@@ -1827,6 +1928,8 @@ export default function App() {
               setIsFormOpen(true);
             }}
             language={settings.language}
+            searchQuery={searchQuery}
+            onClearSearch={() => setSearchQuery('')}
           />
         )}
 
@@ -2477,6 +2580,15 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {/* ANDROID SYSTEM PERMISSION & SECTION DIRECTING MODAL */}
+      <AndroidPermissionModal
+        isOpen={androidPermissionModal.isOpen}
+        onClose={() => setAndroidPermissionModal((prev) => ({ ...prev, isOpen: false }))}
+        permissionType={androidPermissionModal.type}
+        onRetry={androidPermissionModal.onRetry}
+        language={settings.language}
+      />
 
       </div>
       

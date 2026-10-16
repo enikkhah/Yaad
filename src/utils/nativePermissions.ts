@@ -138,3 +138,52 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
     location,
   };
 }
+
+export type AndroidPermissionType = 'notifications' | 'location' | 'microphone' | 'camera' | 'battery' | 'app_details';
+
+/**
+ * Directs the user to the relevant Android Settings screen for the specified feature
+ */
+export function openAndroidSettings(section: AndroidPermissionType = 'app_details'): void {
+  if (typeof window === 'undefined') return;
+
+  const pkg = 'org.yaad.reminder';
+  let intentUrl = `intent:#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;package=${pkg};end`;
+
+  switch (section) {
+    case 'notifications':
+      // Directs to Android App Notification Settings
+      intentUrl = `intent:#Intent;action=android.settings.APP_NOTIFICATION_SETTINGS;S.android.provider.extra.APP_PACKAGE=${pkg};end`;
+      break;
+    case 'location':
+      // Directs to Android Location Source Settings
+      intentUrl = `intent:#Intent;action=android.settings.LOCATION_SOURCE_SETTINGS;end`;
+      break;
+    case 'battery':
+      // Directs to Android Battery Optimization settings
+      intentUrl = `intent:#Intent;action=android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS;end`;
+      break;
+    case 'microphone':
+    case 'camera':
+    case 'app_details':
+    default:
+      // Directs to Application Info / Permissions page
+      intentUrl = `intent:#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;data=package:${pkg};end`;
+      break;
+  }
+
+  try {
+    const link = document.createElement('a');
+    link.href = intentUrl;
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch (err) {
+    try {
+      window.location.href = intentUrl;
+    } catch {
+      console.warn('Could not open Android settings:', err);
+    }
+  }
+}

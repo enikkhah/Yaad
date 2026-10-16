@@ -4,7 +4,10 @@ import {
   getJalaliComponents, 
   PERSIAN_MONTHS, 
   toPersianDigits, 
-  jalaliToGregorian 
+  jalaliToGregorian,
+  GREGORIAN_MONTHS,
+  getDaysInGregorianMonth,
+  getDaysInJalaliMonth
 } from '../utils/jalali';
 import { 
   RECURRENCE_OPTIONS, 
@@ -15,7 +18,7 @@ import {
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
 import { parseSmsOrText } from '../utils/smsParser';
 import { CameraCaptureModal } from './CameraCaptureModal';
-import { requestMicrophonePermission } from '../utils/nativePermissions';
+import { requestMicrophonePermission, requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 import { 
@@ -105,6 +108,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [geofenceTriggerOn, setGeofenceTriggerOn] = useState<GeofenceTriggerType>('enter');
   const [geofenceSavedLocId, setGeofenceSavedLocId] = useState<string>('');
   const [isDetectingGps, setIsDetectingGps] = useState(false);
+  const [gpsError, setGpsError] = useState<string | null>(null);
 
   // Persian date picker states
   const [selectedYear, setSelectedYear] = useState(1405);
@@ -172,12 +176,21 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     if (initialData) {
       // Editing existing reminder: preserve the previously saved date and time exactly
       const reminderTime = initialData.dueTimestamp;
-      const jalali = getJalaliComponents(reminderTime);
-      setSelectedYear(jalali.year);
-      setSelectedMonth(jalali.month);
-      setSelectedDay(jalali.day);
-      setSelectedHour(jalali.hour);
-      setSelectedMinute(jalali.minute);
+      if (isEn) {
+        const d = new Date(reminderTime);
+        setSelectedYear(d.getFullYear());
+        setSelectedMonth(d.getMonth() + 1);
+        setSelectedDay(d.getDate());
+        setSelectedHour(d.getHours());
+        setSelectedMinute(d.getMinutes());
+      } else {
+        const jalali = getJalaliComponents(reminderTime);
+        setSelectedYear(jalali.year);
+        setSelectedMonth(jalali.month);
+        setSelectedDay(jalali.day);
+        setSelectedHour(jalali.hour);
+        setSelectedMinute(jalali.minute);
+      }
 
       setTitle(initialData.title);
       setDescription(initialData.description || '');
@@ -220,12 +233,21 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     } else {
       // Creating new reminder: default date & time is exactly current phone time + 2 minutes
       const defaultTime = Date.now() + 2 * 60 * 1000;
-      const nowJalali = getJalaliComponents(defaultTime);
-      setSelectedYear(nowJalali.year);
-      setSelectedMonth(nowJalali.month);
-      setSelectedDay(nowJalali.day);
-      setSelectedHour(nowJalali.hour);
-      setSelectedMinute(nowJalali.minute);
+      if (isEn) {
+        const d = new Date(defaultTime);
+        setSelectedYear(d.getFullYear());
+        setSelectedMonth(d.getMonth() + 1);
+        setSelectedDay(d.getDate());
+        setSelectedHour(d.getHours());
+        setSelectedMinute(d.getMinutes());
+      } else {
+        const nowJalali = getJalaliComponents(defaultTime);
+        setSelectedYear(nowJalali.year);
+        setSelectedMonth(nowJalali.month);
+        setSelectedDay(nowJalali.day);
+        setSelectedHour(nowJalali.hour);
+        setSelectedMinute(nowJalali.minute);
+      }
 
       setTitle('');
       setDescription('');
@@ -520,12 +542,21 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   // Quick Preset Presets
   const applyPreset = (minutesFromNow: number) => {
     const target = Date.now() + minutesFromNow * 60000;
-    const j = getJalaliComponents(target);
-    setSelectedYear(j.year);
-    setSelectedMonth(j.month);
-    setSelectedDay(j.day);
-    setSelectedHour(j.hour);
-    setSelectedMinute(j.minute);
+    if (isEn) {
+      const d = new Date(target);
+      setSelectedYear(d.getFullYear());
+      setSelectedMonth(d.getMonth() + 1);
+      setSelectedDay(d.getDate());
+      setSelectedHour(d.getHours());
+      setSelectedMinute(d.getMinutes());
+    } else {
+      const j = getJalaliComponents(target);
+      setSelectedYear(j.year);
+      setSelectedMonth(j.month);
+      setSelectedDay(j.day);
+      setSelectedHour(j.hour);
+      setSelectedMinute(j.minute);
+    }
   };
 
   const setTonight = () => {
@@ -534,10 +565,16 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     if (now.getTime() <= Date.now()) {
       now.setDate(now.getDate() + 1);
     }
-    const j = getJalaliComponents(now.getTime());
-    setSelectedYear(j.year);
-    setSelectedMonth(j.month);
-    setSelectedDay(j.day);
+    if (isEn) {
+      setSelectedYear(now.getFullYear());
+      setSelectedMonth(now.getMonth() + 1);
+      setSelectedDay(now.getDate());
+    } else {
+      const j = getJalaliComponents(now.getTime());
+      setSelectedYear(j.year);
+      setSelectedMonth(j.month);
+      setSelectedDay(j.day);
+    }
     setSelectedHour(20);
     setSelectedMinute(0);
   };
@@ -546,16 +583,26 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     tomorrow.setHours(9, 0, 0, 0);
-    const j = getJalaliComponents(tomorrow.getTime());
-    setSelectedYear(j.year);
-    setSelectedMonth(j.month);
-    setSelectedDay(j.day);
+    if (isEn) {
+      setSelectedYear(tomorrow.getFullYear());
+      setSelectedMonth(tomorrow.getMonth() + 1);
+      setSelectedDay(tomorrow.getDate());
+    } else {
+      const j = getJalaliComponents(tomorrow.getTime());
+      setSelectedYear(j.year);
+      setSelectedMonth(j.month);
+      setSelectedDay(j.day);
+    }
     setSelectedHour(9);
     setSelectedMinute(0);
   };
 
-  // Convert selected Persian date and time to Unix Timestamp
+  // Convert selected date and time to Unix Timestamp (Gregorian for EN, Jalali for FA)
   const calculateDueTimestamp = (): number => {
+    if (isEn) {
+      const date = new Date(selectedYear, selectedMonth - 1, selectedDay, selectedHour, selectedMinute, 0, 0);
+      return date.getTime();
+    }
     const [gy, gm, gd] = jalaliToGregorian(selectedYear, selectedMonth, selectedDay);
     const date = new Date(gy, gm - 1, gd, selectedHour, selectedMinute, 0, 0);
     return date.getTime();
@@ -682,8 +729,15 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     reader.readAsText(file);
   };
 
-  const handleGetQuickGps = () => {
+  const handleGetQuickGps = async () => {
+    setGpsError(null);
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGpsError(isEn ? 'Geolocation is not supported.' : 'موقعیت مکانی در این دستگاه پشتیبانی نمی‌شود.');
+      return;
+    }
+    const hasPerm = await requestLocationPermission();
+    if (!hasPerm) {
+      setGpsError(isEn ? 'Location permission denied. Enable in Android Settings.' : 'دسترسی مکان داده نشد. لطفاً در تنظیمات اندروید فعال کنید.');
       return;
     }
     setIsDetectingGps(true);
@@ -698,6 +752,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       },
       (err) => {
         setIsDetectingGps(false);
+        setGpsError(
+          isEn 
+            ? 'GPS request failed or disabled in Android.' 
+            : 'خطا در دریافت موقعیت. لطفاً GPS دستگاه را روشن فرمایید.'
+        );
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
@@ -897,9 +956,19 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </div>
 
               {voiceErrorMsg && (
-                <div className="mt-2 p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center gap-2 animate-in fade-in">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
-                  <span>{voiceErrorMsg}</span>
+                <div className="mt-2 p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center justify-between gap-2 animate-in fade-in">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                    <span className="truncate">{voiceErrorMsg}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openAndroidSettings('microphone')}
+                    className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-500 text-stone-950 font-black text-[11px] flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                  >
+                    <Smartphone className="w-3 h-3" />
+                    <span>{isEn ? 'Android Settings' : 'تنظیمات اندروید'}</span>
+                  </button>
                 </div>
               )}
             </div>
@@ -945,7 +1014,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 </button>
               </div>
 
-              {/* Selectors for Jalali Day / Month / Year */}
+              {/* Selectors for Day / Month / Year (Gregorian for English, Jalali for Persian) */}
               <div className="grid grid-cols-3 gap-2 pt-1">
                 {/* Day */}
                 <div>
@@ -953,9 +1022,12 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <select
                     value={selectedDay}
                     onChange={(e) => setSelectedDay(parseInt(e.target.value, 10))}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
                   >
-                    {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                    {Array.from(
+                      { length: isEn ? getDaysInGregorianMonth(selectedYear, selectedMonth) : getDaysInJalaliMonth(selectedYear, selectedMonth) },
+                      (_, i) => i + 1
+                    ).map((d) => (
                       <option key={d} value={d}>
                         {isEn ? d : toPersianDigits(d)}
                       </option>
@@ -969,13 +1041,21 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <select
                     value={selectedMonth}
                     onChange={(e) => setSelectedMonth(parseInt(e.target.value, 10))}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
                   >
-                    {PERSIAN_MONTHS.map((m, idx) => (
-                      <option key={m} value={idx + 1}>
-                        {m}
-                      </option>
-                    ))}
+                    {isEn ? (
+                      GREGORIAN_MONTHS.map((m, idx) => (
+                        <option key={m} value={idx + 1}>
+                          {m}
+                        </option>
+                      ))
+                    ) : (
+                      PERSIAN_MONTHS.map((m, idx) => (
+                        <option key={m} value={idx + 1}>
+                          {m}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
 
@@ -985,13 +1065,21 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <select
                     value={selectedYear}
                     onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500"
+                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
                   >
-                    {[1404, 1405, 1406, 1407].map((y) => (
-                      <option key={y} value={y}>
-                        {isEn ? y : toPersianDigits(y)}
-                      </option>
-                    ))}
+                    {isEn ? (
+                      [2025, 2026, 2027, 2028, 2029, 2030].map((y) => (
+                        <option key={y} value={y}>
+                          {y}
+                        </option>
+                      ))
+                    ) : (
+                      [1404, 1405, 1406, 1407, 1408].map((y) => (
+                        <option key={y} value={y}>
+                          {toPersianDigits(y)}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
               </div>
@@ -1332,6 +1420,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     onChange={setRecurrenceCustomDates}
                     baseYear={selectedYear}
                     baseMonth={selectedMonth}
+                    language={language}
                   />
                 </div>
               )}
@@ -1502,6 +1591,20 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       </button>
                     </div>
                   </div>
+
+                  {gpsError && (
+                    <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs animate-in fade-in">
+                      <span className="truncate">{gpsError}</span>
+                      <button
+                        type="button"
+                        onClick={() => openAndroidSettings('location')}
+                        className="shrink-0 px-2 py-1 rounded-lg bg-amber-500 text-stone-950 font-black text-[10px] flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                      >
+                        <Smartphone className="w-2.5 h-2.5" />
+                        <span>{isEn ? 'Android Settings' : 'تنظیمات اندروید'}</span>
+                      </button>
+                    </div>
+                  )}
 
                   {/* 3. Coordinates Preview (Latitude / Longitude) */}
                   <div className="grid grid-cols-2 gap-2 text-xs font-mono">

@@ -26,6 +26,7 @@ import {
 import { 
   getJalaliComponents, 
   PERSIAN_MONTHS, 
+  GREGORIAN_MONTHS,
   toPersianDigits, 
   getDaysInJalaliMonth 
 } from '../utils/jalali';
@@ -329,11 +330,11 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
               </div>
             </div>
 
-            {/* Solar Month & Day Picker */}
+            {/* Month & Day Picker */}
             <div className="p-3.5 rounded-2xl bg-stone-950/70 border border-stone-800 space-y-3">
               <div className="flex items-center gap-2 text-xs font-bold text-pink-400">
                 <Calendar className="w-4 h-4" />
-                <span>{isEn ? 'Solar Date (Annual Milestone)' : 'تاریخ شمسی مناسبت (سالانه)'}</span>
+                <span>{isEn ? 'Anniversary Date (Annual Milestone)' : 'تاریخ مناسبت (سالانه)'}</span>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -345,11 +346,19 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                     onChange={(e) => setSolarMonth(parseInt(e.target.value, 10))}
                     className="w-full bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-pink-500 font-bold"
                   >
-                    {PERSIAN_MONTHS.map((m, idx) => (
-                      <option key={m} value={idx + 1}>
-                        {m}
-                      </option>
-                    ))}
+                    {isEn ? (
+                      GREGORIAN_MONTHS.map((m, idx) => (
+                        <option key={m} value={idx + 1}>
+                          {m}
+                        </option>
+                      ))
+                    ) : (
+                      PERSIAN_MONTHS.map((m, idx) => (
+                        <option key={m} value={idx + 1}>
+                          {m}
+                        </option>
+                      ))
+                    )}
                   </select>
                 </div>
 

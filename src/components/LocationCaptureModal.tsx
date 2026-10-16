@@ -26,6 +26,7 @@ import { toPersianDigits } from '../utils/jalali';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { LocationReminderModal } from './LocationReminderModal';
+import { openAndroidSettings } from '../utils/nativePermissions';
 import { AppLanguage } from '../utils/i18n';
 
 interface LocationCaptureModalProps {
@@ -381,14 +382,24 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                       <p className="text-xs text-rose-300/90 leading-relaxed">{locationError}</p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={fetchCurrentLocation}
-                    className="w-full min-h-[48px] px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 active:scale-95 text-white text-xs sm:text-sm font-bold transition-all duration-200 flex items-center justify-center gap-2 shadow-md cursor-pointer"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    <span>{isEn ? 'Try Again' : 'تلاش دوباره'}</span>
-                  </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={fetchCurrentLocation}
+                      className="min-h-[48px] px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 active:scale-95 text-white text-xs sm:text-sm font-bold transition-all duration-200 flex items-center justify-center gap-2 border border-stone-700 cursor-pointer"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>{isEn ? 'Try Again' : 'تلاش دوباره'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openAndroidSettings('location')}
+                      className="min-h-[48px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-stone-950 text-xs sm:text-sm font-black transition-all duration-200 flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>{isEn ? 'Android Settings' : 'تنظیمات موقعیت اندروید'}</span>
+                    </button>
+                  </div>
                 </div>
               )}
 
