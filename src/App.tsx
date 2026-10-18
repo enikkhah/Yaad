@@ -107,7 +107,8 @@ const IDEAS_STORAGE_KEY = 'fa_ideas_app_data_v1';
 const LOCATIONS_STORAGE_KEY = 'fa_locations_app_data_v1';
 const SETTINGS_STORAGE_KEY = 'fa_settings_app_data_v1';
 const DEFAULT_THEME_MIGRATION_KEY = 'yaad_default_theme_midnight_v1';
-const DEFAULT_LANG_FA_MIGRATION_KEY = 'yaad_default_lang_fa_v2';
+const DEFAULT_LANG_FA_MIGRATION_KEY = 'yaad_default_lang_fa_v3';
+const USER_EXPLICIT_LANG_KEY = 'yaad_user_explicit_lang_choice';
 
 export default function App() {
   // Theme and Settings state
@@ -121,7 +122,10 @@ export default function App() {
           parsed.theme = 'midnight_blue_silver';
           localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(parsed));
         }
-        if (!localStorage.getItem(DEFAULT_LANG_FA_MIGRATION_KEY)) {
+        if (
+          !localStorage.getItem(DEFAULT_LANG_FA_MIGRATION_KEY) ||
+          localStorage.getItem(USER_EXPLICIT_LANG_KEY) !== 'true'
+        ) {
           localStorage.setItem(DEFAULT_LANG_FA_MIGRATION_KEY, 'true');
           parsed.language = 'fa';
           localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(parsed));
@@ -152,7 +156,7 @@ export default function App() {
       alarmSound: 'digital-beep',
       alarmVolume: 0.85,
       autoVoiceInput: false,
-      googleMapsApiKey: 'Nikkhah',
+      googleMapsApiKey: '',
     };
   });
 
@@ -397,7 +401,15 @@ export default function App() {
       }
 
       if (backup.settings && isRemindersEmpty) {
-        setSettings((prev) => ({ ...prev, ...backup.settings }));
+        const userExplicitLang =
+          typeof localStorage !== 'undefined' &&
+          localStorage.getItem(USER_EXPLICIT_LANG_KEY) === 'true';
+        setSettings((prev) => ({
+          ...prev,
+          ...backup.settings,
+          // Keep Persian ('fa') as default after fresh install unless user explicitly changed language
+          language: userExplicitLang ? backup.settings.language || 'fa' : 'fa',
+        }));
       }
 
       if (restoredAny) {
@@ -924,10 +936,13 @@ export default function App() {
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
 
-    // When the app is installed or re-installed, request folder permission and recall backup automatically
+    // When the app is installed or re-installed, ensure Persian default language, request folder permission and recall backup automatically
     const handleAppInstalled = () => {
       setIsAppInstalled(true);
       setInstallPromptEvent(null);
+      if (localStorage.getItem(USER_EXPLICIT_LANG_KEY) !== 'true') {
+        setSettings((prev) => ({ ...prev, language: 'fa' }));
+      }
       requestLocalFolderPermission(false, settingsRef.current?.localBackupFolderName)
         .then((res) => {
           if (res.restoredSnapshot) {
@@ -2114,22 +2129,34 @@ export default function App() {
                   onClick={() => setLogoMenuInfoSection(logoMenuInfoSection === 'privacy' ? null : 'privacy')}
                   className={`w-full px-3 py-2 rounded-xl border text-xs font-bold flex items-center justify-between transition-all cursor-pointer ${
                     logoMenuInfoSection === 'privacy'
-                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                      ? 'bg-emerald-500/15 border-emerald-500/50 text-emerald-300'
                       : 'bg-stone-950/60 hover:bg-stone-800/90 border-stone-800/80 text-stone-300 hover:text-white'
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <ShieldCheck className="w-4 h-4 text-emerald-400 drop-shadow-[0_0_6px_rgba(16,185,129,0.4)] shrink-0" />
                     <span>{isEn ? 'Privacy Policy' : 'حریم خصوصی'}</span>
                   </div>
                   <span className="text-[10px] text-stone-400">{logoMenuInfoSection === 'privacy' ? '▲' : '▼'}</span>
                 </button>
 
                 {logoMenuInfoSection === 'privacy' && (
-                  <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed animate-in fade-in">
-                    {isEn
-                      ? 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and never shared externally.'
-                      : 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه ذخیره می‌شوند و به هیچ سروری ارسال نمی‌گردند.'}
+                  <div className="p-2.5 rounded-xl bg-stone-950 border border-emerald-500/30 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
+                    <p>
+                      {isEn
+                        ? 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and never shared externally.'
+                        : 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه ذخیره می‌شوند و به هیچ سروری ارسال نمی‌گردند.'}
+                    </p>
+                    <a
+                      href="https://enikkhah.github.io/Yaad/privacy.html"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm shadow-emerald-950/50 cursor-pointer active:scale-95"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-white shrink-0" />
+                      <span>{isEn ? 'View Privacy Policy' : 'مشاهده'}</span>
+                      <ExternalLink className="w-3 h-3 text-emerald-100 shrink-0" />
+                    </a>
                   </div>
                 )}
 

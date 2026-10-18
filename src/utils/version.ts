@@ -5,11 +5,13 @@
  * - General Revision (بازنگری کلی): +0.1
  * - Minor Revision (بازنگری جزئی): +0.01
  */
-export const APP_VERSION = '1.67';
+export const APP_VERSION = '1.68';
+
+export const PRIVACY_POLICY_URL = '/privacy-policy.html';
 
 export const APP_VERSION_INFO = {
   version: APP_VERSION,
   name: 'YAAD (یاد)',
-  persianVersion: '۱.۶۷',
+  persianVersion: '۱.۶۸',
   type: 'Progressive Web App (PWA) & Android APK',
 };

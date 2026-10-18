@@ -1,8 +1,17 @@
 node_modules/
 build/
 dist/
+dist-apk/
 coverage/
 .DS_Store
 *.log
 .env*
 !.env.example
+firebase-applet-config.json
+firebase_applet_config.xml
+google-services.json
+GoogleService-Info.plist
+*.keystore
+*.jks
+YAAD REMIDER/
+

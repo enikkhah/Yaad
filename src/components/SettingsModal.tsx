@@ -808,7 +808,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
-                      onClick={() => onUpdateSettings({ language: 'fa' })}
+                      onClick={() => {
+                        try {
+                          localStorage.setItem('yaad_user_explicit_lang_choice', 'true');
+                        } catch {}
+                        onUpdateSettings({ language: 'fa' });
+                      }}
                       className={`min-h-[48px] p-2.5 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
                         (settings.language || 'fa') === 'fa'
                           ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/30 font-bold'
@@ -821,7 +826,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                     <button
                       type="button"
-                      onClick={() => onUpdateSettings({ language: 'en' })}
+                      onClick={() => {
+                        try {
+                          localStorage.setItem('yaad_user_explicit_lang_choice', 'true');
+                        } catch {}
+                        onUpdateSettings({ language: 'en' });
+                      }}
                       className={`min-h-[48px] p-2.5 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
                         settings.language === 'en'
                           ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/30 font-bold'
@@ -2192,11 +2202,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   onClick={() => setActiveInfoDialog(activeInfoDialog === 'privacy' ? null : 'privacy')}
                   className={`py-2 px-2.5 rounded-xl border font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
                     activeInfoDialog === 'privacy'
-                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                      ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
                       : 'bg-stone-900/80 hover:bg-stone-800 border-stone-800 text-stone-300 hover:text-white'
                   }`}
                 >
-                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <ShieldCheck className="w-4 h-4 text-emerald-400 drop-shadow-[0_0_6px_rgba(16,185,129,0.4)] shrink-0" />
                   <span className="truncate">{isFa ? 'حریم خصوصی' : 'Privacy'}</span>
                 </button>
 
@@ -2225,9 +2235,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               {/* Expandable Minimal Info Content for Privacy or About */}
               {activeInfoDialog === 'privacy' && (
-                <div className="p-3 rounded-xl bg-stone-900/90 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-1.5 animate-in fade-in">
+                <div className="p-3 rounded-xl bg-stone-900/90 border border-emerald-500/30 text-[11px] text-stone-300 leading-relaxed space-y-2.5 animate-in fade-in">
                   <div className="flex items-center justify-between">
-                    <span className="font-bold text-indigo-300">{isFa ? 'حریم خصوصی و امنیت داده‌ها' : 'Privacy Policy'}</span>
+                    <div className="flex items-center gap-1.5">
+                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span className="font-bold text-emerald-300">{isFa ? 'حریم خصوصی و امنیت داده‌ها' : 'Privacy Policy'}</span>
+                    </div>
                     <button type="button" onClick={() => setActiveInfoDialog(null)} className="text-stone-400 hover:text-white">
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -2237,6 +2250,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ? 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه شما ذخیره می‌شوند و بدون اجازه شما به هیچ سرور خارجی ارسال نمی‌گردند.'
                       : 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and are never shared without your explicit consent.'}
                   </p>
+                  <a
+                    href="https://enikkhah.github.io/Yaad/privacy.html"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm shadow-emerald-950/50 cursor-pointer active:scale-95"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-white shrink-0" />
+                    <span>{isFa ? 'مشاهده' : 'View Privacy Policy'}</span>
+                    <ExternalLink className="w-3 h-3 text-emerald-100 shrink-0" />
+                  </a>
                 </div>
               )}
 

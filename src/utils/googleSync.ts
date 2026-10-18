@@ -1,17 +1,68 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { 
   getAuth, 
   signInWithPopup, 
   GoogleAuthProvider, 
   onAuthStateChanged, 
   signOut as fbSignOut,
-  User 
+  User,
+  Auth
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
 import { Reminder, IdeaNote } from '../types';
 
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+let cachedAuthInstance: Auth | null = null;
+let configPromise: Promise<Auth | null> | null = null;
+
+async function resolveFirebaseAuth(): Promise<Auth | null> {
+  if (cachedAuthInstance) return cachedAuthInstance;
+  if (getApps().length > 0) {
+    cachedAuthInstance = getAuth(getApp());
+    return cachedAuthInstance;
+  }
+
+  if (configPromise) return configPromise;
+
+  configPromise = (async () => {
+    try {
+      // 1. Check build-time / environment variables (e.g. GitHub Actions Secrets or .env)
+      const envKey = (import.meta as any).env?.VITE_FIREBASE_API_KEY;
+      const envProjectId = (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID;
+      if (envKey && envProjectId) {
+        const envConfig = {
+          apiKey: envKey,
+          authDomain:
+            (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN ||
+            `${envProjectId}.firebaseapp.com`,
+          projectId: envProjectId,
+          storageBucket:
+            (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET ||
+            `${envProjectId}.firebasestorage.app`,
+          messagingSenderId: (import.meta as any).env?.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
+          appId: (import.meta as any).env?.VITE_FIREBASE_APP_ID || '',
+        };
+        const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(envConfig);
+        cachedAuthInstance = getAuth(app);
+        return cachedAuthInstance;
+      }
+
+      // 2. Fetch from origin-restricted backend endpoint (/api/firebase-config)
+      const res = await fetch('/api/firebase-config');
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.ok && data.config?.apiKey) {
+          const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(data.config);
+          cachedAuthInstance = getAuth(app);
+          return cachedAuthInstance;
+        }
+      }
+    } catch {
+      // Offline or unconfigured environment
+    }
+    return null;
+  })();
+
+  return configPromise;
+}
 
 const provider = new GoogleAuthProvider();
 // Workspace Scopes requested (Calendar, Tasks, and Google Drive file/folder access for YAAD REMIDER backup)
@@ -32,27 +83,44 @@ export const initGoogleAuth = (
   onSuccess?: (user: User, token: string) => void,
   onSignedOut?: () => void
 ) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        if (onSuccess) onSuccess(user, cachedAccessToken);
-      } else if (!isSigningIn) {
-        // Needs fresh sign-in to obtain access token
+  let unsubscribeFn: (() => void) | null = null;
+  let isCancelled = false;
+
+  resolveFirebaseAuth().then((authInstance) => {
+    if (isCancelled || !authInstance) {
+      if (!authInstance && onSignedOut) onSignedOut();
+      return;
+    }
+    unsubscribeFn = onAuthStateChanged(authInstance, async (user: User | null) => {
+      if (user) {
+        if (cachedAccessToken) {
+          if (onSuccess) onSuccess(user, cachedAccessToken);
+        } else if (!isSigningIn) {
+          cachedAccessToken = null;
+          if (onSignedOut) onSignedOut();
+        }
+      } else {
         cachedAccessToken = null;
+        cachedDriveFolderId = null;
         if (onSignedOut) onSignedOut();
       }
-    } else {
-      cachedAccessToken = null;
-      cachedDriveFolderId = null;
-      if (onSignedOut) onSignedOut();
-    }
+    });
   });
+
+  return () => {
+    isCancelled = true;
+    if (unsubscribeFn) unsubscribeFn();
+  };
 };
 
 export const signInWithGoogle = async (): Promise<{ user: User; accessToken: string }> => {
   try {
     isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
+    const authInstance = await resolveFirebaseAuth();
+    if (!authInstance) {
+      throw new Error('تنظیمات کلید Firebase در این محیط یافت نشد.');
+    }
+    const result = await signInWithPopup(authInstance, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     if (!credential?.accessToken) {
       throw new Error('توکن دسترسی گوگل یافت نشد.');
@@ -69,7 +137,10 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
 export const signOutGoogle = async () => {
   cachedAccessToken = null;
   cachedDriveFolderId = null;
-  await fbSignOut(auth);
+  const authInstance = await resolveFirebaseAuth();
+  if (authInstance) {
+    await fbSignOut(authInstance);
+  }
 };
 
 export const getCachedToken = () => cachedAccessToken;
