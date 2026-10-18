@@ -3,7 +3,6 @@ import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliTime } from '../utils/jalali';
 import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound } from '../utils/audio';
 import { dismissDeliveredNotifications } from '../utils/nativeLocalNotifications';
-import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
 import { 
   Bell, 
   CheckCircle2, 
@@ -40,7 +39,6 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
   useEffect(() => {
     if (!reminder) {
       stopAlarmRinging();
-      stopFlashlightStrobe();
       return;
     }
 
@@ -52,14 +50,8 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
 
-    // Strobe camera flash if enabled
-    if (reminder.useFlash || settings?.enableFlash) {
-      startFlashlightStrobe().catch(() => {});
-    }
-
     return () => {
       stopAlarmRinging();
-      stopFlashlightStrobe();
     };
   }, [reminder]);
 
@@ -68,28 +60,24 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
   const handleComplete = (e: React.MouseEvent) => {
     e.stopPropagation();
     stopAlarmRinging();
-    stopFlashlightStrobe();
     onComplete(reminder.id);
   };
 
   const handlePostpone = (e: React.MouseEvent, minutes: number = 15) => {
     e.stopPropagation();
     stopAlarmRinging();
-    stopFlashlightStrobe();
     onPostpone(reminder.id, minutes);
   };
 
   const handleDismiss = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     stopAlarmRinging();
-    stopFlashlightStrobe();
     onDismiss();
   };
 
   const handleCardClick = () => {
     if (onOpenDetails) {
       stopAlarmRinging();
-      stopFlashlightStrobe();
       onOpenDetails(reminder);
     } else {
       setIsExpanded((prev) => !prev);
@@ -186,7 +174,6 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
                 type="button"
                 onClick={() => {
                   stopAlarmRinging();
-                  stopFlashlightStrobe();
                   onOpenDetails(reminder);
                 }}
                 className="p-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 transition-all active:scale-95 cursor-pointer"

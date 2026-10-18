@@ -252,7 +252,6 @@ export function createReminderFromOccasion(
     category: occasion.type === 'work' ? 'work' : 'family',
     priority: 'high',
     dueTimestamp: Math.max(Date.now() + 60000, triggerTimestamp),
-    useFlash: true,
     ringTune: occasion.ringTune || 'family',
     voiceReadAloud: true,
     recurrence: 'none',

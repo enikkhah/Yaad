@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>سیاست حریم خصوصی اپ یاد (YAAD)</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700&display=swap">
+<style>
+:root{--bg:#F4EFE6;--fg:#17130F;--muted:#6B6258;--accent:#B7710B;--card:#FFFFFF;--border:#E5DEC9}
+@media (prefers-color-scheme: dark){:root{--bg:#17130F;--fg:#F4EFE6;--muted:#B3A99B;--accent:#F5A524;--card:#211C16;--border:#332B22}}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:Vazirmatn,Tahoma,sans-serif;line-height:2;font-size:17px}
+main{max-width:740px;margin:0 auto;padding:32px 20px 64px}
+h1{font-size:28px;margin:0 0 4px}
+h2{font-size:20px;color:var(--accent);margin:32px 0 6px}
+p,li{margin:6px 0}
+ul{padding-inline-start:22px}
+a{color:var(--accent);text-decoration:none;font-weight:700}
+a:hover{text-decoration:underline}
+.meta{color:var(--muted);font-size:15px}
+.box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:12px 20px;margin-top:20px}
+.ltr{direction:ltr;text-align:left;font-family:sans-serif}
+</style>
+</head>
+<body>
+<main>
+<h1>سیاست حریم خصوصی اپ «یاد» (YAAD)</h1>
+<p class="meta">آخرین به‌روزرسانی: ۲۶ مهر ۱۴۰۵ (Oct 2026)</p>
+
+<div class="box">
+<p>«یاد» یک دستیار یادآور، مدیریت زمان، ثبت ایده، مناسبت‌ها و یادآور مکان‌محور (Geofence) است. اصل ما ساده و شفاف است: <strong>اطلاعات شما به‌طور پیش‌فرض روی گوشی خودتان ذخیره می‌شود.</strong> استفاده از اپ نیازی به ساخت حساب کاربری ندارد و ما سرور انحصاری برای جمع‌آوری یا فروش داده‌های شخصی شما نداریم.</p>
+</div>
+
+<h2>۱. چه اطلاعاتی در اپ ثبت و ذخیره می‌شود؟</h2>
+<p>هر اطلاعاتی که خودتان در برنامه وارد می‌کنید، در حافظه داخلی دستگاه شما (LocalStorage / IndexedDB) نگهداری می‌شود:</p>
+<ul>
+<li><strong>یادآورها و مناسبت‌ها:</strong> عنوان، توضیحات، دسته‌بندی، تاریخ و ساعت، تکرار، تصویر پیوست‌شده و تنظیمات هشدار.</li>
+<li><strong>ایده‌ها و یادداشت‌ها:</strong> متن، صدای ضبط‌شده (Voice Memo)، ویدیوی کوتاه یا نقاشی دست‌خط.</li>
+<li><strong>مکان‌های ثبت‌شده و حصار مکانی (Geofence):</strong> مختصات جغرافیایی (طول و عرض)، عنوان، آدرس، شعاع محدوده ورود/خروج و عکس مکان.</li>
+<li><strong>تنظیمات برنامه:</strong> زبان، تم ظاهری، اندازه فونت، صدای زنگ و تنظیمات پشتیبان‌گیری.</li>
+</ul>
+
+<h2>۲. اطلاعاتی که جمع‌آوری نمی‌کنیم</h2>
+<ul>
+<li>برای استفاده از امکانات اصلی اپ، نیازی به ثبت‌نام یا ورود به حساب کاربری نیست.</li>
+<li>داده‌های شخصی شما برای توسعه‌دهنده ارسال نمی‌شود و ما به محتوای یادآورها، عکس‌ها، صداها یا مکان‌های شما دسترسی نداریم.</li>
+<li>اپ حاوی هیچ‌گونه تبلیغات یا اسکریپت‌های ردیابی تبلیغاتی و فروش داده به اشخاص ثالث نیست.</li>
+</ul>
+
+<h2>۳. مجوزها و دسترسی‌های دستگاه (Permissions)</h2>
+<p>برنامه بر اساس قابلیت‌هایی که استفاده می‌کنید، مجوزهای زیر را در سیستم‌عامل اندروید یا مرورگر درخواست می‌کند:</p>
+<ul>
+<li><strong>اعلان‌ها، زنگ هشدار دقیق و راه‌اندازی مجدد (Notifications, Exact Alarm, Vibrate & Boot Completed):</strong> برای نمایش به‌موقع یادآورها، پخش صدای آلارم و لرزش در زمان سررسید، و فعال‌سازی مجدد زنگ‌های زمان‌بندی‌شده پس از خاموش و روشن شدن گوشی.</li>
+<li><strong>موقعیت مکانی (GPS - Fine & Coarse Location):</strong> صرفاً برای ثبت موقعیت مکانی مورد نظر شما روی نقشه و بررسی ورود یا خروج از محدوده تعیین‌شده در «حصار زمانی/مکانی» (Geofence).</li>
+<li><strong>دوربین (Camera):</strong> فقط هنگام عکس‌برداری مستقیم برای پیوست به یادآورها و مکان‌ها، یا ضبط ویدیوی کوتاه در بخش ایده‌ها.</li>
+<li><strong>میکروفون (Microphone / Record Audio):</strong> فقط هنگام استفاده از تایپ صوتی (تبدیل گفتار به متن) یا ضبط یادداشت صوتی در بخش ایده‌ها.</li>
+<li><strong>حافظه و فایل‌ها (Storage / Media Images & Local Folder):</strong> برای انتخاب تصویر از گالری و همچنین ذخیره و فراخوانی خودکار فایل پشتیبان در پوشه محلی <code>YAAD REMIDER</code> روی حافظه دستگاه.</li>
+</ul>
+<p>تمامی این مجوزها اختیاری و شفاف هستند و هر زمان بخواهید می‌توانید آن‌ها را از بخش تنظیمات گوشی خود مدیریت یا لغو کنید.</p>
+
+<h2>۴. پشتیبان‌گیری محلی و فضای ابری (به انتخاب کاربر)</h2>
+<ul>
+<li><strong>پشتیبان‌گیری محلی:</strong> برنامه برای جلوگیری از حذف ناخواسته اطلاعات، یک نسخه پشتیبان (با فرمت JSON) در پوشه محلی <code>YAAD REMIDER</code> در حافظه دستگاه شما نگهداری می‌کند.</li>
+<li><strong>پشتیبان‌گیری ابری (کاملاً اختیاری):</strong> بخش پشتیبان‌گیری ابری به‌طور پیش‌فرض غیرفعال است. تنها در صورتی که خودتان آن را در تنظیمات فعال کنید، فایل پشتیبان در فضای انتخابی شما ذخیره می‌شود:
+  <ul>
+    <li><strong>گوگل درایو (Google Drive):</strong> با استفاده از دسترسی محدود <code>drive.file</code>، برنامه <strong>فقط</strong> به پوشه و فایل پشتیبان ایجادشده توسط خود اپ «یاد» دسترسی دارد و به هیچ فایل دیگری در گوگل درایو شما دسترسی نخواهد داشت.</li>
+    <li><strong>سایر فضاهای ابری یا WebDAV دلخواه کاربر:</strong> در صورت وارد کردن آدرس سرور شخصی/WebDAV یا انتخاب پوشه فضای ابری (مانند OneDrive یا Dropbox)، اطلاعات مستقیماً به فضای معرفی‌شده توسط خود شما منتقل می‌شود.</li>
+  </ul>
+</li>
+</ul>
+
+<h2>۵. سرویس‌های بیرونی (شخص ثالث)</h2>
+<p>هنگام استفاده از برخی امکانات آنلاین، ارتباط مستقیم با سرویس‌های زیر برقرار می‌شود که تابع سیاست حریم خصوصی خودشان هستند:</p>
+<ul>
+<li><strong>Google Maps و OpenStreetMap (Nominatim):</strong> برای نمایش نقشه، مسیریابی و تبدیل مختصات جغرافیایی به نام آدرس (Reverse Geocoding).</li>
+<li><strong>سرویس تشخیص گفتار (Web Speech API / سرویس گفتار سیستم‌عامل):</strong> برای تبدیل صدای شما به متن در هنگام استفاده از تایپ صوتی.</li>
+<li><strong>Google Calendar ،Google Tasks و Google Drive (با احراز هویت Google / Firebase Auth):</strong> فقط در صورتی که خودتان گزینه ورود با گوگل و همگام‌سازی یا پشتیبان‌گیری ابری را فعال کنید.</li>
+</ul>
+
+<h2>۶. کنترل و حذف اطلاعات</h2>
+<p>شما مالک کامل داده‌های خود هستید. می‌توانید هر یادآور، مناسبت، مکان یا ایده را از داخل برنامه (و سطل بازیافت آن) حذف کنید. برای پاک کردن کامل همه اطلاعات، کافی است از بخش تنظیمات گوشی گزینه «پاک کردن داده‌ها» (Clear Data) را بزنید یا برنامه و پوشه پشتیبان <code>YAAD REMIDER</code> را حذف نمایید.</p>
+
+<h2>۷. تغییرات در سیاست حریم خصوصی</h2>
+<p>در صورت افزودن قابلیت جدید یا تغییر در این سیاست، متن به‌روزشده در همین صفحه منتشر خواهد شد و تاریخ آخرین به‌روزرسانی در بالای صفحه تغییر می‌کند.</p>
+
+<h2>۸. تماس با ما</h2>
+<p>برای هرگونه پرسش یا درخواست مرتبط با حریم خصوصی، از طریق ایمیل زیر با ما در ارتباط باشید:</p>
+<p>ایمیل پشتیبانی: <a href="mailto:YAADreminder@gmail.com">YAADreminder@gmail.com</a></p>
+<p class="meta">توسعه‌دهنده: عزت‌الله نیکخواه (Ezzatollah Nikkhah)</p>
+
+<div class="box ltr" style="margin-top:32px;font-size:14px;line-height:1.7">
+<strong>Privacy Policy Summary (English):</strong><br>
+<strong>YAAD Reminder</strong> stores all your reminders, occasions, ideas (text, audio, video, sketches), and saved Geofence locations locally on your device by default. We do not collect, sell, or transmit your personal data to our own servers, nor do we display ads. Device permissions (Notifications/Exact Alarms, GPS Location for geofencing, Camera for photos/video notes, Microphone for voice typing/audio notes, and Storage for local <code>YAAD REMIDER</code> folder backups) are used strictly when you invoke those features. Cloud backup (Google Drive via restricted <code>drive.file</code> scope, custom WebDAV, or user-selected cloud folders) and Google Calendar/Tasks sync are 100% optional and only activated upon your explicit consent. Contact: <a href="mailto:YAADreminder@gmail.com">YAADreminder@gmail.com</a>.
+</div>
+</main>
+</body>
+</html>

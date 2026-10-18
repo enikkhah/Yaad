@@ -1615,7 +1615,7 @@ export default function App() {
   };
 
   // Handler: Complete reminder explicitly (called by Alarm Modal, notifications, and complete actions)
-  // Guarantees stopping sound, strobe, closing modal, and prevents re-triggering
+  // Guarantees stopping sound, closing modal, and prevents re-triggering
   const handleCompleteReminder = (id: string) => {
     stopAlarmRinging();
     setActiveAlarmReminder(null);
@@ -2144,8 +2144,8 @@ export default function App() {
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-emerald-500/30 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
                     <p>
                       {isEn
-                        ? 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and never shared externally.'
-                        : 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه ذخیره می‌شوند و به هیچ سروری ارسال نمی‌گردند.'}
+                        ? 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and are never shared without your explicit consent.'
+                        : 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه شما ذخیره می‌شوند و بدون اجازه شما به هیچ سرور خارجی ارسال نمی‌گردند.'}
                     </p>
                     <a
                       href="https://enikkhah.github.io/Yaad/privacy.html"
@@ -2181,7 +2181,7 @@ export default function App() {
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed animate-in fade-in">
                     {isEn
                       ? `Smart assistant for spoken reminders, occasions, ideas, and location Geofence alerts • Version ${APP_VERSION}`
-                      : `دستیار هوشمند یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار زمانی مکان‌محور (Geofence) • نسخه ${APP_VERSION}`}
+                      : `دستیار هوشمند یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار زمانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`}
                   </div>
                 )}
 

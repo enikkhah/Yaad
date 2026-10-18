@@ -4,7 +4,6 @@ import {
   MapPin, 
   Mic, 
   Camera, 
-  Zap, 
   Settings, 
   ExternalLink, 
   X, 
@@ -80,12 +79,12 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
         };
       case 'camera':
         return {
-          icon: Zap,
-          color: 'text-yellow-400 bg-yellow-500/10 border-yellow-500/30',
-          titleFa: 'دسترسی فلاش دوربین',
-          titleEn: 'Camera & Flashlight Permission',
-          descFa: 'برای چشمک‌زدن فلاش دوربین هنگام آلارم جهت جلب توجه در محیط‌های تاریک یا بی‌صدا.',
-          descEn: 'Required to toggle flashlight strobe during alarm alerts.',
+          icon: Camera,
+          color: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
+          titleFa: 'دوربین',
+          titleEn: 'Camera',
+          descFa: 'برای عکس‌برداری و افزودن تصویر به یادآورها و مکان‌ها، دسترسی به دوربین دستگاه نیاز است.',
+          descEn: 'Required for taking photos and attaching images to reminders and locations.',
           sectionNameFa: 'بخش مجوزهای برنامه در اندروید',
           sectionNameEn: 'Android App Permissions Section',
         };
