@@ -5,7 +5,9 @@ import {
   getDayHeaderLabel, 
   getDateKey, 
   formatJalaliFull,
-  toPersianDigits 
+  getJalaliComponents,
+  toPersianDigits,
+  normalizeSearchText
 } from '../utils/jalali';
 import { 
   Filter, 
@@ -71,15 +73,20 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   // Filter out any deleted reminders (سطل بازیافت)
   const nonDeleted = reminders.filter((r) => !r.deletedAt);
 
-  // Search filter
+  // Enhanced search filter across title, description/notes, location, category, priority, and date/time
   const searchFiltered = searchQuery.trim()
     ? nonDeleted.filter((r) => {
-        const q = searchQuery.trim().toLowerCase();
-        return (
-          r.title.toLowerCase().includes(q) ||
-          r.description?.toLowerCase().includes(q) ||
-          r.geofence?.locationName?.toLowerCase().includes(q)
+        const qNorm = normalizeSearchText(searchQuery);
+        if (!qNorm) return true;
+        const catFa = r.category === 'work' ? 'کار کاری' : r.category === 'family' ? 'خانواده خانوادگی' : 'سایر عمومی';
+        const prioFa = r.priority === 'high' ? 'فوری بالا' : r.priority === 'medium' ? 'متوسط' : 'عادی پایین';
+        const fullDateFa = formatJalaliFull(r.dueTimestamp, 'fa');
+        const fullDateEn = formatJalaliFull(r.dueTimestamp, 'en');
+        const haystack = normalizeSearchText(
+          `${r.title} ${r.description || ''} ${r.geofence?.locationName || ''} ${r.geofence?.address || ''} ${catFa} ${r.category} ${prioFa} ${r.priority} ${fullDateFa} ${fullDateEn}`
         );
+        const tokens = qNorm.split(' ').filter(Boolean);
+        return tokens.every((tok) => haystack.includes(tok));
       })
     : nonDeleted;
 
@@ -197,12 +204,12 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             onClick={() => setIsFilterSheetOpen(true)}
             className={`min-h-[44px] px-3.5 py-2 rounded-xl border flex items-center gap-2 text-xs font-bold transition-all cursor-pointer ${
               categoryFilter !== 'all'
-                ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm shadow-amber-500/20'
+                ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-sm shadow-indigo-500/20'
                 : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-white hover:border-stone-700'
             }`}
             title={isEn ? 'Filter by category' : 'فیلتر دسته‌بندی'}
           >
-            <Filter className={`w-3.5 h-3.5 ${categoryFilter !== 'all' ? 'text-amber-400' : 'text-stone-400'}`} />
+            <Filter className={`w-3.5 h-3.5 ${categoryFilter !== 'all' ? 'text-indigo-400' : 'text-stone-400'}`} />
             <span>
               {categoryFilter === 'all'
                 ? (isEn ? 'All Categories' : 'همه دسته‌ها')
@@ -227,9 +234,9 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
           <div className="space-y-6">
             {/* The 'NOW' Line even when empty */}
             <div ref={nowMarkerRef} className="relative py-4 flex items-center justify-center">
-              <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-amber-500/70 to-transparent" />
-              <div className="relative z-10 px-4 py-1.5 rounded-full bg-amber-500 text-stone-950 font-black text-xs shadow-lg shadow-amber-500/20 flex items-center gap-2 border border-amber-400">
-                <span className="w-2 h-2 rounded-full bg-stone-950 animate-pulse" />
+              <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/70 to-transparent" />
+              <div className="relative z-10 px-4 py-1.5 rounded-full bg-indigo-500 text-white font-black text-xs shadow-lg shadow-indigo-500/20 flex items-center gap-2 border border-indigo-400">
+                <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
                 <span>{isEn ? 'NOW' : 'اکنون'}</span>
                 <span className="font-mono">{liveTimeString}</span>
               </div>
@@ -238,19 +245,21 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             {/* Empty State Card */}
             <div className="py-14 px-5 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-900/30 space-y-4">
               <div className="w-12 h-12 rounded-2xl bg-stone-800/80 border border-stone-700/60 text-stone-400 flex items-center justify-center mx-auto">
-                {searchQuery.trim() ? <Search className="w-6 h-6 text-amber-400" /> : <Clock className="w-6 h-6" />}
+                {searchQuery.trim() ? <Search className="w-6 h-6 text-indigo-400" /> : <Clock className="w-6 h-6" />}
               </div>
-              <div className="space-y-1">
-                <h4 className="font-bold text-base text-white">
+              <div className="space-y-1.5">
+                <h4 className="font-black text-base sm:text-lg text-white">
                   {searchQuery.trim()
-                    ? (isEn ? `No reminders match "${searchQuery}"` : `یادآوری مطابق با «${searchQuery}» پیدا نشد`)
+                    ? (isEn ? 'Reminder not found' : 'یادآور یافت نشد')
                     : categoryFilter === 'all'
                     ? (isEn ? 'No reminders in timeline' : 'هیچ یادآوری در خط زمانی ثبت نشده است')
                     : (isEn ? 'No reminders in this category' : 'هیچ یادآوری در این دسته‌بندی یافت نشد')}
                 </h4>
                 <p className="text-xs sm:text-sm text-stone-400 max-w-md mx-auto">
                   {searchQuery.trim()
-                    ? (isEn ? 'Try another keyword or clear search.' : 'کلمه کلیدی دیگری را جستجو کنید یا جستجو را پاک کنید.')
+                    ? (isEn
+                        ? `No reminder, note, or location matched "${searchQuery}".`
+                        : `هیچ یادآوری با عنوان، متن، توضیحات یا مکان منطبق با «${searchQuery}» یافت نشد.`)
                     : isEn
                     ? 'Tap the button below or the + button to create a new reminder.'
                     : 'برای شروع، دکمه ثبت یادآور جدید یا دکمه + پایین صفحه را لمس کنید.'}
@@ -269,7 +278,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                 <button
                   type="button"
                   onClick={onCreateNew}
-                  className="min-h-[48px] px-6 py-2.5 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm transition-all shadow-md active:scale-95 cursor-pointer inline-flex items-center gap-2"
+                  className="min-h-[48px] px-6 py-2.5 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm transition-all shadow-md active:scale-95 cursor-pointer inline-flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4 stroke-[3]" />
                   <span>{isEn ? 'New Reminder' : 'ثبت یادآور جدید'}</span>
@@ -291,10 +300,10 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                 className="relative py-4 my-2 flex items-center justify-center"
               >
                 {/* Horizontal line across the container */}
-                <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-amber-500/80 to-transparent" />
+                <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/80 to-transparent" />
                 {/* Centered Small Badge with Live Clock */}
-                <div className="relative z-10 px-4 py-1.5 rounded-full bg-amber-500 text-stone-950 font-black text-xs shadow-lg shadow-amber-500/25 flex items-center gap-2 border border-amber-300">
-                  <span className="w-2 h-2 rounded-full bg-stone-950 animate-pulse" />
+                <div className="relative z-10 px-4 py-1.5 rounded-full bg-indigo-500 text-white font-black text-xs shadow-lg shadow-indigo-500/25 flex items-center gap-2 border border-indigo-300">
+                  <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
                   <span>{isEn ? 'NOW' : 'اکنون'}</span>
                   <span className="font-mono">{liveTimeString}</span>
                 </div>
@@ -360,7 +369,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                   ? 'bg-cyan-400'
                   : reminder.category === 'family'
                   ? 'bg-rose-400'
-                  : 'bg-amber-400';
+                  : 'bg-indigo-400';
 
               elements.push(
                 <div
@@ -380,51 +389,52 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                     }
                   }}
                 >
-                  {/* بیرون زدگی هلالی متصل به کارت برای یادآوری بعدی (Crescent Protrusion for Next Reminder) */}
+                  {/* کادر شمارش معکوس برای یادآوری بعدی (Countdown Badge without crescent wings) */}
                   {isNext && (
                     <div className="absolute -top-3.5 inset-x-0 flex items-center justify-center z-10 pointer-events-none">
-                      <div className="relative flex items-center">
-                        {/* Left crescent wing (fillet curve) connecting card border to badge */}
-                        <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0 fill-current -mr-[1px] translate-y-1.5" viewBox="0 0 16 16">
-                          <path d="M16,0 C16,8 8,16 0,16 L16,16 Z" />
-                        </svg>
-
-                        {/* Green Counter Badge */}
-                        <div className="px-3 sm:px-4 py-1 rounded-full bg-emerald-500 text-stone-950 font-black text-xs shadow-lg shadow-emerald-500/35 flex items-center gap-2 border border-emerald-300 pointer-events-auto">
-                          <span className="w-2 h-2 rounded-full bg-stone-950 animate-pulse shrink-0" />
-                          <span className="tracking-wide uppercase text-[10px] sm:text-[11px]">
-                            {isEn ? 'NEXT' : 'یادآوری بعدی'}
-                          </span>
-                          <span className="font-mono font-extrabold text-xs sm:text-sm">
-                            {formatNextCountdown(reminder.dueTimestamp, nowMs, isEn)}
-                          </span>
-                        </div>
-
-                        {/* Right crescent wing (fillet curve) connecting card border to badge */}
-                        <svg className="w-3.5 h-3.5 text-emerald-500 shrink-0 fill-current -ml-[1px] translate-y-1.5" viewBox="0 0 16 16">
-                          <path d="M0,0 C0,8 8,16 16,16 L0,16 Z" />
-                        </svg>
+                      <div className="px-3 sm:px-4 py-1 rounded-full bg-emerald-500 text-stone-950 font-black text-xs shadow-lg shadow-emerald-500/35 flex items-center gap-2 border border-emerald-300 pointer-events-auto">
+                        <span className="w-2 h-2 rounded-full bg-stone-950 animate-pulse shrink-0" />
+                        <span className="tracking-wide uppercase text-[10px] sm:text-[11px]">
+                          {isEn ? 'NEXT' : 'یادآوری بعدی'}
+                        </span>
+                        <span className="font-mono font-extrabold text-xs sm:text-sm">
+                          {formatNextCountdown(reminder.dueTimestamp, nowMs, isEn)}
+                        </span>
                       </div>
                     </div>
                   )}
 
-                  {/* Title & Small Dot */}
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <span 
-                      className={`w-2.5 h-2.5 rounded-full shrink-0 ${dotColor}`}
-                      title={`${getCategoryLabel(reminder.category)} • ${getPriorityLabel(reminder.priority)}`}
-                    />
-                    <span className={`text-sm sm:text-base font-bold truncate ${isCompleted ? 'line-through text-stone-500' : ''}`}>
-                      {reminder.title}
-                    </span>
+                  {/* Title, Optional Description Snippet & Small Dot */}
+                  <div className="flex flex-col gap-1 min-w-0 flex-1">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span 
+                        className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`}
+                        title={`${getCategoryLabel(reminder.category)} • ${getPriorityLabel(reminder.priority)}`}
+                      />
+                      <span className={`text-sm sm:text-base font-bold truncate ${isCompleted ? 'line-through text-stone-500' : ''}`}>
+                        {reminder.title}
+                      </span>
+                    </div>
+                    {reminder.description && (
+                      <p className="text-[11px] sm:text-xs text-stone-400 truncate ps-4.5">
+                        {reminder.description}
+                      </p>
+                    )}
                   </div>
 
-                  {/* Time Only (ساعت) */}
-                  <div className="shrink-0 text-xs sm:text-sm font-mono text-stone-400 flex items-center gap-1.5">
-                    {isCompleted && (
-                      <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                    )}
-                    <span>{formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa')}</span>
+                  {/* Time & Date (with Year) */}
+                  <div className="shrink-0 text-end flex flex-col items-end gap-0.5">
+                    <div className="text-xs sm:text-sm font-mono text-stone-300 font-bold flex items-center gap-1.5">
+                      {isCompleted && (
+                        <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      )}
+                      <span>{formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa')}</span>
+                    </div>
+                    <span className="text-[10px] sm:text-[11px] text-stone-400">
+                      {isEn
+                        ? new Date(reminder.dueTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                        : getJalaliComponents(reminder.dueTimestamp).dateString}
+                    </span>
                   </div>
                 </div>
               );
@@ -462,7 +472,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
               <div className="space-y-1 min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className={`w-2.5 h-2.5 rounded-full ${
-                    selectedReminder.priority === 'high' ? 'bg-red-500' : 'bg-amber-400'
+                    selectedReminder.priority === 'high' ? 'bg-red-500' : 'bg-indigo-400'
                   }`} />
                   <span className="text-xs text-stone-400 font-medium">
                     {getCategoryLabel(selectedReminder.category)} • {getPriorityLabel(selectedReminder.priority)}
@@ -546,7 +556,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                 onClick={() => setShowPostponePicker(!showPostponePicker)}
                 className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-stone-800/90 hover:bg-stone-700/90 text-stone-200 font-bold text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer"
               >
-                <Clock className="w-5 h-5 text-amber-400" />
+                <Clock className="w-5 h-5 text-indigo-400" />
                 <span>{isEn ? 'Snooze / Postpone' : 'تعویق زمان'}</span>
               </button>
 
@@ -597,7 +607,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
 
             <div className="flex items-center justify-between pb-2 border-b border-stone-800">
               <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Filter className="w-4 h-4 text-amber-400" />
+                <Filter className="w-4 h-4 text-indigo-400" />
                 <span>{isEn ? 'Filter by Category' : 'انتخاب دسته‌بندی'}</span>
               </h3>
               <button
@@ -629,12 +639,12 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                     }}
                     className={`min-h-[48px] w-full px-4 py-3 rounded-2xl flex items-center justify-between transition-all cursor-pointer border ${
                       isSelected
-                        ? 'bg-amber-500/15 border-amber-500 text-white font-bold'
+                        ? 'bg-indigo-500/15 border-indigo-500 text-white font-bold'
                         : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-white hover:bg-stone-800/60'
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      <Icon className={`w-4 h-4 ${isSelected ? 'text-amber-400' : 'text-stone-400'}`} />
+                      <Icon className={`w-4 h-4 ${isSelected ? 'text-indigo-400' : 'text-stone-400'}`} />
                       <span className="text-sm">{cat.label}</span>
                     </div>
 
@@ -642,7 +652,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                       <span className="text-xs text-stone-400 font-mono">
                         ({cat.count})
                       </span>
-                      {isSelected && <Check className="w-4 h-4 text-amber-400" />}
+                      {isSelected && <Check className="w-4 h-4 text-indigo-400" />}
                     </div>
                   </button>
                 );

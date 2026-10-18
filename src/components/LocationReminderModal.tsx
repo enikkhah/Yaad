@@ -9,12 +9,14 @@ import {
   BellRing,
   Volume2,
   Zap,
-  Tag
+  Tag,
+  Smartphone
 } from 'lucide-react';
 import { SavedLocation, LocationGeofenceConfig, GeofenceTriggerType, Category, Priority, Reminder } from '../types';
 import { toPersianDigits } from '../utils/jalali';
 import { AppLanguage } from '../utils/i18n';
 import { ValidationAlertModal } from './ValidationAlertModal';
+import { openAndroidSettings } from '../utils/nativePermissions';
 
 interface LocationReminderModalProps {
   isOpen: boolean;
@@ -46,7 +48,6 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<Category>('work');
   const [priority, setPriority] = useState<Priority>('medium');
-  const [useFlash, setUseFlash] = useState(true);
   const [voiceReadAloud, setVoiceReadAloud] = useState(true);
 
   // Selected Location
@@ -164,7 +165,6 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
       category,
       priority,
       dueTimestamp: Date.now() + 3600000 * 24 * 7, // fallback 1 week if time checked
-      useFlash,
       ringTune: 'work',
       voiceReadAloud,
       geofence: geofenceConfig,
@@ -191,7 +191,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
           {/* Header */}
           <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-stone-800 bg-stone-900 sticky top-0 z-10">
             <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/40 text-amber-400 flex items-center justify-center flex-shrink-0">
+              <div className="w-10 h-10 rounded-2xl bg-indigo-500/20 border border-indigo-500/40 text-indigo-400 flex items-center justify-center flex-shrink-0">
                 <BellRing className="w-5 h-5" />
               </div>
               <div>
@@ -224,7 +224,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
               <select
                 value={selectedLocationId}
                 onChange={(e) => handleSelectLocation(e.target.value)}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white text-sm focus:outline-none focus:border-amber-500/70"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white text-sm focus:outline-none focus:border-indigo-500/70"
               >
                 {savedLocations.map((loc) => (
                   <option key={loc.id} value={loc.id}>
@@ -236,6 +236,21 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
                 </option>
               </select>
             </div>
+
+            {/* Location GPS Error Banner */}
+            {locationError && (
+              <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs animate-in fade-in">
+                <span className="truncate">{locationError}</span>
+                <button
+                  type="button"
+                  onClick={() => openAndroidSettings('location')}
+                  className="shrink-0 px-2.5 py-1 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white font-black text-[11px] flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                >
+                  <Smartphone className="w-3.5 h-3.5" />
+                  <span>{isEn ? 'Android Settings' : 'تنظیمات موقعیت اندروید'}</span>
+                </button>
+              </div>
+            )}
 
             {/* GPS coordinates & map preview */}
             {customLat !== null && customLng !== null && (
@@ -280,7 +295,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
                   }}
                   className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex flex-col items-center gap-1 ${
                     triggerOn === 'enter'
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-md'
+                      ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-md'
                       : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-white'
                   }`}
                 >
@@ -299,7 +314,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
                   }}
                   className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex flex-col items-center gap-1 ${
                     triggerOn === 'exit'
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-md'
+                      ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-md'
                       : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-white'
                   }`}
                 >
@@ -313,11 +328,11 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
                   onClick={() => setTriggerOn('both')}
                   className={`p-2.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex flex-col items-center gap-1 ${
                     triggerOn === 'both'
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-md'
+                      ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-md'
                       : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-white'
                   }`}
                 >
-                  <BellRing className="w-4 h-4 text-amber-400" />
+                  <BellRing className="w-4 h-4 text-indigo-400" />
                   <span>{isEn ? 'Both' : 'ورود و خروج'}</span>
                   <span className="text-[10px] text-stone-500 font-normal">{isEn ? 'Both events' : 'هر دو حالت'}</span>
                 </button>
@@ -330,7 +345,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
                 <label className="font-bold text-stone-300">
                   {isEn ? 'Detection Radius:' : 'شعاع محدوده جغرافیایی (Radius):'}
                 </label>
-                <span className="font-bold text-amber-400">
+                <span className="font-bold text-indigo-400">
                   {isEn ? `${radius} meters` : `${toPersianDigits(radius)} متر`}
                 </span>
               </div>
@@ -343,7 +358,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
                     onClick={() => setRadius(opt.value)}
                     className={`p-2.5 rounded-xl border text-xs text-right transition-all cursor-pointer ${
                       radius === opt.value
-                        ? 'bg-amber-500/15 border-amber-500 text-amber-300 font-bold'
+                        ? 'bg-indigo-500/15 border-indigo-500 text-indigo-300 font-bold'
                         : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-stone-200'
                     }`}
                   >
@@ -364,7 +379,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder={isEn ? 'e.g. Pick up documents at warehouse...' : 'مثلاً: تحویل مدارک از انبار، خرید نان، یادآوری کلید...'}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-500 text-sm focus:outline-none focus:border-amber-500/70"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-500 text-sm focus:outline-none focus:border-indigo-500/70"
                 />
               </div>
 
@@ -377,7 +392,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder={isEn ? 'Optional details to read upon arrival...' : 'توضیحات اختیاری، نام افراد یا چک‌لیست اقلامی که باید بردارید...'}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-500 text-sm focus:outline-none focus:border-amber-500/70 resize-none leading-relaxed"
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-500 text-sm focus:outline-none focus:border-indigo-500/70 resize-none leading-relaxed"
                 />
               </div>
             </div>
@@ -419,20 +434,9 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
               <label className="flex items-center gap-2 cursor-pointer text-xs text-stone-300">
                 <input
                   type="checkbox"
-                  checked={useFlash}
-                  onChange={(e) => setUseFlash(e.target.checked)}
-                  className="rounded accent-amber-500"
-                />
-                <Zap className="w-3.5 h-3.5 text-amber-400" />
-                <span>{isEn ? 'Screen Flash' : 'فلش نوری صفحه'}</span>
-              </label>
-
-              <label className="flex items-center gap-2 cursor-pointer text-xs text-stone-300">
-                <input
-                  type="checkbox"
                   checked={voiceReadAloud}
                   onChange={(e) => setVoiceReadAloud(e.target.checked)}
-                  className="rounded accent-amber-500"
+                  className="rounded accent-indigo-500"
                 />
                 <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
                 <span>{isEn ? 'Read aloud title' : 'خواندن صوتی عنوان'}</span>
@@ -453,7 +457,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
-              className="min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs sm:text-sm font-black flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer"
+              className="min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs sm:text-sm font-black flex items-center justify-center gap-2 shadow-lg shadow-indigo-500/25 active:scale-95 transition-all cursor-pointer"
             >
               <Check className="w-4 h-4 stroke-[3]" />
               <span>{isEn ? 'Activate Geofence Reminder' : 'فعال‌سازی یادآور مکان‌محور'}</span>

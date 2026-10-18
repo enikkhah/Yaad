@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
-import { Camera, X, RefreshCw, Check } from 'lucide-react';
+import { Camera, X, RefreshCw, Check, Smartphone, AlertCircle } from 'lucide-react';
+import { openAndroidSettings } from '../utils/nativePermissions';
 
 interface CameraCaptureModalProps {
   isOpen: boolean;
@@ -110,7 +111,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-stone-800">
           <div className="flex items-center gap-2 text-white font-bold text-base">
-            <Camera className="w-5 h-5 text-amber-400" />
+            <Camera className="w-5 h-5 text-indigo-400" />
             <span>عکسبرداری برای یادآور</span>
           </div>
           <button
@@ -124,7 +125,20 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
         {/* Viewfinder or Preview */}
         <div className="relative aspect-[4/3] bg-black flex items-center justify-center overflow-hidden">
           {errorMsg ? (
-            <div className="p-6 text-center text-rose-400 text-sm">{errorMsg}</div>
+            <div className="p-6 text-center text-rose-400 text-sm space-y-3 flex flex-col items-center justify-center">
+              <div className="flex items-center gap-2 text-rose-300">
+                <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                <span className="font-bold">{errorMsg}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => openAndroidSettings('camera')}
+                className="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+              >
+                <Smartphone className="w-4 h-4" />
+                <span>تنظیمات مجوز دوربین اندروید</span>
+              </button>
+            </div>
           ) : capturedPhoto ? (
             <img
               src={capturedPhoto}
@@ -164,7 +178,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
                 type="button"
                 onClick={takeSnapshot}
                 disabled={!!errorMsg}
-                className="flex items-center justify-center w-16 h-16 rounded-full bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-600/40 font-bold active:scale-95 transition-transform"
+                className="flex items-center justify-center w-16 h-16 rounded-full bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/40 font-bold active:scale-95 transition-transform"
                 title="ثبت عکس"
               >
                 <Camera className="w-7 h-7 text-white" />
@@ -184,7 +198,7 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
               <button
                 type="button"
                 onClick={handleConfirm}
-                className="flex-1 py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-lg shadow-amber-600/30 cursor-pointer"
+                className="flex-1 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-bold flex items-center justify-center gap-1.5 transition-colors shadow-lg shadow-indigo-600/30 cursor-pointer"
               >
                 <Check className="w-4 h-4 text-white stroke-[2.5]" />
                 <span className="text-white font-bold">تأیید و ضمیمه</span>

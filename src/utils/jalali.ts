@@ -43,6 +43,22 @@ export function fromPersianDigits(input: string): string {
 }
 
 /**
+ * Normalizes Persian/Arabic text and digits for accurate, insensitive search matching
+ */
+export function normalizeSearchText(input?: string | null): string {
+  if (!input) return '';
+  return fromPersianDigits(String(input))
+    .toLowerCase()
+    .replace(/ي/g, 'ی')
+    .replace(/ى/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/ة/g, 'ه')
+    .replace(/\u200c/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
  * Gets Jalali date components for a given timestamp
  */
 export function getJalaliComponents(timestamp: number): {
@@ -111,7 +127,7 @@ export function formatJalaliFull(timestamp: number, language: string = 'fa'): st
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const h = d.getHours().toString().padStart(2, '0');
     const m = d.getMinutes().toString().padStart(2, '0');
-    return `${months[d.getMonth()]} ${d.getDate()}, ${h}:${m}`;
+    return `${months[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} - ${h}:${m}`;
   }
   return `${dateString} ساعت ${timeString}`;
 }
@@ -284,23 +300,26 @@ export function getDayHeaderLabel(timestamp: number, language: string = 'fa'): s
   const yesterday = new Date(now.getTime() - 86400000);
   const yesterdayDateKey = `${yesterday.getFullYear()}-${yesterday.getMonth() + 1}-${yesterday.getDate()}`;
 
+  const monthsEn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const fullEnDate = `${monthsEn[target.getMonth()]} ${target.getDate()}, ${target.getFullYear()}`;
+  const { weekday, day, monthName, year } = getJalaliComponents(timestamp);
+  const fullFaDate = `${toPersianDigits(day)} ${monthName} ${toPersianDigits(year)}`;
+
   if (targetDateKey === nowDateKey) {
-    return isEn ? 'Today' : 'امروز';
+    return isEn ? `Today — ${fullEnDate}` : `امروز — ${fullFaDate}`;
   }
   if (targetDateKey === tomorrowDateKey) {
-    return isEn ? 'Tomorrow' : 'فردا';
+    return isEn ? `Tomorrow — ${fullEnDate}` : `فردا — ${fullFaDate}`;
   }
   if (targetDateKey === yesterdayDateKey) {
-    return isEn ? 'Yesterday' : 'دیروز';
+    return isEn ? `Yesterday — ${fullEnDate}` : `دیروز — ${fullFaDate}`;
   }
 
   if (isEn) {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${target.toLocaleDateString('en-US', { weekday: 'short' })}, ${months[target.getMonth()]} ${target.getDate()}`;
+    return `${target.toLocaleDateString('en-US', { weekday: 'short' })}, ${fullEnDate}`;
   }
 
-  const { weekday, day, monthName } = getJalaliComponents(timestamp);
-  return `${weekday} ${toPersianDigits(day)} ${monthName}`;
+  return `${weekday} ${fullFaDate}`;
 }
 
 export const GREGORIAN_MONTHS: readonly string[] = [

@@ -76,7 +76,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
     <div 
       className={`rounded-2xl border transition-all duration-200 flex flex-col justify-between overflow-hidden shadow-sm ${
         isToday
-          ? 'bg-stone-900 border-amber-500/50'
+          ? 'bg-stone-900 border-indigo-500/50'
           : 'bg-stone-900 border-stone-800 hover:border-stone-700'
       } p-3.5 sm:p-4 gap-3 text-right rtl:text-right ltr:text-left`}
       dir={isEn ? 'ltr' : 'rtl'}
@@ -94,7 +94,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
                 {isEn ? meta.labelEn : meta.labelFa}
               </span>
               {isToday && (
-                <span className="ms-1.5 inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-amber-500 text-stone-950">
+                <span className="ms-1.5 inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-500 text-white">
                   <PartyPopper className="w-3 h-3" />
                   {isEn ? 'TODAY!' : 'امروز!'}
                 </span>
@@ -144,7 +144,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
       <div className="bg-stone-950/60 p-2.5 rounded-xl border border-stone-800/80 flex items-center justify-between gap-2 text-xs">
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5 text-stone-300 font-bold">
-            <Calendar className="w-3.5 h-3.5 text-amber-400" />
+            <Calendar className="w-3.5 h-3.5 text-indigo-400" />
             <span>{formattedTargetDate}</span>
           </div>
           <div className="flex items-center gap-1 text-[11px] text-stone-400">
@@ -156,11 +156,11 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
         {/* Countdown Badge */}
         <div className="text-center px-2.5 py-1 rounded-xl bg-stone-900 border border-stone-700/80">
           {isToday ? (
-            <span className="text-xs font-black text-amber-400">
+            <span className="text-xs font-black text-indigo-400">
               {isEn ? 'Today' : 'امروز'}
             </span>
           ) : daysRemaining === 1 ? (
-            <span className="text-xs font-black text-amber-400">
+            <span className="text-xs font-black text-indigo-400">
               {isEn ? 'Tomorrow' : 'فردا'}
             </span>
           ) : (
@@ -179,7 +179,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
       {/* Note / Gift Idea if present */}
       {occasion.customNote && (
         <div className="text-[11px] text-stone-300 bg-stone-950/40 p-2 rounded-xl border border-stone-800/40 flex items-start gap-1.5 line-clamp-2">
-          <Gift className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+          <Gift className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
           <span className="leading-relaxed">{occasion.customNote}</span>
         </div>
       )}
@@ -190,9 +190,9 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
           <button
             type="button"
             onClick={() => onCreateReminder(occasion)}
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all active:scale-95 cursor-pointer"
+            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all active:scale-95 cursor-pointer"
           >
-            <BellRing className="w-3.5 h-3.5 text-amber-400" />
+            <BellRing className="w-3.5 h-3.5 text-indigo-400" />
             <span>{isEn ? 'Set Alarm Reminder' : 'تنظیم یادآور و آلارم در تقویم'}</span>
           </button>
         </div>

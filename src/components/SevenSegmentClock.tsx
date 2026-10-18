@@ -121,7 +121,7 @@ export const SevenSegmentClock: React.FC<SevenSegmentClockProps> = ({
     <div
       dir="ltr"
       style={{ color: '#d21ccf' }}
-      className="inline-flex items-center gap-1 sm:gap-1.5 bg-stone-950/95 border border-amber-500/40 rounded-2xl px-3 py-1.5 sm:px-4 sm:py-2 shadow-[inset_0_2px_4px_rgba(0,0,0,0.8),0_0_15px_rgba(245,158,11,0.2)]"
+      className="inline-flex items-center gap-1 sm:gap-1.5 bg-stone-950/95 border border-indigo-500/40 rounded-2xl px-3 py-1.5 sm:px-4 sm:py-2 shadow-[inset_0_2px_4px_rgba(0,0,0,0.8),0_0_15px_rgba(99,102,241,0.2)]"
     >
       {/* Hours */}
       <div className="flex items-center gap-0.5 sm:gap-1">

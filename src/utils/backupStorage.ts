@@ -22,6 +22,23 @@ export interface AutoBackupSnapshot {
 }
 
 /**
+ * Requests permanent persistent storage from the browser / Android OS
+ * Prevents OS from evicting IndexedDB on device reboot or low memory.
+ */
+export async function requestPersistentStorage(): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.storage && navigator.storage.persist) {
+    try {
+      const isPersisted = await navigator.storage.persist();
+      console.log('[YAAD Vault] Storage persistence granted:', isPersisted);
+      return isPersisted;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
  * Open or initialize IndexedDB for robust persistent offline storage
  */
 function openVaultDB(): Promise<IDBDatabase | null> {

@@ -83,6 +83,44 @@ export const getThemeStyles = (theme: AppTheme = 'dark-gold'): ThemeStyles => {
         accentRing: 'ring-teal-400',
       };
 
+    case 'jade_warm_light':
+      return {
+        bg: 'bg-[#F7F6F0] text-[#202A29]',
+        text: 'text-[#202A29]',
+        selection: 'selection:bg-[#168779] selection:text-white',
+        cardBg: 'bg-white',
+        cardBorder: 'border-[#DDE1DA]',
+        cardHoverBorder: 'hover:border-[#168779]/50',
+        cardShadow: 'shadow-sm shadow-[#202A29]/5',
+        btnSecondary: 'bg-[#EFEFE8] hover:bg-[#E2E5DC] text-[#202A29] border border-[#DDE1DA] active:scale-95 transition-all',
+        btnPrimary: 'bg-[#168779] hover:bg-[#116e63] text-white font-bold shadow-md shadow-[#168779]/20 active:scale-95 transition-all',
+        headerBg: 'bg-[#F7F6F0]/95',
+        headerBorder: 'border-[#DDE1DA]',
+        accentText: 'text-[#168779]',
+        accentBorder: 'border-[#168779]/30',
+        accentBadge: 'bg-[#DDEFEA] text-[#168779] border border-[#168779]/30',
+        accentRing: 'ring-[#168779]/30',
+      };
+
+    case 'midnight_blue_silver':
+      return {
+        bg: 'bg-[#101722] text-[#F0F3F7]',
+        text: 'text-[#F0F3F7]',
+        selection: 'selection:bg-[#9CBCE0] selection:text-[#101722]',
+        cardBg: 'bg-[#202B3A]',
+        cardBorder: 'border-[#39475A]',
+        cardHoverBorder: 'hover:border-[#9CBCE0]/60',
+        cardShadow: 'shadow-md shadow-black/30',
+        btnSecondary: 'bg-[#172130] hover:bg-[#293648] text-[#F0F3F7] border border-[#39475A] hover:border-[#9CBCE0]/50 active:scale-95 transition-all',
+        btnPrimary: 'bg-[#9CBCE0] hover:bg-[#C5D9EE] text-[#101722] font-bold shadow-sm active:scale-95 transition-all',
+        headerBg: 'bg-[#101722]/95',
+        headerBorder: 'border-[#39475A]',
+        accentText: 'text-[#9CBCE0]',
+        accentBorder: 'border-[#9CBCE0]/40',
+        accentBadge: 'bg-[#293648] text-[#C5D9EE] border border-[#9CBCE0]/35',
+        accentRing: 'ring-[#9CBCE0]/40',
+      };
+
     case 'dark-gold':
     default:
       // Dark Charcoal base with elegant mild turquoise (فیروزه‌ای خفیف) buttons and frames

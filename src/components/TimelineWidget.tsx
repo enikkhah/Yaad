@@ -145,7 +145,7 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
         >
           {/* Badge & Metadata */}
           <div className="flex items-center gap-2 mb-2 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 text-sm font-bold">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 text-sm font-bold">
               <Bell className="w-4 h-4" />
               <span>{isEn ? 'Next Reminder' : 'یادآور بعدی'}</span>
             </span>
@@ -157,18 +157,18 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
           </div>
 
           {/* Title - Prominent subject */}
-          <h3 className="text-lg sm:text-xl font-black text-white hover:text-amber-400 transition-colors line-clamp-1 tracking-tight">
+          <h3 className="text-lg sm:text-xl font-black text-white hover:text-indigo-400 transition-colors line-clamp-1 tracking-tight">
             {nextPendingReminder.title}
           </h3>
 
           {/* Scheduled Time - Smaller font to contrast with subject */}
           <div className="flex items-center gap-1.5 mt-1.5 text-xs text-stone-400 flex-wrap font-medium">
-            <Clock className="w-3.5 h-3.5 text-amber-500/80 shrink-0" />
+            <Clock className="w-3.5 h-3.5 text-indigo-500/80 shrink-0" />
             <span className="text-stone-300">
               {formatJalaliFull(nextPendingReminder.dueTimestamp, language)}
             </span>
             <span className="text-stone-600">•</span>
-            <span className="text-amber-400 font-bold">
+            <span className="text-indigo-400 font-bold">
               {getPersianRelativeTime(nextPendingReminder.dueTimestamp, language)}
             </span>
           </div>
@@ -185,7 +185,7 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
               minutes={liveCountdown.minutes}
               seconds={liveCountdown.seconds}
               size="sm"
-              color="amber"
+              color="indigo"
             />
           </div>
         )}

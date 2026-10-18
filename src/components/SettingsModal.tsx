@@ -23,7 +23,6 @@ import {
   ShieldCheck,
   Check,
   AlertCircle,
-  Flashlight,
   Download,
   Info,
   Volume2,
@@ -65,7 +64,6 @@ import {
   checkAllPermissionsStatus,
   NativePermissionsStatus
 } from '../utils/nativePermissions';
-import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
 import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume } from '../utils/audio';
 import { syncNotificationSoundAndVolume, syncAllRemindersWithLocalNotifications } from '../utils/nativeLocalNotifications';
 import { User } from 'firebase/auth';
@@ -135,7 +133,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     settings?: Partial<AppSettings>;
   } | null>(null);
 
-  const [isTestingTorch, setIsTestingTorch] = useState<boolean>(false);
   const [playingSoundId, setPlayingSoundId] = useState<PhoneAlarmSound | null>(null);
   const soundTimeoutRef = useRef<number | null>(null);
 
@@ -259,30 +256,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     syncNotificationSoundAndVolume(settings.alarmSound || 'digital-beep', clamped).catch(() => {});
   };
 
-  const handleTestTorch = async () => {
-    setIsTestingTorch(true);
-    try {
-      const started = await startFlashlightStrobe();
-      if (!started) {
-        // If not started, try requesting permission
-        console.warn('Torch could not start directly, check device permissions');
-      }
-      setTimeout(() => {
-        stopFlashlightStrobe();
-        setIsTestingTorch(false);
-      }, 4000);
-    } catch {
-      stopFlashlightStrobe();
-      setIsTestingTorch(false);
-    }
-  };
-
-  const themes: { id: AppTheme; name: string; preview: string }[] = [
-    { id: 'system', name: isFa ? 'خودکار (پیروی از گوشی)' : 'System (Auto)', preview: 'bg-gradient-to-r from-stone-900 to-stone-200 border-amber-400' },
-    { id: 'dark-gold', name: isFa ? 'مشکی طلایی' : 'Dark Gold', preview: 'bg-stone-950 border-amber-500' },
+  const themes: { id: AppTheme; name: string; subtitle?: string; preview: string }[] = [
+    { id: 'system', name: isFa ? 'خودکار (پیروی از گوشی)' : 'System (Auto)', preview: 'bg-gradient-to-r from-stone-900 to-stone-200 border-indigo-400' },
+    { id: 'dark-gold', name: isFa ? 'مشکی نیلی' : 'Dark Indigo', preview: 'bg-stone-950 border-indigo-500' },
     { id: 'dark-slate', name: isFa ? 'آبی تیره' : 'Dark Slate', preview: 'bg-slate-950 border-sky-500' },
     { id: 'light-clean', name: isFa ? 'روشن مدرن' : 'Light Clean', preview: 'bg-stone-100 border-stone-400' },
     { id: 'sketch-contrast', name: isFa ? 'اسکچ خط‌چین' : 'Sketch High Contrast', preview: 'bg-black border-dashed border-white' },
+    { id: 'jade_warm_light', name: isFa ? 'سبز یشمی و سفید گرم' : 'Jade Green & Warm White', preview: 'bg-[#168779] border-[#DDE1DA]' },
+    { id: 'midnight_blue_silver', name: isFa ? 'آبی نیمه‌شب و نقره‌ای' : 'Midnight Blue & Silver', preview: 'bg-[#101722] border-[#9CBCE0]' },
   ];
 
   // Handle downloading JSON backup
@@ -440,7 +421,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
                   <Palette className="w-4.5 h-4.5" />
                 </div>
                 <div className="min-w-0">
@@ -454,51 +435,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </p>
                 </div>
               </div>
-              <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 shrink-0 ${openSections.appearance ? 'rotate-180 text-amber-400' : ''}`} />
+              <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 shrink-0 ${openSections.appearance ? 'rotate-180 text-indigo-400' : ''}`} />
             </button>
 
             {openSections.appearance && (
               <div className="p-3 sm:p-4 space-y-4 animate-in fade-in">
-                {/* 1.1 Phone System Theme Toggle (انتقال‌یافته از هدر به داخل تنظیمات) */}
-                <div className="p-3 sm:p-3.5 rounded-2xl bg-stone-900/90 border border-amber-500/30 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-                    <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
-                      <Smartphone className="w-5 h-5" />
-                    </div>
-                    <div className="min-w-0">
-                      <h5 className="text-xs sm:text-sm font-bold text-white truncate">
-                        {isFa ? 'هماهنگی خودکار با تم گوشی' : 'Follow Phone Theme'}
-                      </h5>
-                      <p className="text-[11px] text-stone-400 truncate">
-                        {settings.theme === 'system'
-                          ? (isFa ? 'فعال (تاریک/روشن خودکار متناسب با گوشی)' : 'Active (Matches phone dark/light)')
-                          : (isFa ? 'پوسته دستی انتخاب شده است' : 'Custom theme selected')}
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const nextTheme: AppTheme = settings.theme === 'system' ? 'dark-gold' : 'system';
-                      onUpdateSettings({ theme: nextTheme });
-                    }}
-                    className={`min-h-[48px] px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 flex items-center gap-1.5 shrink-0 ${
-                      settings.theme === 'system'
-                        ? 'bg-amber-500 text-stone-950 font-black shadow-md shadow-amber-500/20'
-                        : 'bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700'
-                    }`}
-                  >
-                    <Smartphone className="w-4 h-4" />
-                    <span>{settings.theme === 'system' ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'فعال‌سازی' : 'Enable')}</span>
-                  </button>
-                </div>
-
-                {/* 1.2 Theme Selection Cards */}
-                <div className="space-y-2">
+                {/* Theme Selection Chips (Small & Minimal) */}
+                <div className="space-y-3">
                   <span className="text-xs font-bold text-stone-300 block">
                     {isFa ? 'انتخاب قالب ظاهری:' : 'Select Theme:'}
                   </span>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
                     {themes.map((themeItem) => {
                       const isSelected = settings.theme === themeItem.id;
                       return (
@@ -506,14 +453,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           key={themeItem.id}
                           type="button"
                           onClick={() => onUpdateSettings({ theme: themeItem.id })}
-                          className={`min-h-[50px] p-2.5 rounded-2xl border text-center transition-all duration-200 flex flex-col items-center justify-center gap-1.5 cursor-pointer active:scale-95 ${
+                          className={`h-8 px-2 rounded-xl border text-center transition-all duration-150 flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 ${
                             isSelected
-                              ? 'border-amber-400 bg-amber-500/15 ring-2 ring-amber-400/30'
-                              : 'border-stone-800 bg-stone-950/60 hover:border-stone-700'
+                              ? 'border-indigo-400 bg-indigo-500/20 text-indigo-300 font-bold shadow-xs ring-1 ring-indigo-400/40'
+                              : 'border-stone-800 bg-stone-950/70 text-stone-300 hover:border-stone-700 hover:bg-stone-900'
                           }`}
                         >
-                          <span className={`w-4 h-4 rounded-full border ${themeItem.preview}`} />
-                          <span className="font-bold text-[11px] text-white truncate max-w-full">{themeItem.name}</span>
+                          <span className={`w-2.5 h-2.5 rounded-full border shrink-0 ${themeItem.preview}`} />
+                          <span className="text-[11px] font-medium truncate">{themeItem.name}</span>
                         </button>
                       );
                     })}
@@ -523,7 +470,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {/* 1.3 App Language */}
                 <div className="space-y-2 pt-2 border-t border-stone-800/80">
                   <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
-                    <Globe className="w-3.5 h-3.5 text-amber-400" />
+                    <Globe className="w-3.5 h-3.5 text-indigo-400" />
                     <span>{isFa ? 'زبان برنامه (App Language)' : 'Language'}</span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -532,12 +479,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onClick={() => onUpdateSettings({ language: 'fa' })}
                       className={`min-h-[48px] p-2.5 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
                         (settings.language || 'fa') === 'fa'
-                          ? 'border-amber-500 bg-amber-500/15 ring-1 ring-amber-500/30 font-bold'
+                          ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/30 font-bold'
                           : 'border-stone-800 bg-stone-900/60 hover:bg-stone-900'
                       }`}
                     >
                       <span className="text-xs font-bold">فارسی (Persian)</span>
-                      {(settings.language || 'fa') === 'fa' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                      {(settings.language || 'fa') === 'fa' && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
                     </button>
 
                     <button
@@ -545,12 +492,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onClick={() => onUpdateSettings({ language: 'en' })}
                       className={`min-h-[48px] p-2.5 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
                         settings.language === 'en'
-                          ? 'border-amber-500 bg-amber-500/15 ring-1 ring-amber-500/30 font-bold'
+                          ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/30 font-bold'
                           : 'border-stone-800 bg-stone-900/60 hover:bg-stone-900'
                       }`}
                     >
                       <span className="text-xs font-bold">English (انگلیسی)</span>
-                      {settings.language === 'en' && <CheckCircle2 className="w-4 h-4 text-amber-400" />}
+                      {settings.language === 'en' && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
                     </button>
                   </div>
                 </div>
@@ -559,10 +506,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="space-y-2 pt-2 border-t border-stone-800/80">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
-                      <Type className="w-3.5 h-3.5 text-amber-400" />
+                      <Type className="w-3.5 h-3.5 text-indigo-400" />
                       <span>{isFa ? 'اندازه قلم و فونت متن‌ها' : 'Font Size'}</span>
                     </div>
-                    <span className="font-mono text-xs text-amber-300 font-black bg-stone-900 px-2 py-0.5 rounded-lg border border-amber-500/30">
+                    <span className="font-mono text-xs text-indigo-300 font-black bg-stone-900 px-2 py-0.5 rounded-lg border border-indigo-500/30">
                       {isFa ? toPersianDigits(
                         typeof settings.fontSize === 'number'
                           ? settings.fontSize
@@ -614,7 +561,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {/* 1.5 Timeline Style */}
                 <div className="space-y-2 pt-2 border-t border-stone-800/80">
                   <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
-                    <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
                     <span>{isFa ? 'سبک نمایش تایم‌لاین' : 'Timeline Style'}</span>
                   </div>
                   <div className="grid grid-cols-2 gap-2">
@@ -623,11 +570,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       onClick={() => onUpdateSettings({ timelineMode: 'modern' })}
                       className={`min-h-[48px] p-2.5 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
                         (settings.timelineMode || 'modern') === 'modern'
-                          ? 'border-amber-500 bg-amber-500/15 text-white ring-1 ring-amber-500/30'
+                          ? 'border-indigo-500 bg-indigo-500/15 text-white ring-1 ring-indigo-500/30'
                           : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
                       }`}
                     >
-                      <div className="font-black text-xs text-amber-300">{isFa ? 'مدرن طلایی' : 'Modern Gold'}</div>
+                      <div className="font-black text-xs text-indigo-300">{isFa ? 'مدرن نیلی' : 'Modern Indigo'}</div>
                     </button>
                     <button
                       type="button"
@@ -656,7 +603,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
             >
               <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
                   <Volume2 className="w-4.5 h-4.5" />
                 </div>
                 <div className="min-w-0">
@@ -670,7 +617,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </p>
                 </div>
               </div>
-              <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 shrink-0 ${openSections.sound ? 'rotate-180 text-amber-400' : ''}`} />
+              <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 shrink-0 ${openSections.sound ? 'rotate-180 text-indigo-400' : ''}`} />
             </button>
 
             {openSections.sound && (
@@ -682,13 +629,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {((settings.alarmVolume ?? 0.85) <= 0.01) ? (
                         <VolumeX className="w-4 h-4 text-stone-500" />
                       ) : ((settings.alarmVolume ?? 0.85) < 0.5) ? (
-                        <Volume1 className="w-4 h-4 text-amber-400" />
+                        <Volume1 className="w-4 h-4 text-indigo-400" />
                       ) : (
-                        <Volume2 className="w-4 h-4 text-amber-400" />
+                        <Volume2 className="w-4 h-4 text-indigo-400" />
                       )}
                       <span>{isFa ? 'میزان بلندی صدا (ولوم)' : 'Alarm Volume'}</span>
                     </div>
-                    <span className="font-mono text-xs font-black text-amber-300 bg-stone-900 px-2.5 py-0.5 rounded-lg border border-amber-500/30">
+                    <span className="font-mono text-xs font-black text-indigo-300 bg-stone-900 px-2.5 py-0.5 rounded-lg border border-indigo-500/30">
                       {isFa ? `${toPersianDigits(Math.round((settings.alarmVolume ?? 0.85) * 100))}٪` : `${Math.round((settings.alarmVolume ?? 0.85) * 100)}%`}
                     </span>
                   </div>
@@ -703,7 +650,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     >
                       <VolumeX 
                         className={`w-4 h-4 transition-colors ${
-                          (settings.alarmVolume ?? 0.85) <= 0.01 ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
+                          (settings.alarmVolume ?? 0.85) <= 0.01 ? 'text-indigo-400' : 'text-stone-500 hover:text-stone-300'
                         }`} 
                       />
                     </button>
@@ -714,7 +661,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       step="5"
                       value={Math.round((settings.alarmVolume ?? 0.85) * 100)}
                       onChange={(e) => handleVolumeChange(parseInt(e.target.value, 10) / 100)}
-                      className="w-full accent-amber-500 h-2.5 bg-stone-800 rounded-lg cursor-pointer"
+                      className="w-full accent-indigo-500 h-2.5 bg-stone-800 rounded-lg cursor-pointer"
                     />
                     <button
                       type="button"
@@ -724,7 +671,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     >
                       <Volume2 
                         className={`w-4 h-4 transition-colors ${
-                          (settings.alarmVolume ?? 0.85) >= 0.95 ? 'text-amber-400' : 'text-stone-500 hover:text-stone-300'
+                          (settings.alarmVolume ?? 0.85) >= 0.95 ? 'text-indigo-400' : 'text-stone-500 hover:text-stone-300'
                         }`} 
                       />
                     </button>
@@ -747,7 +694,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClick={() => handleVolumeChange(chip.val)}
                           className={`min-h-[36px] text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all cursor-pointer active:scale-95 ${
                             isActive
-                              ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
+                              ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-sm'
                               : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
                           }`}
                         >
@@ -780,19 +727,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClick={() => handleSelectSound(soundItem.id)}
                           className={`p-2.5 rounded-xl border transition-all flex items-center justify-between gap-3 cursor-pointer ${
                             isSelected
-                              ? 'border-amber-500 bg-amber-500/10 ring-1 ring-amber-500/40 shadow-sm'
+                              ? 'border-indigo-500 bg-indigo-500/10 ring-1 ring-indigo-500/40 shadow-sm'
                               : 'border-stone-800/90 bg-stone-950/60 hover:border-stone-700 hover:bg-stone-900/50'
                           }`}
                         >
                           <div className="flex items-center gap-2.5 min-w-0 flex-1">
                             <div className={`w-3.5 h-3.5 rounded-full border flex items-center justify-center shrink-0 ${
-                              isSelected ? 'border-amber-500 bg-amber-500' : 'border-stone-600 bg-transparent'
+                              isSelected ? 'border-indigo-500 bg-indigo-500' : 'border-stone-600 bg-transparent'
                             }`}>
-                              {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-stone-950" />}
+                              {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
                             </div>
 
                             <div className="min-w-0">
-                              <p className={`text-xs font-bold truncate ${isSelected ? 'text-amber-300' : 'text-stone-200'}`}>
+                              <p className={`text-xs font-bold truncate ${isSelected ? 'text-indigo-300' : 'text-stone-200'}`}>
                                 {soundItem.label}
                               </p>
                               <p className="text-[10px] text-stone-400 truncate">
@@ -810,9 +757,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                             }}
                             className={`min-h-[40px] flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer active:scale-95 shrink-0 ${
                               isPlaying
-                                ? 'bg-amber-500 text-stone-950 font-black animate-pulse'
+                                ? 'bg-indigo-500 text-white font-black animate-pulse'
                                 : isSelected
-                                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                                ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
                                 : 'bg-stone-900 text-stone-300 border border-stone-700/80 hover:bg-stone-800'
                             }`}
                           >
@@ -823,7 +770,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                               </>
                             ) : (
                               <>
-                                <Play className="w-3 h-3 fill-current text-amber-400" />
+                                <Play className="w-3 h-3 fill-current text-indigo-400" />
                                 <span>{isFa ? 'پخش' : 'Play'}</span>
                               </>
                             )}
@@ -835,19 +782,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 {/* 2.3 Additional Alarm Preferences */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2 border-t border-stone-800/80">
-                  <label className="min-h-[48px] flex items-center justify-between p-2.5 rounded-xl bg-stone-900/70 border border-stone-800 cursor-pointer">
-                    <span className="text-xs font-bold text-white">
-                      {isFa ? 'فلاش چراغ دوربین پشت گوشی' : 'Camera LED Flash'}
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={settings.enableFlash}
-                      onChange={(e) => onUpdateSettings({ enableFlash: e.target.checked })}
-                      className="w-4 h-4 rounded accent-amber-500"
-                    />
-                  </label>
-
+                <div className="pt-2 border-t border-stone-800/80">
                   <label className="min-h-[48px] flex items-center justify-between p-2.5 rounded-xl bg-stone-900/70 border border-stone-800 cursor-pointer">
                     <span className="text-xs font-bold text-white">
                       {settings.language === 'en' ? t.autoMicInput : 'میکروفون خودکار فرم'}
@@ -856,7 +791,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="checkbox"
                       checked={settings.autoVoiceInput}
                       onChange={(e) => onUpdateSettings({ autoVoiceInput: e.target.checked })}
-                      className="w-4 h-4 rounded accent-amber-500"
+                      className="w-4 h-4 rounded accent-indigo-500"
                     />
                   </label>
                 </div>
@@ -908,18 +843,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
                       nativePerms.notifications
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-amber-500/50 cursor-pointer active:scale-95'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50 cursor-pointer active:scale-95'
                     }`}
                     title={isFa ? 'دسترسی اعلان‌ها' : 'Notifications'}
                   >
                     <div className="relative mb-1">
                       <Bell className={`w-4 h-4 ${nativePerms.notifications ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.notifications ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.notifications ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
                     <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
                       {isFa ? 'اعلان' : 'Alert'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.notifications ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    <span className={`text-[9px] font-bold ${nativePerms.notifications ? 'text-emerald-400' : 'text-indigo-400'}`}>
                       {nativePerms.notifications ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
                     </span>
                   </div>
@@ -930,18 +865,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
                       nativePerms.microphone
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-amber-500/50 cursor-pointer active:scale-95'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50 cursor-pointer active:scale-95'
                     }`}
                     title={isFa ? 'دسترسی میکروفون و صوت' : 'Microphone'}
                   >
                     <div className="relative mb-1">
                       <Mic className={`w-4 h-4 ${nativePerms.microphone ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.microphone ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.microphone ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
                     <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
                       {isFa ? 'میکروفون' : 'Mic'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.microphone ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    <span className={`text-[9px] font-bold ${nativePerms.microphone ? 'text-emerald-400' : 'text-indigo-400'}`}>
                       {nativePerms.microphone ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
                     </span>
                   </div>
@@ -952,18 +887,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
                       nativePerms.camera
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-amber-500/50 cursor-pointer active:scale-95'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50 cursor-pointer active:scale-95'
                     }`}
                     title={isFa ? 'دسترسی دوربین' : 'Camera'}
                   >
                     <div className="relative mb-1">
                       <Camera className={`w-4 h-4 ${nativePerms.camera ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.camera ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.camera ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
                     <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
                       {isFa ? 'دوربین' : 'Camera'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.camera ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    <span className={`text-[9px] font-bold ${nativePerms.camera ? 'text-emerald-400' : 'text-indigo-400'}`}>
                       {nativePerms.camera ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
                     </span>
                   </div>
@@ -974,18 +909,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
                       nativePerms.location
                         ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-amber-500/50 cursor-pointer active:scale-95'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50 cursor-pointer active:scale-95'
                     }`}
                     title={isFa ? 'دسترسی موقعیت مکانی GPS' : 'GPS Location'}
                   >
                     <div className="relative mb-1">
                       <MapPin className={`w-4 h-4 ${nativePerms.location ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.location ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.location ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
                     <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
                       {isFa ? 'موقعیت' : 'GPS'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.location ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    <span className={`text-[9px] font-bold ${nativePerms.location ? 'text-emerald-400' : 'text-indigo-400'}`}>
                       {nativePerms.location ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
                     </span>
                   </div>
@@ -1221,7 +1156,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center text-xs">
                   <div className="p-2 rounded-xl bg-stone-900/80 border border-stone-800">
                     <span className="text-[10px] text-stone-500 block">{isFa ? 'یادآورها' : 'Reminders'}</span>
-                    <span className="font-bold text-amber-400 text-sm">{isFa ? toPersianDigits(reminders.length) : reminders.length}</span>
+                    <span className="font-bold text-indigo-400 text-sm">{isFa ? toPersianDigits(reminders.length) : reminders.length}</span>
                   </div>
                   <div className="p-2 rounded-xl bg-stone-900/80 border border-stone-800">
                     <span className="text-[10px] text-stone-500 block">{isFa ? 'مناسبت‌ها' : 'Occasions'}</span>
@@ -1282,8 +1217,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                 {/* Pending Restore Confirmation Box */}
                 {pendingRestoreData && (
-                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-3 animate-in fade-in">
-                    <div className="flex items-center gap-2 text-xs font-bold text-amber-300">
+                  <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 space-y-3 animate-in fade-in">
+                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-300">
                       <FileJson className="w-4 h-4 shrink-0" />
                       <span>{isFa ? 'فایل پشتیبان با موفقیت شناسایی شد:' : 'Backup file parsed:'}</span>
                     </div>
@@ -1299,7 +1234,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <button
                         type="button"
                         onClick={() => handleConfirmRestore('replace')}
-                        className="min-h-[44px] flex-1 py-2 px-3 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95"
+                        className="min-h-[44px] flex-1 py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95"
                       >
                         {isFa ? 'جایگزینی داده‌ها (Overwrite)' : 'Overwrite Data'}
                       </button>
@@ -1326,8 +1261,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {/* 5.3 Performance Statistics Modal Trigger */}
                 {onOpenStats && (
                   <div className="pt-2 border-t border-stone-800/80">
-                    <div className="flex items-center justify-between p-3 rounded-2xl bg-stone-900/80 border border-stone-800 hover:border-amber-500/40 transition-all">
-                      <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center flex-shrink-0">
+                    <div className="flex items-center justify-between p-3 rounded-2xl bg-stone-900/80 border border-stone-800 hover:border-indigo-500/40 transition-all">
+                      <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 flex items-center justify-center flex-shrink-0">
                         <BarChart3 className="w-5 h-5" />
                       </div>
                       <button
@@ -1336,10 +1271,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           onClose();
                           onOpenStats();
                         }}
-                        className="min-h-[44px] px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-xs shadow-sm active:scale-95 transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5"
+                        className="min-h-[44px] px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-sm active:scale-95 transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5"
                       >
                         <span>{settings.language === 'en' ? t.viewStats : 'مشاهده آمار'}</span>
-                        <span className="text-amber-200">←</span>
+                        <span className="text-indigo-200">←</span>
                       </button>
                     </div>
                   </div>
@@ -1356,7 +1291,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <div className="flex items-center justify-between border-b border-stone-800/60 pb-2">
                     <span className="text-stone-400">{isFa ? 'نسخه فعلی' : 'Current Version'}</span>
-                    <span className="font-mono font-bold text-amber-400">{isFa ? `نسخه ${toPersianDigits(APP_VERSION)}` : `Version ${APP_VERSION}`}</span>
+                    <span className="font-mono font-bold text-indigo-400">{isFa ? `نسخه ${toPersianDigits(APP_VERSION)}` : `Version ${APP_VERSION}`}</span>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-stone-400">{isFa ? 'نوع پلتفرم' : 'Platform Type'}</span>
@@ -1470,13 +1405,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       const getTypeIcon = () => {
                         switch (item.type) {
                           case 'reminder':
-                            return <Bell className="w-3.5 h-3.5 text-amber-400" />;
+                            return <Bell className="w-3.5 h-3.5 text-indigo-400" />;
                           case 'location':
                             return <MapPin className="w-3.5 h-3.5 text-cyan-400" />;
                           case 'occasion':
                             return <Calendar className="w-3.5 h-3.5 text-rose-400" />;
                           case 'idea':
-                            return <Lightbulb className="w-3.5 h-3.5 text-amber-300" />;
+                            return <Lightbulb className="w-3.5 h-3.5 text-indigo-300" />;
                         }
                       };
 
@@ -1551,7 +1486,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <button
             type="button"
             onClick={onClose}
-            className="w-full sm:w-auto min-h-[48px] px-8 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+            className="w-full sm:w-auto min-h-[48px] px-8 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm shadow-md transition-all active:scale-95 cursor-pointer flex items-center justify-center gap-2"
           >
             {settings.language === 'en' ? t.confirm : 'تأیید'}
           </button>

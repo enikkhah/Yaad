@@ -1,9 +1,21 @@
 export type Category = 'work' | 'family' | 'other';
 export type Priority = 'high' | 'medium' | 'low';
 export type ReminderStatus = 'pending' | 'completed' | 'postponed' | 'cancelled';
-export type AppTheme = 'system' | 'dark-gold' | 'dark-slate' | 'light-clean' | 'sketch-contrast';
+export type AppTheme = 'system' | 'dark-gold' | 'dark-slate' | 'light-clean' | 'sketch-contrast' | 'jade_warm_light' | 'midnight_blue_silver';
 
-export type PhoneAlarmSound = 'digital-beep' | 'radar' | 'marimba' | 'morning-chime' | 'urgent-bell';
+export type PhoneAlarmSound =
+  | 'digital-beep'
+  | 'radar'
+  | 'marimba'
+  | 'morning-chime'
+  | 'zen-bowl'
+  | 'soft-harp'
+  | 'ocean-drop'
+  | 'wind-chimes'
+  | 'warm-pad'
+  | 'calm-piano'
+  | 'urgent-bell';
+
 export type RecurrenceType = 'none' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'custom_dates';
 
 export interface IdeaNote {
@@ -31,7 +43,6 @@ export interface AppSettings {
   defaultRingTune: Category;
   alarmSound: PhoneAlarmSound;
   alarmVolume: number; // 0.0 - 1.0
-  enableFlash: boolean;
   autoVoiceInput: boolean;
   googleMapsApiKey?: string;
 }
@@ -96,7 +107,6 @@ export interface Reminder {
   cancelledAt?: number;
   imageUrl?: string;
   sourceApp?: 'sms' | 'manual' | 'voice' | 'other';
-  useFlash: boolean;
   ringTune: Category | string; // Ring tune or category sound
   voiceReadAloud: boolean;
   recurrence?: RecurrenceType;
@@ -165,4 +175,3 @@ export interface RecycleBinItem {
   deletedAt: number;
   originalItem: Reminder | SavedLocation | Occasion | IdeaNote;
 }
-

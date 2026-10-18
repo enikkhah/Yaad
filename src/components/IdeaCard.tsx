@@ -76,7 +76,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
               <button
                 type="button"
                 onClick={() => onEdit(idea)}
-                className="p-2 rounded-xl text-stone-400 hover:text-amber-400 hover:bg-stone-800 transition-colors cursor-pointer"
+                className="p-2 rounded-xl text-stone-400 hover:text-indigo-400 hover:bg-stone-800 transition-colors cursor-pointer"
                 title={language === 'en' ? 'Edit idea' : 'ویرایش ایده'}
               >
                 <Pencil className="w-4 h-4" />
@@ -107,7 +107,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
         {/* Audio Memo */}
         {idea.audioRecordUrl && (
           <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 flex flex-col gap-1.5">
-            <span className="text-xs text-amber-400 font-bold flex items-center gap-1.5">
+            <span className="text-xs text-indigo-400 font-bold flex items-center gap-1.5">
               <Volume2 className="w-3.5 h-3.5" /> {language === 'en' ? 'Audio Memo' : 'یادداشت صوتی'}
             </span>
             <audio controls src={idea.audioRecordUrl} preload="none" className="w-full h-9" />
@@ -117,7 +117,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
         {/* Video Memo */}
         {idea.videoRecordUrl && (
           <div className="rounded-xl overflow-hidden border border-stone-800 bg-stone-950">
-            <span className="text-xs text-amber-400 font-bold px-2.5 py-1.5 flex items-center gap-1.5">
+            <span className="text-xs text-indigo-400 font-bold px-2.5 py-1.5 flex items-center gap-1.5">
               <Video className="w-3.5 h-3.5" /> {language === 'en' ? 'Video Memo' : 'یادداشت ویدیویی'}
             </span>
             <video controls preload="metadata" src={idea.videoRecordUrl} className="w-full max-h-52 object-cover" />
@@ -131,7 +131,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
             className="rounded-xl overflow-hidden border border-stone-800 bg-stone-950 p-1.5 relative group cursor-pointer"
           >
             <div className="flex items-center justify-between pb-1 px-1">
-              <span className="text-xs text-amber-400 font-bold flex items-center gap-1.5">
+              <span className="text-xs text-indigo-400 font-bold flex items-center gap-1.5">
                 <PenTool className="w-3.5 h-3.5" /> {language === 'en' ? 'Pen Sketch' : 'طرح رسم‌شده با قلم'}
               </span>
               <span className="text-[10px] text-stone-400 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -142,7 +142,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
             <div className="relative min-h-[100px] flex items-center justify-center bg-stone-900/50 rounded-lg overflow-hidden">
               {!drawingLoaded && (
                 <div className="absolute inset-0 flex items-center justify-center text-stone-500 gap-1.5 text-xs">
-                  <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                  <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
                   <span>{language === 'en' ? 'Loading image...' : 'درحال بارگذاری تصویر...'}</span>
                 </div>
               )}
@@ -165,7 +165,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
       <div className="pt-2 border-t border-stone-800/60 flex items-center justify-between text-xs text-stone-400">
         <span className="flex items-center gap-1.5">
           <Calendar className="w-3.5 h-3.5 text-stone-400" />
-          {language === 'en' ? new Date(idea.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : formatJalaliFull(idea.createdAt)}
+          {formatJalaliFull(idea.createdAt, language)}
         </span>
       </div>
     </div>

@@ -41,7 +41,6 @@ export interface Translations {
   alarmSound: string;
   voiceSpeechRate: string;
   systemNotification: string;
-  enableFlash: string;
   timelineOrientation: string;
   vertical: string;
   horizontal: string;
@@ -56,7 +55,6 @@ export interface Translations {
   hourLabel: string;
   minuteLabel: string;
   typingHint: string;
-  strobeLed: string;
   autoMicInput: string;
   statsTitle: string;
   viewStats: string;
@@ -89,7 +87,6 @@ export interface Translations {
   importFromSms: string;
   cameraPhoto: string;
   uploadPhoto: string;
-  useFlashLed: string;
   saveReminder: string;
   saveChanges: string;
   requiredFieldAlert: string;
@@ -170,7 +167,6 @@ export const translations: Record<AppLanguage, Translations> = {
     alarmSound: 'نوع صدای زنگ آلارم',
     voiceSpeechRate: 'سرعت خواندن صوتی یادآور',
     systemNotification: 'اعلان بومی سیستم در صفحه اصلی و قفل',
-    enableFlash: 'فلاش چشمک‌زن صفحه/فلش هنگام آلارم',
     timelineOrientation: 'چیدمان خط زمانی (Timeline)',
     vertical: 'عمودی',
     horizontal: 'افقی',
@@ -185,7 +181,6 @@ export const translations: Record<AppLanguage, Translations> = {
     hourLabel: 'ساعت (00 - 23)',
     minuteLabel: 'دقیقه (00 - 59)',
     typingHint: '💡 ۲ بار کلیک رو گردونه = تایپ مستقیم عدد',
-    strobeLed: 'پالس نوری فلاش LED',
     autoMicInput: 'میکروفون خودکار فرم',
     statsTitle: 'آمار و گزارش عملکرد',
     viewStats: 'مشاهده آمار',
@@ -217,7 +212,6 @@ export const translations: Record<AppLanguage, Translations> = {
     importFromSms: 'ورود از پیامک',
     cameraPhoto: 'گرفتن عکس با دوربین',
     uploadPhoto: 'آپلود فایل عکس',
-    useFlashLed: 'استفاده از فلاش LED هنگام آلارم',
     saveReminder: 'ثبت نهایی یادآور',
     saveChanges: 'ذخیره تغییرات',
     requiredFieldAlert: 'تکمیل فیلد اجباری',
@@ -296,7 +290,6 @@ export const translations: Record<AppLanguage, Translations> = {
     alarmSound: 'Alarm Ring Sound',
     voiceSpeechRate: 'Text-to-Speech Speed',
     systemNotification: 'System Notifications (Lock screen & Apps)',
-    enableFlash: 'Flashlight Strobe during Alarm',
     timelineOrientation: 'Timeline Orientation',
     vertical: 'Vertical',
     horizontal: 'Horizontal',
@@ -311,7 +304,6 @@ export const translations: Record<AppLanguage, Translations> = {
     hourLabel: 'Hour (00 - 23)',
     minuteLabel: 'Minute (00 - 59)',
     typingHint: '💡 Double-click wheel to type directly',
-    strobeLed: 'Strobe Flashlight LED',
     autoMicInput: 'Auto Voice Input in Form',
     statsTitle: 'Performance Statistics',
     viewStats: 'View Statistics',
@@ -343,7 +335,6 @@ export const translations: Record<AppLanguage, Translations> = {
     importFromSms: 'Import from SMS',
     cameraPhoto: 'Take Camera Photo',
     uploadPhoto: 'Upload Photo',
-    useFlashLed: 'Camera LED Flashlight during alarm',
     saveReminder: 'Save Reminder',
     saveChanges: 'Save Changes',
     requiredFieldAlert: 'Required Field Missing',

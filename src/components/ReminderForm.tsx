@@ -92,7 +92,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [category, setCategory] = useState<Category>('work');
   const [priority, setPriority] = useState<Priority>('medium');
   const [imageUrl, setImageUrl] = useState<string | undefined>(undefined);
-  const [useFlash, setUseFlash] = useState(true);
   const [voiceReadAloud, setVoiceReadAloud] = useState(true);
   const [ringTune, setRingTune] = useState<string>('work');
   const [syncWithGoogle, setSyncWithGoogle] = useState(!!googleToken);
@@ -110,12 +109,29 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [isDetectingGps, setIsDetectingGps] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
 
-  // Persian date picker states
-  const [selectedYear, setSelectedYear] = useState(1405);
-  const [selectedMonth, setSelectedMonth] = useState(1);
-  const [selectedDay, setSelectedDay] = useState(1);
-  const [selectedHour, setSelectedHour] = useState(12);
-  const [selectedMinute, setSelectedMinute] = useState(0);
+  // Calculate dynamic default time (+2 minutes from now)
+  const getDynamicDefaultTime = () => {
+    const t = Date.now() + 2 * 60 * 1000;
+    const j = getJalaliComponents(t);
+    const d = new Date(t);
+    return {
+      jalali: j,
+      gregorian: {
+        year: d.getFullYear(),
+        month: d.getMonth() + 1,
+        day: d.getDate(),
+        hour: d.getHours(),
+        minute: d.getMinutes(),
+      },
+    };
+  };
+
+  // Persian/Gregorian date picker states initialized to exactly 2 minutes after current time
+  const [selectedYear, setSelectedYear] = useState(() => language === 'en' ? getDynamicDefaultTime().gregorian.year : getDynamicDefaultTime().jalali.year);
+  const [selectedMonth, setSelectedMonth] = useState(() => language === 'en' ? getDynamicDefaultTime().gregorian.month : getDynamicDefaultTime().jalali.month);
+  const [selectedDay, setSelectedDay] = useState(() => language === 'en' ? getDynamicDefaultTime().gregorian.day : getDynamicDefaultTime().jalali.day);
+  const [selectedHour, setSelectedHour] = useState(() => language === 'en' ? getDynamicDefaultTime().gregorian.hour : getDynamicDefaultTime().jalali.hour);
+  const [selectedMinute, setSelectedMinute] = useState(() => language === 'en' ? getDynamicDefaultTime().gregorian.minute : getDynamicDefaultTime().jalali.minute);
 
   // Recurrence states (ساعتی، روزانه، هفتگی، ماهیانه، انتخاب از تقویم)
   const [recurrence, setRecurrence] = useState<RecurrenceType>('none');
@@ -197,7 +213,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setCategory(initialData.category);
       setPriority(initialData.priority);
       setImageUrl(initialData.imageUrl);
-      setUseFlash(initialData.useFlash);
       setVoiceReadAloud(initialData.voiceReadAloud);
       setRingTune(initialData.ringTune || initialData.category);
       setRecurrence(initialData.recurrence || 'none');
@@ -254,7 +269,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setCategory('work');
       setPriority('medium');
       setImageUrl(undefined);
-      setUseFlash(true);
       setVoiceReadAloud(true);
       setRingTune('work');
       setRecurrence('none');
@@ -282,7 +296,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     if (!isOpen) {
       stopVoiceListening();
     }
+    const handleForceStopMic = () => stopVoiceListening();
+    window.addEventListener('yaad:stop-all-microphones', handleForceStopMic);
     return () => {
+      window.removeEventListener('yaad:stop-all-microphones', handleForceStopMic);
       stopVoiceListening();
     };
   }, [isOpen]);
@@ -354,13 +371,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
-    }
-
-    // Request mic access gracefully
-    try {
-      await requestMicrophonePermission();
-    } catch {
-      // Non-fatal, SpeechRecognition prompt will trigger
     }
 
     try {
@@ -795,7 +805,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         priority,
         dueTimestamp,
         imageUrl,
-        useFlash,
         ringTune,
         voiceReadAloud,
         recurrence: recurrence !== 'none' ? recurrence : undefined,
@@ -837,7 +846,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
           {/* Header */}
           <div className="px-2.5 sm:px-6 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-950/60 sticky top-0 z-10 backdrop-blur shrink-0">
             <div className="flex items-center gap-2.5 sm:gap-3">
-              <div className="p-1.5 sm:p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+              <div className="p-1.5 sm:p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
                 <Plus className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
               </div>
               <h2 className="text-base sm:text-lg font-bold text-white">
@@ -885,7 +894,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
                 <label className="text-xs font-bold text-stone-200 flex items-center gap-1">
                   <span>{isEn ? 'Reminder Title' : 'عنوان یادآور'}</span>
-                  <span className="text-amber-400 font-black">*</span>
+                  <span className="text-indigo-400 font-black">*</span>
                 </label>
                 <div className="flex items-center gap-2">
                   {/* Language switch button for voice typing */}
@@ -901,7 +910,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     }}
                     className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
                       voiceLang === 'fa'
-                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30 hover:bg-amber-500/25'
+                        ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/25'
                         : 'bg-sky-500/15 text-sky-300 border-sky-500/30 hover:bg-sky-500/25'
                     }`}
                     title={isEn ? 'Toggle voice typing language (FA / EN)' : 'تغییر زبان گفتار بین فارسی و انگلیسی'}
@@ -910,10 +919,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   </button>
 
                   {isListening && (
-                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-400">
-                      <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-400">
+                      <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
                       {speechTranscript ? (
-                        <span className="text-amber-300 bg-amber-500/15 px-2 py-0.5 rounded-md border border-amber-500/30 font-medium max-w-[180px] sm:max-w-xs truncate">
+                        <span className="text-indigo-300 bg-indigo-500/15 px-2 py-0.5 rounded-md border border-indigo-500/30 font-medium max-w-[180px] sm:max-w-xs truncate">
                           «{speechTranscript}»
                         </span>
                       ) : (
@@ -935,8 +944,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   placeholder={isEn ? 'e.g. Project delivery, Doctor appointment, Buy groceries...' : 'مثال: تحویل پروژه، تماس با پزشک، خرید نان...'}
                   className={`w-full bg-stone-950 border rounded-2xl ${isEn ? 'pl-4 pr-14' : 'pr-4 pl-14'} py-3.5 text-white placeholder-stone-500 focus:outline-none transition-all text-sm sm:text-base font-medium ${
                     isListening
-                      ? 'border-amber-400 ring-2 ring-amber-400/20 shadow-lg shadow-amber-500/10'
-                      : 'border-stone-700 focus:border-amber-500'
+                      ? 'border-indigo-400 ring-2 ring-indigo-400/20 shadow-lg shadow-indigo-500/10'
+                      : 'border-stone-700 focus:border-indigo-500'
                   }`}
                 />
 
@@ -946,8 +955,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   onClick={toggleListening}
                   className={`absolute ${isEn ? 'right-2' : 'left-2'} top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
                     isListening
-                      ? 'bg-amber-500 text-stone-950 shadow-lg shadow-amber-500/50 scale-105 animate-pulse'
-                      : 'bg-stone-800/80 hover:bg-stone-700 text-stone-300 hover:text-amber-400 border border-stone-700'
+                      ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/50 scale-105 animate-pulse'
+                      : 'bg-stone-800/80 hover:bg-stone-700 text-stone-300 hover:text-indigo-400 border border-stone-700'
                   }`}
                   title={isListening ? (isEn ? 'Stop voice typing' : 'توقف تایپ صوتی') : (isEn ? 'Start voice typing' : 'شروع تایپ صوتی (تبدیل گفتار به متن)')}
                 >
@@ -956,15 +965,15 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </div>
 
               {voiceErrorMsg && (
-                <div className="mt-2 p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center justify-between gap-2 animate-in fade-in">
+                <div className="mt-2 p-2.5 rounded-xl bg-indigo-500/15 border border-indigo-500/40 text-indigo-300 text-xs flex items-center justify-between gap-2 animate-in fade-in">
                   <div className="flex items-center gap-2 min-w-0">
-                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
+                    <AlertCircle className="w-4 h-4 shrink-0 text-indigo-400" />
                     <span className="truncate">{voiceErrorMsg}</span>
                   </div>
                   <button
                     type="button"
                     onClick={() => openAndroidSettings('microphone')}
-                    className="shrink-0 px-2.5 py-1 rounded-lg bg-amber-500 text-stone-950 font-black text-[11px] flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                    className="shrink-0 px-2.5 py-1 rounded-lg bg-indigo-500 text-white font-black text-[11px] flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
                   >
                     <Smartphone className="w-3 h-3" />
                     <span>{isEn ? 'Android Settings' : 'تنظیمات اندروید'}</span>
@@ -975,12 +984,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
 
             {/* Persian Jalali Date & Time Picker */}
             <div className="p-4 rounded-2xl bg-stone-950/60 border border-stone-800 space-y-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-xs font-bold text-amber-400">
-                  <Calendar className="w-4 h-4" />
-                  <span>{isEn ? 'Due Date & Time' : 'تقویم و زمان فارسی (شمسی)'}</span>
-                </div>
-              </div>
 
               {/* Quick Presets - Exactly 4 buttons */}
               <div className="grid grid-cols-4 gap-1.5 pt-1">
@@ -1008,7 +1011,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 <button
                   type="button"
                   onClick={setTomorrowMorning}
-                  className="min-h-[40px] px-2 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 font-bold text-xs text-center transition-all cursor-pointer active:scale-95"
+                  className="min-h-[40px] px-2 py-1.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 font-bold text-xs text-center transition-all cursor-pointer active:scale-95"
                 >
                   {isEn ? 'Tomorrow' : 'فردا ۹ صبح'}
                 </button>
@@ -1022,7 +1025,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <select
                     value={selectedDay}
                     onChange={(e) => setSelectedDay(parseInt(e.target.value, 10))}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-bold"
                   >
                     {Array.from(
                       { length: isEn ? getDaysInGregorianMonth(selectedYear, selectedMonth) : getDaysInJalaliMonth(selectedYear, selectedMonth) },
@@ -1041,7 +1044,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <select
                     value={selectedMonth}
                     onChange={(e) => setSelectedMonth(parseInt(e.target.value, 10))}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-bold"
                   >
                     {isEn ? (
                       GREGORIAN_MONTHS.map((m, idx) => (
@@ -1065,7 +1068,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <select
                     value={selectedYear}
                     onChange={(e) => setSelectedYear(parseInt(e.target.value, 10))}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-amber-500 font-bold"
+                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-2 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 font-bold"
                   >
                     {isEn ? (
                       [2025, 2026, 2027, 2028, 2029, 2030].map((y) => (
@@ -1085,7 +1088,38 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </div>
 
               {/* Time: Clean minimal setting, Hour on Left, Minute on Right, with at least 1cm margin from sides */}
-              <div className="pt-3 border-t border-stone-800">
+              <div className="pt-3 border-t border-stone-800 space-y-2">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-xs font-bold text-stone-300">
+                    {language === 'en' ? 'Alarm Time (Roller Clock):' : 'ساعت زنگ هشدار (ساعت رولی):'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = Date.now() + 2 * 60 * 1000;
+                      if (isEn) {
+                        const d = new Date(target);
+                        setSelectedYear(d.getFullYear());
+                        setSelectedMonth(d.getMonth() + 1);
+                        setSelectedDay(d.getDate());
+                        setSelectedHour(d.getHours());
+                        setSelectedMinute(d.getMinutes());
+                      } else {
+                        const j = getJalaliComponents(target);
+                        setSelectedYear(j.year);
+                        setSelectedMonth(j.month);
+                        setSelectedDay(j.day);
+                        setSelectedHour(j.hour);
+                        setSelectedMinute(j.minute);
+                      }
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-[11px] font-bold flex items-center gap-1 active:scale-95 transition-all cursor-pointer"
+                    title={language === 'en' ? 'Default: 2 minutes after current time' : 'پیش‌فرض: ۲ دقیقه بعدتر از زمان اکنون'}
+                  >
+                    <Clock className="w-3 h-3 text-indigo-400" />
+                    <span>{language === 'en' ? 'Now + 2 min' : 'پیش‌فرض (۲ دقیقه بعدتر)'}</span>
+                  </button>
+                </div>
                 <div 
                   dir="ltr"
                   className="grid grid-cols-2 gap-3 sm:gap-4 max-w-[260px] sm:max-w-[280px] mx-auto px-2"
@@ -1129,10 +1163,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 className="w-full min-h-[48px] py-2.5 px-4 rounded-2xl bg-stone-950/70 hover:bg-stone-900 border border-stone-800 hover:border-stone-700 text-stone-300 hover:text-white text-xs sm:text-sm font-bold flex items-center justify-between transition-all cursor-pointer"
               >
                 <span className="flex items-center gap-2">
-                  <Sliders className="w-4 h-4 text-amber-400" />
+                  <Sliders className="w-4 h-4 text-indigo-400" />
                   <span>{isEn ? 'More Options (Description, Category, Priority...)' : 'گزینه‌های بیشتر (توضیحات، دسته، اولویت...)'}</span>
                 </span>
-                <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 ${showMoreOptions ? 'rotate-180 text-amber-400' : ''}`} />
+                <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 ${showMoreOptions ? 'rotate-180 text-indigo-400' : ''}`} />
               </button>
 
               {showMoreOptions && (
@@ -1147,7 +1181,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       onChange={(e) => setDescription(e.target.value)}
                       placeholder={isEn ? 'Additional details, address, phone number or key notes...' : 'توضیحات تکمیلی، آدرس، شماره یا نکته مهم...'}
                       rows={2}
-                      className="w-full bg-stone-950 border border-stone-700 rounded-xl px-4 py-2.5 text-white placeholder-stone-500 focus:outline-none focus:border-amber-500 transition-colors text-xs resize-none"
+                      className="w-full bg-stone-950 border border-stone-700 rounded-xl px-4 py-2.5 text-white placeholder-stone-500 focus:outline-none focus:border-indigo-500 transition-colors text-xs resize-none"
                     />
                   </div>
 
@@ -1163,11 +1197,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         onClick={() => handleCategoryChange('work')}
                         className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
                           category === 'work'
-                            ? 'bg-stone-900 border-amber-500 text-amber-300 shadow-sm'
+                            ? 'bg-stone-900 border-indigo-500 text-indigo-300 shadow-sm'
                             : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
                         }`}
                       >
-                        <Briefcase className={`w-4.5 h-4.5 ${category === 'work' ? 'text-amber-400' : 'text-stone-400'}`} />
+                        <Briefcase className={`w-4.5 h-4.5 ${category === 'work' ? 'text-indigo-400' : 'text-stone-400'}`} />
                         <span className="text-xs font-bold">{isEn ? 'Work' : 'کار'}</span>
                       </button>
 
@@ -1177,11 +1211,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         onClick={() => handleCategoryChange('family')}
                         className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
                           category === 'family'
-                            ? 'bg-stone-900 border-amber-500 text-amber-300 shadow-sm'
+                            ? 'bg-stone-900 border-indigo-500 text-indigo-300 shadow-sm'
                             : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
                         }`}
                       >
-                        <Heart className={`w-4.5 h-4.5 ${category === 'family' ? 'text-amber-400' : 'text-stone-400'}`} />
+                        <Heart className={`w-4.5 h-4.5 ${category === 'family' ? 'text-indigo-400' : 'text-stone-400'}`} />
                         <span className="text-xs font-bold">{isEn ? 'Family' : 'خانواده'}</span>
                       </button>
 
@@ -1191,11 +1225,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         onClick={() => handleCategoryChange('other')}
                         className={`p-3 rounded-2xl border flex flex-col items-center gap-1.5 transition-all text-center cursor-pointer ${
                           category === 'other'
-                            ? 'bg-stone-900 border-amber-500 text-amber-300 shadow-sm'
+                            ? 'bg-stone-900 border-indigo-500 text-indigo-300 shadow-sm'
                             : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:border-stone-700'
                         }`}
                       >
-                        <Tag className={`w-4.5 h-4.5 ${category === 'other' ? 'text-amber-400' : 'text-stone-400'}`} />
+                        <Tag className={`w-4.5 h-4.5 ${category === 'other' ? 'text-indigo-400' : 'text-stone-400'}`} />
                         <span className="text-xs font-bold">{isEn ? 'Other' : 'سایر'}</span>
                       </button>
                     </div>
@@ -1223,7 +1257,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         onClick={() => setPriority('medium')}
                         className={`py-2 px-3 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
                           priority === 'medium'
-                            ? 'bg-amber-950/80 border-amber-500 text-amber-300 shadow-sm'
+                            ? 'bg-indigo-950/80 border-indigo-500 text-indigo-300 shadow-sm'
                             : 'bg-stone-950/50 border-stone-800 text-stone-400'
                         }`}
                       >
@@ -1246,12 +1280,12 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
             {/* Recurrence Selection Section */}
             <div className="p-2.5 sm:p-5 rounded-2xl bg-stone-950/80 border border-stone-800 space-y-3 sm:space-y-4">
               <div className="flex items-center justify-between">
-                <div className="p-1.5 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
                   <Repeat className="w-4 h-4" />
                 </div>
 
                 {recurrence !== 'none' && (
-                  <span className="text-xs px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 font-bold flex items-center gap-1">
+                  <span className="text-xs px-2.5 py-1 rounded-lg bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 font-bold flex items-center gap-1">
                     <Repeat className="w-3 h-3" />
                     <span>
                       {isEn 
@@ -1278,14 +1312,14 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       }}
                       className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between cursor-pointer active:scale-95 ${
                         isSelected
-                          ? 'bg-amber-500/15 border-amber-500/80 text-white shadow-md shadow-amber-500/15 ring-1 ring-amber-400/50'
+                          ? 'bg-indigo-500/15 border-indigo-500/80 text-white shadow-md shadow-indigo-500/15 ring-1 ring-indigo-400/50'
                           : 'bg-stone-900/70 border-stone-800 text-stone-400 hover:text-stone-200 hover:bg-stone-900'
                       }`}
                     >
-                      <span className={`text-xs font-black ${isSelected ? 'text-amber-400' : 'text-stone-300'}`}>
+                      <span className={`text-xs font-black ${isSelected ? 'text-indigo-400' : 'text-stone-300'}`}>
                         {isEn ? opt.labelEn : opt.label}
                       </span>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-amber-400" />}
+                      {isSelected && <Check className="w-3.5 h-3.5 text-indigo-400" />}
                     </button>
                   );
                 })}
@@ -1299,7 +1333,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     <span className="text-stone-300 font-bold">
                       {isEn ? 'Hourly Interval:' : 'بازه تکرار ساعتی:'}
                     </span>
-                    <span className="text-amber-400 font-extrabold font-mono">
+                    <span className="text-indigo-400 font-extrabold font-mono">
                       {isEn ? `Every ${recurrenceInterval} hours` : `هر ${toPersianDigits(recurrenceInterval)} ساعت`}
                     </span>
                   </div>
@@ -1313,7 +1347,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                           onClick={() => setRecurrenceInterval(hours)}
                           className={`py-1.5 px-2 rounded-lg text-xs font-bold font-mono transition-all text-center cursor-pointer ${
                             isSel
-                              ? 'bg-amber-500 text-stone-950 font-black shadow'
+                              ? 'bg-indigo-500 text-white font-black shadow'
                               : 'bg-stone-950 text-stone-400 hover:text-white border border-stone-800'
                           }`}
                         >
@@ -1327,8 +1361,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
 
               {/* 2. DAILY SUB-PANEL */}
               {recurrence === 'daily' && (
-                <div className="p-2.5 rounded-xl bg-stone-900/80 border border-amber-500/20 text-xs text-stone-300 animate-in fade-in">
-                  <p className="font-bold text-amber-300">
+                <div className="p-2.5 rounded-xl bg-stone-900/80 border border-indigo-500/20 text-xs text-stone-300 animate-in fade-in">
+                  <p className="font-bold text-indigo-300">
                     {isEn 
                       ? `Repeats every day at ${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`
                       : `تکرار هر روز ساعت ${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`}
@@ -1347,14 +1381,14 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       <button
                         type="button"
                         onClick={() => setRecurrenceDaysOfWeek([0, 1, 2, 3, 4, 5, 6])}
-                        className="text-[10px] text-stone-400 hover:text-amber-400 underline px-1"
+                        className="text-[10px] text-stone-400 hover:text-indigo-400 underline px-1"
                       >
                         {isEn ? 'All Days' : 'همه روزها'}
                       </button>
                       <button
                         type="button"
                         onClick={() => setRecurrenceDaysOfWeek([0, 1, 2, 3, 4])}
-                        className="text-[10px] text-stone-400 hover:text-amber-400 underline px-1"
+                        className="text-[10px] text-stone-400 hover:text-indigo-400 underline px-1"
                       >
                         {isEn ? 'Work Days' : 'روزهای کاری'}
                       </button>
@@ -1377,7 +1411,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                           }}
                           className={`py-2 rounded-xl text-center flex flex-col items-center justify-center transition-all cursor-pointer active:scale-95 ${
                             isSel
-                              ? 'bg-amber-500 text-stone-950 font-black shadow-md shadow-amber-500/20'
+                              ? 'bg-indigo-500 text-white font-black shadow-md shadow-indigo-500/20'
                               : 'bg-stone-950 text-stone-400 hover:text-stone-200 border border-stone-800'
                           }`}
                         >
@@ -1392,8 +1426,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
 
               {/* 4. MONTHLY SUB-PANEL */}
               {recurrence === 'monthly' && (
-                <div className="p-2.5 rounded-xl bg-stone-900/80 border border-amber-500/20 text-xs text-stone-300 animate-in fade-in">
-                  <p className="font-bold text-amber-300">
+                <div className="p-2.5 rounded-xl bg-stone-900/80 border border-indigo-500/20 text-xs text-stone-300 animate-in fade-in">
+                  <p className="font-bold text-indigo-300">
                     {isEn 
                       ? `Repeats monthly on day ${selectedDay} at ${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`
                       : `تکرار هر ماه در روز ${selectedDay} ساعت ${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`}
@@ -1408,7 +1442,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     <span className="text-stone-200 font-bold">
                       {isEn ? 'Selected calendar dates:' : 'انتخاب روزهای مشخص از تقویم شمسی:'}
                     </span>
-                    <span className="text-amber-400 font-bold text-[11px]">
+                    <span className="text-indigo-400 font-bold text-[11px]">
                       {recurrenceCustomDates.length > 0
                         ? (isEn ? `${recurrenceCustomDates.length} days selected` : `${toPersianDigits(recurrenceCustomDates.length)} روز انتخاب شد`)
                         : (isEn ? 'Click dates on calendar' : 'روی روزهای تقویم کلیک کنید')}
@@ -1451,16 +1485,16 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsCameraOpen(true)}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-amber-500/50 text-stone-300 text-xs font-medium transition-colors"
+                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-indigo-500/50 text-stone-300 text-xs font-medium transition-colors"
                   >
-                    <Camera className="w-4 h-4 text-amber-400" />
+                    <Camera className="w-4 h-4 text-indigo-400" />
                     <span>{isEn ? 'Take Photo' : 'گرفتن عکس با دوربین'}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-amber-500/50 text-stone-300 text-xs font-medium transition-colors"
+                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-indigo-500/50 text-stone-300 text-xs font-medium transition-colors"
                   >
                     <Upload className="w-4 h-4 text-cyan-400" />
                     <span>{isEn ? 'Upload File' : 'آپلود فایل عکس'}</span>
@@ -1492,7 +1526,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     type="checkbox"
                     checked={syncWithGoogle}
                     onChange={(e) => setSyncWithGoogle(e.target.checked)}
-                    className="w-4 h-4 accent-amber-500 rounded cursor-pointer"
+                    className="w-4 h-4 accent-indigo-500 rounded cursor-pointer"
                   />
                 </label>
               </div>
@@ -1512,7 +1546,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       </span>
                       <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
                         enableGeofence 
-                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' 
+                          ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40' 
                           : 'bg-stone-800 text-stone-400 border-stone-700'
                       }`}>
                         {enableGeofence ? (isEn ? 'ACTIVE' : 'فعال') : (isEn ? 'OFF' : 'غیرفعال')}
@@ -1534,7 +1568,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     onChange={(e) => setEnableGeofence(e.target.checked)}
                     className="sr-only peer"
                   />
-                  <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                  <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
                 </label>
               </div>
 
@@ -1598,7 +1632,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       <button
                         type="button"
                         onClick={() => openAndroidSettings('location')}
-                        className="shrink-0 px-2 py-1 rounded-lg bg-amber-500 text-stone-950 font-black text-[10px] flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
+                        className="shrink-0 px-2 py-1 rounded-lg bg-indigo-500 text-white font-black text-[10px] flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
                       >
                         <Smartphone className="w-2.5 h-2.5" />
                         <span>{isEn ? 'Android Settings' : 'تنظیمات اندروید'}</span>
@@ -1666,7 +1700,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       <label className="text-[11px] font-bold text-stone-300">
                         {isEn ? 'Trigger Radius:' : 'شعاع محدوده حصار مکانی:'}
                       </label>
-                      <span className="text-xs font-mono font-bold text-amber-400">
+                      <span className="text-xs font-mono font-bold text-indigo-400">
                         {toPersianDigits(geofenceRadius)} {isEn ? 'meters' : 'متر'}
                       </span>
                     </div>
@@ -1678,7 +1712,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                           onClick={() => setGeofenceRadius(r)}
                           className={`py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
                             geofenceRadius === r
-                              ? 'bg-amber-500 text-stone-950 font-black border-amber-400'
+                              ? 'bg-indigo-500 text-white font-black border-indigo-400'
                               : 'bg-stone-900 border-stone-800 text-stone-300 hover:border-stone-700'
                           }`}
                         >
@@ -1708,12 +1742,12 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 type="submit"
                 className={`min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 ${
                   !title.trim()
-                    ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                    : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/20'
+                    ? 'bg-indigo-500/20 border border-indigo-500/40 text-indigo-300'
+                    : 'bg-indigo-500 hover:bg-indigo-400 text-white font-black shadow-lg shadow-indigo-500/20'
                 }`}
               >
-                <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-amber-300' : 'text-stone-950'}`} />
-                <span className={!title.trim() ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
+                <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-indigo-300' : 'text-white'}`} />
+                <span className={!title.trim() ? 'text-indigo-300 font-bold' : 'text-white font-black'}>
                   {initialData ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') : (isEn ? 'Save Reminder' : 'ثبت نهایی یادآور')}
                 </span>
               </button>
@@ -1829,7 +1863,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   smsPermissionStatus === 'granted'
                     ? 'bg-emerald-950/50 text-emerald-300 border-emerald-500/30'
                     : smsPermissionStatus === 'listening'
-                    ? 'bg-amber-950/50 text-amber-300 border-amber-500/30'
+                    ? 'bg-indigo-950/50 text-indigo-300 border-indigo-500/30'
                     : 'bg-stone-950 text-stone-300 border-stone-800'
                 }`}>
                   {smsStatusMsg}
@@ -1884,8 +1918,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
             {smsRawText.trim() && (() => {
               const preview = parseSmsOrText(smsRawText);
               return (
-                <div className="p-3 rounded-2xl bg-stone-950 border border-amber-500/25 space-y-1.5 text-xs">
-                  <div className="font-bold text-amber-400 flex items-center gap-1">
+                <div className="p-3 rounded-2xl bg-stone-950 border border-indigo-500/25 space-y-1.5 text-xs">
+                  <div className="font-bold text-indigo-400 flex items-center gap-1">
                     <Sparkles className="w-3.5 h-3.5" />
                     <span>اطلاعات استخراج‌شده هوشمند:</span>
                   </div>
@@ -1917,7 +1951,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 type="button"
                 onClick={handleSmsImport}
                 disabled={!smsRawText.trim()}
-                className="px-5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-stone-950 font-black text-xs shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer"
+                className="px-5 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white font-black text-xs shadow-lg shadow-indigo-500/25 active:scale-95 transition-all cursor-pointer"
               >
                 تأیید و درج در یادآور
               </button>

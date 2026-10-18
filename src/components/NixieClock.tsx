@@ -16,7 +16,7 @@ export const NixieTube: React.FC<NixieTubeProps> = ({ digit, size = 'md' }) => {
     <div className="flex flex-col items-center">
       {/* Glass Vacuum Tube Cylinder with Nixie Gas Discharge Glow */}
       <div
-        className={`relative ${sizeClasses} rounded-t-2xl rounded-b-md flex items-center justify-center overflow-hidden select-none border border-amber-600/40 shadow-[0_0_15px_rgba(255,100,0,0.35),inset_0_0_12px_rgba(255,80,0,0.25)]`}
+        className={`relative ${sizeClasses} rounded-t-2xl rounded-b-md flex items-center justify-center overflow-hidden select-none border border-indigo-600/40 shadow-[0_0_15px_rgba(255,100,0,0.35),inset_0_0_12px_rgba(255,80,0,0.25)]`}
         style={{
           background: 'radial-gradient(ellipse at 50% 40%, #1e0901 0%, #100400 70%, #080200 100%)',
         }}
@@ -33,7 +33,7 @@ export const NixieTube: React.FC<NixieTubeProps> = ({ digit, size = 'md' }) => {
 
         {/* Faint unlit filament wire ghost (the iconic Nixie stacked cathode look) */}
         <span
-          className="absolute font-mono font-bold text-amber-950/30 select-none pointer-events-none transform scale-95"
+          className="absolute font-mono font-bold text-indigo-950/30 select-none pointer-events-none transform scale-95"
           style={{
             filter: 'blur(0.5px)',
           }}
@@ -89,7 +89,7 @@ export const NixieTube: React.FC<NixieTubeProps> = ({ digit, size = 'md' }) => {
       </div>
 
       {/* Brass / Copper Tube Base Collar */}
-      <div className="w-[108%] h-2 sm:h-2.5 bg-gradient-to-r from-amber-900 via-amber-600 to-amber-950 rounded-b-md border-t border-amber-500/60 shadow-[0_2px_4px_rgba(0,0,0,0.9)] -mt-0.5 z-10" />
+      <div className="w-[108%] h-2 sm:h-2.5 bg-gradient-to-r from-indigo-900 via-indigo-600 to-indigo-950 rounded-b-md border-t border-indigo-500/60 shadow-[0_2px_4px_rgba(0,0,0,0.9)] -mt-0.5 z-10" />
     </div>
   );
 };
@@ -104,7 +104,7 @@ export const NixieColon: React.FC<NixieColonProps> = ({ size = 'md' }) => {
   return (
     <div className="flex flex-col items-center justify-center gap-2 sm:gap-2.5 px-1 sm:px-1.5 select-none self-center">
       <div
-        className={`${dotSize} rounded-full bg-amber-200 animate-pulse`}
+        className={`${dotSize} rounded-full bg-indigo-200 animate-pulse`}
         style={{
           boxShadow: `
             0 0 3px #fff,
@@ -115,7 +115,7 @@ export const NixieColon: React.FC<NixieColonProps> = ({ size = 'md' }) => {
         }}
       />
       <div
-        className={`${dotSize} rounded-full bg-amber-200 animate-pulse`}
+        className={`${dotSize} rounded-full bg-indigo-200 animate-pulse`}
         style={{
           boxShadow: `
             0 0 3px #fff,

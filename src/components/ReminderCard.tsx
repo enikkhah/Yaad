@@ -163,7 +163,7 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
             className={`font-black text-base sm:text-lg leading-snug tracking-tight transition-colors line-clamp-2 ${
               isCompleted
                 ? 'line-through text-stone-500 font-medium'
-                : 'text-stone-100 hover:text-amber-400'
+                : 'text-stone-100 hover:text-indigo-400'
             }`}
           >
             {reminder.title}
@@ -171,10 +171,10 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
 
           {/* Time Display - Smaller font to contrast with prominent subject */}
           <div className="flex items-center gap-1.5 mt-2 text-xs text-stone-400 flex-wrap font-medium">
-            <Clock className="w-3.5 h-3.5 text-amber-500/80 shrink-0" />
+            <Clock className="w-3.5 h-3.5 text-indigo-500/80 shrink-0" />
             <span className="text-stone-300">{formattedTime}</span>
             <span className="text-stone-600">•</span>
-            <span className={`font-bold ${isOverdue ? 'text-red-400' : 'text-amber-400/90'}`}>
+            <span className={`font-bold ${isOverdue ? 'text-red-400' : 'text-indigo-400/90'}`}>
               {relativeTime}
             </span>
           </div>
@@ -205,7 +205,7 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                     setIsMenuOpen(false);
                     onPostpone(reminder.id, 10);
                   }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-indigo-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
                 >
                   <RotateCcw className="w-4 h-4 text-stone-400" />
                   <span>{isEn ? '+10 minutes' : '+۱۰ دقیقه'}</span>
@@ -220,7 +220,7 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                     setIsMenuOpen(false);
                     onPostpone(reminder.id, 60);
                   }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-indigo-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
                 >
                   <RotateCcw className="w-4 h-4 text-stone-400" />
                   <span>{isEn ? '+1 hour' : '+۱ ساعت'}</span>
@@ -234,7 +234,7 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                   setIsMenuOpen(false);
                   onEdit(reminder);
                 }}
-                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-indigo-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
               >
                 <Edit2 className="w-4 h-4 text-stone-400" />
                 <span>{isEn ? 'Edit' : 'ویرایش'}</span>
@@ -248,7 +248,7 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                     setIsMenuOpen(false);
                     onViewImage(reminder.imageUrl!);
                   }}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-indigo-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
                 >
                   <ImageIcon className="w-4 h-4 text-stone-400" />
                   <span>{isEn ? 'View Photo' : 'مشاهده تصویر'}</span>
@@ -262,7 +262,7 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={() => setIsMenuOpen(false)}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-amber-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm font-medium text-stone-200 hover:text-indigo-400 hover:bg-stone-800 transition-colors text-start cursor-pointer"
                 >
                   <Navigation className="w-4 h-4 text-stone-400" />
                   <span>{isEn ? 'Directions' : 'مسیریابی'}</span>

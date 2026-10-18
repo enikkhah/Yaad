@@ -101,7 +101,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           <span className="text-base sm:text-lg font-black text-white tracking-wider drop-shadow-sm">
             {isEn ? 'YAAD' : 'یاد • YAAD'}
           </span>
-          <span className="inline-flex items-center gap-1 px-3 py-0.5 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 font-mono text-xs sm:text-sm font-bold shadow-sm">
+          <span className="inline-flex items-center gap-1 px-3 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 font-mono text-xs sm:text-sm font-bold shadow-sm">
             {isEn ? `v${APP_VERSION}` : `نسخه ${toPersianDigits(APP_VERSION)}`}
           </span>
         </div>

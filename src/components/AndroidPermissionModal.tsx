@@ -36,7 +36,7 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
       case 'notifications':
         return {
           icon: Bell,
-          color: 'text-amber-400 bg-amber-500/10 border-amber-500/30',
+          color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/30',
           titleFa: 'دسترسی ارسال اعلان و زنگ هشدار',
           titleEn: 'Notification & Alarm Permission',
           descFa: 'برای یادآوری به موقع رویدادها، پخش زنگ بیدارباش و نمایش اعلان‌ها در اندروید، این دسترسی الزامی است.',
@@ -116,7 +116,7 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
               <Icon className="w-6 h-6 stroke-[2.2]" />
             </div>
             <div>
-              <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-400">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-400">
                 <Smartphone className="w-3.5 h-3.5" />
                 <span>{isEn ? 'Android System Request' : 'درخواست سیستمی اندروید'}</span>
               </div>
@@ -140,8 +140,8 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
           <p className="text-xs sm:text-sm text-stone-300 leading-relaxed">
             {isEn ? details.descEn : details.descFa}
           </p>
-          <div className="flex items-center gap-1.5 text-[11px] text-amber-300 font-medium pt-1">
-            <Settings className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          <div className="flex items-center gap-1.5 text-[11px] text-indigo-300 font-medium pt-1">
+            <Settings className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
             <span>
               {isEn ? `Target: ${details.sectionNameEn}` : `مقصد: ${details.sectionNameFa}`}
             </span>
@@ -154,7 +154,7 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
           <button
             type="button"
             onClick={handleOpenSettings}
-            className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-stone-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-amber-500/25 active:scale-95 transition-all cursor-pointer"
+            className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-gradient-to-r from-indigo-500 to-indigo-600 hover:from-indigo-400 hover:to-indigo-500 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2.5 shadow-lg shadow-indigo-500/25 active:scale-95 transition-all cursor-pointer"
           >
             <ExternalLink className="w-4 h-4 stroke-[2.5]" />
             <span>{isEn ? 'Open Android Settings' : 'انتقال به بخش مرتبط اندروید'}</span>

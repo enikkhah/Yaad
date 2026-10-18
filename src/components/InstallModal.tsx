@@ -105,8 +105,8 @@ export const InstallModal: React.FC<InstallModalProps> = ({
             </div>
           ) : (
             <div className="space-y-3">
-              <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/25 space-y-2">
-                <div className="flex items-center gap-2 text-amber-300 text-xs font-bold">
+              <div className="p-3.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 space-y-2">
+                <div className="flex items-center gap-2 text-indigo-300 text-xs font-bold">
                   <Smartphone className="w-4 h-4 flex-shrink-0" />
                   <span>{isEn ? 'Installation Guide for Phone & PC' : 'راهنمای نصب اپلیکیشن روی گوشی و کامپیوتر'}</span>
                 </div>
@@ -120,7 +120,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
               {/* Step by step guide */}
               <div className="space-y-2">
                 <div className="flex items-start gap-3 p-3 rounded-xl bg-stone-950/70 border border-stone-800">
-                  <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <div className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">
                     1
                   </div>
                   <div className="text-xs text-stone-300 leading-relaxed">
@@ -131,7 +131,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
                 </div>
 
                 <div className="flex items-start gap-3 p-3 rounded-xl bg-stone-950/70 border border-stone-800">
-                  <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <div className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">
                     2
                   </div>
                   <div className="text-xs text-stone-300 leading-relaxed">
@@ -142,7 +142,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
                 </div>
 
                 <div className="flex items-start gap-3 p-3 rounded-xl bg-stone-950/70 border border-stone-800">
-                  <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">
+                  <div className="w-6 h-6 rounded-full bg-indigo-500/20 text-indigo-400 text-xs font-black flex items-center justify-center flex-shrink-0 mt-0.5">
                     3
                   </div>
                   <div className="text-xs text-stone-300 leading-relaxed">
@@ -156,7 +156,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
               {/* Alternative in other browsers */}
               <div className="p-3 rounded-xl bg-stone-950/50 border border-stone-800 text-xs text-stone-400 space-y-1.5">
                 <div className="font-bold text-stone-300 flex items-center gap-1.5">
-                  <Monitor className="w-3.5 h-3.5 text-amber-400" />
+                  <Monitor className="w-3.5 h-3.5 text-indigo-400" />
                   <span className="text-white font-bold">{isEn ? 'Other Browsers:' : 'در سایر مرورگرها:'}</span>
                 </div>
                 <p className="leading-relaxed">

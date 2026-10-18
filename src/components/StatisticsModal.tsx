@@ -74,7 +74,7 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
         {/* Header */}
         <div className="flex items-center justify-between pb-3 sm:pb-4 border-b border-stone-800">
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="p-2 sm:p-2.5 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+            <div className="p-2 sm:p-2.5 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
               <BarChart3 className="w-5 h-5" />
             </div>
             <h2 className="text-base sm:text-lg font-bold text-white">
@@ -96,7 +96,7 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
             onClick={() => setTimeframe('weekly')}
             className={`flex-1 py-2.5 sm:py-3 rounded-xl transition-all ${
               timeframe === 'weekly'
-                ? 'bg-amber-600 text-white shadow-md font-black border border-amber-400/40'
+                ? 'bg-indigo-600 text-white shadow-md font-black border border-indigo-400/40'
                 : 'text-stone-400 hover:text-white'
             }`}
           >
@@ -107,7 +107,7 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
             onClick={() => setTimeframe('monthly')}
             className={`flex-1 py-2.5 sm:py-3 rounded-xl transition-all ${
               timeframe === 'monthly'
-                ? 'bg-amber-600 text-white shadow-md font-black border border-amber-400/40'
+                ? 'bg-indigo-600 text-white shadow-md font-black border border-indigo-400/40'
                 : 'text-stone-400 hover:text-white'
             }`}
           >
@@ -118,7 +118,7 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
             onClick={() => setTimeframe('yearly')}
             className={`flex-1 py-2.5 sm:py-3 rounded-xl transition-all ${
               timeframe === 'yearly'
-                ? 'bg-amber-600 text-white shadow-md font-black border border-amber-400/40'
+                ? 'bg-indigo-600 text-white shadow-md font-black border border-indigo-400/40'
                 : 'text-stone-400 hover:text-white'
             }`}
           >
@@ -151,14 +151,14 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
           </div>
 
           {/* Postponed Reminders */}
-          <div className="p-4 sm:p-5 rounded-2xl bg-amber-950/30 border border-amber-500/30 flex flex-col items-center text-center">
-            <div className="p-2.5 rounded-xl bg-amber-500/20 text-amber-400 mb-2">
+          <div className="p-4 sm:p-5 rounded-2xl bg-indigo-950/30 border border-indigo-500/30 flex flex-col items-center text-center">
+            <div className="p-2.5 rounded-xl bg-indigo-500/20 text-indigo-400 mb-2">
               <Clock className="w-5 h-5" />
             </div>
-            <span className="text-2xl sm:text-3xl font-black font-mono text-amber-400">
+            <span className="text-2xl sm:text-3xl font-black font-mono text-indigo-400">
               {formatNum(postponed)}
             </span>
-            <span className="text-xs sm:text-sm text-amber-300/90 mt-1 font-medium">{t.statsPostponed}</span>
+            <span className="text-xs sm:text-sm text-indigo-300/90 mt-1 font-medium">{t.statsPostponed}</span>
           </div>
 
           {/* Cancelled / Pending */}
@@ -262,8 +262,8 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
               {formatNum(highCount)}
             </span>
           </div>
-          <div className="p-3 rounded-xl bg-amber-950/20 border border-amber-500/30">
-            <span className="text-[11px] text-amber-400 block mb-1">{t.priorityMedium}</span>
+          <div className="p-3 rounded-xl bg-indigo-950/20 border border-indigo-500/30">
+            <span className="text-[11px] text-indigo-400 block mb-1">{t.priorityMedium}</span>
             <span className="font-mono font-bold text-white text-base">
               {formatNum(medCount)}
             </span>

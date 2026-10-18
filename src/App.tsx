@@ -1,8 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Reminder, Category, Priority, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
-import { getJalaliComponents, getGregorianComponents, formatJalaliFull, toPersianDigits } from './utils/jalali';
+import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText } from './utils/jalali';
 import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging, unlockAudio } from './utils/audio';
-import { stopFlashlightStrobe } from './utils/torch';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { TimelineWidget } from './components/TimelineWidget';
 import { ReminderForm } from './components/ReminderForm';
@@ -20,9 +19,10 @@ import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
 import { AndroidPermissionType, openAndroidSettings, requestNotificationPermission, requestLocationPermission } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
-import { performAutoBackup, retrieveLatestBackup } from './utils/backupStorage';
+import { performAutoBackup, retrieveLatestBackup, requestPersistentStorage } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
+import { useFabVisibility } from './hooks/useFabVisibility';
 import { App as CapacitorApp } from '@capacitor/app';
 import { 
   initGoogleAuth, 
@@ -99,19 +99,33 @@ const REMINDERS_STORAGE_KEY = 'fa_reminder_app_data_v2';
 const IDEAS_STORAGE_KEY = 'fa_ideas_app_data_v1';
 const LOCATIONS_STORAGE_KEY = 'fa_locations_app_data_v1';
 const SETTINGS_STORAGE_KEY = 'fa_settings_app_data_v1';
+const DEFAULT_THEME_MIGRATION_KEY = 'yaad_default_theme_midnight_v1';
 
 export default function App() {
   // Theme and Settings state
   const [settings, setSettings] = useState<AppSettings>(() => {
     try {
       const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (!localStorage.getItem(DEFAULT_THEME_MIGRATION_KEY)) {
+          localStorage.setItem(DEFAULT_THEME_MIGRATION_KEY, 'true');
+          parsed.theme = 'midnight_blue_silver';
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(parsed));
+        }
+        return parsed;
+      }
     } catch {
       // Fallback
     }
+    try {
+      localStorage.setItem(DEFAULT_THEME_MIGRATION_KEY, 'true');
+    } catch {
+      // Ignore
+    }
     return {
       language: 'fa',
-      theme: 'system',
+      theme: 'midnight_blue_silver',
       timelineOrientation: 'vertical',
       timelineMode: 'modern',
       fontSize: 'normal',
@@ -120,7 +134,6 @@ export default function App() {
       defaultRingTune: 'work',
       alarmSound: 'digital-beep',
       alarmVolume: 0.85,
-      enableFlash: true,
       autoVoiceInput: false,
       googleMapsApiKey: 'Nikkhah',
     };
@@ -434,20 +447,28 @@ export default function App() {
 
   // Compute effective dark mode state
   const isDarkMode = React.useMemo(() => {
-    if (settings.theme === 'light-clean') return false;
-    if (settings.theme === 'dark-gold' || settings.theme === 'dark-slate' || settings.theme === 'sketch-contrast') return true;
+    if (settings.theme === 'light-clean' || settings.theme === 'jade_warm_light') return false;
+    if (
+      settings.theme === 'dark-gold' ||
+      settings.theme === 'dark-slate' ||
+      settings.theme === 'sketch-contrast' ||
+      settings.theme === 'midnight_blue_silver'
+    ) {
+      return true;
+    }
     return systemPrefersDark;
   }, [settings.theme, systemPrefersDark]);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
+      document.documentElement.setAttribute('data-theme', settings.theme);
       if (isDarkMode) {
         document.documentElement.classList.add('dark');
       } else {
         document.documentElement.classList.remove('dark');
       }
     }
-  }, [isDarkMode]);
+  }, [isDarkMode, settings.theme]);
 
   // 2. HARDWARE & BROWSER BACK BUTTON HANDLER (بسته شدن پنجره‌ها با دکمه بازگشت گوشی)
   const isAnyModalCurrentlyOpen = Boolean(
@@ -560,8 +581,30 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const fabMenuRef = useRef<HTMLDivElement>(null);
+  const fabBtnRef = useRef<HTMLButtonElement>(null);
   const [categoryFilter, setCategoryFilter] = useState<'all' | Category | 'completed'>('all');
   const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
+
+  // Close + 4-option menu when clicking anywhere on the screen outside the 4-option menu
+  useEffect(() => {
+    if (!isCreateChoiceOpen) return;
+    const handlePointerDownOutside = (e: PointerEvent | MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (fabMenuRef.current && fabMenuRef.current.contains(target)) {
+        return;
+      }
+      if (fabBtnRef.current && fabBtnRef.current.contains(target)) {
+        return;
+      }
+      setIsCreateChoiceOpen(false);
+    };
+    document.addEventListener('pointerdown', handlePointerDownOutside, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownOutside, true);
+    };
+  }, [isCreateChoiceOpen]);
 
   // Android Permission Directing Modal
   const [androidPermissionModal, setAndroidPermissionModal] = useState<{
@@ -580,6 +623,88 @@ export default function App() {
   useEffect(() => {
     remindersRef.current = reminders;
   }, [reminders]);
+
+  const ideasRef = useRef(ideas);
+  useEffect(() => {
+    ideasRef.current = ideas;
+  }, [ideas]);
+
+  const savedLocationsRef = useRef(savedLocations);
+  useEffect(() => {
+    savedLocationsRef.current = savedLocations;
+  }, [savedLocations]);
+
+  const occasionsRef = useRef(occasions);
+  useEffect(() => {
+    occasionsRef.current = occasions;
+  }, [occasions]);
+
+  const settingsRef = useRef(settings);
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
+  // Floating Action Button (+) intelligent visibility & scroll edge boundary management
+  const {
+    isFabHidden: isFabHiddenOnScroll,
+    resetFabPosition,
+    fabContainerStyle,
+    fabContainerClassName,
+  } = useFabVisibility({
+    isMenuOpen: isCreateChoiceOpen,
+    threshold: 6,
+    settleDelay: 380,
+    slideDistance: 40,
+    baseRightOffset: 20,
+  });
+
+  // Automatic persistent backup & restore on app entry & exit (Phone reboot / reinstall resilience)
+  useEffect(() => {
+    // Request permanent non-evictable storage from browser/Android OS
+    requestPersistentStorage();
+
+    const saveFullSnapshot = () => {
+      performAutoBackup({
+        reminders: remindersRef.current,
+        ideas: ideasRef.current,
+        savedLocations: savedLocationsRef.current,
+        occasions: occasionsRef.current,
+        settings: settingsRef.current,
+      });
+    };
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        saveFullSnapshot();
+      }
+    };
+
+    window.addEventListener('beforeunload', saveFullSnapshot);
+    window.addEventListener('pagehide', saveFullSnapshot);
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    let appStateSub: any = null;
+    try {
+      CapacitorApp.addListener('appStateChange', (state) => {
+        if (!state.isActive) {
+          saveFullSnapshot();
+        }
+      }).then((sub) => {
+        appStateSub = sub;
+      }).catch(() => {});
+    } catch {
+      // ignore
+    }
+
+    return () => {
+      window.removeEventListener('beforeunload', saveFullSnapshot);
+      window.removeEventListener('pagehide', saveFullSnapshot);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      if (appStateSub && appStateSub.remove) {
+        appStateSub.remove();
+      }
+    };
+  }, []);
 
   const handleCompleteReminderRef = useRef<(id: string) => void>(() => {});
   const handlePostponeRef = useRef<(id: string, mins: number) => void>(() => {});
@@ -602,11 +727,37 @@ export default function App() {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
 
+    // Listen for Service Worker notification actions (complete, snooze, open)
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'YAAD_NOTIFICATION_ACTION') {
+        const { action, reminderId } = event.data;
+        if (!reminderId) return;
+        if (action === 'complete') {
+          handleCompleteReminderRef.current(reminderId);
+        } else if (action === 'snooze') {
+          handlePostponeRef.current(reminderId, 15);
+        } else if (action === 'stop') {
+          stopAlarmRinging();
+          setActiveAlarmReminder(null);
+        } else {
+          const found = remindersRef.current?.find((r) => r.id === reminderId);
+          if (found) {
+            setActiveAlarmReminder(found);
+          }
+        }
+      }
+    };
+    navigator.serviceWorker?.addEventListener('message', handleSwMessage);
+
     // Initialize Android Notification Channel & Listeners for native Local Notifications
     initNotificationChannel().catch(() => {});
     setupNotificationListeners(
       (id) => handleCompleteReminderRef.current(id),
-      (id, mins) => handlePostponeRef.current(id, mins)
+      (id, mins) => handlePostponeRef.current(id, mins),
+      (id) => {
+        stopAlarmRinging();
+        setActiveAlarmReminder(null);
+      }
     );
 
     // Listen for Chrome / Android PWA beforeinstallprompt event
@@ -633,6 +784,7 @@ export default function App() {
 
     return () => {
       unsubscribe();
+      navigator.serviceWorker?.removeEventListener('message', handleSwMessage);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
@@ -701,6 +853,28 @@ export default function App() {
         ) {
           triggeredAlarmsRef.current.add(r.id);
           setActiveAlarmReminder(r);
+
+          // If in background tab or outside app, show persistent notification that stays open until user action
+          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+            try {
+              const timeFormatted = formatJalaliTime(r.dueTimestamp, settings.language === 'en' ? 'en' : 'fa');
+              const notif = new Notification(`🔔 ${r.title}`, {
+                body: r.description ? `${r.description} • ${timeFormatted}` : `زمان انجام یادآور: ${timeFormatted}`,
+                icon: '/pwa-192x192.png',
+                badge: '/favicon.ico',
+                tag: `yaad-rem-${r.id}`,
+                requireInteraction: true,
+                data: { reminderId: r.id },
+              });
+              notif.onclick = () => {
+                window.focus();
+                setActiveAlarmReminder(r);
+                notif.close();
+              };
+            } catch {
+              // ignore
+            }
+          }
         }
       });
     };
@@ -1162,7 +1336,6 @@ export default function App() {
           status: 'pending',
           createdAt: Date.now(),
           postponeCount: 0,
-          useFlash: true,
           ringTune: 'work',
           voiceReadAloud: false,
           imageUrl: newLocData.photoUrl,
@@ -1282,7 +1455,6 @@ export default function App() {
   // Guarantees stopping sound, strobe, closing modal, and prevents re-triggering
   const handleCompleteReminder = (id: string) => {
     stopAlarmRinging();
-    stopFlashlightStrobe();
     setActiveAlarmReminder(null);
     triggeredAlarmsRef.current.add(id);
 
@@ -1338,7 +1510,6 @@ export default function App() {
   // Handler: Toggle complete from reminder card list checkbox
   const handleToggleComplete = (id: string) => {
     stopAlarmRinging();
-    stopFlashlightStrobe();
     setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
 
     setReminders((prev) => {
@@ -1403,7 +1574,6 @@ export default function App() {
   // Handler: Postpone reminder
   const handlePostpone = (id: string, minutes: number) => {
     stopAlarmRinging();
-    stopFlashlightStrobe();
     setActiveAlarmReminder(null);
     setReminders((prev) =>
       prev.map((r) => {
@@ -1431,7 +1601,6 @@ export default function App() {
   // Handler: Delete reminder (soft delete into Recycle Bin)
   const handleDelete = (id: string) => {
     stopAlarmRinging();
-    stopFlashlightStrobe();
     setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
     triggeredAlarmsRef.current.delete(id);
 
@@ -1564,8 +1733,8 @@ export default function App() {
     }
   };
 
-  // Filtered list
-  const filteredReminders = reminders.filter((r) => {
+  // Filtered list (using normalized search across title, description/notes, location, category, priority, and date)
+  const filteredReminders = activeReminders.filter((r) => {
     if (categoryFilter === 'completed') {
       if (r.status !== 'completed') return false;
     } else if (categoryFilter !== 'all') {
@@ -1577,11 +1746,17 @@ export default function App() {
     }
 
     if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchTitle = r.title.toLowerCase().includes(q);
-      const matchDesc = r.description?.toLowerCase().includes(q);
-      const matchGeofence = r.geofence?.locationName?.toLowerCase().includes(q);
-      return matchTitle || matchDesc || !!matchGeofence;
+      const qNorm = normalizeSearchText(searchQuery);
+      if (!qNorm) return true;
+      const catFa = r.category === 'work' ? 'کار کاری' : r.category === 'family' ? 'خانواده خانوادگی' : 'سایر عمومی';
+      const prioFa = r.priority === 'high' ? 'فوری بالا' : r.priority === 'medium' ? 'متوسط' : 'عادی پایین';
+      const fullDateFa = formatJalaliFull(r.dueTimestamp, 'fa');
+      const fullDateEn = formatJalaliFull(r.dueTimestamp, 'en');
+      const haystack = normalizeSearchText(
+        `${r.title} ${r.description || ''} ${r.geofence?.locationName || ''} ${r.geofence?.address || ''} ${catFa} ${r.category} ${prioFa} ${r.priority} ${fullDateFa} ${fullDateEn}`
+      );
+      const tokens = qNorm.split(' ').filter(Boolean);
+      return tokens.every((tok) => haystack.includes(tok));
     }
 
     return true;
@@ -1617,18 +1792,22 @@ export default function App() {
   const getThemeClass = (theme: AppTheme) => {
     if (theme === 'system') {
       return systemPrefersDark
-        ? 'bg-stone-950 text-stone-100 selection:bg-amber-500 selection:text-stone-950'
-        : 'bg-stone-50 text-stone-900 selection:bg-amber-500 selection:text-stone-950';
+        ? 'bg-stone-950 text-stone-100 selection:bg-indigo-500 selection:text-white'
+        : 'bg-stone-50 text-stone-900 selection:bg-indigo-600 selection:text-white';
     }
     switch (theme) {
       case 'dark-slate':
         return 'bg-slate-950 text-slate-100 selection:bg-sky-500 selection:text-slate-950';
       case 'light-clean':
-        return 'bg-stone-50 text-stone-900 selection:bg-amber-500 selection:text-stone-950';
+        return 'bg-stone-50 text-stone-900 selection:bg-indigo-600 selection:text-white';
       case 'sketch-contrast':
         return 'bg-black text-white selection:bg-white selection:text-black font-mono';
+      case 'jade_warm_light':
+        return 'bg-[#F7F6F0] text-[#202A29] selection:bg-[#168779] selection:text-white';
+      case 'midnight_blue_silver':
+        return 'bg-[#101722] text-[#F0F3F7] selection:bg-[#9CBCE0] selection:text-[#101722]';
       default:
-        return 'bg-stone-950 text-stone-100 selection:bg-amber-500 selection:text-stone-950';
+        return 'bg-stone-950 text-stone-100 selection:bg-indigo-500 selection:text-white';
     }
   };
 
@@ -1642,7 +1821,7 @@ export default function App() {
       >
       {/* Toast Notification for Google Sync */}
       {syncToast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-2xl bg-amber-500 text-stone-950 font-bold text-xs shadow-2xl flex items-center gap-2 animate-bounce">
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-2xl bg-indigo-500 text-white font-bold text-xs shadow-2xl flex items-center gap-2 animate-bounce">
           <Check className="w-4 h-4" />
           <span>{syncToast}</span>
         </div>
@@ -1651,7 +1830,7 @@ export default function App() {
       {/* 5-SECOND UNDO TOAST NOTIFICATION */}
       {undoToast && (
         <div 
-          className="fixed bottom-22 sm:bottom-10 left-1/2 -translate-x-1/2 z-50 px-4 py-3 rounded-2xl bg-stone-900/95 border-2 border-amber-500/80 text-white shadow-2xl shadow-black/95 flex items-center gap-3.5 backdrop-blur-xl animate-in fade-in slide-in-from-bottom-4 duration-200"
+          className="fixed bottom-22 sm:bottom-10 left-1/2 -translate-x-1/2 z-50 px-4 py-3 rounded-2xl bg-stone-900/95 border-2 border-indigo-500/80 text-white shadow-2xl shadow-black/95 flex items-center gap-3.5 backdrop-blur-xl animate-in fade-in slide-in-from-bottom-4 duration-200"
           dir={isEn ? 'ltr' : 'rtl'}
         >
           <div className="flex items-center gap-2">
@@ -1664,7 +1843,7 @@ export default function App() {
           <button
             type="button"
             onClick={handleUndoDelete}
-            className="px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer shrink-0"
+            className="px-3.5 py-1.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs flex items-center gap-1.5 transition-all shadow-md active:scale-95 cursor-pointer shrink-0"
           >
             <RotateCcw className="w-3.5 h-3.5 stroke-[2.5]" />
             <span>{isEn ? 'Undo' : 'بازگردانی'}</span>
@@ -1686,7 +1865,11 @@ export default function App() {
 
       {/* Top Navigation Bar */}
       <header className={`sticky top-0 z-30 backdrop-blur-md border-b transition-colors duration-200 ${
-        isDarkMode 
+        settings.theme === 'jade_warm_light'
+          ? 'bg-[#F7F6F0]/95 border-[#DDE1DA] text-[#202A29] shadow-xs'
+          : settings.theme === 'midnight_blue_silver'
+          ? 'bg-[#101722]/95 border-[#39475A] text-[#F0F3F7]'
+          : isDarkMode 
           ? 'bg-stone-900/95 border-stone-800/90 text-stone-100' 
           : 'bg-white/95 border-stone-200 text-stone-900 shadow-sm'
       }`}>
@@ -1717,7 +1900,7 @@ export default function App() {
 
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5">
-                <span className="font-black text-sm sm:text-base tracking-tight text-amber-400">
+                <span className="font-black text-sm sm:text-base tracking-tight text-indigo-400">
                   {isEn ? 'YAAD' : 'یاد'}
                 </span>
                 {googleUser && (
@@ -1729,8 +1912,8 @@ export default function App() {
               </div>
               <span className="text-[10px] sm:text-xs text-stone-400 font-medium">
                 {isEn
-                  ? `${todayGregorian.weekday}, ${todayGregorian.monthName} ${todayGregorian.day}`
-                  : toPersianDigits(`${todayJalali.weekday} ${todayJalali.day} ${todayJalali.monthName}`)}
+                  ? `${todayGregorian.weekday}, ${todayGregorian.monthName} ${todayGregorian.day}, ${todayGregorian.year}`
+                  : toPersianDigits(`${todayJalali.weekday} ${todayJalali.day} ${todayJalali.monthName} ${todayJalali.year}`)}
               </span>
             </div>
           </div>
@@ -1742,7 +1925,7 @@ export default function App() {
               onClick={() => setActiveMainTab('reminders')}
               className={`px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'reminders'
-                  ? 'bg-stone-900 border border-amber-400/80 text-amber-300 font-black shadow-sm'
+                  ? 'bg-stone-900 border border-indigo-400/80 text-indigo-300 font-black shadow-sm'
                   : 'text-stone-300 hover:text-white'
               }`}
             >
@@ -1757,11 +1940,11 @@ export default function App() {
               onClick={() => setActiveMainTab('occasions')}
               className={`flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'occasions'
-                  ? 'bg-stone-900 border border-amber-400/80 text-amber-300 font-black shadow-sm'
+                  ? 'bg-stone-900 border border-indigo-400/80 text-indigo-300 font-black shadow-sm'
                   : 'text-stone-300 hover:text-white'
               }`}
             >
-              <Cake className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'occasions' ? 'text-amber-400' : 'text-stone-400'}`} />
+              <Cake className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'occasions' ? 'text-indigo-400' : 'text-stone-400'}`} />
               <span>{t.tabOccasions}</span>
               <span className="opacity-80 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeOccasions.length : toPersianDigits(activeOccasions.length)})
@@ -1773,11 +1956,11 @@ export default function App() {
               onClick={() => setActiveMainTab('locations')}
               className={`flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'locations'
-                  ? 'bg-stone-900 border border-amber-400/80 text-amber-300 font-black shadow-sm'
+                  ? 'bg-stone-900 border border-indigo-400/80 text-indigo-300 font-black shadow-sm'
                   : 'text-stone-300 hover:text-white'
               }`}
             >
-              <MapPin className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'locations' ? 'text-amber-400' : 'text-stone-400'}`} />
+              <MapPin className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'locations' ? 'text-indigo-400' : 'text-stone-400'}`} />
               <span>{t.tabLocations}</span>
               <span className="opacity-80 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeSavedLocations.length : toPersianDigits(activeSavedLocations.length)})
@@ -1789,11 +1972,11 @@ export default function App() {
               onClick={() => setActiveMainTab('ideas')}
               className={`flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'ideas'
-                  ? 'bg-stone-900 border border-amber-400/80 text-amber-300 font-black shadow-sm'
+                  ? 'bg-stone-900 border border-indigo-400/80 text-indigo-300 font-black shadow-sm'
                   : 'text-stone-300 hover:text-white'
               }`}
             >
-              <Lightbulb className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'ideas' ? 'text-amber-400' : 'text-stone-400'}`} />
+              <Lightbulb className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'ideas' ? 'text-indigo-400' : 'text-stone-400'}`} />
               <span>{t.tabIdeas}</span>
               <span className="opacity-80 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeIdeas.length : toPersianDigits(activeIdeas.length)})
@@ -1809,7 +1992,7 @@ export default function App() {
               <button
                 type="button"
                 onClick={handleInstallClick}
-                className="hidden sm:flex min-h-[48px] items-center gap-1.5 px-3 py-2 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm transition-all duration-200 active:scale-95 cursor-pointer shadow-md shadow-amber-500/20 whitespace-nowrap"
+                className="hidden sm:flex min-h-[48px] items-center gap-1.5 px-3 py-2 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm transition-all duration-200 active:scale-95 cursor-pointer shadow-md shadow-indigo-500/20 whitespace-nowrap"
                 title={t.installApp}
               >
                 <Download className="w-4 h-4 stroke-[2.5]" />
@@ -1834,13 +2017,13 @@ export default function App() {
               }}
               className={`min-h-[48px] min-w-[48px] p-2.5 rounded-2xl border flex items-center justify-center cursor-pointer shadow-md active:scale-95 transition-all duration-200 ${
                 isSearchOpen || searchQuery.trim()
-                  ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm shadow-amber-500/20'
+                  ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-sm shadow-indigo-500/20'
                   : 'bg-stone-800/95 hover:bg-stone-700 text-stone-100 hover:text-white border-stone-700/90'
               }`}
               title={isEn ? 'Search Reminders' : 'جستجوی یادآورها'}
               aria-label={isEn ? 'Search' : 'جستجو'}
             >
-              <Search className={`w-5 h-5 shrink-0 ${isSearchOpen || searchQuery.trim() ? 'text-amber-400' : 'text-stone-300'}`} />
+              <Search className={`w-5 h-5 shrink-0 ${isSearchOpen || searchQuery.trim() ? 'text-indigo-400' : 'text-stone-300'}`} />
             </button>
 
             {/* Settings Button in Header - PROMINENT, ACCESSIBLE, MIN 48px TOUCH TARGET (فقط آیکون) */}
@@ -1852,7 +2035,7 @@ export default function App() {
               title={t.settings}
               aria-label={t.settings}
             >
-              <SettingsIcon className="w-5 h-5 text-amber-400 shrink-0" />
+              <SettingsIcon className="w-5 h-5 text-indigo-400 shrink-0" />
             </button>
 
             {/* Desktop Primary Action Button */}
@@ -1864,9 +2047,9 @@ export default function App() {
                   setEditingReminder(null);
                   setIsFormOpen(true);
                 }}
-                className="hidden lg:flex min-h-[48px] items-center gap-2 px-4 py-2 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-amber-500/25 transition-all duration-200 active:scale-95 cursor-pointer"
+                className="hidden lg:flex min-h-[48px] items-center gap-2 px-4 py-2 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs sm:text-sm font-black shadow-lg shadow-indigo-500/25 transition-all duration-200 active:scale-95 cursor-pointer"
               >
-                <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
+                <Plus className="w-4 h-4 text-white stroke-[3]" />
                 <span>{t.newReminder}</span>
               </button>
             ) : null}
@@ -1876,30 +2059,89 @@ export default function App() {
         {/* Expandable Search Input Bar (ظاهر شدن فیلد تایپ و جستجو بعد از کلیک ذره‌بین) */}
         {isSearchOpen && (
           <div className="w-full px-3 sm:px-6 py-2.5 bg-stone-900 border-t border-stone-800/90 animate-in slide-in-from-top-2 duration-150">
-            <div className="relative max-w-2xl mx-auto flex items-center" dir={isEn ? 'ltr' : 'rtl'}>
-              <Search className={`absolute ${isEn ? 'left-3.5' : 'right-3.5'} w-4 h-4 text-stone-400 pointer-events-none`} />
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={isEn ? 'Search reminders by title, note, or place...' : 'جستجو در یادآورها، متن یا مکان...'}
-                className={`w-full bg-stone-950 border border-stone-700 focus:border-amber-500 rounded-2xl ${
-                  isEn ? 'pl-10 pr-10' : 'pr-10 pl-10'
-                } py-2.5 text-xs sm:text-sm text-white placeholder-stone-500 focus:outline-none transition-all shadow-inner`}
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSearchQuery('');
-                    searchInputRef.current?.focus();
+            <div className="max-w-2xl mx-auto space-y-2" dir={isEn ? 'ltr' : 'rtl'}>
+              <div className="relative flex items-center">
+                <Search className={`absolute ${isEn ? 'left-3.5' : 'right-3.5'} w-4 h-4 text-stone-400 pointer-events-none`} />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    if (activeMainTab !== 'reminders') {
+                      setActiveMainTab('reminders');
+                    }
                   }}
-                  className={`absolute ${isEn ? 'right-3' : 'left-3'} p-1 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition-colors cursor-pointer`}
-                  title={isEn ? 'Clear' : 'پاک کردن'}
-                >
-                  <X className="w-4 h-4" />
-                </button>
+                  placeholder={isEn ? 'Search reminders by title, note, date, or place...' : 'جستجو در یادآورها، متن، توضیحات، تاریخ یا مکان...'}
+                  className={`w-full bg-stone-950 border border-stone-700 focus:border-indigo-500 rounded-2xl ${
+                    isEn ? 'pl-10 pr-10' : 'pr-10 pl-10'
+                  } py-2.5 text-xs sm:text-sm text-white placeholder-stone-500 focus:outline-none transition-all shadow-inner`}
+                />
+                {searchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearchQuery('');
+                      searchInputRef.current?.focus();
+                    }}
+                    className={`absolute ${isEn ? 'right-3' : 'left-3'} p-1 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition-colors cursor-pointer`}
+                    title={isEn ? 'Clear' : 'پاک کردن'}
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+
+              {/* Inline Search Feedback right in the search bar area (در همان محل) */}
+              {searchQuery.trim() && (
+                filteredReminders.length === 0 ? (
+                  <div className="px-3.5 py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between gap-2 text-xs text-rose-300 animate-in fade-in duration-150">
+                    <div className="flex items-center gap-2 font-bold">
+                      <Search className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>
+                        {isEn
+                          ? `Reminder not found — no match for "${searchQuery}"`
+                          : `یادآور یافت نشد — موردی با «${searchQuery}» در یادآورها، متن و توضیحات وجود ندارد`}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="px-3 py-2 rounded-xl bg-stone-950/90 border border-stone-800 space-y-1.5 animate-in fade-in duration-150">
+                    <div className="flex items-center justify-between text-[11px] text-indigo-300 font-bold">
+                      <span>
+                        {isEn
+                          ? `${filteredReminders.length} reminder(s) found`
+                          : `${toPersianDigits(filteredReminders.length)} یادآور یافت شد`}
+                      </span>
+                      <span className="text-stone-400 text-[10px]">
+                        {isEn ? 'Tap item to edit' : 'برای مشاهده یا ویرایش روی مورد کلیک کنید'}
+                      </span>
+                    </div>
+                    <div className="max-h-40 overflow-y-auto space-y-1 pr-0.5">
+                      {filteredReminders.slice(0, 5).map((rem) => (
+                        <button
+                          key={rem.id}
+                          type="button"
+                          onClick={() => {
+                            setEditingReminder(rem);
+                            setIsFormOpen(true);
+                          }}
+                          className="w-full text-start p-2 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800/80 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-bold text-white truncate">{rem.title}</p>
+                            {rem.description && (
+                              <p className="text-[10px] text-stone-400 truncate">{rem.description}</p>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-mono text-indigo-300 shrink-0">
+                            {formatJalaliFull(rem.dueTimestamp, isEn ? 'en' : 'fa')}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )
               )}
             </div>
           </div>
@@ -1938,14 +2180,14 @@ export default function App() {
           <section className="space-y-4">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-stone-800">
               <h3 className="font-bold text-base sm:text-lg text-white flex items-center gap-2">
-                <Lightbulb className="w-5 h-5 text-amber-400" />
+                <Lightbulb className="w-5 h-5 text-indigo-400" />
                 <span>{isEn ? 'Organize Ideas & Notes' : 'ثبت و سازماندهی ایده و افکار'}</span>
               </h3>
 
               <button
                 type="button"
                 onClick={() => setIsIdeaModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 !text-white font-bold text-xs shadow-md transition-all self-stretch sm:self-auto justify-center active:scale-95 cursor-pointer"
+                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 !text-white font-bold text-xs shadow-md transition-all self-stretch sm:self-auto justify-center active:scale-95 cursor-pointer"
               >
                 <Plus className="w-4 h-4 text-white stroke-[3]" />
                 <span className="text-white font-black">
@@ -1972,7 +2214,7 @@ export default function App() {
               </div>
             ) : (
               <div className="py-12 px-4 text-center rounded-3xl border border-dashed border-stone-800/80 bg-stone-900/30 space-y-3.5 transition-all duration-200">
-                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center mx-auto shadow-inner">
+                <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center mx-auto shadow-inner">
                   <Lightbulb className="w-7 h-7" />
                 </div>
                 <div className="space-y-1">
@@ -1988,9 +2230,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsIdeaModalOpen(true)}
-                  className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-amber-500/25 active:scale-95 cursor-pointer mx-auto"
+                  className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-indigo-500/25 active:scale-95 cursor-pointer mx-auto"
                 >
-                  <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
+                  <Plus className="w-4 h-4 text-white stroke-[3]" />
                   <span>{isEn ? 'Create New Idea' : 'ثبت اولین ایده'}</span>
                 </button>
               </div>
@@ -2006,7 +2248,7 @@ export default function App() {
             <section className="space-y-4 animate-in fade-in">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-stone-800/80">
                 <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center flex-shrink-0">
+                  <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center flex-shrink-0">
                     <MapPin className="w-4 h-4" />
                   </div>
                   <div>
@@ -2016,8 +2258,8 @@ export default function App() {
                         {formatNumber(activeSavedLocations.length)}
                       </span>
                       {activeGeofencesCount > 0 && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 flex items-center gap-1">
+                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
                           <span>{isEn ? `${activeGeofencesCount} Active Geofences` : `${toPersianDigits(activeGeofencesCount)} حصار مکانی فعال`}</span>
                         </span>
                       )}
@@ -2034,10 +2276,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setIsLocationModalOpen(true)}
-                    className="flex-1 sm:flex-initial flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs shadow-md shadow-amber-500/20 transition-all justify-center cursor-pointer active:scale-95"
+                    className="flex-1 sm:flex-initial flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs shadow-md shadow-indigo-500/20 transition-all justify-center cursor-pointer active:scale-95"
                   >
-                    <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
-                    <span className="text-stone-950 font-black">
+                    <Plus className="w-4 h-4 text-white stroke-[3]" />
+                    <span className="text-white font-black">
                       {isEn ? 'Save New Location' : 'ثبت مکان جدید'}
                     </span>
                   </button>
@@ -2051,7 +2293,7 @@ export default function App() {
                   onClick={() => setLocationFilter('all')}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap active:scale-95 ${
                     locationFilter === 'all'
-                      ? 'bg-amber-500 text-stone-950 font-black shadow-sm'
+                      ? 'bg-indigo-500 text-white font-black shadow-sm'
                       : 'bg-stone-900 border border-stone-800 text-stone-300 hover:text-white'
                   }`}
                 >
@@ -2064,7 +2306,7 @@ export default function App() {
                   onClick={() => setLocationFilter('checkpoints')}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer whitespace-nowrap active:scale-95 flex items-center gap-1.5 ${
                     locationFilter === 'checkpoints'
-                      ? 'bg-amber-500 text-stone-950 font-black shadow-sm'
+                      ? 'bg-indigo-500 text-white font-black shadow-sm'
                       : 'bg-stone-900 border border-stone-800 text-stone-300 hover:text-white'
                   }`}
                 >
@@ -2083,7 +2325,7 @@ export default function App() {
                     value={locationSearchQuery}
                     onChange={(e) => setLocationSearchQuery(e.target.value)}
                     placeholder={isEn ? 'Search places by name or address...' : 'جست‌وجوی مکان بر اساس نام، آدرس یا توضیحات...'}
-                    className="w-full ps-9 pe-3 py-2 rounded-xl bg-stone-900 border border-stone-800 text-white placeholder-stone-500 text-xs focus:outline-none focus:border-amber-500"
+                    className="w-full ps-9 pe-3 py-2 rounded-xl bg-stone-900 border border-stone-800 text-white placeholder-stone-500 text-xs focus:outline-none focus:border-indigo-500"
                   />
                   {locationSearchQuery && (
                     <button
@@ -2099,7 +2341,7 @@ export default function App() {
                 {/* Geofence Engine Status Toggle */}
                 <div className="flex items-center justify-between sm:justify-start gap-2 px-3 py-1.5 rounded-xl bg-stone-900 border border-stone-800 text-xs">
                   <div className="flex items-center gap-1.5 text-stone-300">
-                    <span className={`w-2 h-2 rounded-full ${isGeofenceActive ? 'bg-amber-400' : 'bg-stone-500'}`} />
+                    <span className={`w-2 h-2 rounded-full ${isGeofenceActive ? 'bg-indigo-400' : 'bg-stone-500'}`} />
                     <span className="text-[11px] font-bold">
                       {isEn ? 'Geofence Radar:' : 'رادار پایش حصار مکانی:'}
                     </span>
@@ -2109,7 +2351,7 @@ export default function App() {
                     onClick={() => handleToggleGeofenceService()}
                     className={`text-[10px] px-2 py-0.5 rounded-lg font-black transition-colors cursor-pointer ${
                       isGeofenceActive
-                        ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                        ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
                         : 'bg-stone-800 text-stone-400 border border-stone-700'
                     }`}
                   >
@@ -2167,7 +2409,7 @@ export default function App() {
                 </div>
               ) : (
               <div className="py-12 px-4 text-center rounded-3xl border border-dashed border-stone-800/80 bg-stone-900/30 space-y-3.5 transition-all duration-200">
-                <div className="w-14 h-14 rounded-2xl bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center justify-center mx-auto shadow-inner">
+                <div className="w-14 h-14 rounded-2xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center mx-auto shadow-inner">
                   <MapPin className="w-7 h-7" />
                 </div>
                 <div className="space-y-1">
@@ -2183,9 +2425,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsLocationModalOpen(true)}
-                  className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-amber-500/25 active:scale-95 cursor-pointer mx-auto"
+                  className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-indigo-500/25 active:scale-95 cursor-pointer mx-auto"
                 >
-                  <Plus className="w-4 h-4 text-stone-950 stroke-[3]" />
+                  <Plus className="w-4 h-4 text-white stroke-[3]" />
                   <span>{isEn ? 'Save First Location' : 'ثبت اولین مکان'}</span>
                 </button>
               </div>
@@ -2214,112 +2456,125 @@ export default function App() {
 
       </main>
 
+      {/* FULL-SCREEN CLICKAWAY BACKDROP FOR (+) MENU (outside transformed FAB container so fixed inset-0 covers entire viewport) */}
+      {isCreateChoiceOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[3px] animate-in fade-in duration-200"
+          onClick={() => setIsCreateChoiceOpen(false)}
+        />
+      )}
+
       {/* FLOATING ACTION BUTTON (+) - POSITIONED DIRECTLY ABOVE BOTTOM NAVIGATION BAR */}
       <div 
-        className="fixed bottom-20 sm:bottom-22 z-40 flex items-center pointer-events-auto transition-all duration-200" 
-        style={{ right: '1.25rem', left: 'auto' }}
+        className={`${fabContainerClassName} ${isCreateChoiceOpen ? '!z-50' : ''}`}
+        style={fabContainerStyle}
         dir="ltr"
       >
         {/* Relative container for FAB and choice popup */}
         <div className="relative">
           {/* Choice Menu Popup */}
           {isCreateChoiceOpen && (
-            <>
-              {/* Clickaway backdrop */}
-              <div 
-                className="fixed inset-0 z-40 bg-black/40 backdrop-blur-[2px]" 
-                onClick={() => setIsCreateChoiceOpen(false)}
-              />
+            <div
+              ref={fabMenuRef}
+              onClick={(e) => e.stopPropagation()}
+              className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/98 border border-stone-800 rounded-2xl p-2 sm:p-2.5 shadow-2xl backdrop-blur-2xl w-56 sm:w-60 space-y-1 animate-fab-menu"
+            >
+              {/* Option 1: Reminder */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreateChoiceOpen(false);
+                  setEditingReminder(null);
+                  setIsFormOpen(true);
+                }}
+                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-1"
+              >
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                  <Bell className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                  {isEn ? 'New Reminder' : 'ثبت یادآور'}
+                </span>
+              </button>
 
-              {/* Popup Options: Clean, single color, without subtitles */}
-              <div className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/98 border border-stone-800 rounded-2xl p-2 sm:p-2.5 shadow-xl backdrop-blur-2xl w-56 sm:w-60 space-y-1 animate-zoom-out">
-                {/* Option 1: Reminder */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCreateChoiceOpen(false);
-                    setEditingReminder(null);
-                    setIsFormOpen(true);
-                  }}
-                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-amber-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                    <Bell className="w-4.5 h-4.5" />
-                  </div>
-                  <span className="text-sm font-bold text-stone-200 group-hover:text-amber-300">
-                    {isEn ? 'New Reminder' : 'ثبت یادآور'}
-                  </span>
-                </button>
+              {/* Option 2: Occasion */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreateChoiceOpen(false);
+                  setEditingOccasion(null);
+                  setIsOccasionModalOpen(true);
+                }}
+                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-2"
+              >
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                  <Cake className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                  {isEn ? 'Add Occasion' : 'ثبت مناسبت'}
+                </span>
+              </button>
 
-                {/* Option 2: Occasion */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCreateChoiceOpen(false);
-                    setEditingOccasion(null);
-                    setIsOccasionModalOpen(true);
-                  }}
-                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-amber-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                    <Cake className="w-4.5 h-4.5" />
-                  </div>
-                  <span className="text-sm font-bold text-stone-200 group-hover:text-amber-300">
-                    {isEn ? 'Add Occasion' : 'ثبت مناسبت'}
-                  </span>
-                </button>
+              {/* Option 3: Idea */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreateChoiceOpen(false);
+                  setIsIdeaModalOpen(true);
+                }}
+                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-3"
+              >
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                  <Lightbulb className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                  {isEn ? 'Capture Idea' : 'ثبت ایده'}
+                </span>
+              </button>
 
-                {/* Option 3: Idea */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCreateChoiceOpen(false);
-                    setIsIdeaModalOpen(true);
-                  }}
-                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-amber-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                    <Lightbulb className="w-4.5 h-4.5" />
-                  </div>
-                  <span className="text-sm font-bold text-stone-200 group-hover:text-amber-300">
-                    {isEn ? 'Capture Idea' : 'ثبت ایده'}
-                  </span>
-                </button>
-
-                {/* Option 4: Location */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsCreateChoiceOpen(false);
-                    setIsLocationModalOpen(true);
-                  }}
-                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-amber-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60"
-                >
-                  <div className="w-9 h-9 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                    <MapPin className="w-4.5 h-4.5" />
-                  </div>
-                  <span className="text-sm font-bold text-stone-200 group-hover:text-amber-300">
-                    {isEn ? 'Save Place' : 'ثبت مکان'}
-                  </span>
-                </button>
-              </div>
-            </>
+              {/* Option 4: Location */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCreateChoiceOpen(false);
+                  setIsLocationModalOpen(true);
+                }}
+                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-4"
+              >
+                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                  <MapPin className="w-4.5 h-4.5" />
+                </div>
+                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                  {isEn ? 'Save Place' : 'ثبت مکان'}
+                </span>
+              </button>
+            </div>
           )}
 
           {/* Circular FAB */}
           <button
+            ref={fabBtnRef}
             id="fab-create-btn"
             data-keep-color="true"
             type="button"
             style={{ width: '56px', height: '56px' }}
-            onClick={() => setIsCreateChoiceOpen(!isCreateChoiceOpen)}
-            className={`fab-add-btn rounded-full bg-amber-500 hover:bg-amber-400 text-stone-950 flex items-center justify-center shadow-lg shadow-black/40 hover:scale-105 active:scale-95 transition-all duration-200 border border-amber-300/80 flex-shrink-0 cursor-pointer ${
-              isCreateChoiceOpen ? 'rotate-45' : ''
+            onClick={() => {
+              resetFabPosition();
+              setIsCreateChoiceOpen(!isCreateChoiceOpen);
+            }}
+            className={`fab-add-btn rounded-full flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] border flex-shrink-0 cursor-pointer ${
+              settings.theme === 'jade_warm_light'
+                ? isCreateChoiceOpen
+                  ? 'rotate-45 bg-[#168779] text-white border-[#168779] shadow-[#168779]/30'
+                  : 'rotate-0 bg-[#168779] hover:bg-[#116e63] text-white border-[#168779]/40 shadow-[#168779]/25'
+                : isCreateChoiceOpen 
+                ? 'rotate-45 bg-amber-400 text-stone-950 border-amber-200 shadow-amber-500/30' 
+                : 'rotate-0 bg-amber-500 hover:bg-amber-400 text-stone-950 border-amber-300/80 shadow-black/40'
             }`}
             title={isEn ? 'Add New' : 'ثبت جدید'}
             aria-label={isEn ? 'Add New' : 'ثبت جدید'}
           >
-            <Plus style={{ width: '30px', height: '30px' }} className="w-7 h-7 stroke-[3] transition-transform duration-200" />
+            <Plus style={{ width: '30px', height: '30px' }} className="w-7 h-7 stroke-[3] transition-transform duration-300" />
           </button>
         </div>
       </div>
@@ -2327,7 +2582,11 @@ export default function App() {
       {/* FIXED BOTTOM NAVIGATION BAR (منوی پایین ثابت: آیکون‌ها خاکستری، تب فعال رنگ کهربایی، نشان تعداد خنثی) */}
       <nav 
         className={`fixed bottom-0 left-0 right-0 z-40 border-t backdrop-blur-xl transition-colors duration-200 pb-safe ${
-          isDarkMode 
+          settings.theme === 'jade_warm_light'
+            ? 'bg-[#FFFFFF]/95 border-[#DDE1DA] text-[#202A29] shadow-sm'
+            : settings.theme === 'midnight_blue_silver'
+            ? 'bg-[#101722]/95 border-[#39475A] text-[#F0F3F7] shadow-xl'
+            : isDarkMode 
             ? 'bg-stone-950/95 border-stone-800/90 text-stone-200 shadow-xl' 
             : 'bg-white/95 border-stone-200 text-stone-800 shadow-md'
         }`}
@@ -2339,12 +2598,12 @@ export default function App() {
             onClick={() => setActiveMainTab('reminders')}
             className={`min-h-[48px] flex-1 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'reminders'
-                ? 'text-amber-400 font-black'
+                ? 'text-indigo-400 font-black'
                 : 'text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
-              <Bell className={`w-5 h-5 ${activeMainTab === 'reminders' ? 'stroke-[2.4] text-amber-400' : 'stroke-[1.8] text-stone-400'}`} />
+              <Bell className={`w-5 h-5 ${activeMainTab === 'reminders' ? 'stroke-[2.4] text-indigo-400' : 'stroke-[1.8] text-stone-400'}`} />
               {activeReminders.length > 0 && (
                 <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
                   {formatNumber(activeReminders.length)}
@@ -2360,12 +2619,12 @@ export default function App() {
             onClick={() => setActiveMainTab('occasions')}
             className={`min-h-[48px] flex-1 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'occasions'
-                ? 'text-amber-400 font-black'
+                ? 'text-indigo-400 font-black'
                 : 'text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
-              <Cake className={`w-5 h-5 ${activeMainTab === 'occasions' ? 'stroke-[2.4] text-amber-400' : 'stroke-[1.8] text-stone-400'}`} />
+              <Cake className={`w-5 h-5 ${activeMainTab === 'occasions' ? 'stroke-[2.4] text-indigo-400' : 'stroke-[1.8] text-stone-400'}`} />
               {activeOccasions.length > 0 && (
                 <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
                   {formatNumber(activeOccasions.length)}
@@ -2381,12 +2640,12 @@ export default function App() {
             onClick={() => setActiveMainTab('locations')}
             className={`min-h-[48px] flex-1 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'locations'
-                ? 'text-amber-400 font-black'
+                ? 'text-indigo-400 font-black'
                 : 'text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
-              <MapPin className={`w-5 h-5 ${activeMainTab === 'locations' ? 'stroke-[2.4] text-amber-400' : 'stroke-[1.8] text-stone-400'}`} />
+              <MapPin className={`w-5 h-5 ${activeMainTab === 'locations' ? 'stroke-[2.4] text-indigo-400' : 'stroke-[1.8] text-stone-400'}`} />
               {activeSavedLocations.length > 0 && (
                 <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
                   {formatNumber(activeSavedLocations.length)}
@@ -2402,12 +2661,12 @@ export default function App() {
             onClick={() => setActiveMainTab('ideas')}
             className={`min-h-[48px] flex-1 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'ideas'
-                ? 'text-amber-400 font-black'
+                ? 'text-indigo-400 font-black'
                 : 'text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
-              <Lightbulb className={`w-5 h-5 ${activeMainTab === 'ideas' ? 'stroke-[2.4] text-amber-400' : 'stroke-[1.8] text-stone-400'}`} />
+              <Lightbulb className={`w-5 h-5 ${activeMainTab === 'ideas' ? 'stroke-[2.4] text-indigo-400' : 'stroke-[1.8] text-stone-400'}`} />
               {activeIdeas.length > 0 && (
                 <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
                   {formatNumber(activeIdeas.length)}
@@ -2541,7 +2800,6 @@ export default function App() {
           onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
           onDismiss={() => {
             stopAlarmRinging();
-            stopFlashlightStrobe();
             setActiveAlarmReminder(null);
             setActiveMainTab('reminders');
             window.scrollTo({ top: 0, behavior: 'smooth' });

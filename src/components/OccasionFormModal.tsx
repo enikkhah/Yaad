@@ -213,7 +213,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
         return <Briefcase className="w-5 h-5 text-sky-400" />;
       case 'CalendarHeart':
       default:
-        return <CalendarHeart className="w-5 h-5 text-amber-400" />;
+        return <CalendarHeart className="w-5 h-5 text-indigo-400" />;
     }
   };
 
@@ -501,7 +501,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
             </div>
 
             {/* Live Preview Card */}
-            <div className="p-3 rounded-2xl bg-gradient-to-r from-pink-500/10 via-purple-500/10 to-amber-500/10 border border-pink-500/30 flex items-center justify-between gap-3">
+            <div className="p-3 rounded-2xl bg-gradient-to-r from-pink-500/10 via-purple-500/10 to-indigo-500/10 border border-pink-500/30 flex items-center justify-between gap-3">
               <div className="space-y-0.5">
                 <span className="text-[10px] text-pink-300 font-bold block">
                   {isEn ? 'Preview Card' : 'پیش‌نمایش کارت مناسبت:'}

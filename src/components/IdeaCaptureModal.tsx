@@ -25,7 +25,7 @@ import { formatJalaliFull } from '../utils/jalali';
 import { syncToGoogleTasks } from '../utils/googleSync';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { AppLanguage } from '../utils/i18n';
-import { requestMicrophonePermission } from '../utils/nativePermissions';
+import { requestMicrophonePermission, openAndroidSettings } from '../utils/nativePermissions';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 
 interface IdeaCaptureModalProps {
@@ -126,7 +126,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   // Drawing Canvas state with Samsung S Pen & Stylus Support
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
-  const [penColor, setPenColor] = useState('#f59e0b');
+  const [penColor, setPenColor] = useState('#818CF8');
   const [penSize, setPenSize] = useState(3);
   const [drawingDataUrl, setDrawingDataUrl] = useState<string | null>(null);
   const [isStylusActive, setIsStylusActive] = useState(false);
@@ -162,9 +162,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     }
   }, [isOpen, editingIdea]);
 
-  // Clean up streams & speech on close
+  // Clean up streams & speech on close or when alarm fires
   useEffect(() => {
-    if (!isOpen) {
+    const cleanupAllMedia = () => {
       if (videoStreamRef.current) {
         videoStreamRef.current.getTracks().forEach((t) => t.stop());
         videoStreamRef.current = null;
@@ -192,8 +192,17 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       if (mediaRecorderRef.current && isRecordingAudio) {
         mediaRecorderRef.current.stop();
       }
+    };
+
+    if (!isOpen) {
+      cleanupAllMedia();
     }
-  }, [isOpen]);
+
+    window.addEventListener('yaad:stop-all-microphones', cleanupAllMedia);
+    return () => {
+      window.removeEventListener('yaad:stop-all-microphones', cleanupAllMedia);
+    };
+  }, [isOpen, isRecordingAudio]);
 
   // 0. VOICE TYPING FOR TITLE (تبدیل گفتار به متن برای عنوان ایده)
   const toggleTitleVoiceTyping = async (forcedLang?: 'fa' | 'en') => {
@@ -228,13 +237,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     setTitleInterimTranscript('');
     lastFinalTitleTranscriptRef.current = '';
     processedFinalTitleIndicesRef.current.clear();
-
-    const micGranted = await requestMicrophonePermission();
-    if (!micGranted) {
-      setVoiceErrorMsg(isEn ? 'Microphone permission denied.' : 'دسترسی به میکروفون مجاز نیست. لطفاً در تنظیمات دستگاه اجازه دسترسی دهید.');
-      setTimeout(() => setVoiceErrorMsg(null), 4000);
-      return;
-    }
 
     try {
       const activeLang = forcedLang || voiceLang;
@@ -421,13 +423,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     lastFinalContentTranscriptRef.current = '';
     processedFinalContentIndicesRef.current.clear();
 
-    const micGranted = await requestMicrophonePermission();
-    if (!micGranted) {
-      setVoiceErrorMsg(isEn ? 'Microphone permission denied.' : 'دسترسی به میکروفون مجاز نیست. لطفاً در تنظیمات دستگاه اجازه دسترسی دهید.');
-      setTimeout(() => setVoiceErrorMsg(null), 4000);
-      return;
-    }
-
     try {
       const activeLang = forcedLang || voiceLang;
       shouldKeepContentListeningRef.current = true;
@@ -601,7 +596,8 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       recorder.start();
       setIsRecordingAudio(true);
     } catch (err) {
-      alert('دسترسی به میکروفون امکان‌پذیر نیست.');
+      console.warn('Microphone recording access denied:', err);
+      openAndroidSettings('microphone');
     }
   };
 
@@ -641,7 +637,8 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       recorder.start();
       setIsRecordingVideo(true);
     } catch (err) {
-      alert('دسترسی به دوربین و میکروفون برای ضبط ویدیو امکان‌پذیر نشد.');
+      console.warn('Video recording access denied:', err);
+      openAndroidSettings('camera');
     }
   };
 
@@ -855,7 +852,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         {/* Header */}
         <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="p-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
+            <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
               <Lightbulb className="w-5 h-5" />
             </div>
             <h3 className="font-bold text-base sm:text-lg text-white">
@@ -904,7 +901,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                     }}
                     className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-all cursor-pointer ${
                       voiceLang === 'fa'
-                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
                         : 'bg-sky-500/15 text-sky-300 border-sky-500/30'
                     }`}
                   >
@@ -913,7 +910,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                   <span className="text-[11px] text-stone-400">
                     {isTitleVoiceTyping ? (
                       titleInterimTranscript ? (
-                        <span className="text-amber-300 font-medium">«{titleInterimTranscript}»</span>
+                        <span className="text-indigo-300 font-medium">«{titleInterimTranscript}»</span>
                       ) : (
                         isEn ? 'Stops in 5s' : 'توقف با ۵ثانیه سکوت'
                       )
@@ -929,20 +926,20 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                   placeholder={isEn ? 'e.g. Marketing campaign, Redesign idea...' : 'مثلاً: ایده راه‌اندازی کمپین بازاریابی، طراحی مجدد...'}
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
-                  className={`w-full ${isEn ? 'pr-11 pl-3.5' : 'pl-11 pr-3.5'} py-2.5 rounded-xl bg-stone-950 border border-stone-800 focus:border-amber-500 focus:ring-1 focus:ring-amber-500 text-stone-100 text-sm outline-none`}
+                  className={`w-full ${isEn ? 'pr-11 pl-3.5' : 'pl-11 pr-3.5'} py-2.5 rounded-xl bg-stone-950 border border-stone-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-stone-100 text-sm outline-none`}
                 />
                 <button
                   type="button"
                   onClick={() => toggleTitleVoiceTyping()}
-                  className={`absolute ${isEn ? 'right-2' : 'left-2'} p-1.5 rounded-lg transition-all cursor-pointer ` + (isTitleVoiceTyping ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-500/30' : 'text-stone-400 hover:text-amber-400 hover:bg-stone-800')}
+                  className={`absolute ${isEn ? 'right-2' : 'left-2'} p-1.5 rounded-lg transition-all cursor-pointer ` + (isTitleVoiceTyping ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-500/30' : 'text-stone-400 hover:text-indigo-400 hover:bg-stone-800')}
                   title={isTitleVoiceTyping ? (isEn ? 'Stop voice typing' : 'توقف ضبط گفتار عنوان') : (isEn ? 'Voice input' : 'تایپ صوتی عنوان ایده')}
                 >
                   {isTitleVoiceTyping ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                 </button>
               </div>
               {voiceErrorMsg && (
-                <div className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-center gap-1.5 animate-in fade-in">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                <div className="p-2 rounded-xl bg-indigo-500/15 border border-indigo-500/40 text-indigo-300 text-xs flex items-center gap-1.5 animate-in fade-in">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
                   <span>{voiceErrorMsg}</span>
                 </div>
               )}
@@ -954,7 +951,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
               <select
                 value={category}
                 onChange={(e) => setCategory(e.target.value as Category)}
-                className="w-full px-3 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-stone-100 text-sm focus:border-amber-500 outline-none"
+                className="w-full px-3 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-stone-100 text-sm focus:border-indigo-500 outline-none"
               >
                 <option value="work">{isEn ? 'Work' : 'کاری (Work)'}</option>
                 <option value="family">{isEn ? 'Family' : 'خانواده (Family)'}</option>
@@ -973,7 +970,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 type="button"
                 onClick={() => setActiveTab('text')}
                 className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
-                  activeTab === 'text' ? 'bg-amber-500 text-stone-950' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                  activeTab === 'text' ? 'bg-indigo-500 text-white' : 'text-stone-400 hover:text-white hover:bg-stone-900'
                 }`}
                 title={isEn ? 'Text & Voice' : 'متن و تایپ صوتی'}
                 aria-label={isEn ? 'Text & Voice' : 'متن و تایپ صوتی'}
@@ -984,7 +981,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 type="button"
                 onClick={() => setActiveTab('voice')}
                 className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
-                  activeTab === 'voice' ? 'bg-amber-500 text-stone-950' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                  activeTab === 'voice' ? 'bg-indigo-500 text-white' : 'text-stone-400 hover:text-white hover:bg-stone-900'
                 }`}
                 title={isEn ? 'Voice Memo' : 'ضبط صدا'}
                 aria-label={isEn ? 'Voice Memo' : 'ضبط صدا'}
@@ -995,7 +992,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 type="button"
                 onClick={() => setActiveTab('video')}
                 className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
-                  activeTab === 'video' ? 'bg-amber-500 text-stone-950' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                  activeTab === 'video' ? 'bg-indigo-500 text-white' : 'text-stone-400 hover:text-white hover:bg-stone-900'
                 }`}
                 title={isEn ? 'Video' : 'ضبط ویدیو'}
                 aria-label={isEn ? 'Video' : 'ضبط ویدیو'}
@@ -1006,7 +1003,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 type="button"
                 onClick={() => setActiveTab('sketch')}
                 className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
-                  activeTab === 'sketch' ? 'bg-amber-500 text-stone-950' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                  activeTab === 'sketch' ? 'bg-indigo-500 text-white' : 'text-stone-400 hover:text-white hover:bg-stone-900'
                 }`}
                 title={isEn ? 'Sketch' : 'رسم با قلم'}
                 aria-label={isEn ? 'Sketch' : 'رسم با قلم'}
@@ -1036,7 +1033,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                     }}
                     className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
                       voiceLang === 'fa'
-                        ? 'bg-amber-500/15 text-amber-300 border-amber-500/30'
+                        ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30'
                         : 'bg-sky-500/15 text-sky-300 border-sky-500/30'
                     }`}
                     title={isEn ? 'Toggle speech language' : 'تغییر زبان گفتار'}
@@ -1052,11 +1049,11 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                         : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
                     }`}
                   >
-                    {isVoiceTyping ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-amber-400" />}
+                    {isVoiceTyping ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-indigo-400" />}
                     <span>
                       {isVoiceTyping ? (
                         contentInterimTranscript ? (
-                          <span className="text-amber-200 font-medium">«{contentInterimTranscript}»</span>
+                          <span className="text-indigo-200 font-medium">«{contentInterimTranscript}»</span>
                         ) : (
                           isEn ? 'Waiting (stops in 5s)' : 'منتظر صوت (خاموشی در ۵ ثانیه)'
                         )
@@ -1072,7 +1069,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
                 placeholder={isEn ? 'Write your thoughts, goals, or details here, or tap voice typing...' : 'افکار، اهداف یا جزئیات ایده‌تان را اینجا بنویسید یا دکمه تایپ صوتی را لمس کنید...'}
-                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-stone-100 text-sm focus:border-amber-500 outline-none leading-relaxed"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-stone-100 text-sm focus:border-indigo-500 outline-none leading-relaxed"
               />
             </div>
           )}
@@ -1097,9 +1094,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 <button
                   type="button"
                   onClick={stopAudioRecording}
-                  className="flex items-center gap-2 px-5 py-3 rounded-full bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-sm animate-pulse shadow-lg"
+                  className="flex items-center gap-2 px-5 py-3 rounded-full bg-indigo-500 hover:bg-indigo-400 text-white font-black text-sm animate-pulse shadow-lg"
                 >
-                  <Square className="w-4 h-4 fill-stone-950" />
+                  <Square className="w-4 h-4 fill-white" />
                   <span>توقف و ذخیره صدا</span>
                 </button>
               )}
@@ -1142,7 +1139,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 <button
                   type="button"
                   onClick={startVideoRecording}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-500 text-stone-950 font-bold text-xs shadow-md"
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-500 text-white font-bold text-xs shadow-md"
                 >
                   <Video className="w-4 h-4" />
                   <span>شروع ضبط ویدیویی ایده</span>
@@ -1169,7 +1166,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                   <div className={`p-1.5 rounded-lg flex items-center justify-center transition-colors ${
                     isStylusActive 
                       ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40 shadow-sm' 
-                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                      : 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
                   }`}>
                     <PenTool className="w-4 h-4" />
                   </div>
@@ -1214,7 +1211,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                     onClick={() => setPenMode('pen')}
                     className={`flex items-center gap-1 px-3 py-1.5 rounded-lg transition-all ${
                       penMode === 'pen'
-                        ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
+                        ? 'bg-indigo-500 text-white font-bold shadow-sm'
                         : 'text-stone-400 hover:text-white'
                     }`}
                   >
@@ -1227,7 +1224,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                     onClick={() => setPenMode('highlighter')}
                     className={`flex items-center gap-1 px-3 py-1.5 rounded-lg transition-all ${
                       penMode === 'highlighter'
-                        ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
+                        ? 'bg-indigo-500 text-white font-bold shadow-sm'
                         : 'text-stone-400 hover:text-white'
                     }`}
                   >
@@ -1240,7 +1237,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                     onClick={() => setPenMode('eraser')}
                     className={`flex items-center gap-1 px-3 py-1.5 rounded-lg transition-all ${
                       penMode === 'eraser'
-                        ? 'bg-amber-500 text-stone-950 font-bold shadow-sm'
+                        ? 'bg-indigo-500 text-white font-bold shadow-sm'
                         : 'text-stone-400 hover:text-white'
                     }`}
                   >
@@ -1252,7 +1249,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 {/* Color Palette (disabled in eraser mode) */}
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-stone-400">رنگ:</span>
-                  {['#f59e0b', '#38bdf8', '#34d399', '#f87171', '#a855f7', '#ffffff'].map((c) => (
+                  {['#818CF8', '#38bdf8', '#34d399', '#f87171', '#a855f7', '#ffffff'].map((c) => (
                     <button
                       key={c}
                       type="button"
@@ -1276,7 +1273,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                     max="16"
                     value={penSize}
                     onChange={(e) => setPenSize(Number(e.target.value))}
-                    className="w-20 accent-amber-500 cursor-pointer"
+                    className="w-20 accent-indigo-500 cursor-pointer"
                   />
                   <button
                     type="button"
@@ -1314,7 +1311,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 type="checkbox"
                 checked={syncWithGoogle}
                 onChange={(e) => setSyncWithGoogle(e.target.checked)}
-                className="rounded accent-amber-500 w-4 h-4 cursor-pointer"
+                className="rounded accent-indigo-500 w-4 h-4 cursor-pointer"
               />
               <span className="flex items-center gap-1.5">
                 <Cloud className="w-4 h-4 text-sky-400" />
@@ -1339,12 +1336,12 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             onClick={handleSave}
             className={`min-h-[48px] flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black shadow-md transition-all active:scale-95 cursor-pointer ${
               !title.trim()
-                ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/25'
+                ? 'bg-indigo-500/20 border border-indigo-500/40 text-indigo-300'
+                : 'bg-indigo-500 hover:bg-indigo-400 text-white font-black shadow-lg shadow-indigo-500/25'
             }`}
           >
-            <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-amber-300' : 'text-stone-950'}`} />
-            <span className={!title.trim() ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
+            <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-indigo-300' : 'text-white'}`} />
+            <span className={!title.trim() ? 'text-indigo-300 font-bold' : 'text-white font-black'}>
               {editingIdea 
                 ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
                 : (isEn ? 'Save Idea' : 'ثبت ایده')}

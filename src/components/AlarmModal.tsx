@@ -1,10 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliFull, formatJalaliTime } from '../utils/jalali';
 import { getRecurrenceLabel } from '../utils/recurrence';
 import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound } from '../utils/audio';
 import { dismissDeliveredNotifications } from '../utils/nativeLocalNotifications';
-import { startFlashlightStrobe, stopFlashlightStrobe } from '../utils/torch';
 import { 
   Bell, 
   CheckCircle2, 
@@ -13,8 +12,7 @@ import {
   Heart, 
   Tag,
   Repeat,
-  X,
-  Flashlight
+  X
 } from 'lucide-react';
 
 interface AlarmModalProps {
@@ -33,37 +31,33 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
   onComplete,
   onPostpone,
 }) => {
-  const [torchActive, setTorchActive] = useState<boolean>(false);
   const isEn = settings?.language === 'en';
 
   useEffect(() => {
     if (!reminder) {
       stopAlarmRinging();
-      stopFlashlightStrobe();
-      setTorchActive(false);
       return;
     }
 
-    // Requirement 4: Close system notification so two sounds don't play simultaneously
+    // Ensure any active speech recognition or microphone session in the background is immediately aborted
+    try {
+      window.dispatchEvent(new CustomEvent('yaad:stop-all-microphones'));
+    } catch {
+      // ignore
+    }
+
+    // Close system notification so two sounds don't play simultaneously
     dismissDeliveredNotifications(reminder.id).catch(() => {});
 
-    // Requirement 1 & 2: Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital-beep)
+    // Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital-beep)
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
 
-    // Strobe the physical camera flash LED on the back of the phone if enabled
-    if (reminder.useFlash || settings?.enableFlash) {
-      setTorchActive(true);
-      startFlashlightStrobe().catch(() => {});
-    }
-
     return () => {
       stopAlarmRinging();
-      stopFlashlightStrobe();
-      setTorchActive(false);
     };
-  }, [reminder, settings?.alarmSound, settings?.alarmVolume, settings?.enableFlash]);
+  }, [reminder, settings?.alarmSound, settings?.alarmVolume]);
 
   if (!reminder) return null;
 
@@ -74,36 +68,23 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       case 'family':
         return <Heart className="w-3.5 h-3.5 text-rose-400" />;
       default:
-        return <Tag className="w-3.5 h-3.5 text-amber-400" />;
+        return <Tag className="w-3.5 h-3.5 text-indigo-400" />;
     }
   };
 
   const handleComplete = () => {
     stopAlarmRinging();
-    stopFlashlightStrobe();
     onComplete(reminder.id);
   };
 
   const handlePostpone = (minutes: number) => {
     stopAlarmRinging();
-    stopFlashlightStrobe();
     onPostpone(reminder.id, minutes);
   };
 
   const handleDismiss = () => {
     stopAlarmRinging();
-    stopFlashlightStrobe();
     onDismiss();
-  };
-
-  const toggleManualTorch = async () => {
-    if (torchActive) {
-      stopFlashlightStrobe();
-      setTorchActive(false);
-    } else {
-      setTorchActive(true);
-      await startFlashlightStrobe();
-    }
   };
 
   const timeFormatted = formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa');
@@ -118,9 +99,9 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       <div className="flex items-center justify-between gap-3 w-full max-w-4xl mx-auto">
         <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
           {/* Subtle pulsating alarm icon */}
-          <div className="relative w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center flex-shrink-0">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-xl bg-amber-400 opacity-20" />
-            <Bell className="w-4 h-4 text-amber-400" />
+          <div className="relative w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center flex-shrink-0">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-xl bg-indigo-400 opacity-20" />
+            <Bell className="w-4 h-4 text-indigo-400" />
           </div>
 
           <span className="text-xs sm:text-sm font-bold text-stone-300">
@@ -138,22 +119,6 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
                 : (isEn ? 'Other' : 'سایر')}
             </span>
           </div>
-
-          {/* Flashlight status button */}
-          {(reminder.useFlash || settings?.enableFlash) && (
-            <button
-              type="button"
-              onClick={toggleManualTorch}
-              className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
-                torchActive 
-                  ? 'bg-amber-500/15 border-amber-500/30 text-amber-300' 
-                  : 'bg-stone-900 border-stone-800 text-stone-400'
-              }`}
-            >
-              <Flashlight className={`w-3.5 h-3.5 ${torchActive ? 'text-amber-400 animate-pulse' : 'text-stone-400'}`} />
-              <span>{torchActive ? (isEn ? 'Flash on' : 'فلاش روشن') : (isEn ? 'Flash' : 'فلاش')}</span>
-            </button>
-          )}
         </div>
 
         {/* Minimal Close button */}
@@ -171,7 +136,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       <div className="flex-1 flex flex-col justify-center items-center text-center my-6 sm:my-8 px-2 max-w-3xl mx-auto w-full">
         {/* Large Minimal Time Display */}
         <div className="mb-2">
-          <div className="text-5xl sm:text-7xl font-mono font-black text-amber-400 tracking-tight">
+          <div className="text-5xl sm:text-7xl font-mono font-black text-indigo-400 tracking-tight">
             {timeFormatted}
           </div>
           <div className="text-xs sm:text-sm text-stone-400 mt-1 font-medium">
@@ -219,7 +184,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             onClick={() => handlePostpone(15)}
             className="py-3 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-stone-200 hover:text-white font-bold text-xs sm:text-sm border border-stone-800 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
           >
-            <Clock className="w-3.5 h-3.5 text-amber-400" />
+            <Clock className="w-3.5 h-3.5 text-indigo-400" />
             <span>{isEn ? '+15m Snooze' : '+۱۵ دقیقه تعویق'}</span>
           </button>
 
@@ -228,7 +193,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             onClick={() => handlePostpone(60)}
             className="py-3 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-stone-200 hover:text-white font-bold text-xs sm:text-sm border border-stone-800 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
           >
-            <Clock className="w-3.5 h-3.5 text-amber-400" />
+            <Clock className="w-3.5 h-3.5 text-indigo-400" />
             <span>{isEn ? '+1h Snooze' : '+۱ ساعت تعویق'}</span>
           </button>
 

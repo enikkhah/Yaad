@@ -159,8 +159,8 @@ export function calculateNextOccasionOccurrence(
   const monthNameFa = PERSIAN_MONTHS[occasion.solarMonth - 1] || 'فروردین';
   const monthNameEn = GREGORIAN_MONTHS[occasion.solarMonth - 1] || 'January';
   const formattedTargetDate = isEn 
-    ? `${monthNameEn} ${occasion.solarDay}`
-    : `${toPersianDigits(occasion.solarDay)} ${monthNameFa}`;
+    ? `${monthNameEn} ${occasion.solarDay}, ${occurrenceYear}`
+    : `${toPersianDigits(occasion.solarDay)} ${monthNameFa} ${toPersianDigits(occurrenceYear)}`;
 
   return {
     nextTimestamp,

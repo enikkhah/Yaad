@@ -341,7 +341,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             <div className="p-4 rounded-2xl bg-stone-950 border border-stone-800/90 space-y-3.5 transition-all duration-200">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2.5">
-                  <Navigation className={`w-5 h-5 ${isLocating ? 'text-amber-400 animate-spin' : 'text-emerald-400'}`} />
+                  <Navigation className={`w-5 h-5 ${isLocating ? 'text-indigo-400 animate-spin' : 'text-emerald-400'}`} />
                   <span className="text-sm font-bold text-stone-200">
                     {isLocating 
                       ? (isEn ? 'Acquiring GPS location...' : 'در حال دریافت موقعیت مکانی...') 
@@ -356,18 +356,18 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   className="min-h-[48px] px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 active:scale-95 text-stone-200 hover:text-white text-xs sm:text-sm font-bold transition-all duration-200 disabled:opacity-50 cursor-pointer flex items-center gap-2 border border-stone-700/60"
                   title={isEn ? 'Refresh GPS position' : 'دریافت مجدد موقعیت'}
                 >
-                  <RefreshCw className={`w-4 h-4 ${isLocating ? 'animate-spin text-amber-400' : ''}`} />
+                  <RefreshCw className={`w-4 h-4 ${isLocating ? 'animate-spin text-indigo-400' : ''}`} />
                   <span>{isLocating ? (isEn ? 'Receiving...' : 'در حال دریافت...') : (isEn ? 'Refresh GPS' : 'بروزرسانی GPS')}</span>
                 </button>
               </div>
 
               {/* In-progress banner */}
               {isLocating && (
-                <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs sm:text-sm flex items-center gap-3 animate-pulse">
-                  <div className="w-5 h-5 rounded-full border-2 border-amber-400 border-t-transparent animate-spin shrink-0" />
+                <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-300 text-xs sm:text-sm flex items-center gap-3 animate-pulse">
+                  <div className="w-5 h-5 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin shrink-0" />
                   <div className="flex flex-col">
                     <span className="font-bold">{isEn ? 'Acquiring accurate GPS...' : 'در حال دریافت مختصات دقیق از ماهواره GPS…'}</span>
-                    <span className="text-[11px] text-amber-400/80">{isEn ? 'Please wait a moment' : 'لطفاً چند لحظه صبر کنید'}</span>
+                    <span className="text-[11px] text-indigo-400/80">{isEn ? 'Please wait a moment' : 'لطفاً چند لحظه صبر کنید'}</span>
                   </div>
                 </div>
               )}
@@ -394,7 +394,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                     <button
                       type="button"
                       onClick={() => openAndroidSettings('location')}
-                      className="min-h-[48px] px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 active:scale-95 text-stone-950 text-xs sm:text-sm font-black transition-all duration-200 flex items-center justify-center gap-2 shadow-md cursor-pointer"
+                      className="min-h-[48px] px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 active:scale-95 text-white text-xs sm:text-sm font-black transition-all duration-200 flex items-center justify-center gap-2 shadow-md cursor-pointer"
                     >
                       <ExternalLink className="w-4 h-4" />
                       <span>{isEn ? 'Android Settings' : 'تنظیمات موقعیت اندروید'}</span>
@@ -660,7 +660,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                         onClick={() => setGeofenceTriggerOn('exit')}
                         className={`p-2.5 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
                           geofenceTriggerOn === 'exit'
-                            ? 'bg-amber-500/20 border-amber-500 text-amber-300 font-black shadow-sm'
+                            ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 font-black shadow-sm'
                             : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200'
                         }`}
                       >
@@ -737,7 +737,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                       onClick={() => setIsCameraOpen(true)}
                       className="px-3 py-1.5 rounded-xl bg-stone-900/90 text-white text-xs font-bold flex items-center gap-1.5 border border-white/20 hover:bg-black cursor-pointer"
                     >
-                      <Camera className="w-3.5 h-3.5 text-amber-400" />
+                      <Camera className="w-3.5 h-3.5 text-indigo-400" />
                       <span>{isEn ? 'Retake' : 'عکس مجدد'}</span>
                     </button>
                     <button
@@ -791,12 +791,12 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             </div>
 
             {/* Also Create Reminder Toggle */}
-            <label className="flex items-center gap-3 p-3 rounded-2xl bg-stone-950 border border-stone-800/80 cursor-pointer hover:border-amber-500/30 transition-colors">
+            <label className="flex items-center gap-3 p-3 rounded-2xl bg-stone-950 border border-stone-800/80 cursor-pointer hover:border-indigo-500/30 transition-colors">
               <input
                 type="checkbox"
                 checked={alsoCreateReminder}
                 onChange={(e) => setAlsoCreateReminder(e.target.checked)}
-                className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
+                className="w-4 h-4 rounded accent-indigo-500 cursor-pointer"
               />
               <div className="flex-1">
                 <span className="text-xs font-bold text-white block">
@@ -824,12 +824,12 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               onClick={handleSave}
               className={`flex-1 sm:flex-initial min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer active:scale-95 ${
                 !title.trim() || latitude === null || longitude === null
-                  ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                  : 'bg-amber-500 hover:bg-amber-400 text-stone-950 font-black shadow-lg shadow-amber-500/25'
+                  ? 'bg-indigo-500/20 border border-indigo-500/40 text-indigo-300'
+                  : 'bg-indigo-500 hover:bg-indigo-400 text-white font-black shadow-lg shadow-indigo-500/25'
               }`}
             >
-              <Check className={`w-4 h-4 stroke-[3] ${!title.trim() || latitude === null || longitude === null ? 'text-amber-300' : 'text-stone-950'}`} />
-              <span className={!title.trim() || latitude === null || longitude === null ? 'text-amber-300 font-bold' : 'text-stone-950 font-black'}>
+              <Check className={`w-4 h-4 stroke-[3] ${!title.trim() || latitude === null || longitude === null ? 'text-indigo-300' : 'text-white'}`} />
+              <span className={!title.trim() || latitude === null || longitude === null ? 'text-indigo-300 font-bold' : 'text-white font-black'}>
                 {editingLocation 
                   ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
                   : (isEn ? 'Save Place' : 'ثبت مکان')}

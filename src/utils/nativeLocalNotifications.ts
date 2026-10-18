@@ -29,6 +29,12 @@ export const SOUND_FILE_MAP: Record<string, string> = {
   'radar': 'radar.wav',
   'marimba': 'marimba.wav',
   'morning-chime': 'morning_chime.wav',
+  'zen-bowl': 'morning_chime.wav',
+  'soft-harp': 'morning_chime.wav',
+  'ocean-drop': 'morning_chime.wav',
+  'wind-chimes': 'morning_chime.wav',
+  'warm-pad': 'morning_chime.wav',
+  'calm-piano': 'morning_chime.wav',
   'urgent-bell': 'urgent_bell.wav',
 };
 
@@ -75,8 +81,6 @@ export async function initNotificationChannel(): Promise<void> {
       visibility: 1, // 1 = VISIBILITY_PUBLIC (shows on lock screen)
       sound: 'digital_beep.wav',
       vibration: true,
-      lights: true,
-      lightColor: '#8b5cf6',
     });
 
     // 2. Silent channel (for volume = 0% / mute)
@@ -87,7 +91,6 @@ export async function initNotificationChannel(): Promise<void> {
       importance: 2, // 2 = IMPORTANCE_LOW (no sound, no vibration, silent in notification shade)
       visibility: 1,
       vibration: false,
-      lights: false,
     });
 
     // 3. Channels for each sound type so Android notification manager plays the exact selected tone
@@ -108,12 +111,11 @@ export async function initNotificationChannel(): Promise<void> {
         visibility: 1,
         sound: sc.sound,
         vibration: true,
-        lights: true,
-        lightColor: '#8b5cf6',
       });
     }
 
-    // Register quick notification actions (Done, Snooze 15m)
+    // Register quick notification actions (Done, Snooze 15m, Stop)
+    // foreground: false ensures the reaction executes cleanly in background without launching/opening the app!
     await LocalNotifications.registerActionTypes({
       types: [
         {
@@ -127,6 +129,11 @@ export async function initNotificationChannel(): Promise<void> {
             {
               id: 'snooze',
               title: '⏱ تعویق ۱۵ دقیقه',
+              foreground: false,
+            },
+            {
+              id: 'stop',
+              title: '✕ توقف هشدار',
               foreground: false,
             },
           ],
@@ -315,6 +322,22 @@ export function getNotificationId(reminderId: string | number): number {
   return hash === 0 ? 1 : hash;
 }
 
+/**
+ * Repeat intervals in minutes for continuous background alarm alerts until user reaction
+ */
+export const NOTIFICATION_REPEAT_OFFSETS_MINUTES = [1, 2, 3, 5, 8, 12];
+
+/**
+ * Resolves all notification IDs for a reminder (primary ID + repeating alarms)
+ */
+export function getAllNotificationIdsForReminder(reminderId: string | number): number[] {
+  const baseId = getNotificationId(reminderId);
+  return [
+    baseId,
+    ...NOTIFICATION_REPEAT_OFFSETS_MINUTES.map((_, index) => (baseId + 1000 + index + 1) % 2147483647),
+  ];
+}
+
 
 /**
  * Checks if notification permission is currently granted on Android.
@@ -457,28 +480,62 @@ export async function scheduleReminderNotification(
     const targetChannelId = getChannelIdForConfig(soundType, volume);
     const soundFile = isSilent ? undefined : getSoundFileName(soundType);
 
+    // Build notification queue: Primary notification + Repeating alarm notifications
+    // Configured with ongoing: true, autoCancel: false and priority: 2 (PRIORITY_MAX)
+    // so notification takes precedence over other apps and window stays open until user acts.
+    const notificationsToSchedule: any[] = [
+      {
+        id: notifId,
+        title,
+        body,
+        channelId: targetChannelId,
+        schedule: {
+          at: scheduledDate,
+          allowWhileIdle: true, // Crucial for Android Doze mode / Exact alarms
+        },
+        sound: soundFile,
+        priority: 2, // Android PRIORITY_MAX: Always prioritized over other app notifications
+        ongoing: true, // Keeps notification persistent in notification drawer / lockscreen
+        autoCancel: false, // Notification window stays open until user action
+        actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
+        extra: {
+          reminderId: reminder.id,
+          dueTimestamp: reminder.dueTimestamp,
+          sound: soundType,
+          volume,
+          isRepeat: false,
+        },
+      },
+      ...NOTIFICATION_REPEAT_OFFSETS_MINUTES.map((offsetMins, index) => ({
+        id: (notifId + 1000 + index + 1) % 2147483647,
+        title: `⏰ تکرار آلارم: ${reminder.title}`,
+        body: reminder.description
+          ? `${reminder.description} • در انتظار عکس‌العمل شما (${timeFormatted})`
+          : `یادآور در انتظار ثبت عکس‌العمل شماست (${timeFormatted})`,
+        channelId: targetChannelId,
+        schedule: {
+          at: new Date(reminder.dueTimestamp + offsetMins * 60000),
+          allowWhileIdle: true,
+        },
+        sound: soundFile,
+        priority: 2, // Highest priority over other notifications
+        ongoing: true,
+        autoCancel: false,
+        actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
+        extra: {
+          reminderId: reminder.id,
+          dueTimestamp: reminder.dueTimestamp,
+          sound: soundType,
+          volume,
+          isRepeat: true,
+          repeatIndex: index + 1,
+        },
+      })),
+    ];
+
     // Call LocalNotifications.schedule with allowWhileIdle: true
     const scheduleResult = await LocalNotifications.schedule({
-      notifications: [
-        {
-          id: notifId,
-          title,
-          body,
-          channelId: targetChannelId,
-          schedule: {
-            at: scheduledDate,
-            allowWhileIdle: true, // Crucial for Android Doze mode / Exact alarms
-          },
-          sound: soundFile,
-          actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
-          extra: {
-            reminderId: reminder.id,
-            dueTimestamp: reminder.dueTimestamp,
-            sound: soundType,
-            volume,
-          },
-        },
-      ],
+      notifications: notificationsToSchedule,
     });
 
     // Requirement 1: Immediately run getPending() after schedule
@@ -849,10 +906,10 @@ function currentDebugTestScheduled() {
  * Cancels a previously scheduled Android Local Notification by reminder ID.
  */
 export async function cancelReminderNotification(reminderId: string | number): Promise<boolean> {
-  const notifId = getNotificationId(reminderId);
+  const allIds = getAllNotificationIdsForReminder(reminderId);
 
   if (!isNativeApp()) {
-    const updatedList = (currentDebugState.pendingList || []).filter((n) => n.id !== notifId);
+    const updatedList = (currentDebugState.pendingList || []).filter((n) => !allIds.includes(n.id));
     updateDebugState({
       lastUpdated: new Date().toISOString(),
       pendingCount: updatedList.length,
@@ -863,7 +920,7 @@ export async function cancelReminderNotification(reminderId: string | number): P
 
   try {
     await LocalNotifications.cancel({
-      notifications: [{ id: notifId }],
+      notifications: allIds.map((id) => ({ id })),
     });
 
     // Refresh pending notifications in debug state
@@ -947,7 +1004,11 @@ export async function fireImmediateLocalNotification(
     // In web environment, log or trigger HTML5 notification if granted
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
       try {
-        new Notification(title, { body, icon: '/icon-192.png' });
+        new Notification(title, { 
+          body, 
+          icon: '/pwa-192x192.png',
+          requireInteraction: true,
+        });
       } catch {
         // ignore
       }
@@ -967,6 +1028,9 @@ export async function fireImmediateLocalNotification(
           title,
           body,
           channelId,
+          ongoing: true,
+          autoCancel: false,
+          actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
           smallIcon: 'ic_stat_notification',
           largeIcon: 'ic_stat_notification',
           extra: extraData || {},
@@ -1011,23 +1075,32 @@ export async function syncAllRemindersWithLocalNotifications(
 }
 
 /**
- * Sets up listeners for user tapping the notification or selecting quick actions (Done, Snooze).
+ * Sets up listeners for user tapping the notification or selecting quick actions (Done, Snooze, Stop).
+ * Actions with foreground: false run in the background without launching or opening the app.
  */
 export function setupNotificationListeners(
   onComplete?: (reminderId: string) => void,
-  onSnooze?: (reminderId: string, minutes: number) => void
+  onSnooze?: (reminderId: string, minutes: number) => void,
+  onStop?: (reminderId: string) => void
 ): void {
   if (!isNativeApp()) return;
 
   try {
-    LocalNotifications.addListener('localNotificationActionPerformed', (action) => {
+    LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
       const reminderId = action.notification.extra?.reminderId;
       if (!reminderId) return;
+
+      // When user reacts, cancel repeating notifications for this reminder
+      cancelReminderNotification(reminderId).catch(() => {});
 
       if (action.actionId === 'complete') {
         if (onComplete) onComplete(reminderId);
       } else if (action.actionId === 'snooze') {
         if (onSnooze) onSnooze(reminderId, 15);
+      } else if (action.actionId === 'stop') {
+        if (onStop) {
+          onStop(reminderId);
+        }
       }
     });
   } catch (err) {

@@ -127,7 +127,7 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
       {/* Calendar Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <CalendarIcon className="w-4 h-4 text-amber-400" />
+          <CalendarIcon className="w-4 h-4 text-indigo-400" />
           <span className="font-extrabold text-sm text-stone-200">
             {isEn 
               ? `${GREGORIAN_MONTHS[viewMonth - 1]} ${viewYear}` 
@@ -139,7 +139,7 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
           <button
             type="button"
             onClick={isEn ? handlePrevMonth : handlePrevMonth}
-            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-amber-400 border border-stone-800 transition-colors"
+            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-indigo-400 border border-stone-800 transition-colors"
             title={isEn ? 'Previous month' : 'ماه قبل'}
           >
             {isEn ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -147,7 +147,7 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
           <button
             type="button"
             onClick={isEn ? handleNextMonth : handleNextMonth}
-            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-amber-400 border border-stone-800 transition-colors"
+            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-indigo-400 border border-stone-800 transition-colors"
             title={isEn ? 'Next month' : 'ماه بعد'}
           >
             {isEn ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
@@ -208,9 +208,9 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
               onClick={() => toggleDay(day)}
               className={`h-8 sm:h-9 rounded-xl flex items-center justify-center font-mono font-bold text-xs sm:text-sm transition-all relative active:scale-95 cursor-pointer ${
                 isSelected
-                  ? 'bg-amber-600 text-white font-black shadow-md shadow-amber-600/30 ring-2 ring-amber-400'
+                  ? 'bg-indigo-600 text-white font-black shadow-md shadow-indigo-600/30 ring-2 ring-indigo-400'
                   : isToday
-                  ? 'border border-amber-400/80 text-amber-300 bg-amber-500/10 hover:bg-amber-500/20'
+                  ? 'border border-indigo-400/80 text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20'
                   : isHighlightDay
                   ? 'text-rose-400 hover:bg-stone-800/80'
                   : 'text-stone-300 hover:bg-stone-800/80 hover:text-white'
@@ -234,14 +234,14 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
           <button
             type="button"
             onClick={() => handleAddNextDays(7)}
-            className="px-2 py-0.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-amber-400 border border-stone-800 text-[11px] transition-colors"
+            className="px-2 py-0.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-indigo-400 border border-stone-800 text-[11px] transition-colors"
           >
             {isEn ? '+7 Days' : '۷ روز بعد'}
           </button>
           <button
             type="button"
             onClick={() => handleAddNextDays(14)}
-            className="px-2 py-0.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-amber-400 border border-stone-800 text-[11px] transition-colors"
+            className="px-2 py-0.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-indigo-400 border border-stone-800 text-[11px] transition-colors"
           >
             {isEn ? '+14 Days' : '۱۴ روز بعد'}
           </button>
@@ -281,13 +281,13 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
               return (
                 <span
                   key={dateStr}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 text-[11px] font-bold"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-indigo-500/15 text-indigo-300 border border-indigo-500/30 text-[11px] font-bold"
                 >
                   <span>{display}</span>
                   <button
                     type="button"
                     onClick={() => removeDate(dateStr)}
-                    className="p-0.5 rounded hover:bg-amber-500/30 text-amber-400 hover:text-white"
+                    className="p-0.5 rounded hover:bg-indigo-500/30 text-indigo-400 hover:text-white"
                   >
                     <X className="w-2.5 h-2.5" />
                   </button>

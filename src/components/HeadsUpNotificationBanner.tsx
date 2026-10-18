@@ -173,7 +173,7 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
             <button
               type="button"
               onClick={(e) => handlePostpone(e, 15)}
-              className="py-1.5 px-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-amber-300 font-bold border border-amber-500/30 transition-all flex items-center justify-center gap-1 active:scale-95 cursor-pointer text-xs shrink-0"
+              className="py-1.5 px-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-indigo-300 font-bold border border-indigo-500/30 transition-all flex items-center justify-center gap-1 active:scale-95 cursor-pointer text-xs shrink-0"
             >
               <Clock className="w-3.5 h-3.5" />
               <span>{isEn ? '+15m' : '+۱۵د'}</span>

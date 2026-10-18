@@ -55,9 +55,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   const isEn = language === 'en';
   const [copied, setCopied] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
-  const formattedDate = isEn 
-    ? new Date(location.createdAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-    : formatJalaliFull(location.createdAt);
+  const formattedDate = formatJalaliFull(location.createdAt, language);
 
   const copyToClipboard = () => {
     const textToCopy = `${location.title}\nCoordinates: ${location.latitude}, ${location.longitude}\nGoogle Maps: ${location.googleMapsUrl}`;
@@ -110,7 +108,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                 </h4>
                 {isCheckpointActive && (
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-stone-800 text-stone-300 font-bold border border-stone-700 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
                     <span>{isEn ? 'Geofence Active' : 'حصار مکانی فعال'}</span>
                   </span>
                 )}
@@ -127,7 +125,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               <button
                 type="button"
                 onClick={() => onEdit(location)}
-                className="p-2 rounded-xl text-stone-400 hover:text-amber-400 hover:bg-stone-800 transition-colors cursor-pointer"
+                className="p-2 rounded-xl text-stone-400 hover:text-indigo-400 hover:bg-stone-800 transition-colors cursor-pointer"
                 title={isEn ? 'Edit place' : 'ویرایش مکان'}
               >
                 <Pencil className="w-4 h-4" />
@@ -298,7 +296,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                 <button
                   type="button"
                   onClick={() => onSimulateCheckpointTrigger(location, 'exit')}
-                  className="px-2 py-0.5 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 text-[10px] font-bold cursor-pointer transition-colors"
+                  className="px-2 py-0.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold cursor-pointer transition-colors"
                 >
                   {isEn ? 'Exit Test' : 'تست خروج'}
                 </button>
@@ -329,7 +327,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               href={googleDirectionsUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 text-xs font-bold transition-all active:scale-95"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all active:scale-95"
               title={isEn ? 'Open directions in Google Maps' : 'مسیریابی در نقشه گوگل'}
             >
               <Navigation className="w-3.5 h-3.5" />
@@ -374,7 +372,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
             href={location.googleMapsUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-amber-400 transition-colors"
+            className="flex items-center gap-1 text-[11px] text-stone-400 hover:text-indigo-400 transition-colors"
             title={isEn ? 'View on Google Maps' : 'مشاهده در گوگل‌مپ'}
           >
             <span>{isEn ? 'View Map' : 'مشاهده'}</span>

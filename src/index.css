@@ -1,6 +1,23 @@
 @import "tailwindcss";
 
 @layer base {
+  html,
+  body,
+  button,
+  input,
+  select,
+  textarea {
+    font-family: 'Vazirmatn', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  }
+
+  .font-mono,
+  code,
+  kbd,
+  samp,
+  pre {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  }
+
   html {
     font-size: 16px;
     -webkit-text-size-adjust: 100%;
@@ -22,8 +39,8 @@
 
 /* Theme-adaptive subtle brand accent variables */
 :root {
-  --brand-accent-border: rgba(245, 158, 11, 0.25);
-  --brand-accent-hover: rgba(245, 158, 11, 0.45);
+  --brand-accent-border: rgba(99, 102, 241, 0.25);
+  --brand-accent-hover: rgba(99, 102, 241, 0.45);
 }
 
 /* Ensure font color inside all form input fields, textareas, and selects is crisp and readable */
@@ -49,21 +66,400 @@ h4 {
 
 /* Theme variations */
 [data-theme="dark-slate"] {
-  --brand-accent-border: rgba(245, 158, 11, 0.25);
-  --brand-accent-hover: rgba(245, 158, 11, 0.45);
+  --brand-accent-border: rgba(99, 102, 241, 0.25);
+  --brand-accent-hover: rgba(99, 102, 241, 0.45);
 }
 
 [data-theme="light-clean"] {
-  --brand-accent-border: rgba(245, 158, 11, 0.25);
-  --brand-accent-hover: rgba(245, 158, 11, 0.45);
+  --brand-accent-border: rgba(79, 70, 229, 0.3);
+  --brand-accent-hover: rgba(79, 70, 229, 0.55);
+}
+
+[data-theme="light-clean"] .text-indigo-300,
+[data-theme="light-clean"] .text-indigo-400,
+[data-theme="light-clean"] .text-indigo-500 {
+  color: #4F46E5 !important;
+}
+
+[data-theme="light-clean"] .bg-indigo-500,
+[data-theme="light-clean"] .bg-indigo-600 {
+  background-color: #4F46E5 !important;
+  color: #FFFFFF !important;
+}
+
+[data-theme="light-clean"] .border-indigo-400,
+[data-theme="light-clean"] .border-indigo-500 {
+  border-color: #4F46E5 !important;
 }
 
 [data-theme="sketch-contrast"] {
-  --brand-accent-border: rgba(245, 158, 11, 0.25);
-  --brand-accent-hover: rgba(245, 158, 11, 0.45);
+  --brand-accent-border: rgba(99, 102, 241, 0.25);
+  --brand-accent-hover: rgba(99, 102, 241, 0.45);
 }
 
-/* Custom Zoom-Out entrance animation for the FAB 3-action choice modal */
+/* ==========================================================================
+   THEME: سبز یشمی و سفید گرم (Jade Green & Warm White - jade_warm_light)
+   ========================================================================== */
+[data-theme="jade_warm_light"] {
+  --brand-accent-border: rgba(22, 135, 121, 0.35);
+  --brand-accent-hover: rgba(22, 135, 121, 0.6);
+  background-color: #F7F6F0 !important;
+  color: #202A29 !important;
+}
+
+[data-theme="jade_warm_light"] input,
+[data-theme="jade_warm_light"] textarea,
+[data-theme="jade_warm_light"] select {
+  color: #202A29 !important;
+  background-color: #FFFFFF !important;
+  border-color: #DDE1DA !important;
+}
+
+[data-theme="jade_warm_light"] input::placeholder,
+[data-theme="jade_warm_light"] textarea::placeholder {
+  color: #7B8583 !important;
+}
+
+[data-theme="jade_warm_light"] .modal-title,
+[data-theme="jade_warm_light"] h1,
+[data-theme="jade_warm_light"] h2,
+[data-theme="jade_warm_light"] h3,
+[data-theme="jade_warm_light"] h4,
+[data-theme="jade_warm_light"] h5 {
+  color: #202A29 !important;
+}
+
+[data-theme="jade_warm_light"] .bg-stone-900,
+[data-theme="jade_warm_light"] .bg-stone-900\/80,
+[data-theme="jade_warm_light"] .bg-stone-900\/85,
+[data-theme="jade_warm_light"] .bg-stone-900\/90,
+[data-theme="jade_warm_light"] .bg-stone-900\/95,
+[data-theme="jade_warm_light"] .bg-stone-900\/98,
+[data-theme="jade_warm_light"] .bg-stone-950\/95 {
+  background-color: #FFFFFF !important;
+  color: #202A29 !important;
+  border-color: #DDE1DA !important;
+}
+
+[data-theme="jade_warm_light"] .bg-stone-950,
+[data-theme="jade_warm_light"] .bg-stone-950\/60,
+[data-theme="jade_warm_light"] .bg-stone-950\/70,
+[data-theme="jade_warm_light"] .bg-stone-950\/80,
+[data-theme="jade_warm_light"] .bg-stone-900\/60,
+[data-theme="jade_warm_light"] .bg-stone-900\/70 {
+  background-color: #EFEFE8 !important;
+  color: #202A29 !important;
+  border-color: #DDE1DA !important;
+}
+
+[data-theme="jade_warm_light"] .bg-stone-800,
+[data-theme="jade_warm_light"] .bg-stone-800\/80,
+[data-theme="jade_warm_light"] .bg-stone-800\/90,
+[data-theme="jade_warm_light"] .bg-stone-800\/95 {
+  background-color: #F0F2EC !important;
+  color: #202A29 !important;
+  border-color: #DDE1DA !important;
+}
+
+[data-theme="jade_warm_light"] .text-white,
+[data-theme="jade_warm_light"] .text-stone-100,
+[data-theme="jade_warm_light"] .text-stone-200,
+[data-theme="jade_warm_light"] .text-stone-300 {
+  color: #202A29 !important;
+}
+
+[data-theme="jade_warm_light"] .text-stone-400,
+[data-theme="jade_warm_light"] .text-stone-500 {
+  color: #7B8583 !important;
+}
+
+[data-theme="jade_warm_light"] .border-stone-800,
+[data-theme="jade_warm_light"] .border-stone-800\/80,
+[data-theme="jade_warm_light"] .border-stone-800\/90,
+[data-theme="jade_warm_light"] .border-stone-700,
+[data-theme="jade_warm_light"] .border-stone-700\/80,
+[data-theme="jade_warm_light"] .border-stone-700\/90 {
+  border-color: #DDE1DA !important;
+}
+
+[data-theme="jade_warm_light"] .fab-add-btn {
+  background-color: #168779 !important;
+  border-color: #168779 !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 8px 20px -4px rgba(22, 135, 121, 0.35) !important;
+}
+[data-theme="jade_warm_light"] .fab-add-btn svg {
+  color: #FFFFFF !important;
+  stroke: #FFFFFF !important;
+}
+
+[data-theme="jade_warm_light"] .bg-indigo-500,
+[data-theme="jade_warm_light"] .bg-indigo-600 {
+  background-color: #168779 !important;
+  color: #FFFFFF !important;
+}
+[data-theme="jade_warm_light"] .bg-indigo-500 span,
+[data-theme="jade_warm_light"] .bg-indigo-500 svg {
+  color: #FFFFFF !important;
+}
+[data-theme="jade_warm_light"] .text-indigo-400,
+[data-theme="jade_warm_light"] .text-indigo-500,
+[data-theme="jade_warm_light"] .text-indigo-300 {
+  color: #168779 !important;
+}
+[data-theme="jade_warm_light"] .border-indigo-500,
+[data-theme="jade_warm_light"] .border-indigo-400 {
+  border-color: #168779 !important;
+}
+[data-theme="jade_warm_light"] .bg-indigo-500\/10,
+[data-theme="jade_warm_light"] .bg-indigo-500\/15,
+[data-theme="jade_warm_light"] .bg-indigo-500\/20 {
+  background-color: #DDEFEA !important;
+  color: #168779 !important;
+}
+
+/* ==========================================================================
+   THEME: آبی نیمه‌شب و نقره‌ای (Midnight Blue & Silver - midnight_blue_silver)
+   ========================================================================== */
+[data-theme="midnight_blue_silver"] {
+  --brand-accent-border: rgba(156, 188, 224, 0.35);
+  --brand-accent-hover: rgba(197, 217, 238, 0.6);
+  background-color: #101722 !important;
+  color: #F0F3F7 !important;
+}
+
+[data-theme="midnight_blue_silver"] input,
+[data-theme="midnight_blue_silver"] textarea,
+[data-theme="midnight_blue_silver"] select {
+  color: #F0F3F7 !important;
+  background-color: #172130 !important;
+  border-color: #39475A !important;
+}
+
+[data-theme="midnight_blue_silver"] input:focus,
+[data-theme="midnight_blue_silver"] textarea:focus,
+[data-theme="midnight_blue_silver"] select:focus {
+  border-color: #9CBCE0 !important;
+}
+
+[data-theme="midnight_blue_silver"] input::placeholder,
+[data-theme="midnight_blue_silver"] textarea::placeholder {
+  color: #B1BBC9 !important;
+}
+
+[data-theme="midnight_blue_silver"] .modal-title,
+[data-theme="midnight_blue_silver"] h1,
+[data-theme="midnight_blue_silver"] h2,
+[data-theme="midnight_blue_silver"] h3,
+[data-theme="midnight_blue_silver"] h4,
+[data-theme="midnight_blue_silver"] h5 {
+  color: #F0F3F7 !important;
+}
+
+/* Primary & Secondary Surfaces */
+[data-theme="midnight_blue_silver"] .bg-stone-950,
+[data-theme="midnight_blue_silver"] .bg-stone-950\/90,
+[data-theme="midnight_blue_silver"] .bg-stone-950\/95 {
+  background-color: #101722 !important;
+  color: #F0F3F7 !important;
+  border-color: #39475A !important;
+}
+
+[data-theme="midnight_blue_silver"] .bg-stone-950\/60,
+[data-theme="midnight_blue_silver"] .bg-stone-950\/70,
+[data-theme="midnight_blue_silver"] .bg-stone-950\/80,
+[data-theme="midnight_blue_silver"] .bg-stone-900\/60,
+[data-theme="midnight_blue_silver"] .bg-stone-900\/70 {
+  background-color: #172130 !important;
+  color: #F0F3F7 !important;
+  border-color: #39475A !important;
+}
+
+/* Card Surfaces */
+[data-theme="midnight_blue_silver"] .bg-stone-900,
+[data-theme="midnight_blue_silver"] .bg-stone-900\/80,
+[data-theme="midnight_blue_silver"] .bg-stone-900\/85,
+[data-theme="midnight_blue_silver"] .bg-stone-900\/90,
+[data-theme="midnight_blue_silver"] .bg-stone-900\/95,
+[data-theme="midnight_blue_silver"] .bg-stone-900\/98 {
+  background-color: #202B3A !important;
+  color: #F0F3F7 !important;
+  border-color: #39475A !important;
+}
+
+/* Highlighted / Raised Surfaces */
+[data-theme="midnight_blue_silver"] .bg-stone-800,
+[data-theme="midnight_blue_silver"] .bg-stone-800\/80,
+[data-theme="midnight_blue_silver"] .bg-stone-800\/90,
+[data-theme="midnight_blue_silver"] .bg-stone-800\/95,
+[data-theme="midnight_blue_silver"] .hover\:bg-stone-800:hover,
+[data-theme="midnight_blue_silver"] .hover\:bg-stone-900:hover {
+  background-color: #293648 !important;
+  color: #F0F3F7 !important;
+  border-color: #39475A !important;
+}
+
+/* Typography Hierarchy */
+[data-theme="midnight_blue_silver"] .text-white,
+[data-theme="midnight_blue_silver"] .text-stone-100,
+[data-theme="midnight_blue_silver"] .text-stone-200,
+[data-theme="midnight_blue_silver"] .text-stone-300 {
+  color: #F0F3F7 !important;
+}
+
+[data-theme="midnight_blue_silver"] .text-stone-400,
+[data-theme="midnight_blue_silver"] .text-stone-500 {
+  color: #B1BBC9 !important;
+}
+
+/* Borders */
+[data-theme="midnight_blue_silver"] .border-stone-800,
+[data-theme="midnight_blue_silver"] .border-stone-800\/80,
+[data-theme="midnight_blue_silver"] .border-stone-800\/90,
+[data-theme="midnight_blue_silver"] .border-stone-700,
+[data-theme="midnight_blue_silver"] .border-stone-700\/80,
+[data-theme="midnight_blue_silver"] .border-stone-700\/90 {
+  border-color: #39475A !important;
+}
+
+/* Amber Yellow FAB (+) Button in Midnight Blue & Silver Theme */
+[data-theme="midnight_blue_silver"] .fab-add-btn {
+  background-color: #f59e0b !important;
+  border-color: #fcd34d !important;
+  color: #0c0a09 !important;
+  box-shadow: 0 8px 20px -4px rgba(245, 158, 11, 0.35) !important;
+}
+[data-theme="midnight_blue_silver"] .fab-add-btn:hover {
+  background-color: #fbbf24 !important;
+}
+[data-theme="midnight_blue_silver"] .fab-add-btn svg {
+  color: #0c0a09 !important;
+  stroke: #0c0a09 !important;
+}
+
+[data-theme="midnight_blue_silver"] .bg-indigo-500,
+[data-theme="midnight_blue_silver"] .bg-indigo-400,
+[data-theme="midnight_blue_silver"] .bg-indigo-600 {
+  background-color: #9CBCE0 !important;
+  color: #101722 !important;
+}
+[data-theme="midnight_blue_silver"] .bg-indigo-500:hover,
+[data-theme="midnight_blue_silver"] .bg-indigo-400:hover {
+  background-color: #C5D9EE !important;
+  color: #101722 !important;
+}
+[data-theme="midnight_blue_silver"] .bg-indigo-500 span,
+[data-theme="midnight_blue_silver"] .bg-indigo-500 svg {
+  color: #101722 !important;
+}
+
+[data-theme="midnight_blue_silver"] .text-indigo-400,
+[data-theme="midnight_blue_silver"] .text-indigo-500 {
+  color: #9CBCE0 !important;
+}
+[data-theme="midnight_blue_silver"] .text-indigo-300 {
+  color: #C5D9EE !important;
+}
+
+[data-theme="midnight_blue_silver"] .border-indigo-500,
+[data-theme="midnight_blue_silver"] .border-indigo-400,
+[data-theme="midnight_blue_silver"] .border-indigo-500\/30,
+[data-theme="midnight_blue_silver"] .border-indigo-500\/40 {
+  border-color: #9CBCE0 !important;
+}
+
+[data-theme="midnight_blue_silver"] .bg-indigo-500\/10,
+[data-theme="midnight_blue_silver"] .bg-indigo-500\/15,
+[data-theme="midnight_blue_silver"] .bg-indigo-500\/20 {
+  background-color: rgba(156, 188, 224, 0.16) !important;
+  color: #C5D9EE !important;
+}
+
+/* Status Colors (Independent of Accent) */
+/* Success: #79B89D */
+[data-theme="midnight_blue_silver"] .bg-emerald-500,
+[data-theme="midnight_blue_silver"] .bg-emerald-600 {
+  background-color: #79B89D !important;
+  color: #101722 !important;
+}
+[data-theme="midnight_blue_silver"] .text-emerald-400,
+[data-theme="midnight_blue_silver"] .text-emerald-500 {
+  color: #79B89D !important;
+}
+[data-theme="midnight_blue_silver"] .border-emerald-500,
+[data-theme="midnight_blue_silver"] .border-emerald-500\/80 {
+  border-color: #79B89D !important;
+}
+
+/* Warning: #E0B56A */
+[data-theme="midnight_blue_silver"] .text-yellow-400,
+[data-theme="midnight_blue_silver"] .text-yellow-500 {
+  color: #E0B56A !important;
+}
+
+/* Urgent: #E17B7B */
+[data-theme="midnight_blue_silver"] .bg-rose-500,
+[data-theme="midnight_blue_silver"] .bg-rose-600,
+[data-theme="midnight_blue_silver"] .bg-red-500 {
+  background-color: #E17B7B !important;
+  color: #101722 !important;
+}
+[data-theme="midnight_blue_silver"] .text-rose-400,
+[data-theme="midnight_blue_silver"] .text-red-400,
+[data-theme="midnight_blue_silver"] .text-red-500 {
+  color: #E17B7B !important;
+}
+[data-theme="midnight_blue_silver"] .border-rose-500\/30,
+[data-theme="midnight_blue_silver"] .border-rose-500\/50 {
+  border-color: rgba(225, 123, 123, 0.45) !important;
+}
+
+/* Custom Fluid Spring entrance animations for FAB and Choice Menu */
+@keyframes fabMenuEntrance {
+  0% {
+    opacity: 0;
+    transform: scale(0.85) translateY(18px);
+  }
+  65% {
+    transform: scale(1.02) translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes fabItemCascade {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-fab-menu {
+  animation: fabMenuEntrance 0.26s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-fab-item-1 {
+  animation: fabItemCascade 0.2s cubic-bezier(0.16, 1, 0.3, 1) 0.03s forwards both;
+}
+
+.animate-fab-item-2 {
+  animation: fabItemCascade 0.2s cubic-bezier(0.16, 1, 0.3, 1) 0.07s forwards both;
+}
+
+.animate-fab-item-3 {
+  animation: fabItemCascade 0.2s cubic-bezier(0.16, 1, 0.3, 1) 0.11s forwards both;
+}
+
+.animate-fab-item-4 {
+  animation: fabItemCascade 0.2s cubic-bezier(0.16, 1, 0.3, 1) 0.15s forwards both;
+}
+
 @keyframes zoomOutEntrance {
   0% {
     opacity: 0;
@@ -99,10 +495,10 @@ h4 {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(245, 158, 11, 0.35);
+  background: rgba(99, 102, 241, 0.35);
   border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(245, 158, 11, 0.7);
+  background: rgba(99, 102, 241, 0.7);
 }

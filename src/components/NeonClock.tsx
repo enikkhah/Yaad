@@ -5,7 +5,7 @@ interface NeonClockProps {
   minutes: number | string;
   seconds?: number | string;
   size?: 'xs' | 'sm' | 'md' | 'lg';
-  color?: 'amber' | 'cyan' | 'magenta' | 'green';
+  color?: 'indigo' | 'amber' | 'cyan' | 'magenta' | 'green';
   className?: string;
 }
 
@@ -14,7 +14,7 @@ export const NeonClock: React.FC<NeonClockProps> = ({
   minutes,
   seconds,
   size = 'md',
-  color = 'amber',
+  color = 'indigo',
   className = '',
 }) => {
   const hStr = hours.toString().padStart(2, '0');
@@ -23,6 +23,29 @@ export const NeonClock: React.FC<NeonClockProps> = ({
 
   // Neon theme color definitions with intense multi-layer tube glow
   const colorMap = {
+    indigo: {
+      textCore: '#f5f6ff',
+      primaryGlow: '#818CF8',
+      outerGlow: '#6366F1',
+      borderGlow: 'rgba(99, 102, 241, 0.4)',
+      boxShadow: '0 0 25px rgba(129, 140, 248, 0.25), inset 0 0 15px rgba(99, 102, 241, 0.15)',
+      colonGlow: '0 0 4px #fff, 0 0 10px #818CF8, 0 0 20px #6366F1',
+      textShadow: `
+        0 0 2px #ffffff,
+        0 0 5px #ffffff,
+        0 0 10px #818CF8,
+        0 0 20px #818CF8,
+        0 0 35px #6366F1,
+        0 0 55px #6366F1,
+        0 0 75px #4F46E5
+      `,
+      secShadow: `
+        0 0 2px #ffffff,
+        0 0 6px #818CF8,
+        0 0 14px #6366F1,
+        0 0 25px #6366F1
+      `,
+    },
     amber: {
       textCore: '#fffdf5',
       primaryGlow: '#ffb703',
@@ -147,7 +170,7 @@ export const NeonClock: React.FC<NeonClockProps> = ({
   return (
     <div
       dir="ltr"
-      className={`relative inline-flex items-center gap-1.5 sm:gap-2.5 select-none bg-stone-950/95 border border-amber-500/30 overflow-hidden font-mono tracking-wider tabular-nums ${sizeClasses.wrap} ${className}`}
+      className={`relative inline-flex items-center gap-1.5 sm:gap-2.5 select-none bg-stone-950/95 border border-indigo-500/30 overflow-hidden font-mono tracking-wider tabular-nums ${sizeClasses.wrap} ${className}`}
       style={{
         boxShadow: colorMap.boxShadow,
         borderColor: colorMap.borderGlow,

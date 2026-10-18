@@ -89,31 +89,31 @@ export const ValidationAlertModal: React.FC<ValidationAlertModalProps> = ({
       {/* Entire box container fades out smoothly as a whole */}
       <div
         onClick={handleManualClose}
-        className={`pointer-events-auto relative overflow-hidden rounded-2xl bg-stone-900 border-2 border-amber-500 shadow-2xl shadow-amber-950/80 backdrop-blur-md cursor-pointer transition-all duration-400 ease-in-out transform ${
+        className={`pointer-events-auto relative overflow-hidden rounded-2xl bg-stone-900 border-2 border-indigo-500 shadow-2xl shadow-indigo-950/80 backdrop-blur-md cursor-pointer transition-all duration-400 ease-in-out transform ${
           isFadingOut
             ? 'opacity-0 -translate-y-4 scale-95 pointer-events-none'
             : 'opacity-100 translate-y-0 scale-100 animate-in fade-in slide-in-from-top-4'
         }`}
         style={{
-          boxShadow: isFadingOut ? 'none' : '0 10px 30px -5px rgba(245, 158, 11, 0.35)',
+          boxShadow: isFadingOut ? 'none' : '0 10px 30px -5px rgba(99, 102, 241, 0.35)',
         }}
       >
         {/* Ambient background glow */}
-        <div className={`absolute top-0 ${isEn ? 'left-0' : 'right-0'} w-32 h-32 bg-amber-500/10 rounded-full blur-2xl pointer-events-none`} />
+        <div className={`absolute top-0 ${isEn ? 'left-0' : 'right-0'} w-32 h-32 bg-indigo-500/10 rounded-full blur-2xl pointer-events-none`} />
 
         <div className="relative p-3.5 sm:p-4 flex items-start gap-3">
           {/* Solid warning icon */}
-          <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/50 text-amber-400 flex items-center justify-center flex-shrink-0 shadow-md shadow-amber-500/15">
-            <AlertTriangle className="w-5 h-5 text-amber-400" />
+          <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/50 text-indigo-400 flex items-center justify-center flex-shrink-0 shadow-md shadow-indigo-500/15">
+            <AlertTriangle className="w-5 h-5 text-indigo-400" />
           </div>
 
           {/* Alert Content */}
           <div className="flex-1 min-w-0 pr-0.5">
             <div className="flex items-center justify-between gap-2">
-              <h4 className="text-xs sm:text-sm font-black text-amber-300">
+              <h4 className="text-xs sm:text-sm font-black text-indigo-300">
                 {displayTitle}
               </h4>
-              <span className="text-[10px] text-amber-400/90 bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 rounded-full font-mono">
+              <span className="text-[10px] text-indigo-400/90 bg-indigo-500/10 border border-indigo-500/30 px-2 py-0.5 rounded-full font-mono">
                 {isEn ? 'Auto-dismiss' : 'محو خودکار'}
               </span>
             </div>
@@ -124,11 +124,11 @@ export const ValidationAlertModal: React.FC<ValidationAlertModalProps> = ({
               ) : fieldName ? (
                 isEn ? (
                   <>
-                    Required field <strong className="text-amber-400 font-bold underline decoration-amber-500/60">"{fieldName}"</strong> cannot be empty. Please fill it in.
+                    Required field <strong className="text-indigo-400 font-bold underline decoration-indigo-500/60">"{fieldName}"</strong> cannot be empty. Please fill it in.
                   </>
                 ) : (
                   <>
-                    فیلد اجباری <strong className="text-amber-400 font-bold underline decoration-amber-500/60">«{fieldName}»</strong> پر نشده است. لطفاً آن را وارد فرمایید.
+                    فیلد اجباری <strong className="text-indigo-400 font-bold underline decoration-indigo-500/60">«{fieldName}»</strong> پر نشده است. لطفاً آن را وارد فرمایید.
                   </>
                 )
               ) : (
@@ -151,7 +151,7 @@ export const ValidationAlertModal: React.FC<ValidationAlertModalProps> = ({
         {/* 3-Second Fading Progress Countdown Bar */}
         <div className="w-full bg-stone-800 h-1">
           <div
-            className="h-full bg-gradient-to-l from-amber-400 to-amber-500 transition-all duration-75 ease-linear"
+            className="h-full bg-gradient-to-l from-indigo-400 to-indigo-500 transition-all duration-75 ease-linear"
             style={{ width: `${progress}%` }}
           />
         </div>
