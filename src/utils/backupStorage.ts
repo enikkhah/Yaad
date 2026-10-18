@@ -149,16 +149,31 @@ async function getDirectoryHandleFromDB(keyId: string = 'yaad_remider_dir'): Pro
  */
 export async function selectUserCloudSpaceFolder(
   customFolderName?: string
-): Promise<{ granted: boolean; folderName: string; restoredSnapshot?: AutoBackupSnapshot | null }> {
+): Promise<{
+  granted: boolean;
+  nativePickerOpened: boolean;
+  folderName: string;
+  restoredSnapshot?: AutoBackupSnapshot | null;
+}> {
   let effectiveFolderName = (customFolderName || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
   let restoredFromCloudFolder: AutoBackupSnapshot | null = null;
+  let nativePickerOpened = false;
 
-  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+  const isInIframe = (() => {
+    try {
+      return typeof window !== 'undefined' && window.self !== window.top;
+    } catch {
+      return true;
+    }
+  })();
+
+  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window && !isInIframe) {
     try {
       const pickedHandle = await (window as any).showDirectoryPicker({
         id: 'yaad_custom_cloud_space',
         mode: 'readwrite',
       });
+      nativePickerOpened = true;
       if (pickedHandle) {
         let targetFolderHandle = pickedHandle;
         const pickedName = (pickedHandle.name || '').trim();
@@ -178,17 +193,22 @@ export async function selectUserCloudSpaceFolder(
         restoredFromCloudFolder = await readFromDirectoryHandle(targetFolderHandle);
         return {
           granted: true,
+          nativePickerOpened: true,
           folderName: effectiveFolderName,
           restoredSnapshot: restoredFromCloudFolder,
         };
       }
     } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        nativePickerOpened = true;
+      }
       console.warn('[YAAD Cloud Folder] Picker notice:', err?.message || err);
     }
   }
 
   return {
     granted: false,
+    nativePickerOpened,
     folderName: effectiveFolderName,
     restoredSnapshot: null,
   };
@@ -309,47 +329,32 @@ export async function shareBackupToAnyCloudApp(
 export async function requestLocalFolderPermission(
   interactivePicker: boolean = false,
   customLocalFolder?: string
-): Promise<{ granted: boolean; folderName: string; restoredSnapshot?: AutoBackupSnapshot | null }> {
-  await requestPersistentStorage();
+): Promise<{
+  granted: boolean;
+  nativePickerOpened: boolean;
+  folderName: string;
+  restoredSnapshot?: AutoBackupSnapshot | null;
+}> {
   let effectiveFolderName = (customLocalFolder || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
-
-  // 1. Ensure OPFS "YAAD REMIDER" directory exists
-  try {
-    if (typeof navigator !== 'undefined' && navigator.storage && (navigator.storage as any).getDirectory) {
-      const rootDir = await (navigator.storage as any).getDirectory();
-      await rootDir.getDirectoryHandle(effectiveFolderName, { create: true });
-    }
-  } catch {
-    // ignore OPFS errors
-  }
-
-  // 2. If running in Native Android Capacitor with Filesystem plugin, request permission
-  try {
-    const capFilesystem = (window as any).Capacitor?.Plugins?.Filesystem;
-    if (capFilesystem) {
-      if (capFilesystem.requestPermissions) {
-        await capFilesystem.requestPermissions();
-      }
-      if (capFilesystem.mkdir) {
-        await capFilesystem.mkdir({
-          path: effectiveFolderName,
-          directory: 'DOCUMENTS',
-          recursive: true,
-        }).catch(() => {});
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  // 3. If interactive directory picker is requested and available on device browser
   let restoredFromPickedFolder: AutoBackupSnapshot | null = null;
-  if (interactivePicker && typeof window !== 'undefined' && 'showDirectoryPicker' in window) {
+  let nativePickerOpened = false;
+
+  const isInIframe = (() => {
+    try {
+      return typeof window !== 'undefined' && window.self !== window.top;
+    } catch {
+      return true;
+    }
+  })();
+
+  // 1. MUST invoke showDirectoryPicker FIRST before any await so user gesture activation is preserved
+  if (interactivePicker && typeof window !== 'undefined' && 'showDirectoryPicker' in window && !isInIframe) {
     try {
       const pickedHandle = await (window as any).showDirectoryPicker({
         id: 'yaad_remider_backup',
         mode: 'readwrite',
       });
+      nativePickerOpened = true;
       if (pickedHandle) {
         let targetFolderHandle = pickedHandle;
         const pickedName = (pickedHandle.name || '').trim();
@@ -369,11 +374,46 @@ export async function requestLocalFolderPermission(
         restoredFromPickedFolder = await readFromDirectoryHandle(targetFolderHandle);
       }
     } catch (err: any) {
-      // If user cancelled picker, still keep OPFS & local folder fallback active
+      if (err?.name === 'AbortError') {
+        nativePickerOpened = true;
+      }
       console.warn('[YAAD Folder] Directory picker notice:', err?.message || err);
     }
-  } else {
-    // Check if we already have a stored directory handle and re-verify permission
+  }
+
+  await requestPersistentStorage();
+
+  // 2. Ensure OPFS "YAAD REMIDER" directory exists
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage && (navigator.storage as any).getDirectory) {
+      const rootDir = await (navigator.storage as any).getDirectory();
+      const cleanSubName = effectiveFolderName.split('/').pop() || LOCAL_BACKUP_FOLDER_NAME;
+      await rootDir.getDirectoryHandle(cleanSubName, { create: true });
+    }
+  } catch {
+    // ignore OPFS errors
+  }
+
+  // 3. If running in Native Android Capacitor with Filesystem plugin, request permission
+  try {
+    const capFilesystem = (window as any).Capacitor?.Plugins?.Filesystem;
+    if (capFilesystem) {
+      if (capFilesystem.requestPermissions) {
+        await capFilesystem.requestPermissions();
+      }
+      if (capFilesystem.mkdir) {
+        await capFilesystem.mkdir({
+          path: effectiveFolderName,
+          directory: 'DOCUMENTS',
+          recursive: true,
+        }).catch(() => {});
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  if (!interactivePicker) {
     const existingHandle = await getDirectoryHandleFromDB();
     if (existingHandle && existingHandle.requestPermission) {
       try {
@@ -399,6 +439,7 @@ export async function requestLocalFolderPermission(
 
   return {
     granted: true,
+    nativePickerOpened,
     folderName: effectiveFolderName,
     restoredSnapshot: restoredFromPickedFolder,
   };

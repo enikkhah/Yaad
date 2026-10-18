@@ -183,6 +183,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isLocalSyncing, setIsLocalSyncing] = useState<boolean>(false);
   const [isCloudSyncing, setIsCloudSyncing] = useState<boolean>(false);
   const [confirmCloudUpload, setConfirmCloudUpload] = useState<boolean>(false);
+  const [folderPickerModalMode, setFolderPickerModalMode] = useState<'local' | 'cloud' | null>(null);
+  const [pickerCustomPath, setPickerCustomPath] = useState<string>(LOCAL_BACKUP_FOLDER_NAME);
+  const [pickerCloudServiceLabel, setPickerCloudServiceLabel] = useState<string>('');
+  const nativeDirInputRef = useRef<HTMLInputElement | null>(null);
 
   // Native permissions state (for Android APK / PWA)
   const [nativePerms, setNativePerms] = useState<NativePermissionsStatus>({
@@ -250,10 +254,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } else if (type === 'location') {
       await requestLocationPermission();
     } else if (type === 'storage') {
-      const res = await requestLocalFolderPermission(true, localFolderInput.trim() || LOCAL_BACKUP_FOLDER_NAME);
+      const target = localFolderInput.trim() || LOCAL_BACKUP_FOLDER_NAME;
+      const res = await requestLocalFolderPermission(true, target);
       if (res.folderName) {
         setLocalFolderInput(res.folderName);
         onUpdateSettings({ localBackupFolderName: res.folderName });
+      }
+      if (!res.nativePickerOpened) {
+        setPickerCustomPath(res.folderName || target);
+        setFolderPickerModalMode('local');
       }
     }
     const updated = await checkAllPermissionsStatus();
@@ -436,8 +445,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const targetName = localFolderInput.trim() || LOCAL_BACKUP_FOLDER_NAME;
       const res = await requestLocalFolderPermission(true, targetName);
       const finalFolder = res.folderName || targetName;
+
+      // If browser/WebView/iframe did not open a native OS directory picker, open the visual Folder Picker Modal
+      if (!res.nativePickerOpened) {
+        setPickerCustomPath(finalFolder);
+        setFolderPickerModalMode('local');
+        setIsLocalSyncing(false);
+        return;
+      }
+
+      await finalizeLocalFolderSelection(finalFolder);
+    } catch {
+      setPickerCustomPath(localFolderInput.trim() || LOCAL_BACKUP_FOLDER_NAME);
+      setFolderPickerModalMode('local');
+    } finally {
+      setIsLocalSyncing(false);
+    }
+  };
+
+  const finalizeLocalFolderSelection = async (chosenFolder: string) => {
+    const finalFolder = chosenFolder.trim() || LOCAL_BACKUP_FOLDER_NAME;
+    setIsLocalSyncing(true);
+    setBackupErrorMessage(null);
+    try {
       setLocalFolderInput(finalFolder);
       onUpdateSettings({ localBackupFolderName: finalFolder });
+      await requestLocalFolderPermission(false, finalFolder);
       await performAutoBackup({
         reminders,
         ideas,
@@ -449,14 +482,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setNativePerms(updatedPerms);
       setBackupSuccessMessage(
         isFa
-          ? `پوشه محلی «${finalFolder}» تنظیم شد و نسخه پشتیبان ذخیره گردید.`
-          : `Local folder "${finalFolder}" set and backup saved.`
+          ? `پوشه محلی «${finalFolder}» انتخاب شد و نسخه پشتیبان در آن ذخیره گردید.`
+          : `Local folder "${finalFolder}" selected and backup saved.`
       );
-      setTimeout(() => setBackupSuccessMessage(null), 4000);
+      setTimeout(() => setBackupSuccessMessage(null), 5000);
     } catch {
       setBackupErrorMessage(isFa ? 'خطا در تنظیم پوشه محلی.' : 'Failed to configure local folder.');
     } finally {
       setIsLocalSyncing(false);
+      setFolderPickerModalMode(null);
     }
   };
 
@@ -502,11 +536,38 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const targetCloudFolder = cloudFolderInput.trim() || DRIVE_BACKUP_FOLDER_NAME;
       const res = await selectUserCloudSpaceFolder(targetCloudFolder);
       const finalFolder = res.folderName || targetCloudFolder;
+
+      if (!res.nativePickerOpened) {
+        setPickerCustomPath(finalFolder);
+        setPickerCloudServiceLabel(cloudSpaceLabelInput.trim() || 'OneDrive');
+        setFolderPickerModalMode('cloud');
+        setIsCloudSyncing(false);
+        return;
+      }
+
+      await finalizeCloudFolderSelection(finalFolder, cloudSpaceLabelInput.trim());
+    } catch {
+      setPickerCustomPath(cloudFolderInput.trim() || DRIVE_BACKUP_FOLDER_NAME);
+      setPickerCloudServiceLabel(cloudSpaceLabelInput.trim() || 'OneDrive');
+      setFolderPickerModalMode('cloud');
+    } finally {
+      setIsCloudSyncing(false);
+    }
+  };
+
+  const finalizeCloudFolderSelection = async (chosenFolder: string, serviceLabel?: string) => {
+    const finalFolder = chosenFolder.trim() || DRIVE_BACKUP_FOLDER_NAME;
+    const finalLabel = (serviceLabel !== undefined ? serviceLabel : cloudSpaceLabelInput).trim();
+    setIsCloudSyncing(true);
+    setBackupErrorMessage(null);
+    try {
       setCloudFolderInput(finalFolder);
+      if (finalLabel) setCloudSpaceLabelInput(finalLabel);
       onUpdateSettings({
+        cloudBackupEnabled: true,
         cloudBackupProvider: 'custom_cloud_folder',
         cloudBackupFolderName: finalFolder,
-        cloudSpaceLabel: cloudSpaceLabelInput.trim() || undefined,
+        cloudSpaceLabel: finalLabel || undefined,
       });
       await performAutoBackup(
         {
@@ -519,7 +580,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             cloudBackupEnabled: true,
             cloudBackupProvider: 'custom_cloud_folder',
             cloudBackupFolderName: finalFolder,
-            cloudSpaceLabel: cloudSpaceLabelInput.trim() || undefined,
+            cloudSpaceLabel: finalLabel || undefined,
           },
         },
         { immediateCloud: true, forceCloud: true, googleToken }
@@ -529,11 +590,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           ? `محل فضای ابری مورد نظر («${finalFolder}») ثبت شد و پشتیبان‌گیری انجام گردید.`
           : `Cloud space location ("${finalFolder}") configured and backed up.`
       );
-      setTimeout(() => setBackupSuccessMessage(null), 4000);
+      setTimeout(() => setBackupSuccessMessage(null), 5000);
     } catch {
       setBackupErrorMessage(isFa ? 'خطا در معرفی پوشه فضای ابری.' : 'Failed to set cloud folder.');
     } finally {
       setIsCloudSyncing(false);
+      setFolderPickerModalMode(null);
     }
   };
 
@@ -1598,7 +1660,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <button
                       type="button"
                       disabled={isLocalSyncing}
-                      onClick={handleSelectLocalFolder}
+                      onClick={() => finalizeLocalFolderSelection(localFolderInput)}
                       className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Check className="w-3.5 h-3.5 text-emerald-400" />
@@ -2306,6 +2368,245 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {settings.language === 'en' ? t.confirm : 'تأیید'}
           </button>
         </div>
+
+        {/* Hidden Native Directory / File Input for Mobile & Cross-Origin Fallback */}
+        <input
+          ref={nativeDirInputRef}
+          type="file"
+          {...({ webkitdirectory: '', directory: '' } as any)}
+          multiple
+          className="hidden"
+          onChange={async (e) => {
+            const files = e.target.files;
+            if (!files || files.length === 0) return;
+            const firstFile = files[0] as any;
+            const relPath: string = firstFile.webkitRelativePath || '';
+            const pickedDirName = relPath ? relPath.split('/')[0] : LOCAL_BACKUP_FOLDER_NAME;
+            const finalPath =
+              pickedDirName.toUpperCase().includes('YAAD')
+                ? pickedDirName
+                : `${pickedDirName}/${LOCAL_BACKUP_FOLDER_NAME}`;
+            setPickerCustomPath(finalPath);
+
+            // Check if a yaad_backup.json exists inside the selected folder
+            for (let i = 0; i < files.length; i++) {
+              if (files[i].name === 'yaad_backup.json' || files[i].name.endsWith('.json')) {
+                try {
+                  const text = await files[i].text();
+                  const parsed = JSON.parse(text);
+                  if (parsed && Array.isArray(parsed.reminders)) {
+                    setPendingRestoreData({
+                      reminders: parsed.reminders || [],
+                      ideas: parsed.ideas || [],
+                      savedLocations: parsed.savedLocations || [],
+                      occasions: parsed.occasions || [],
+                      settings: parsed.settings,
+                    });
+                  }
+                } catch {
+                  // ignore invalid json
+                }
+                break;
+              }
+            }
+            e.target.value = '';
+          }}
+        />
+
+        {/* Interactive Folder & Storage Location Picker Modal (پنجره انتخاب و معرفی محل پوشه) */}
+        {folderPickerModalMode && (
+          <div
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+            onClick={() => setFolderPickerModalMode(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-3xl bg-stone-900 border border-stone-700 p-5 space-y-4 shadow-2xl text-stone-100 animate-in zoom-in-95 duration-150"
+              onClick={(e) => e.stopPropagation()}
+              dir={isFa ? 'rtl' : 'ltr'}
+            >
+              <div className="flex items-center justify-between gap-2 border-b border-stone-800 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+                    <FolderOpen className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-black text-white">
+                      {folderPickerModalMode === 'local'
+                        ? isFa
+                          ? 'انتخاب محل پوشه پشتیبان در حافظه دستگاه'
+                          : 'Select Local Backup Folder Location'
+                        : isFa
+                          ? 'انتخاب و معرفی محل پوشه در فضای ابری'
+                          : 'Select Cloud Backup Folder Location'}
+                    </h4>
+                    <p className="text-[11px] text-stone-400">
+                      {isFa
+                        ? 'یکی از مسیرهای زیر را انتخاب کنید یا مسیر دلخواه خود را وارد نمایید:'
+                        : 'Choose a storage location below or enter a custom folder path:'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFolderPickerModalMode(null)}
+                  className="p-1.5 rounded-xl text-stone-400 hover:text-white hover:bg-stone-800 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Preset Storage Locations */}
+              <div className="space-y-1.5 max-h-52 overflow-y-auto pr-0.5">
+                {(folderPickerModalMode === 'local'
+                  ? [
+                      {
+                        path: 'Documents/YAAD REMIDER',
+                        labelFa: 'پوشه اسناد گوشی (Documents / YAAD REMIDER) — پیشنهادی',
+                        labelEn: 'Device Documents (Documents / YAAD REMIDER)',
+                      },
+                      {
+                        path: 'Download/YAAD REMIDER',
+                        labelFa: 'پوشه دانلودهای گوشی (Download / YAAD REMIDER)',
+                        labelEn: 'Device Downloads (Download / YAAD REMIDER)',
+                      },
+                      {
+                        path: 'InternalStorage/YAAD REMIDER',
+                        labelFa: 'ریشه حافظه داخلی (Internal Storage / YAAD REMIDER)',
+                        labelEn: 'Internal Storage Root (YAAD REMIDER)',
+                      },
+                      {
+                        path: 'YAAD REMIDER',
+                        labelFa: 'پوشه پیش‌فرض برنامه (YAAD REMIDER)',
+                        labelEn: 'Default App Folder (YAAD REMIDER)',
+                      },
+                    ]
+                  : [
+                      {
+                        path: 'OneDrive/YAAD REMIDER',
+                        service: 'OneDrive',
+                        labelFa: 'وان‌درایو مایکروسافت (OneDrive / YAAD REMIDER)',
+                        labelEn: 'Microsoft OneDrive (OneDrive / YAAD REMIDER)',
+                      },
+                      {
+                        path: 'Dropbox/YAAD REMIDER',
+                        service: 'Dropbox',
+                        labelFa: 'دراپ‌باکس (Dropbox / YAAD REMIDER)',
+                        labelEn: 'Dropbox (Dropbox / YAAD REMIDER)',
+                      },
+                      {
+                        path: 'GoogleDrive/YAAD REMIDER',
+                        service: 'Google Drive',
+                        labelFa: 'پوشه گوگل درایو (Google Drive / YAAD REMIDER)',
+                        labelEn: 'Google Drive Folder (GoogleDrive / YAAD REMIDER)',
+                      },
+                      {
+                        path: 'iCloudDrive/YAAD REMIDER',
+                        service: 'iCloud Drive',
+                        labelFa: 'آی‌کلود درایو (iCloud Drive / YAAD REMIDER)',
+                        labelEn: 'iCloud Drive (iCloudDrive / YAAD REMIDER)',
+                      },
+                      {
+                        path: 'MEGA/YAAD REMIDER',
+                        service: 'MEGA',
+                        labelFa: 'فضای ابری مگا (MEGA / YAAD REMIDER)',
+                        labelEn: 'MEGA Cloud (MEGA / YAAD REMIDER)',
+                      },
+                    ]
+                ).map((item: any) => {
+                  const isSelected = pickerCustomPath === item.path;
+                  return (
+                    <button
+                      key={item.path}
+                      type="button"
+                      onClick={() => {
+                        setPickerCustomPath(item.path);
+                        if (item.service) setPickerCloudServiceLabel(item.service);
+                      }}
+                      className={`w-full p-2.5 rounded-xl border text-start transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                        isSelected
+                          ? 'bg-emerald-500/20 border-emerald-400 text-white shadow-sm'
+                          : 'bg-stone-950/80 hover:bg-stone-800 border-stone-800 text-stone-300'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-xs font-bold truncate">
+                          {isFa ? item.labelFa : item.labelEn}
+                        </div>
+                        <div className="text-[10px] font-mono text-stone-400 truncate" dir="ltr">
+                          /{item.path}/yaad_backup.json
+                        </div>
+                      </div>
+                      {isSelected && <Check className="w-4 h-4 text-emerald-400 shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Browse from Device File Manager + Direct Save to Phone Downloads */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => nativeDirInputRef.current?.click()}
+                  className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <FolderOpen className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                  <span>{isFa ? 'مرور از فایل‌منیجر دستگاه' : 'Browse Device Files'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleExportData();
+                  }}
+                  className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                  <span>{isFa ? 'ذخیره فایل در پوشه Download گوشی' : 'Save File to Downloads'}</span>
+                </button>
+              </div>
+
+              {/* Custom Path Input */}
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-bold text-stone-300 block">
+                  {isFa ? 'مسیر یا نام پوشه انتخاب‌شده:' : 'Selected Folder Path:'}
+                </label>
+                <input
+                  type="text"
+                  dir="ltr"
+                  value={pickerCustomPath}
+                  onChange={(e) => setPickerCustomPath(e.target.value)}
+                  placeholder="Documents/YAAD REMIDER"
+                  className="w-full px-3 py-2.5 rounded-xl bg-stone-950 border border-emerald-500/50 text-xs font-mono text-white focus:outline-none focus:border-emerald-400"
+                />
+              </div>
+
+              {/* Confirm & Cancel Buttons */}
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (folderPickerModalMode === 'local') {
+                      finalizeLocalFolderSelection(pickerCustomPath);
+                    } else {
+                      finalizeCloudFolderSelection(pickerCustomPath, pickerCloudServiceLabel);
+                    }
+                  }}
+                  className="flex-1 min-h-[44px] py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-950/50 cursor-pointer active:scale-95 transition-all"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isFa ? 'تأیید و ذخیره در این پوشه' : 'Confirm & Save in Folder'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFolderPickerModalMode(null)}
+                  className="min-h-[44px] py-2.5 px-4 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold text-xs cursor-pointer"
+                >
+                  {isFa ? 'انصراف' : 'Cancel'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
