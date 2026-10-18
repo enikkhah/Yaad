@@ -4,15 +4,20 @@ import {
   checkNotificationPermission, 
   requestNotificationPermission 
 } from './nativeLocalNotifications';
+import {
+  checkLocalFolderPermissionStatus,
+  requestLocalFolderPermission
+} from './backupStorage';
 
 export interface NativePermissionsStatus {
   notifications: boolean;
   microphone: boolean;
   camera: boolean;
   location: boolean;
+  storage?: boolean;
 }
 
-export { requestNotificationPermission };
+export { requestNotificationPermission, requestLocalFolderPermission };
 
 /**
  * Checks if the current environment is running inside Capacitor (Native Android APK / iOS)
@@ -88,12 +93,14 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     microphone: false,
     camera: false,
     location: false,
+    storage: false,
   };
 
   if (typeof window === 'undefined') return result;
 
-  // 1. Notification permission
+  // 1. Notification & Local Folder permission
   result.notifications = await checkNotificationPermission();
+  result.storage = await checkLocalFolderPermissionStatus();
 
   // 2. Permissions API query (Chrome / Chromium WebView)
   if (navigator.permissions && navigator.permissions.query) {
@@ -123,10 +130,11 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
 }
 
 /**
- * Requests all essential native permissions (Notifications, Mic, Cam, Location) with 1 click
+ * Requests all essential native permissions (Notifications, Mic, Cam, Location, Local Folder YAAD REMIDER) with 1 click
  */
 export async function requestAllNativePermissions(): Promise<NativePermissionsStatus> {
   const notifications = await requestNotificationPermission();
+  const folderPerm = await requestLocalFolderPermission(false);
   const microphone = await requestMicrophonePermission();
   const camera = await requestCameraPermission();
   const location = await requestLocationPermission();
@@ -136,10 +144,11 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
     microphone,
     camera,
     location,
+    storage: folderPerm.granted,
   };
 }
 
-export type AndroidPermissionType = 'notifications' | 'location' | 'microphone' | 'camera' | 'battery' | 'app_details';
+export type AndroidPermissionType = 'notifications' | 'location' | 'microphone' | 'camera' | 'battery' | 'storage' | 'app_details';
 
 /**
  * Directs the user to the relevant Android Settings screen for the specified feature

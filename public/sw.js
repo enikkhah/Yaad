@@ -71,12 +71,36 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
+// Track acknowledged reminder IDs so swiped/dismissed notifications re-appear until user actually reacts
+const acknowledgedAlarmIds = new Set();
+
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'YAAD_DISMISS_ALARM_NOTIFICATION') {
+    const reminderId = event.data.reminderId;
+    if (reminderId) {
+      acknowledgedAlarmIds.add(String(reminderId));
+      self.registration.getNotifications({ tag: `yaad-rem-${reminderId}` }).then((list) => {
+        list.forEach((n) => n.close());
+      }).catch(() => {});
+    }
+  } else if (event.data?.type === 'YAAD_ACTIVATE_ALARM_NOTIFICATION') {
+    const reminderId = event.data.reminderId;
+    if (reminderId) {
+      acknowledgedAlarmIds.delete(String(reminderId));
+    }
+  }
+});
+
 // Handle notification interaction so window remains active until user reacts
 // When user taps an action button (Complete / Snooze / Stop), process in background WITHOUT opening the app
 self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
   const reminderId = event.notification.data?.reminderId;
   const action = event.action;
+
+  if (reminderId) {
+    acknowledgedAlarmIds.add(String(reminderId));
+  }
+  event.notification.close();
 
   // If user clicked quick action button (complete, snooze, stop), apply directly WITHOUT opening or focusing the app!
   if (action === 'complete' || action === 'snooze' || action === 'stop') {
@@ -96,7 +120,7 @@ self.addEventListener('notificationclick', (event) => {
         if (reminderId && 'indexedDB' in self) {
           try {
             await new Promise((resolve) => {
-              const req = indexedDB.open('yaad_persistent_vault', 1);
+              const req = indexedDB.open('yaad_persistent_vault');
               req.onsuccess = (e) => {
                 const db = e.target.result;
                 if (!db.objectStoreNames.contains('app_backups')) {
@@ -159,6 +183,50 @@ self.addEventListener('notificationclick', (event) => {
         const urlToOpen = reminderId ? `/?alarmId=${encodeURIComponent(reminderId)}` : '/';
         return self.clients.openWindow(urlToOpen);
       }
+    })
+  );
+});
+
+// If user swipes/closes the out-of-app notification WITHOUT reacting (Complete / Snooze / Stop),
+// re-show it continuously so the out-of-app notification persists until user reaction!
+self.addEventListener('notificationclose', (event) => {
+  const notif = event.notification;
+  const data = notif?.data || {};
+  const reminderId = data.reminderId;
+  if (!reminderId || !data.persistentUntilReaction) return;
+  if (acknowledgedAlarmIds.has(String(reminderId))) return;
+
+  event.waitUntil(
+    new Promise((resolve) => {
+      setTimeout(async () => {
+        if (acknowledgedAlarmIds.has(String(reminderId))) {
+          resolve(null);
+          return;
+        }
+        try {
+          await self.registration.showNotification(notif.title, {
+            body: notif.body,
+            icon: notif.icon || '/pwa-192x192.png',
+            badge: notif.badge || '/favicon.ico',
+            tag: notif.tag || `yaad-rem-${reminderId}`,
+            renotify: true,
+            requireInteraction: true,
+            vibrate: [500, 250, 500, 250, 500],
+            data: {
+              ...data,
+              persistentUntilReaction: true,
+            },
+            actions: data.actions || [
+              { action: 'complete', title: '✓ انجام شد' },
+              { action: 'snooze', title: '⏱ تعویق ۱۵ دقیقه' },
+              { action: 'stop', title: '✕ توقف هشدار' },
+            ],
+          });
+        } catch (err) {
+          console.warn('[SW] Re-show persistent notification error:', err);
+        }
+        resolve(null);
+      }, 2000);
     })
   );
 });

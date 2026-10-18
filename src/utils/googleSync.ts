@@ -14,13 +14,19 @@ const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 
 const provider = new GoogleAuthProvider();
-// Workspace Scopes requested
+// Workspace Scopes requested (Calendar, Tasks, and Google Drive file/folder access for YAAD REMIDER backup)
 provider.addScope('https://www.googleapis.com/auth/calendar.events');
 provider.addScope('https://www.googleapis.com/auth/tasks');
+provider.addScope('https://www.googleapis.com/auth/drive.file');
+
+export const DRIVE_BACKUP_FOLDER_NAME = 'YAAD REMIDER';
+export const DRIVE_BACKUP_FILE_NAME = 'yaad_auto_backup.json';
+export const LAST_DRIVE_BACKUP_KEY = 'yaad_last_drive_backup_timestamp';
 
 // In-memory token storage (DO NOT store in localStorage per security guidelines)
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
+let cachedDriveFolderId: string | null = null;
 
 export const initGoogleAuth = (
   onSuccess?: (user: User, token: string) => void,
@@ -37,6 +43,7 @@ export const initGoogleAuth = (
       }
     } else {
       cachedAccessToken = null;
+      cachedDriveFolderId = null;
       if (onSignedOut) onSignedOut();
     }
   });
@@ -61,10 +68,275 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
 
 export const signOutGoogle = async () => {
   cachedAccessToken = null;
+  cachedDriveFolderId = null;
   await fbSignOut(auth);
 };
 
 export const getCachedToken = () => cachedAccessToken;
+
+export function getLastDriveBackupTimestamp(): number | null {
+  try {
+    const raw = localStorage.getItem(LAST_DRIVE_BACKUP_KEY);
+    return raw ? parseInt(raw, 10) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Finds or creates the target backup folder (default 'YAAD REMIDER') in Google Drive
+ */
+export async function findOrCreateDriveFolder(
+  token: string,
+  createIfMissing: boolean = true,
+  customFolderName?: string
+): Promise<string | null> {
+  const targetFolder = (customFolderName || DRIVE_BACKUP_FOLDER_NAME).trim() || DRIVE_BACKUP_FOLDER_NAME;
+
+  try {
+    const escapedTarget = targetFolder.replace(/'/g, "\\'");
+    const q = encodeURIComponent(
+      `mimeType = 'application/vnd.google-apps.folder' and (name = '${escapedTarget}' or name = 'YAAD REMIDER' or name = 'YAAD REMINDER') and trashed = false`
+    );
+    const listRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=5`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      if (Array.isArray(listData.files) && listData.files.length > 0) {
+        const exactMatch = listData.files.find((f: any) => f.name === targetFolder) || listData.files[0];
+        cachedDriveFolderId = exactMatch.id;
+        return exactMatch.id;
+      }
+    }
+
+    if (!createIfMissing) {
+      return null;
+    }
+
+    // Create folder with the user-specified or default 'YAAD REMIDER' name
+    const createRes = await fetch('https://www.googleapis.com/drive/v3/files', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        name: targetFolder,
+        mimeType: 'application/vnd.google-apps.folder',
+        description: 'YAAD Reminder Automatic Cloud Backup Folder',
+      }),
+    });
+
+    if (!createRes.ok) {
+      return null;
+    }
+
+    const createdFolder = await createRes.json();
+    if (createdFolder?.id) {
+      cachedDriveFolderId = createdFolder.id;
+      return createdFolder.id;
+    }
+    return null;
+  } catch (err) {
+    console.warn('[YAAD Drive] Error finding/creating backup folder:', err);
+    return null;
+  }
+}
+
+/**
+ * Uploads automatic backup JSON into the target folder (default 'YAAD REMIDER') on Google Drive
+ */
+export async function uploadBackupToGoogleDrive(
+  snapshot: any,
+  tokenOverride?: string | null,
+  customFolderName?: string
+): Promise<boolean> {
+  const activeToken = tokenOverride || cachedAccessToken;
+  if (!activeToken) return false;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
+
+  const targetFolder = (customFolderName || snapshot?.settings?.cloudBackupFolderName || DRIVE_BACKUP_FOLDER_NAME).trim() || DRIVE_BACKUP_FOLDER_NAME;
+
+  try {
+    const folderId = await findOrCreateDriveFolder(activeToken, true, targetFolder);
+    if (!folderId) return false;
+
+    // Check if backup file already exists inside the folder
+    const fileQuery = encodeURIComponent(
+      `'${folderId}' in parents and name = '${DRIVE_BACKUP_FILE_NAME}' and trashed = false`
+    );
+    const searchRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${fileQuery}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=1`,
+      {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+        },
+      }
+    );
+
+    let existingFileId: string | null = null;
+    if (searchRes.ok) {
+      const searchData = await searchRes.json();
+      if (Array.isArray(searchData.files) && searchData.files.length > 0) {
+        existingFileId = searchData.files[0].id;
+      }
+    }
+
+    const payloadToSave = {
+      ...snapshot,
+      folder: targetFolder,
+      source: 'google_drive',
+      updatedAt: snapshot.updatedAt || Date.now(),
+    };
+
+    const boundary = '-------yaad_drive_backup_boundary_' + Date.now();
+    const metadata: Record<string, any> = {
+      name: DRIVE_BACKUP_FILE_NAME,
+      mimeType: 'application/json',
+    };
+    if (!existingFileId) {
+      metadata.parents = [folderId];
+    }
+
+    const multipartBody =
+      `--${boundary}\r\n` +
+      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify(metadata)}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Type: application/json; charset=UTF-8\r\n\r\n` +
+      `${JSON.stringify(payloadToSave, null, 2)}\r\n` +
+      `--${boundary}--`;
+
+    const uploadUrl = existingFileId
+      ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart`
+      : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart`;
+
+    const uploadRes = await fetch(uploadUrl, {
+      method: existingFileId ? 'PATCH' : 'POST',
+      headers: {
+        Authorization: `Bearer ${activeToken}`,
+        'Content-Type': `multipart/related; boundary=${boundary}`,
+      },
+      body: multipartBody,
+    });
+
+    if (uploadRes.ok) {
+      try {
+        localStorage.setItem(LAST_DRIVE_BACKUP_KEY, String(Date.now()));
+      } catch {
+        // ignore
+      }
+      return true;
+    }
+    return false;
+  } catch (err) {
+    console.warn('[YAAD Drive] Upload backup to Google Drive failed:', err);
+    return false;
+  }
+}
+
+/**
+ * Downloads the latest backup JSON from the target folder (default 'YAAD REMIDER') on Google Drive
+ */
+export async function downloadBackupFromGoogleDrive(
+  tokenOverride?: string | null,
+  customFolderName?: string
+): Promise<any | null> {
+  const activeToken = tokenOverride || cachedAccessToken;
+  if (!activeToken) return null;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return null;
+
+  try {
+    const folderId = await findOrCreateDriveFolder(activeToken, false, customFolderName);
+    let targetFileId: string | null = null;
+
+    if (folderId) {
+      const fileQuery = encodeURIComponent(
+        `'${folderId}' in parents and trashed = false`
+      );
+      const searchRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${fileQuery}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=5`,
+        {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+          },
+        }
+      );
+
+      if (searchRes.ok) {
+        const searchData = await searchRes.json();
+        if (Array.isArray(searchData.files) && searchData.files.length > 0) {
+          const exactFile =
+            searchData.files.find((f: any) => f.name === DRIVE_BACKUP_FILE_NAME) ||
+            searchData.files.find((f: any) => f.name.endsWith('.json')) ||
+            searchData.files[0];
+          targetFileId = exactFile?.id || null;
+        }
+      }
+    }
+
+    // Fallback search if file was saved directly with DRIVE_BACKUP_FILE_NAME
+    if (!targetFileId) {
+      const fallbackQuery = encodeURIComponent(
+        `name = '${DRIVE_BACKUP_FILE_NAME}' and trashed = false`
+      );
+      const fallbackRes = await fetch(
+        `https://www.googleapis.com/drive/v3/files?q=${fallbackQuery}&fields=files(id,name,modifiedTime)&orderBy=modifiedTime desc&pageSize=1`,
+        {
+          headers: {
+            Authorization: `Bearer ${activeToken}`,
+          },
+        }
+      );
+      if (fallbackRes.ok) {
+        const fallbackData = await fallbackRes.json();
+        if (Array.isArray(fallbackData.files) && fallbackData.files.length > 0) {
+          targetFileId = fallbackData.files[0].id;
+        }
+      }
+    }
+
+    if (!targetFileId) {
+      return null;
+    }
+
+    const downloadRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${targetFileId}?alt=media`,
+      {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+        },
+      }
+    );
+
+    if (!downloadRes.ok) {
+      return null;
+    }
+
+    const parsed = await downloadRes.json();
+    if (
+      parsed &&
+      typeof parsed === 'object' &&
+      (Array.isArray(parsed.reminders) ||
+        Array.isArray(parsed.ideas) ||
+        Array.isArray(parsed.savedLocations) ||
+        Array.isArray(parsed.occasions))
+    ) {
+      return parsed;
+    }
+    return null;
+  } catch (err) {
+    console.warn('[YAAD Drive] Download backup from YAAD REMIDER failed:', err);
+    return null;
+  }
+}
 
 /**
  * Sync Reminder to Google Calendar as an event

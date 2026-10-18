@@ -19,7 +19,7 @@ import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
 import { AndroidPermissionType, openAndroidSettings, requestNotificationPermission, requestLocationPermission } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
-import { performAutoBackup, retrieveLatestBackup, requestPersistentStorage } from './utils/backupStorage';
+import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, requestLocalFolderPermission } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
 import { useFabVisibility } from './hooks/useFabVisibility';
@@ -45,7 +45,9 @@ import {
   setupNotificationListeners,
   getNotificationId,
   fireImmediateLocalNotification,
-  dismissDeliveredNotifications
+  dismissDeliveredNotifications,
+  triggerOutOfAppPersistentNotification,
+  clearOutOfAppPersistentNotification
 } from './utils/nativeLocalNotifications';
 import { 
   evaluateGeofences, 
@@ -313,45 +315,125 @@ export default function App() {
   const activeSavedLocations = useMemo(() => savedLocations.filter((l) => !l.deletedAt), [savedLocations]);
   const activeOccasions = useMemo(() => occasions.filter((o) => !o.deletedAt), [occasions]);
 
-  // Auto-recall/restore from persistent local vault (IndexedDB / LocalStorage backup) upon app launch or re-installation
+  // Auto-recall/restore from Google Drive (Priority 1 if enabled/available) or Local "YAAD REMIDER" Folder (Priority 2) upon app open or re-installation
   const [isVaultInitialized, setIsVaultInitialized] = useState(false);
+
+  const applyRestoredBackupIfNeeded = useCallback(
+    (backup: any, source: 'google_drive' | 'local_folder' | 'none') => {
+      if (!backup) return false;
+
+      const curReminders = remindersRef.current;
+      const curIdeas = ideasRef.current;
+      const curLocations = savedLocationsRef.current;
+      const curOccasions = occasionsRef.current;
+
+      const isRemindersEmpty = curReminders.length === 0;
+      const isIdeasDefaultOrEmpty =
+        curIdeas.length === 0 || (curIdeas.length === 1 && curIdeas[0].id === 'idea-1');
+      const isLocationsEmpty = curLocations.length === 0;
+      const isOccasionsDefaultOrEmpty =
+        curOccasions.length === 0 ||
+        (curOccasions.length === 2 && curOccasions[0].id === 'sample_occ_1');
+
+      let restoredAny = false;
+
+      // Merge or restore reminders from backup if local state is empty or backup has additional items
+      if (Array.isArray(backup.reminders) && backup.reminders.length > 0) {
+        if (isRemindersEmpty) {
+          setReminders(backup.reminders);
+          restoredAny = true;
+        } else {
+          const existingIds = new Set(curReminders.map((r) => r.id));
+          const missing = backup.reminders.filter((r: Reminder) => r?.id && !existingIds.has(r.id));
+          if (missing.length > 0) {
+            setReminders((prev) => [...missing, ...prev]);
+            restoredAny = true;
+          }
+        }
+      }
+
+      if (Array.isArray(backup.ideas) && backup.ideas.length > 0) {
+        if (isIdeasDefaultOrEmpty) {
+          setIdeas(backup.ideas);
+          restoredAny = true;
+        } else {
+          const existingIds = new Set(curIdeas.map((i) => i.id));
+          const missing = backup.ideas.filter((i: IdeaNote) => i?.id && !existingIds.has(i.id));
+          if (missing.length > 0) {
+            setIdeas((prev) => [...missing, ...prev]);
+            restoredAny = true;
+          }
+        }
+      }
+
+      if (Array.isArray(backup.savedLocations) && backup.savedLocations.length > 0) {
+        if (isLocationsEmpty) {
+          setSavedLocations(backup.savedLocations);
+          restoredAny = true;
+        } else {
+          const existingIds = new Set(curLocations.map((l) => l.id));
+          const missing = backup.savedLocations.filter(
+            (l: SavedLocation) => l?.id && !existingIds.has(l.id)
+          );
+          if (missing.length > 0) {
+            setSavedLocations((prev) => [...missing, ...prev]);
+            restoredAny = true;
+          }
+        }
+      }
+
+      if (Array.isArray(backup.occasions) && backup.occasions.length > 0) {
+        if (isOccasionsDefaultOrEmpty) {
+          setOccasions(backup.occasions);
+          restoredAny = true;
+        } else {
+          const existingIds = new Set(curOccasions.map((o) => o.id));
+          const missing = backup.occasions.filter((o: Occasion) => o?.id && !existingIds.has(o.id));
+          if (missing.length > 0) {
+            setOccasions((prev) => [...missing, ...prev]);
+            restoredAny = true;
+          }
+        }
+      }
+
+      if (backup.settings && isRemindersEmpty) {
+        setSettings((prev) => ({ ...prev, ...backup.settings }));
+      }
+
+      if (restoredAny) {
+        const cloudLabel = settingsRef.current?.cloudSpaceLabel || (settingsRef.current?.cloudBackupFolderName || 'YAAD REMIDER');
+        const srcText =
+          source === 'google_drive'
+            ? settingsRef.current?.language === 'en'
+              ? `Restored automatically from cloud space (${cloudLabel}).`
+              : `اطلاعات از فضای ابری انتخابی (${cloudLabel}) فراخوانی شد.`
+            : settingsRef.current?.language === 'en'
+            ? 'Restored automatically from local folder (YAAD REMIDER).'
+            : 'اطلاعات از پوشه محلی (YAAD REMIDER) فراخوانی شد.';
+        showSyncNotification(srcText);
+      }
+
+      return restoredAny;
+    },
+    []
+  );
 
   useEffect(() => {
     let isMounted = true;
-    const autoRestoreFromVault = async () => {
+    const autoRestoreOnOpen = async () => {
       try {
-        const backup = await retrieveLatestBackup();
-        if (backup && isMounted) {
-          const isRemindersEmpty = reminders.length === 0;
-          const isIdeasDefaultOrEmpty = ideas.length === 0 || (ideas.length === 1 && ideas[0].id === 'idea-1');
-          const isLocationsEmpty = savedLocations.length === 0;
-          const isOccasionsDefaultOrEmpty = occasions.length === 0 || (occasions.length === 2 && occasions[0].id === 'sample_occ_1');
+        // Ensure local folder "YAAD REMIDER" is initialized on startup / reinstall
+        await requestLocalFolderPermission(
+          false,
+          settingsRef.current?.localBackupFolderName
+        ).catch(() => {});
 
-          let restoredAny = false;
-
-          if (isRemindersEmpty && backup.reminders && backup.reminders.length > 0) {
-            setReminders(backup.reminders);
-            restoredAny = true;
-          }
-          if (isIdeasDefaultOrEmpty && backup.ideas && backup.ideas.length > 0) {
-            setIdeas(backup.ideas);
-            restoredAny = true;
-          }
-          if (isLocationsEmpty && backup.savedLocations && backup.savedLocations.length > 0) {
-            setSavedLocations(backup.savedLocations);
-            restoredAny = true;
-          }
-          if (isOccasionsDefaultOrEmpty && backup.occasions && backup.occasions.length > 0) {
-            setOccasions(backup.occasions);
-            restoredAny = true;
-          }
-          if (backup.settings) {
-            setSettings((prev) => ({ ...prev, ...backup.settings }));
-          }
-
-          if (restoredAny) {
-            showSyncNotification('پشتیبان خودکار با موفقیت فراخوانی و بازیابی شد.');
-          }
+        const { snapshot, source } = await retrieveLatestBackupWithPriority(
+          undefined,
+          settingsRef.current
+        );
+        if (snapshot && isMounted) {
+          applyRestoredBackupIfNeeded(snapshot, source);
         }
       } catch (err) {
         console.warn('Auto restore vault check:', err);
@@ -362,14 +444,14 @@ export default function App() {
       }
     };
 
-    autoRestoreFromVault();
+    autoRestoreOnOpen();
 
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [applyRestoredBackupIfNeeded]);
 
-  // Automatic local backup to persistent vault & IndexedDB after every registration/save
+  // Automatic backup to local "YAAD REMIDER" folder (and Google Drive if enabled by user) after every change
   useEffect(() => {
     if (isVaultInitialized) {
       performAutoBackup({
@@ -694,36 +776,56 @@ export default function App() {
     baseRightOffset: 20,
   });
 
-  // Automatic persistent backup & restore on app entry & exit (Phone reboot / reinstall resilience)
+  // Automatic persistent backup & recall on every app open & close (Drive priority -> Local YAAD REMIDER fallback)
   useEffect(() => {
-    // Request permanent non-evictable storage from browser/Android OS
     requestPersistentStorage();
 
-    const saveFullSnapshot = () => {
-      performAutoBackup({
-        reminders: remindersRef.current,
-        ideas: ideasRef.current,
-        savedLocations: savedLocationsRef.current,
-        occasions: occasionsRef.current,
-        settings: settingsRef.current,
-      });
+    const saveFullSnapshotOnClose = () => {
+      performAutoBackup(
+        {
+          reminders: remindersRef.current,
+          ideas: ideasRef.current,
+          savedLocations: savedLocationsRef.current,
+          occasions: occasionsRef.current,
+          settings: settingsRef.current,
+        },
+        { immediateCloud: true }
+      );
+    };
+
+    const recallOnAppOpen = async () => {
+      try {
+        const { snapshot, source } = await retrieveLatestBackupWithPriority(
+          undefined,
+          settingsRef.current
+        );
+        if (snapshot) {
+          applyRestoredBackupIfNeeded(snapshot, source);
+        }
+      } catch {
+        // ignore
+      }
     };
 
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        saveFullSnapshot();
+        saveFullSnapshotOnClose();
+      } else if (document.visibilityState === 'visible') {
+        recallOnAppOpen();
       }
     };
 
-    window.addEventListener('beforeunload', saveFullSnapshot);
-    window.addEventListener('pagehide', saveFullSnapshot);
+    window.addEventListener('beforeunload', saveFullSnapshotOnClose);
+    window.addEventListener('pagehide', saveFullSnapshotOnClose);
     document.addEventListener('visibilitychange', handleVisibility);
 
     let appStateSub: any = null;
     try {
       CapacitorApp.addListener('appStateChange', (state) => {
         if (!state.isActive) {
-          saveFullSnapshot();
+          saveFullSnapshotOnClose();
+        } else {
+          recallOnAppOpen();
         }
       }).then((sub) => {
         appStateSub = sub;
@@ -733,14 +835,14 @@ export default function App() {
     }
 
     return () => {
-      window.removeEventListener('beforeunload', saveFullSnapshot);
-      window.removeEventListener('pagehide', saveFullSnapshot);
+      window.removeEventListener('beforeunload', saveFullSnapshotOnClose);
+      window.removeEventListener('pagehide', saveFullSnapshotOnClose);
       document.removeEventListener('visibilitychange', handleVisibility);
       if (appStateSub && appStateSub.remove) {
         appStateSub.remove();
       }
     };
-  }, []);
+  }, [applyRestoredBackupIfNeeded]);
 
   const handleCompleteReminderRef = useRef<(id: string) => void>(() => {});
   const handlePostponeRef = useRef<(id: string, mins: number) => void>(() => {});
@@ -751,6 +853,16 @@ export default function App() {
       (user, token) => {
         setGoogleUser(user);
         setGoogleToken(token);
+        if (token) {
+          // Priority 1 recall from Google Drive when token becomes available
+          retrieveLatestBackupWithPriority(token, settingsRef.current)
+            .then(({ snapshot, source }) => {
+              if (snapshot) {
+                applyRestoredBackupIfNeeded(snapshot, source);
+              }
+            })
+            .catch(() => {});
+        }
       },
       () => {
         setGoogleUser(null);
@@ -763,11 +875,12 @@ export default function App() {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     }
 
-    // Listen for Service Worker notification actions (complete, snooze, open)
+    // Listen for Service Worker notification actions (complete, snooze, stop, open)
     const handleSwMessage = (event: MessageEvent) => {
       if (event.data?.type === 'YAAD_NOTIFICATION_ACTION') {
         const { action, reminderId } = event.data;
         if (!reminderId) return;
+        clearOutOfAppPersistentNotification(reminderId);
         if (action === 'complete') {
           handleCompleteReminderRef.current(reminderId);
         } else if (action === 'snooze') {
@@ -788,9 +901,16 @@ export default function App() {
     // Initialize Android Notification Channel & Listeners for native Local Notifications
     initNotificationChannel().catch(() => {});
     setupNotificationListeners(
-      (id) => handleCompleteReminderRef.current(id),
-      (id, mins) => handlePostponeRef.current(id, mins),
       (id) => {
+        clearOutOfAppPersistentNotification(id);
+        handleCompleteReminderRef.current(id);
+      },
+      (id, mins) => {
+        clearOutOfAppPersistentNotification(id);
+        handlePostponeRef.current(id, mins);
+      },
+      (id) => {
+        clearOutOfAppPersistentNotification(id);
         stopAlarmRinging();
         setActiveAlarmReminder(null);
       }
@@ -804,11 +924,17 @@ export default function App() {
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
 
-    // When the app is installed via Chrome's 3-dot menu ("Install app" / "نصب برنامه")
+    // When the app is installed or re-installed, request folder permission and recall backup automatically
     const handleAppInstalled = () => {
-      console.log('App was installed via browser menu!');
       setIsAppInstalled(true);
       setInstallPromptEvent(null);
+      requestLocalFolderPermission(false, settingsRef.current?.localBackupFolderName)
+        .then((res) => {
+          if (res.restoredSnapshot) {
+            applyRestoredBackupIfNeeded(res.restoredSnapshot, 'local_folder');
+          }
+        })
+        .catch(() => {});
     };
 
     window.addEventListener('appinstalled', handleAppInstalled);
@@ -824,7 +950,7 @@ export default function App() {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
-  }, []);
+  }, [applyRestoredBackupIfNeeded]);
 
   // Save to localStorage
   useEffect(() => {
@@ -890,27 +1016,11 @@ export default function App() {
           triggeredAlarmsRef.current.add(r.id);
           setActiveAlarmReminder(r);
 
-          // If in background tab or outside app, show persistent notification that stays open until user action
-          if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
-            try {
-              const timeFormatted = formatJalaliTime(r.dueTimestamp, settings.language === 'en' ? 'en' : 'fa');
-              const notif = new Notification(`🔔 ${r.title}`, {
-                body: r.description ? `${r.description} • ${timeFormatted}` : `زمان انجام یادآور: ${timeFormatted}`,
-                icon: '/pwa-192x192.png',
-                badge: '/favicon.ico',
-                tag: `yaad-rem-${r.id}`,
-                requireInteraction: true,
-                data: { reminderId: r.id },
-              });
-              notif.onclick = () => {
-                window.focus();
-                setActiveAlarmReminder(r);
-                notif.close();
-              };
-            } catch {
-              // ignore
-            }
-          }
+          // Trigger continuous out-of-app notification (via Service Worker / Native / Notification API) alongside in-app modal until user reacts
+          triggerOutOfAppPersistentNotification(
+            r,
+            settings.language === 'en' ? 'en' : 'fa'
+          ).catch(() => {});
         }
       });
     };
@@ -1496,7 +1606,8 @@ export default function App() {
     setActiveAlarmReminder(null);
     triggeredAlarmsRef.current.add(id);
 
-    // Cancel Android Local Notification for completed reminder
+    // Clear continuous out-of-app & Android Local Notification for completed reminder
+    clearOutOfAppPersistentNotification(id);
     cancelReminderNotification(id).catch(() => {});
 
     setReminders((prev) =>
@@ -1555,7 +1666,8 @@ export default function App() {
       if (!target) return prev;
       if (target.status !== 'completed') {
         triggeredAlarmsRef.current.add(id);
-        // Cancel Android Local Notification
+        // Clear continuous out-of-app & Android Local Notification
+        clearOutOfAppPersistentNotification(id);
         cancelReminderNotification(id).catch(() => {});
 
         confetti({
@@ -1613,6 +1725,7 @@ export default function App() {
   const handlePostpone = (id: string, minutes: number) => {
     stopAlarmRinging();
     setActiveAlarmReminder(null);
+    clearOutOfAppPersistentNotification(id);
     setReminders((prev) =>
       prev.map((r) => {
         if (r.id === id) {
@@ -1642,7 +1755,8 @@ export default function App() {
     setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
     triggeredAlarmsRef.current.delete(id);
 
-    // Cancel Android Local Notification immediately
+    // Cancel continuous out-of-app & Android Local Notification immediately
+    clearOutOfAppPersistentNotification(id);
     cancelReminderNotification(id).catch(() => {});
 
     const targetIndex = reminders.findIndex((r) => r.id === id);
@@ -3046,6 +3160,7 @@ export default function App() {
           setIsAppInstalled(true);
           setInstallPromptEvent(null);
         }}
+        onRestoreBackup={(snap) => handleRestoreData(snap, 'merge')}
         language={settings.language}
       />
 

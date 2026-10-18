@@ -325,7 +325,9 @@ export function getNotificationId(reminderId: string | number): number {
 /**
  * Repeat intervals in minutes for continuous background alarm alerts until user reaction
  */
-export const NOTIFICATION_REPEAT_OFFSETS_MINUTES = [1, 2, 3, 5, 8, 12];
+export const NOTIFICATION_REPEAT_OFFSETS_MINUTES = [
+  0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50, 60
+];
 
 /**
  * Resolves all notification IDs for a reminder (primary ID + repeating alarms)
@@ -1105,5 +1107,147 @@ export function setupNotificationListeners(
     });
   } catch (err) {
     console.warn('Could not set up local notification listeners:', err);
+  }
+}
+
+/**
+ * Triggers or refreshes a persistent, continuous out-of-app notification (Service Worker / OS Notification / Native)
+ * that stays active and re-alerts until the user explicitly reacts (Complete / Snooze / Stop).
+ */
+export async function triggerOutOfAppPersistentNotification(
+  reminder: Reminder,
+  settings?: AppSettings,
+  onClickOpen?: (r: Reminder) => void
+): Promise<void> {
+  const isEn = settings?.language === 'en';
+  const timeFormatted = formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa');
+  const title = `🔔 ${reminder.title}`;
+  const body = reminder.description
+    ? `${reminder.description} • ${timeFormatted}`
+    : isEn
+    ? `Reminder due at ${timeFormatted} (Awaiting your action)`
+    : `زمان انجام یادآور: ${timeFormatted} (در انتظار عکس‌العمل شما)`;
+
+  // 1. If running in Native Android Capacitor, also fire/refresh ongoing high-priority notification
+  if (isNativeApp()) {
+    try {
+      const notifId = reminder.notificationId || getNotificationId(reminder.id);
+      const soundType = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
+      const volume = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
+      const isSilent = volume <= 0.01;
+      const targetChannelId = getChannelIdForConfig(soundType, volume);
+      const soundFile = isSilent ? undefined : getSoundFileName(soundType);
+
+      await LocalNotifications.schedule({
+        notifications: [
+          {
+            id: notifId,
+            title,
+            body,
+            channelId: targetChannelId,
+            sound: soundFile,
+            priority: 2,
+            ongoing: true,
+            autoCancel: false,
+            actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
+            extra: {
+              reminderId: reminder.id,
+              dueTimestamp: reminder.dueTimestamp,
+              sound: soundType,
+              volume,
+              persistentUntilReaction: true,
+            },
+          },
+        ],
+      });
+    } catch {
+      // ignore native schedule errors
+    }
+  }
+
+  // 2. Web / PWA Service Worker persistent notification with renotify: true & action buttons
+  if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+    const actions = [
+      { action: 'complete', title: isEn ? '✓ Mark Done' : '✓ انجام شد' },
+      { action: 'snooze', title: isEn ? '⏱ Snooze 15m' : '⏱ تعویق ۱۵ دقیقه' },
+      { action: 'stop', title: isEn ? '✕ Dismiss' : '✕ توقف هشدار' },
+    ];
+
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration();
+        if (reg && reg.showNotification) {
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({
+              type: 'YAAD_ACTIVATE_ALARM_NOTIFICATION',
+              reminderId: reminder.id,
+            });
+          }
+          await reg.showNotification(title, {
+            body,
+            icon: '/pwa-192x192.png',
+            badge: '/favicon.ico',
+            tag: `yaad-rem-${reminder.id}`,
+            renotify: true,
+            requireInteraction: true,
+            vibrate: [500, 250, 500, 250, 500],
+            data: {
+              reminderId: reminder.id,
+              persistentUntilReaction: true,
+              actions,
+            },
+            actions,
+          } as any);
+          return;
+        }
+      }
+    } catch {
+      // Fallback to standard Notification API below
+    }
+
+    try {
+      const notif = new Notification(title, {
+        body,
+        icon: '/pwa-192x192.png',
+        badge: '/favicon.ico',
+        tag: `yaad-rem-${reminder.id}`,
+        renotify: true,
+        requireInteraction: true,
+        data: { reminderId: reminder.id, persistentUntilReaction: true },
+      } as any);
+      notif.onclick = () => {
+        window.focus();
+        if (onClickOpen) onClickOpen(reminder);
+        notif.close();
+      };
+    } catch {
+      // ignore
+    }
+  }
+}
+
+/**
+ * Clears the continuous out-of-app notification once the user reacts (Complete / Snooze / Stop)
+ */
+export async function clearOutOfAppPersistentNotification(reminderId: string | number): Promise<void> {
+  await cancelReminderNotification(reminderId).catch(() => {});
+  await dismissDeliveredNotifications(reminderId).catch(() => {});
+
+  if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+    try {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'YAAD_DISMISS_ALARM_NOTIFICATION',
+          reminderId: String(reminderId),
+        });
+      }
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg && reg.getNotifications) {
+        const list = await reg.getNotifications({ tag: `yaad-rem-${reminderId}` });
+        list.forEach((n) => n.close());
+      }
+    } catch {
+      // ignore
+    }
   }
 }

@@ -3,7 +3,10 @@ import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliFull, formatJalaliTime } from '../utils/jalali';
 import { getRecurrenceLabel } from '../utils/recurrence';
 import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound, speakReminderText } from '../utils/audio';
-import { dismissDeliveredNotifications } from '../utils/nativeLocalNotifications';
+import { 
+  triggerOutOfAppPersistentNotification, 
+  clearOutOfAppPersistentNotification 
+} from '../utils/nativeLocalNotifications';
 import { 
   Bell, 
   CheckCircle2, 
@@ -46,16 +49,20 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       // ignore
     }
 
-    // Close system notification so two sounds don't play simultaneously
-    dismissDeliveredNotifications(reminder.id).catch(() => {});
+    // Keep out-of-app notification continuous (alongside in-app alarm) until user reaction
+    triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
+    const outOfAppRepeatInterval = setInterval(() => {
+      triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
+    }, 10000);
 
     // Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital-beep)
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
 
+    let ttsTimer: any = null;
     if (reminder.voiceReadAloud) {
-      const ttsTimer = setTimeout(() => {
+      ttsTimer = setTimeout(() => {
         speakReminderText(
           reminder.title,
           reminder.category,
@@ -63,13 +70,11 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           settings?.language || 'fa'
         );
       }, 600);
-      return () => {
-        clearTimeout(ttsTimer);
-        stopAlarmRinging();
-      };
     }
 
     return () => {
+      if (ttsTimer) clearTimeout(ttsTimer);
+      clearInterval(outOfAppRepeatInterval);
       stopAlarmRinging();
     };
   }, [reminder, settings?.alarmSound, settings?.alarmVolume, settings?.language, settings?.ttsVoiceRate]);
@@ -89,16 +94,19 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
 
   const handleComplete = () => {
     stopAlarmRinging();
+    clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
     onComplete(reminder.id);
   };
 
   const handlePostpone = (minutes: number) => {
     stopAlarmRinging();
+    clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
     onPostpone(reminder.id, minutes);
   };
 
   const handleDismiss = () => {
     stopAlarmRinging();
+    clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
     onDismiss();
   };
 
