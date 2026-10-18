@@ -37,12 +37,12 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
         return {
           icon: FolderOpen,
           color: 'text-teal-400 bg-teal-500/10 border-teal-500/30',
-          titleFa: 'دسترسی به پوشه YAAD REMIDER در حافظه دستگاه',
-          titleEn: 'YAAD REMIDER Folder Storage Access',
-          descFa: 'برای ذخیره و فراخوانی خودکار فایل‌های پشتیبان در پوشه YAAD REMIDER روی حافظه گوشی در هر بار بستن، باز شدن و نصب مجدد برنامه، لطفاً دسترسی به پوشه را تایید نمایید.',
-          descEn: 'Required to automatically back up and restore your data in the YAAD REMIDER folder on device storage across app restarts and reinstalls.',
-          sectionNameFa: 'مجوز دسترسی به پوشه و حافظه (YAAD REMIDER)',
-          sectionNameEn: 'Folder & Storage Access (YAAD REMIDER)',
+          titleFa: 'دسترسی به پوشه Yaad reminder در حافظه دستگاه',
+          titleEn: 'Yaad reminder Folder Storage Access',
+          descFa: 'برای ذخیره و فراخوانی خودکار فایل‌های پشتیبان در پوشه Yaad reminder روی حافظه گوشی در هر بار بستن، باز شدن و نصب مجدد برنامه، لطفاً دسترسی به پوشه را تایید نمایید.',
+          descEn: 'Required to automatically back up and restore your data in the Yaad reminder folder on device storage across app restarts and reinstalls.',
+          sectionNameFa: 'مجوز دسترسی به پوشه و حافظه (Yaad reminder)',
+          sectionNameEn: 'Folder & Storage Access (Yaad reminder)',
         };
       case 'notifications':
         return {

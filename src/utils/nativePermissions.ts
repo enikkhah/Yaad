@@ -156,7 +156,7 @@ export type AndroidPermissionType = 'notifications' | 'location' | 'microphone' 
 export function openAndroidSettings(section: AndroidPermissionType = 'app_details'): void {
   if (typeof window === 'undefined') return;
 
-  const pkg = 'org.yaad.reminder';
+  const pkg = 'com.yaad.reminder';
   let intentUrl = `intent:#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;package=${pkg};end`;
 
   switch (section) {
@@ -172,6 +172,7 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
       // Directs to Android Battery Optimization settings
       intentUrl = `intent:#Intent;action=android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS;end`;
       break;
+    case 'storage':
     case 'microphone':
     case 'camera':
     case 'app_details':

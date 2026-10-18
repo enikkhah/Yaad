@@ -6,12 +6,18 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 
-const DEFAULT_BACKUP_FOLDER_NAME = 'YAAD REMIDER';
+const DEFAULT_BACKUP_FOLDER_NAME = 'Yaad reminder';
 
 function getSafeFolderDir(folderName?: string) {
-  const cleaned = (folderName || DEFAULT_BACKUP_FOLDER_NAME)
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, '_')
-    .trim() || DEFAULT_BACKUP_FOLDER_NAME;
+  const raw = (folderName || DEFAULT_BACKUP_FOLDER_NAME).trim();
+  const normalized =
+    raw.toUpperCase() === 'YAAD REMIDER' ? DEFAULT_BACKUP_FOLDER_NAME : raw;
+  const cleaned =
+    normalized
+      .replace(/\.\./g, '')
+      .replace(/[<>:"\\|?*\x00-\x1F]/g, '_')
+      .replace(/^\/+|\/+$/g, '')
+      .trim() || DEFAULT_BACKUP_FOLDER_NAME;
   return {
     folderName: cleaned,
     dirPath: path.resolve(process.cwd(), cleaned),

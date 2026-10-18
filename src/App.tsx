@@ -413,15 +413,15 @@ export default function App() {
       }
 
       if (restoredAny) {
-        const cloudLabel = settingsRef.current?.cloudSpaceLabel || (settingsRef.current?.cloudBackupFolderName || 'YAAD REMIDER');
+        const cloudLabel = settingsRef.current?.cloudSpaceLabel || (settingsRef.current?.cloudBackupFolderName || 'Yaad reminder');
         const srcText =
           source === 'google_drive'
             ? settingsRef.current?.language === 'en'
               ? `Restored automatically from cloud space (${cloudLabel}).`
               : `اطلاعات از فضای ابری انتخابی (${cloudLabel}) فراخوانی شد.`
             : settingsRef.current?.language === 'en'
-            ? 'Restored automatically from local folder (YAAD REMIDER).'
-            : 'اطلاعات از پوشه محلی (YAAD REMIDER) فراخوانی شد.';
+            ? 'Restored automatically from local folder (Yaad reminder).'
+            : 'اطلاعات از پوشه محلی (Yaad reminder) فراخوانی شد.';
         showSyncNotification(srcText);
       }
 

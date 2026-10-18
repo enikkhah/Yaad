@@ -70,7 +70,7 @@ provider.addScope('https://www.googleapis.com/auth/calendar.events');
 provider.addScope('https://www.googleapis.com/auth/tasks');
 provider.addScope('https://www.googleapis.com/auth/drive.file');
 
-export const DRIVE_BACKUP_FOLDER_NAME = 'YAAD REMIDER';
+export const DRIVE_BACKUP_FOLDER_NAME = 'Yaad reminder';
 export const DRIVE_BACKUP_FILE_NAME = 'yaad_auto_backup.json';
 export const LAST_DRIVE_BACKUP_KEY = 'yaad_last_drive_backup_timestamp';
 

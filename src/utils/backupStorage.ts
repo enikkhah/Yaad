@@ -6,13 +6,15 @@
  * - Restore Priority: 1. Google Drive ("YAAD REMIDER") -> 2. Local Folder ("YAAD REMIDER")
  */
 
+import { Capacitor } from '@capacitor/core';
+import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Reminder, IdeaNote, SavedLocation, Occasion, AppSettings } from '../types';
 import { uploadBackupToGoogleDrive, downloadBackupFromGoogleDrive, getCachedToken } from './googleSync';
 
 export const AUTO_BACKUP_STORAGE_KEY = 'yaad_auto_backup_vault_v1';
-export const LOCAL_BACKUP_FOLDER_NAME = 'YAAD REMIDER';
+export const LOCAL_BACKUP_FOLDER_NAME = 'Yaad reminder';
 export const LOCAL_BACKUP_FILE_NAME = 'yaad_backup.json';
-export const FOLDER_PERMISSION_GRANTED_KEY = 'yaad_folder_permission_granted_v1';
+export const FOLDER_PERMISSION_GRANTED_KEY = 'yaad_folder_permission_granted_v2';
 export const LAST_LOCAL_BACKUP_KEY = 'yaad_last_local_backup_timestamp';
 
 const DB_NAME = 'yaad_persistent_vault';
@@ -167,7 +169,11 @@ export async function selectUserCloudSpaceFolder(
     }
   })();
 
-  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window && !isInIframe) {
+  const isMobileOrAndroid =
+    typeof navigator !== 'undefined' &&
+    (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || Capacitor.isNativePlatform());
+
+  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window && !isInIframe && !isMobileOrAndroid) {
     try {
       const pickedHandle = await (window as any).showDirectoryPicker({
         id: 'yaad_custom_cloud_space',
@@ -335,7 +341,9 @@ export async function requestLocalFolderPermission(
   folderName: string;
   restoredSnapshot?: AutoBackupSnapshot | null;
 }> {
-  let effectiveFolderName = (customLocalFolder || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
+  const rawFolder = (customLocalFolder || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
+  let effectiveFolderName =
+    rawFolder.toUpperCase() === 'YAAD REMIDER' ? LOCAL_BACKUP_FOLDER_NAME : rawFolder;
   let restoredFromPickedFolder: AutoBackupSnapshot | null = null;
   let nativePickerOpened = false;
 
@@ -347,8 +355,18 @@ export async function requestLocalFolderPermission(
     }
   })();
 
-  // 1. MUST invoke showDirectoryPicker FIRST before any await so user gesture activation is preserved
-  if (interactivePicker && typeof window !== 'undefined' && 'showDirectoryPicker' in window && !isInIframe) {
+  const isMobileOrAndroid =
+    typeof navigator !== 'undefined' &&
+    (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || Capacitor.isNativePlatform());
+
+  // 1. On desktop browsers (outside iframe & non-Android), invoke showDirectoryPicker FIRST before any await
+  if (
+    interactivePicker &&
+    typeof window !== 'undefined' &&
+    'showDirectoryPicker' in window &&
+    !isInIframe &&
+    !isMobileOrAndroid
+  ) {
     try {
       const pickedHandle = await (window as any).showDirectoryPicker({
         id: 'yaad_remider_backup',
@@ -383,7 +401,7 @@ export async function requestLocalFolderPermission(
 
   await requestPersistentStorage();
 
-  // 2. Ensure OPFS "YAAD REMIDER" directory exists
+  // 2. Ensure OPFS "Yaad reminder" directory exists
   try {
     if (typeof navigator !== 'undefined' && navigator.storage && (navigator.storage as any).getDirectory) {
       const rootDir = await (navigator.storage as any).getDirectory();
@@ -394,37 +412,29 @@ export async function requestLocalFolderPermission(
     // ignore OPFS errors
   }
 
-  // 3. If running in Native Android Capacitor with Filesystem plugin, request permission
+  // 3. Request Android storage permission & create physical "Yaad reminder" folder via @capacitor/filesystem
   try {
-    const capFilesystem = (window as any).Capacitor?.Plugins?.Filesystem;
-    if (capFilesystem) {
-      if (capFilesystem.requestPermissions) {
-        await capFilesystem.requestPermissions();
-      }
-      if (capFilesystem.mkdir) {
-        await capFilesystem.mkdir({
-          path: effectiveFolderName,
-          directory: 'DOCUMENTS',
-          recursive: true,
-        }).catch(() => {});
-      }
+    if (Capacitor.isNativePlatform() || (window as any).Capacitor?.Plugins?.Filesystem) {
+      await Promise.race([
+        Filesystem.requestPermissions(),
+        new Promise((resolve) => setTimeout(resolve, 4000)),
+      ]).catch(() => {});
+
+      const cleanSubName = effectiveFolderName.replace(/^Documents\//i, '').trim() || LOCAL_BACKUP_FOLDER_NAME;
+      await Filesystem.mkdir({
+        path: cleanSubName,
+        directory: Directory.Documents,
+        recursive: true,
+      }).catch(() => {});
+
+      await Filesystem.mkdir({
+        path: cleanSubName,
+        directory: Directory.Data,
+        recursive: true,
+      }).catch(() => {});
     }
   } catch {
     // ignore
-  }
-
-  if (!interactivePicker) {
-    const existingHandle = await getDirectoryHandleFromDB();
-    if (existingHandle && existingHandle.requestPermission) {
-      try {
-        const state = await existingHandle.queryPermission({ mode: 'readwrite' });
-        if (state !== 'granted' && interactivePicker) {
-          await existingHandle.requestPermission({ mode: 'readwrite' });
-        }
-      } catch {
-        // ignore
-      }
-    }
   }
 
   try {
@@ -447,6 +457,12 @@ export async function requestLocalFolderPermission(
 
 export async function checkLocalFolderPermissionStatus(): Promise<boolean> {
   try {
+    if (Capacitor.isNativePlatform()) {
+      const perm = await Filesystem.checkPermissions().catch(() => null);
+      if (perm && perm.publicStorage === 'granted') {
+        return true;
+      }
+    }
     if (localStorage.getItem(FOLDER_PERMISSION_GRANTED_KEY) === 'true') {
       return true;
     }
@@ -676,16 +692,23 @@ export async function performAutoBackup(
 
     // 4. Save to Native Capacitor Filesystem '<localFolder>/yaad_backup.json' if available
     try {
-      const capFilesystem = (window as any).Capacitor?.Plugins?.Filesystem;
-      if (capFilesystem && capFilesystem.writeFile) {
-        await capFilesystem.writeFile({
-          path: `${localFolder}/${LOCAL_BACKUP_FILE_NAME}`,
-          data: JSON.stringify(payload, null, 2),
-          directory: 'DOCUMENTS',
-          encoding: 'utf8',
-          recursive: true,
-        }).catch(() => {});
-      }
+      const cleanSubName = localFolder.replace(/^Documents\//i, '').trim() || LOCAL_BACKUP_FOLDER_NAME;
+      const jsonData = JSON.stringify(payload, null, 2);
+      await Filesystem.writeFile({
+        path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
+        data: jsonData,
+        directory: Directory.Documents,
+        encoding: Encoding.UTF8,
+        recursive: true,
+      }).catch(() => {});
+
+      await Filesystem.writeFile({
+        path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
+        data: jsonData,
+        directory: Directory.Data,
+        encoding: Encoding.UTF8,
+        recursive: true,
+      }).catch(() => {});
     } catch {
       // ignore
     }
@@ -848,13 +871,13 @@ export async function retrieveFromLocalYaadFolder(customLocalFolder?: string): P
 
   // 2. Native Android Capacitor Filesystem ('<targetFolder>/yaad_backup.json')
   try {
-    const capFilesystem = (window as any).Capacitor?.Plugins?.Filesystem;
-    if (capFilesystem && capFilesystem.readFile) {
-      const res = await capFilesystem.readFile({
-        path: `${targetFolder}/${LOCAL_BACKUP_FILE_NAME}`,
-        directory: 'DOCUMENTS',
-        encoding: 'utf8',
-      });
+    const cleanSubName = targetFolder.replace(/^Documents\//i, '').trim() || LOCAL_BACKUP_FOLDER_NAME;
+    for (const dir of [Directory.Documents, Directory.Data]) {
+      const res = await Filesystem.readFile({
+        path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
+        directory: dir,
+        encoding: Encoding.UTF8,
+      }).catch(() => null);
       if (res?.data) {
         const parsed = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
         if (isValidSnapshot(parsed)) candidates.push(parsed);
