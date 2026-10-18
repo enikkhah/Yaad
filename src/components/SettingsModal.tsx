@@ -43,7 +43,9 @@ import {
   Trash2,
   RotateCcw,
   Calendar,
-  Lightbulb
+  Lightbulb,
+  Mail,
+  ExternalLink
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION, APP_VERSION_INFO } from '../utils/version';
@@ -138,6 +140,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   // Recycle Bin state
   const [isConfirmingEmptyBin, setIsConfirmingEmptyBin] = useState<boolean>(false);
+  const [activeInfoDialog, setActiveInfoDialog] = useState<'privacy' | 'about' | null>(null);
 
   // Native permissions state (for Android APK / PWA)
   const [nativePerms, setNativePerms] = useState<NativePermissionsStatus>({
@@ -740,10 +743,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                             <div className="min-w-0">
                               <p className={`text-xs font-bold truncate ${isSelected ? 'text-indigo-300' : 'text-stone-200'}`}>
-                                {soundItem.label}
+                                {isFa ? soundItem.label : soundItem.labelEn}
                               </p>
                               <p className="text-[10px] text-stone-400 truncate">
-                                {soundItem.desc}
+                                {isFa ? soundItem.desc : soundItem.descEn}
                               </p>
                             </div>
                           </div>
@@ -1143,7 +1146,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {isFa ? '۵. پشتیبان‌گیری و اطلاعات' : '5. Backup & Data'}
                   </h4>
                   <p className="text-[11px] text-stone-400 truncate">
-                    {isFa ? 'دانلود و بازیابی فایل JSON • اطلاعات نسخه' : 'JSON Export/Import • Version Info'}
+                    {isFa ? 'دانلود و بازیابی فایل JSON • آمار عملکرد' : 'JSON Export/Import • Performance Stats'}
                   </p>
                 </div>
               </div>
@@ -1279,25 +1282,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
                 )}
-
-                {/* 5.4 App Specifications & Version */}
-                <div className="p-3 rounded-2xl bg-stone-900/60 border border-stone-800/80 space-y-2 text-xs">
-                  <div className="flex items-center justify-between border-b border-stone-800/60 pb-2">
-                    <span className="text-stone-400">{isFa ? 'نام برنامه' : 'App Name'}</span>
-                    <div className="flex items-center gap-2">
-                      <img src={appIcon} alt="YAAD" className="w-4.5 h-4.5 rounded-md object-cover" />
-                      <span className="font-bold text-white">{APP_VERSION_INFO.name}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between border-b border-stone-800/60 pb-2">
-                    <span className="text-stone-400">{isFa ? 'نسخه فعلی' : 'Current Version'}</span>
-                    <span className="font-mono font-bold text-indigo-400">{isFa ? `نسخه ${toPersianDigits(APP_VERSION)}` : `Version ${APP_VERSION}`}</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-stone-400">{isFa ? 'نوع پلتفرم' : 'Platform Type'}</span>
-                    <span className="text-stone-200">{isFa ? 'اپلیکیشن تحت وب پیشرونده (PWA)' : 'Progressive Web App (PWA)'}</span>
-                  </div>
-                </div>
               </div>
             )}
           </div>
@@ -1477,6 +1461,110 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 )}
               </div>
             )}
+          </div>
+
+          {/* ========================================================= */}
+          {/* 7. MINIMAL APP INFO & LINKS (بعد از بخش سطل زباله) */}
+          {/* ========================================================= */}
+          <div className="pt-2">
+            <div className="rounded-2xl border border-stone-800/90 bg-stone-950/70 p-3.5 sm:p-4 space-y-3">
+              {/* Row 1: App Version */}
+              <div className="flex items-center justify-between pb-2.5 border-b border-stone-800/80">
+                <div className="flex items-center gap-2">
+                  <img src={appIcon} alt="YAAD" className="w-5 h-5 rounded-md object-cover" />
+                  <span className="text-xs font-bold text-stone-300">
+                    {isFa ? 'ورژن اپ' : 'App Version'}
+                  </span>
+                </div>
+                <span className="font-mono text-xs font-black text-indigo-400 bg-indigo-500/10 border border-indigo-500/25 px-2.5 py-0.5 rounded-lg" dir="ltr">
+                  v{APP_VERSION}
+                </span>
+              </div>
+
+              {/* Row 2: Minimal Links (Privacy, About, Support Email) */}
+              <div className="grid grid-cols-3 gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setActiveInfoDialog(activeInfoDialog === 'privacy' ? null : 'privacy')}
+                  className={`py-2 px-2.5 rounded-xl border font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    activeInfoDialog === 'privacy'
+                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                      : 'bg-stone-900/80 hover:bg-stone-800 border-stone-800 text-stone-300 hover:text-white'
+                  }`}
+                >
+                  <ShieldCheck className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span className="truncate">{isFa ? 'حریم خصوصی' : 'Privacy'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveInfoDialog(activeInfoDialog === 'about' ? null : 'about')}
+                  className={`py-2 px-2.5 rounded-xl border font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                    activeInfoDialog === 'about'
+                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                      : 'bg-stone-900/80 hover:bg-stone-800 border-stone-800 text-stone-300 hover:text-white'
+                  }`}
+                >
+                  <Info className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span className="truncate">{isFa ? 'درباره‌ی' : 'About'}</span>
+                </button>
+
+                <a
+                  href="mailto:YAADreminder@gmail.com?subject=YAAD%20App%20Support"
+                  className="py-2 px-2.5 rounded-xl bg-stone-900/80 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-indigo-300 font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  title="YAADreminder@gmail.com"
+                >
+                  <Mail className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                  <span className="truncate">{isFa ? 'پشتیبانی' : 'Support'}</span>
+                </a>
+              </div>
+
+              {/* Expandable Minimal Info Content for Privacy or About */}
+              {activeInfoDialog === 'privacy' && (
+                <div className="p-3 rounded-xl bg-stone-900/90 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-1.5 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-indigo-300">{isFa ? 'حریم خصوصی و امنیت داده‌ها' : 'Privacy Policy'}</span>
+                    <button type="button" onClick={() => setActiveInfoDialog(null)} className="text-stone-400 hover:text-white">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <p>
+                    {isFa
+                      ? 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه شما ذخیره می‌شوند و بدون اجازه شما به هیچ سرور خارجی ارسال نمی‌گردند.'
+                      : 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and are never shared without your explicit consent.'}
+                  </p>
+                </div>
+              )}
+
+              {activeInfoDialog === 'about' && (
+                <div className="p-3 rounded-xl bg-stone-900/90 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-1.5 animate-in fade-in">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-indigo-300">{isFa ? 'درباره‌ی اپلیکیشن یاد (YAAD)' : 'About YAAD'}</span>
+                    <button type="button" onClick={() => setActiveInfoDialog(null)} className="text-stone-400 hover:text-white">
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                  <p>
+                    {isFa
+                      ? `دستیار هوشمند مدیریت زمان، یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار زمانی مکان‌محور (Geofence) • نسخه ${APP_VERSION}`
+                      : `Smart time management assistant for spoken reminders, occasions, ideas, and location-based Geofence alerts • Version ${APP_VERSION}`}
+                  </p>
+                </div>
+              )}
+
+              {/* Direct Support Email Display */}
+              <div className="pt-1 flex items-center justify-between text-[11px] text-stone-400">
+                <span>{isFa ? 'ارتباط با پشتیبانی:' : 'Support Email:'}</span>
+                <a
+                  href="mailto:YAADreminder@gmail.com?subject=YAAD%20App%20Support"
+                  className="font-mono text-indigo-400 hover:text-indigo-300 underline flex items-center gap-1"
+                  dir="ltr"
+                >
+                  <span>YAADreminder@gmail.com</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              </div>
+            </div>
           </div>
 
         </div>

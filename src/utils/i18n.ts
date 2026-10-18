@@ -377,3 +377,45 @@ export const translations: Record<AppLanguage, Translations> = {
 export function getT(lang: AppLanguage = 'fa'): Translations {
   return translations[lang] || translations.fa;
 }
+
+const PERSIAN_DIGITS_MAP: Record<string, string> = {
+  '۰': '0',
+  '۱': '1',
+  '۲': '2',
+  '۳': '3',
+  '۴': '4',
+  '۵': '5',
+  '۶': '6',
+  '۷': '7',
+  '۸': '8',
+  '۹': '9',
+};
+
+const ENGLISH_DIGITS_MAP: Record<string, string> = {
+  '0': '۰',
+  '1': '۱',
+  '2': '۲',
+  '3': '۳',
+  '4': '۴',
+  '5': '۵',
+  '6': '۶',
+  '7': '۷',
+  '8': '۸',
+  '9': '۹',
+};
+
+export function formatSavedLocationTitle(rawTitle: string, lang: AppLanguage = 'fa'): string {
+  if (!rawTitle) return '';
+  if (lang === 'en') {
+    const convertedDigits = rawTitle.replace(/[۰-۹]/g, (d) => PERSIAN_DIGITS_MAP[d] ?? d);
+    return convertedDigits
+      .replace(/موقعیت ثبت[‌\s]*شده/g, 'Saved Location')
+      .replace(/مکان ثبت[‌\s]*شده/g, 'Saved Location')
+      .replace(/موقعیت فعلی من/g, 'Current Location');
+  } else {
+    const convertedDigits = rawTitle.replace(/[0-9]/g, (d) => ENGLISH_DIGITS_MAP[d] ?? d);
+    return convertedDigits
+      .replace(/Saved Location/gi, 'موقعیت ثبت‌شده');
+  }
+}
+

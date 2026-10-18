@@ -54,7 +54,7 @@ import {
   Sliders
 } from 'lucide-react';
 import { WheelPicker } from './WheelPicker';
-import { AppLanguage, getT } from '../utils/i18n';
+import { AppLanguage, getT, formatSavedLocationTitle } from '../utils/i18n';
 import { ValidationAlertModal } from './ValidationAlertModal';
 
 interface ReminderFormProps {
@@ -152,6 +152,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const speechStartTimeRef = useRef<number>(0);
   const lastSpeechTimeRef = useRef<number>(0);
   const [voiceErrorMsg, setVoiceErrorMsg] = useState<string | null>(null);
+
+  // Keep voiceLang synced with app language
+  useEffect(() => {
+    setVoiceLang(language === 'en' ? 'en' : 'fa');
+  }, [language, isOpen]);
 
   // Keep titleRef synchronized with current title state to prevent stale closures
   useEffect(() => {
@@ -776,7 +781,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     setGeofenceSavedLocId(locId);
     const found = savedLocations?.find((l) => l.id === locId);
     if (found) {
-      setGeofenceLocationName(found.title);
+      setGeofenceLocationName(formatSavedLocationTitle(found.title, language));
       setGeofenceLat(found.latitude);
       setGeofenceLng(found.longitude);
     }
@@ -1532,27 +1537,24 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </div>
             )}
 
-            {/* GEOFENCE LOCATION CHECKPOINT (چک‌پوینت هشدار مکان‌محور) */}
-            <div className="rounded-2xl border border-stone-800 bg-stone-950/60 p-3 sm:p-4 space-y-3.5">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl bg-stone-800 border border-stone-700 text-stone-400 flex items-center justify-center shrink-0">
-                    <MapPin className="w-4 h-4" />
+            {/* GEOFENCE LOCATION CHECKPOINT (حصار زمانی / Geofence) */}
+            <div className={`rounded-2xl border-2 p-3.5 sm:p-5 space-y-3.5 shadow-md transition-all ${
+              enableGeofence
+                ? 'bg-emerald-500/12 border-emerald-400/75 shadow-emerald-500/10'
+                : 'bg-indigo-500/12 border-indigo-400/50 shadow-indigo-500/10'
+            }`}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/30 text-white flex items-center justify-center shrink-0">
+                    <MapPin className="w-4.5 h-4.5 text-white" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <div className="flex items-center gap-2">
-                      <span className="text-xs sm:text-sm font-black text-white">
-                        {isEn ? 'Location Fence (Geofence)' : 'حصار مکانی (Geofence)'}
-                      </span>
-                      <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
-                        enableGeofence 
-                          ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40' 
-                          : 'bg-stone-800 text-stone-400 border-stone-700'
-                      }`}>
-                        {enableGeofence ? (isEn ? 'ACTIVE' : 'فعال') : (isEn ? 'OFF' : 'غیرفعال')}
+                      <span style={{ color: '#FFFFFF' }} className="text-sm sm:text-base font-black !text-white">
+                        {isEn ? 'Geofence' : 'حصار زمانی'}
                       </span>
                     </div>
-                    <p className="text-[11px] text-stone-400">
+                    <p className="text-[11px] text-stone-200">
                       {isEn
                         ? 'Trigger alarm & spoken alert upon arrival or departure from this coordinate'
                         : 'پخش آلارم، صوت و اعلان اختصاصی هنگام ورود یا خروج از محدوده مکانی'}
@@ -1560,16 +1562,34 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   </div>
                 </div>
 
-                {/* Checkpoint Toggle Switch */}
-                <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                  <input
-                    type="checkbox"
-                    checked={enableGeofence}
-                    onChange={(e) => setEnableGeofence(e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-500"></div>
-                </label>
+                {/* High-Visibility Sliding Toggle Switch (کلید کشویی واضح فعال‌سازی) */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={enableGeofence}
+                  onClick={() => setEnableGeofence(!enableGeofence)}
+                  className="flex items-center gap-2 shrink-0 cursor-pointer group focus:outline-none"
+                  title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار زمانی') : (isEn ? 'Enable Geofence' : 'فعال کردن حصار زمانی')}
+                >
+                  <span className={`text-xs font-black transition-colors ${
+                    enableGeofence ? 'text-emerald-300' : 'text-stone-200 group-hover:text-white'
+                  }`}>
+                    {enableGeofence ? (isEn ? 'ON' : 'فعال') : (isEn ? 'OFF' : 'غیرفعال')}
+                  </span>
+                  <div
+                    dir="ltr"
+                    className={`w-14 h-8 rounded-full border-2 p-1 flex items-center transition-all duration-200 shadow-inner ${
+                      enableGeofence
+                        ? 'bg-emerald-500 border-emerald-200 justify-end shadow-[0_0_14px_rgba(16,185,129,0.55)]'
+                        : 'bg-stone-700 border-stone-400 justify-start hover:border-white'
+                    }`}
+                  >
+                    <span
+                      style={{ backgroundColor: '#FFFFFF' }}
+                      className="w-5.5 h-5.5 rounded-full !bg-white shadow-md transition-all duration-200"
+                    />
+                  </div>
+                </button>
               </div>
 
               {enableGeofence && (
@@ -1588,7 +1608,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         <option value="">{isEn ? '-- Custom GPS / Coordinates --' : '-- انتخاب دستی یا GPS جدید --'}</option>
                         {savedLocations.map((loc) => (
                           <option key={loc.id} value={loc.id}>
-                            📍 {loc.title} {loc.address ? `(${loc.address.slice(0, 28)}...)` : ''}
+                            📍 {formatSavedLocationTitle(loc.title, language)} {loc.address ? `(${loc.address.slice(0, 28)}...)` : ''}
                           </option>
                         ))}
                       </select>

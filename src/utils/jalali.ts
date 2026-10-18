@@ -43,16 +43,20 @@ export function fromPersianDigits(input: string): string {
 }
 
 /**
- * Normalizes Persian/Arabic text and digits for accurate, insensitive search matching
+ * Normalizes Persian/Arabic/English text and digits for accurate, case-insensitive bilingual search matching
  */
-export function normalizeSearchText(input?: string | null): string {
-  if (!input) return '';
+export function normalizeSearchText(input?: string | number | null): string {
+  if (input === null || input === undefined) return '';
   return fromPersianDigits(String(input))
     .toLowerCase()
     .replace(/ي/g, 'ی')
     .replace(/ى/g, 'ی')
     .replace(/ك/g, 'ک')
     .replace(/ة/g, 'ه')
+    .replace(/آ/g, 'ا')
+    .replace(/أ/g, 'ا')
+    .replace(/إ/g, 'ا')
+    .replace(/ؤ/g, 'و')
     .replace(/\u200c/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -419,3 +423,207 @@ export function formatDateByLanguage(timestamp: number, language: string = 'fa')
   const comp = getJalaliComponents(timestamp);
   return comp.dateString;
 }
+
+/**
+ * Helper to match tokenized query against a normalized haystack (supporting Persian & English)
+ */
+export function matchesNormalizedQuery(haystackParts: (string | number | undefined | null)[], query: string): boolean {
+  const qNorm = normalizeSearchText(query);
+  if (!qNorm) return true;
+  const haystack = normalizeSearchText(haystackParts.filter((p) => p !== null && p !== undefined && p !== '').join(' '));
+  const tokens = qNorm.split(' ').filter(Boolean);
+  return tokens.every((tok) => haystack.includes(tok));
+}
+
+/**
+ * Comprehensive bilingual search for Reminders across all user-entered fields
+ */
+export function matchesReminderSearch(r: any, query: string): boolean {
+  if (!query || !query.trim()) return true;
+  const catKeywords =
+    r.category === 'work'
+      ? 'work کاری کار شغلی اداره office job business'
+      : r.category === 'family'
+      ? 'family خانوادگی خانواده منزل خانه home personal'
+      : 'other سایر عمومی متفرقه general misc';
+  const prioKeywords =
+    r.priority === 'high'
+      ? 'high urgent فوری بالا مهم اضطراری'
+      : r.priority === 'medium'
+      ? 'medium normal متوسط معمولی'
+      : 'low عادی پایین کم';
+  const statusKeywords =
+    r.status === 'completed'
+      ? 'completed done انجام شده تکمیل'
+      : r.status === 'postponed'
+      ? 'postponed snoozed معوق به تعویق افتاده'
+      : 'pending active در انتظار فعال';
+  const recurrenceKeywords =
+    r.recurrence === 'hourly'
+      ? 'hourly ساعتی هر ساعت'
+      : r.recurrence === 'daily'
+      ? 'daily روزانه هر روز'
+      : r.recurrence === 'weekly'
+      ? 'weekly هفتگی هر هفته'
+      : r.recurrence === 'monthly'
+      ? 'monthly ماهانه ماهیانه هر ماه'
+      : r.recurrence === 'custom_dates'
+      ? 'custom calendar تقویم انتخابی'
+      : '';
+
+  const jComp = getJalaliComponents(r.dueTimestamp);
+  const gComp = getGregorianComponents(r.dueTimestamp);
+  const jNumeric = `${jComp.year}/${String(jComp.month).padStart(2, '0')}/${String(jComp.day).padStart(2, '0')} ${jComp.year}/${jComp.month}/${jComp.day}`;
+  const gNumeric = `${gComp.year}-${String(gComp.month).padStart(2, '0')}-${String(gComp.day).padStart(2, '0')} ${gComp.year}/${gComp.month}/${gComp.day}`;
+
+  return matchesNormalizedQuery(
+    [
+      r.title,
+      r.description,
+      r.geofence?.locationName,
+      r.geofence?.address,
+      r.geofence?.radius ? `${r.geofence.radius}m` : '',
+      r.recurrenceCustomDates?.join(' '),
+      catKeywords,
+      prioKeywords,
+      statusKeywords,
+      recurrenceKeywords,
+      formatJalaliFull(r.dueTimestamp, 'fa'),
+      formatJalaliFull(r.dueTimestamp, 'en'),
+      jComp.weekday,
+      jComp.monthName,
+      jComp.year,
+      jNumeric,
+      gComp.weekday,
+      gComp.monthName,
+      gComp.year,
+      gNumeric,
+      gComp.timeString,
+      'reminder یادآور یاداوری',
+    ],
+    query
+  );
+}
+
+/**
+ * Comprehensive bilingual search for Ideas/Notes across all user-entered fields
+ */
+export function matchesIdeaSearch(idea: any, query: string): boolean {
+  if (!query || !query.trim()) return true;
+  const catKeywords =
+    idea.category === 'work'
+      ? 'work کاری کار شغلی office job'
+      : idea.category === 'family'
+      ? 'family خانوادگی خانواده شخصی'
+      : 'other سایر عمومی متفرقه';
+  const mediaKeywords = [
+    idea.audioRecordUrl ? 'voice audio memo ویس صوتی ضبط صدا' : '',
+    idea.videoRecordUrl ? 'video clip ویدیو فیلم' : '',
+    idea.drawingDataUrl ? 'drawing sketch canvas نقاشی طراحی دستخط' : '',
+  ].join(' ');
+
+  const jComp = getJalaliComponents(idea.createdAt);
+  const gComp = getGregorianComponents(idea.createdAt);
+
+  return matchesNormalizedQuery(
+    [
+      idea.title,
+      idea.content,
+      idea.tags?.join(' '),
+      catKeywords,
+      mediaKeywords,
+      formatJalaliFull(idea.createdAt, 'fa'),
+      formatJalaliFull(idea.createdAt, 'en'),
+      jComp.weekday,
+      jComp.monthName,
+      jComp.year,
+      gComp.weekday,
+      gComp.monthName,
+      gComp.year,
+      'idea note thought ایده یادداشت فکر افکار',
+    ],
+    query
+  );
+}
+
+/**
+ * Comprehensive bilingual search for Saved Locations across all user-entered fields
+ */
+export function matchesLocationSearch(loc: any, query: string): boolean {
+  if (!query || !query.trim()) return true;
+  const jComp = getJalaliComponents(loc.createdAt);
+  const gComp = getGregorianComponents(loc.createdAt);
+  const geofenceKeywords = loc.geofence
+    ? `geofence checkpoint radar حصار مکانی رادار ${loc.geofence.customMessage || ''} ${loc.geofence.radius || ''}m ${
+        loc.geofence.triggerOn === 'enter'
+          ? 'enter arrival ورود رسیدن'
+          : loc.geofence.triggerOn === 'exit'
+          ? 'exit departure خروج ترک'
+          : 'both enter exit ورود و خروج'
+      }`
+    : '';
+
+  return matchesNormalizedQuery(
+    [
+      loc.title,
+      loc.description,
+      loc.address,
+      loc.latitude,
+      loc.longitude,
+      loc.googleMapsUrl,
+      geofenceKeywords,
+      formatJalaliFull(loc.createdAt, 'fa'),
+      formatJalaliFull(loc.createdAt, 'en'),
+      jComp.weekday,
+      jComp.monthName,
+      jComp.year,
+      gComp.weekday,
+      gComp.monthName,
+      gComp.year,
+      'location place gps map مکان لوکیشن موقعیت نقشه آدرس',
+    ],
+    query
+  );
+}
+
+/**
+ * Comprehensive bilingual search for Occasions across all user-entered fields
+ */
+export function matchesOccasionSearch(occ: any, query: string): boolean {
+  if (!query || !query.trim()) return true;
+  const typeKeywords =
+    occ.type === 'birthday'
+      ? 'birthday birth تولد زادروز'
+      : occ.type === 'wedding'
+      ? 'wedding marriage anniversary سالگرد ازدواج عروسی'
+      : occ.type === 'dating'
+      ? 'dating relationship anniversary سالگرد آشنایی دوستی'
+      : occ.type === 'memorial'
+      ? 'memorial remembrance سالگرد فوت درگذشت یادبود'
+      : occ.type === 'family'
+      ? 'family occasion مناسبت خانوادگی خانواده'
+      : occ.type === 'work'
+      ? 'work occasion مناسبت کاری شغلی'
+      : 'custom occasion سایر مناسبت دلخواه';
+
+  const persianMonth = PERSIAN_MONTHS[(occ.solarMonth || 1) - 1] || '';
+  const dateStr = `${occ.solarYear ? occ.solarYear + '/' : ''}${String(occ.solarMonth).padStart(2, '0')}/${String(occ.solarDay).padStart(2, '0')} ${occ.solarDay} ${persianMonth} ${occ.solarYear || ''}`;
+
+  return matchesNormalizedQuery(
+    [
+      occ.title,
+      occ.personName,
+      occ.customNote,
+      occ.notifyTime,
+      typeKeywords,
+      persianMonth,
+      dateStr,
+      occ.solarYear,
+      occ.solarMonth,
+      occ.solarDay,
+      'occasion event milestone مناسبت رویداد سالگرد یادبود',
+    ],
+    query
+  );
+}
+

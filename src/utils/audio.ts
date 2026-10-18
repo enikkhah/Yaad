@@ -44,17 +44,17 @@ export const unlockAudio = () => {
   }
 };
 
-export const PHONE_ALARM_SOUNDS: { id: PhoneAlarmSound; label: string; desc: string }[] = [
-  { id: 'digital-beep', label: 'زنگ دیجیتال کلاسیک', desc: 'بوق استاندارد ساعت‌های دیجیتال (پیشنهادی)' },
-  { id: 'radar', label: 'آلارم پالس رادار', desc: 'صدای موجی و ملایم مشابه هشدار گوشی‌های هوشمند' },
-  { id: 'marimba', label: 'ملودی ماریمبا و چوب', desc: 'ریتم گرم و دلنشین چوبی با گام بالارونده' },
-  { id: 'morning-chime', label: 'زنگ ملایم صبحگاهی', desc: 'زنگ آرام و شفاف برای یادآوری بدون استرس' },
-  { id: 'zen-bowl', label: 'کاسه تبتی آرامش‌بخش', desc: 'طنین عمیق، ملایم و آرامش‌بخش مدیتیشن' },
-  { id: 'soft-harp', label: 'آرپژ چنگ ملایم', desc: 'نوازشگر، لطیف و رویایی با نت‌های نرم چنگ' },
-  { id: 'ocean-drop', label: 'قطرات آرام آب', desc: 'صدای لطیف و طبیعی چکه آب در سکوت آرام' },
-  { id: 'wind-chimes', label: 'نسیم و زنگوله بادی', desc: 'طنین زنگوله‌های بادی کریستالی و بسیار ملایم' },
-  { id: 'warm-pad', label: 'موج گرم و آرامش‌بخش', desc: 'پد صوتی نرم و تدریجی بدون هیچ‌گونه شوک صوتی' },
-  { id: 'calm-piano', label: 'پیانوی آرام شبانه', desc: 'آکوردهای ملایم و دلنشین پیانو برای آرامش ذهن' },
+export const PHONE_ALARM_SOUNDS: { id: PhoneAlarmSound; label: string; labelEn: string; desc: string; descEn: string }[] = [
+  { id: 'digital-beep', label: 'زنگ دیجیتال کلاسیک', labelEn: 'Classic Digital Beep', desc: 'بوق استاندارد ساعت‌های دیجیتال (پیشنهادی)', descEn: 'Standard digital clock beep (Recommended)' },
+  { id: 'radar', label: 'آلارم پالس رادار', labelEn: 'Radar Pulse Alarm', desc: 'صدای موجی و ملایم مشابه هشدار گوشی‌های هوشمند', descEn: 'Smooth wave pulse similar to smartphone alerts' },
+  { id: 'marimba', label: 'ملودی ماریمبا و چوب', labelEn: 'Warm Marimba Melody', desc: 'ریتم گرم و دلنشین چوبی با گام بالارونده', descEn: 'Pleasant wooden rhythm with ascending scale' },
+  { id: 'morning-chime', label: 'زنگ ملایم صبحگاهی', labelEn: 'Gentle Morning Chime', desc: 'زنگ آرام و شفاف برای یادآوری بدون استرس', descEn: 'Clear, stress-free morning chime' },
+  { id: 'zen-bowl', label: 'کاسه تبتی آرامش‌بخش', labelEn: 'Soothing Zen Bowl', desc: 'طنین عمیق، ملایم و آرامش‌بخش مدیتیشن', descEn: 'Deep, calming meditation bowl resonance' },
+  { id: 'soft-harp', label: 'آرپژ چنگ ملایم', labelEn: 'Soft Harp Arpeggio', desc: 'نوازشگر، لطیف و رویایی با نت‌های نرم چنگ', descEn: 'Dreamy, delicate harp notes' },
+  { id: 'ocean-drop', label: 'قطرات آرام آب', labelEn: 'Calm Water Drops', desc: 'صدای لطیف و طبیعی چکه آب در سکوت آرام', descEn: 'Natural, gentle water droplets in calm silence' },
+  { id: 'wind-chimes', label: 'نسیم و زنگوله بادی', labelEn: 'Breeze & Wind Chimes', desc: 'طنین زنگوله‌های بادی کریستالی و بسیار ملایم', descEn: 'Soft crystalline wind chimes in the breeze' },
+  { id: 'warm-pad', label: 'موج گرم و آرامش‌بخش', labelEn: 'Warm Ambient Pad', desc: 'پد صوتی نرم و تدریجی بدون هیچ‌گونه شوک صوتی', descEn: 'Gradual, soft ambient pad without sudden shock' },
+  { id: 'calm-piano', label: 'پیانوی آرام شبانه', labelEn: 'Calm Evening Piano', desc: 'آکوردهای ملایم و دلنشین پیانو برای آرامش ذهن', descEn: 'Gentle piano chords for peace of mind' },
 ];
 
 const VALID_ALARM_SOUND_IDS = new Set<string>(PHONE_ALARM_SOUNDS.map((s) => s.id));
@@ -345,7 +345,7 @@ export const stopAlarmRinging = () => {
 
 export const speakReminderText = (
   title: string,
-  category: Category,
+  category?: Category,
   rate = 1.0,
   lang: 'fa' | 'en' = 'fa'
 ) => {
@@ -355,13 +355,21 @@ export const speakReminderText = (
     window.speechSynthesis.cancel();
     let text = '';
     if (lang === 'en') {
-      const categoryLabel =
-        category === 'work' ? 'Work' : category === 'family' ? 'Family' : 'General';
-      text = `Reminder for ${categoryLabel}: ${title}`;
+      if (category) {
+        const categoryLabel =
+          category === 'work' ? 'Work' : category === 'family' ? 'Family' : 'General';
+        text = `Reminder for ${categoryLabel}: ${title}`;
+      } else {
+        text = title;
+      }
     } else {
-      const categoryLabel =
-        category === 'work' ? 'کاری' : category === 'family' ? 'خانوادگی' : 'عمومی';
-      text = `یادآورِ ${categoryLabel}: ${title}`;
+      if (category) {
+        const categoryLabel =
+          category === 'work' ? 'کاری' : category === 'family' ? 'خانوادگی' : 'عمومی';
+        text = `یادآورِ ${categoryLabel}: ${title}`;
+      } else {
+        text = title;
+      }
     }
 
     const utterance = new SpeechSynthesisUtterance(text);

@@ -100,6 +100,11 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   const titleSpeechStartTimeRef = useRef<number>(0);
   const titleLastSpeechTimeRef = useRef<number>(0);
 
+  // Keep voiceLang synced with app language
+  useEffect(() => {
+    setVoiceLang(language === 'en' ? 'en' : 'fa');
+  }, [language, isOpen]);
+
   // Keep titleRef and contentRef synced to prevent stale closures
   useEffect(() => {
     titleRef.current = title;

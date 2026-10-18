@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import { SavedLocation, LocationGeofenceConfig, GeofenceTriggerType, Category, Priority, Reminder } from '../types';
 import { toPersianDigits } from '../utils/jalali';
-import { AppLanguage } from '../utils/i18n';
+import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { openAndroidSettings } from '../utils/nativePermissions';
 
@@ -69,18 +69,20 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       if (initialLocation) {
+        const locTitle = formatSavedLocationTitle(initialLocation.title, language);
         setSelectedLocationId(initialLocation.id);
         setCustomLat(initialLocation.latitude);
         setCustomLng(initialLocation.longitude);
-        setCustomLocName(initialLocation.title);
-        setTitle(isEn ? `Arrive at ${initialLocation.title}` : `رسیدن به ${initialLocation.title}`);
+        setCustomLocName(locTitle);
+        setTitle(isEn ? `Arrive at ${locTitle}` : `رسیدن به ${locTitle}`);
         setDescription(initialLocation.description || '');
       } else if (savedLocations.length > 0) {
+        const locTitle = formatSavedLocationTitle(savedLocations[0].title, language);
         setSelectedLocationId(savedLocations[0].id);
         setCustomLat(savedLocations[0].latitude);
         setCustomLng(savedLocations[0].longitude);
-        setCustomLocName(savedLocations[0].title);
-        setTitle(isEn ? `Arrive at ${savedLocations[0].title}` : `رسیدن به ${savedLocations[0].title}`);
+        setCustomLocName(locTitle);
+        setTitle(isEn ? `Arrive at ${locTitle}` : `رسیدن به ${locTitle}`);
         setDescription(savedLocations[0].description || '');
       } else {
         setSelectedLocationId('custom');
@@ -97,12 +99,13 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
     } else {
       const found = savedLocations.find((l) => l.id === locId);
       if (found) {
+        const locTitle = formatSavedLocationTitle(found.title, language);
         setCustomLat(found.latitude);
         setCustomLng(found.longitude);
-        setCustomLocName(found.title);
+        setCustomLocName(locTitle);
         if (!title.trim() || title.startsWith('رسیدن به') || title.startsWith('خروج از') || title.startsWith('Arrive at') || title.startsWith('Leave')) {
           const prefix = triggerOn === 'enter' ? (isEn ? 'Arrive at ' : 'رسیدن به ') : (isEn ? 'Leave ' : 'خروج از ');
-          setTitle(`${prefix}${found.title}`);
+          setTitle(`${prefix}${locTitle}`);
         }
       }
     }
@@ -228,7 +231,7 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
               >
                 {savedLocations.map((loc) => (
                   <option key={loc.id} value={loc.id}>
-                    📍 {loc.title} {loc.address ? `(${loc.address.slice(0, 30)}...)` : ''}
+                    📍 {formatSavedLocationTitle(loc.title, language)} {loc.address ? `(${loc.address.slice(0, 30)}...)` : ''}
                   </option>
                 ))}
                 <option value="custom">

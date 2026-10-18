@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliFull, formatJalaliTime } from '../utils/jalali';
 import { getRecurrenceLabel } from '../utils/recurrence';
-import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound } from '../utils/audio';
+import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound, speakReminderText } from '../utils/audio';
 import { dismissDeliveredNotifications } from '../utils/nativeLocalNotifications';
 import { 
   Bell, 
@@ -54,10 +54,25 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
 
+    if (reminder.voiceReadAloud) {
+      const ttsTimer = setTimeout(() => {
+        speakReminderText(
+          reminder.title,
+          reminder.category,
+          settings?.ttsVoiceRate ?? 0.95,
+          settings?.language || 'fa'
+        );
+      }, 600);
+      return () => {
+        clearTimeout(ttsTimer);
+        stopAlarmRinging();
+      };
+    }
+
     return () => {
       stopAlarmRinging();
     };
-  }, [reminder, settings?.alarmSound, settings?.alarmVolume]);
+  }, [reminder, settings?.alarmSound, settings?.alarmVolume, settings?.language, settings?.ttsVoiceRate]);
 
   if (!reminder) return null;
 

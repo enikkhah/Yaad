@@ -7,7 +7,7 @@ import {
   formatJalaliFull,
   getJalaliComponents,
   toPersianDigits,
-  normalizeSearchText
+  matchesReminderSearch
 } from '../utils/jalali';
 import { 
   Filter, 
@@ -73,21 +73,9 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   // Filter out any deleted reminders (سطل بازیافت)
   const nonDeleted = reminders.filter((r) => !r.deletedAt);
 
-  // Enhanced search filter across title, description/notes, location, category, priority, and date/time
+  // Enhanced bilingual search filter across all user-entered reminder fields
   const searchFiltered = searchQuery.trim()
-    ? nonDeleted.filter((r) => {
-        const qNorm = normalizeSearchText(searchQuery);
-        if (!qNorm) return true;
-        const catFa = r.category === 'work' ? 'کار کاری' : r.category === 'family' ? 'خانواده خانوادگی' : 'سایر عمومی';
-        const prioFa = r.priority === 'high' ? 'فوری بالا' : r.priority === 'medium' ? 'متوسط' : 'عادی پایین';
-        const fullDateFa = formatJalaliFull(r.dueTimestamp, 'fa');
-        const fullDateEn = formatJalaliFull(r.dueTimestamp, 'en');
-        const haystack = normalizeSearchText(
-          `${r.title} ${r.description || ''} ${r.geofence?.locationName || ''} ${r.geofence?.address || ''} ${catFa} ${r.category} ${prioFa} ${r.priority} ${fullDateFa} ${fullDateEn}`
-        );
-        const tokens = qNorm.split(' ').filter(Boolean);
-        return tokens.every((tok) => haystack.includes(tok));
-      })
+    ? nonDeleted.filter((r) => matchesReminderSearch(r, searchQuery))
     : nonDeleted;
 
   // Apply category filter
@@ -361,15 +349,24 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                 cardStyle = 'bg-stone-900 border-stone-800 text-stone-100 hover:border-stone-700 shadow-sm';
               }
 
-              // Priority / Category dot color
-              const dotColor =
+              // Priority / Category hollow circle color coding
+              const circleBorderColor =
                 reminder.priority === 'high'
-                  ? 'bg-red-500 ring-2 ring-red-500/30'
+                  ? 'border-red-500 text-red-400 hover:bg-red-500/15 ring-2 ring-red-500/20'
                   : reminder.category === 'work'
-                  ? 'bg-cyan-400'
+                  ? 'border-cyan-400 text-cyan-400 hover:bg-cyan-400/15'
                   : reminder.category === 'family'
-                  ? 'bg-rose-400'
-                  : 'bg-indigo-400';
+                  ? 'border-rose-400 text-rose-400 hover:bg-rose-400/15'
+                  : 'border-indigo-400 text-indigo-400 hover:bg-indigo-400/15';
+
+              const completedCircleColor =
+                reminder.priority === 'high'
+                  ? 'border-red-500 bg-red-500/20 text-red-400'
+                  : reminder.category === 'work'
+                  ? 'border-cyan-400 bg-cyan-400/20 text-cyan-300'
+                  : reminder.category === 'family'
+                  ? 'border-rose-400 bg-rose-400/20 text-rose-300'
+                  : 'border-indigo-400 bg-indigo-400/20 text-indigo-300';
 
               elements.push(
                 <div
@@ -404,22 +401,45 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                     </div>
                   )}
 
-                  {/* Title, Optional Description Snippet & Small Dot */}
-                  <div className="flex flex-col gap-1 min-w-0 flex-1">
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <span 
-                        className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`}
-                        title={`${getCategoryLabel(reminder.category)} • ${getPriorityLabel(reminder.priority)}`}
+                  {/* Title, Optional Description Snippet & Larger Hollow Colored Circle with Checkmark Completion */}
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onToggleComplete(reminder.id);
+                      }}
+                      className={`w-6 h-6 sm:w-6.5 sm:h-6.5 rounded-full border-[2.5px] flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer active:scale-90 group ${
+                        isCompleted ? completedCircleColor : `bg-transparent ${circleBorderColor}`
+                      }`}
+                      title={
+                        isCompleted
+                          ? (isEn ? 'Completed (Click to undo)' : 'انجام شده (برای بازگردانی ضربه بزنید)')
+                          : `${isEn ? 'Mark as completed' : 'انجام شد'} • ${getCategoryLabel(reminder.category)} (${getPriorityLabel(reminder.priority)})`
+                      }
+                      aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'انجام شد')}
+                    >
+                      <Check
+                        className={`w-3.5 h-3.5 stroke-[3] transition-all duration-150 ${
+                          isCompleted
+                            ? 'opacity-100 scale-100'
+                            : 'opacity-0 scale-50 group-hover:opacity-60 group-hover:scale-90'
+                        }`}
                       />
-                      <span className={`text-sm sm:text-base font-bold truncate ${isCompleted ? 'line-through text-stone-500' : ''}`}>
-                        {reminder.title}
-                      </span>
+                    </button>
+
+                    <div className="flex flex-col gap-1 min-w-0 flex-1">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <span className={`text-sm sm:text-base font-bold truncate ${isCompleted ? 'line-through text-stone-500' : ''}`}>
+                          {reminder.title}
+                        </span>
+                      </div>
+                      {reminder.description && (
+                        <p className="text-[11px] sm:text-xs text-stone-400 truncate">
+                          {reminder.description}
+                        </p>
+                      )}
                     </div>
-                    {reminder.description && (
-                      <p className="text-[11px] sm:text-xs text-stone-400 truncate ps-4.5">
-                        {reminder.description}
-                      </p>
-                    )}
                   </div>
 
                   {/* Time & Date (with Year) */}
@@ -471,8 +491,14 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             <div className="flex items-start justify-between gap-3 pt-1">
               <div className="space-y-1 min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`w-2.5 h-2.5 rounded-full ${
-                    selectedReminder.priority === 'high' ? 'bg-red-500' : 'bg-indigo-400'
+                  <span className={`w-4 h-4 rounded-full border-2 bg-transparent ${
+                    selectedReminder.priority === 'high'
+                      ? 'border-red-500'
+                      : selectedReminder.category === 'work'
+                      ? 'border-cyan-400'
+                      : selectedReminder.category === 'family'
+                      ? 'border-rose-400'
+                      : 'border-indigo-400'
                   }`} />
                   <span className="text-xs text-stone-400 font-medium">
                     {getCategoryLabel(selectedReminder.category)} • {getPriorityLabel(selectedReminder.priority)}

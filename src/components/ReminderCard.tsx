@@ -93,31 +93,24 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
     }
   };
 
-  // Priority Dot: red only for urgent/high priority
-  const renderPriorityDot = () => {
-    if (reminder.priority === 'high') {
-      return (
-        <span 
-          className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-sm shrink-0" 
-          title={isEn ? 'Urgent' : 'فوری'}
-        />
-      );
-    }
-    if (reminder.priority === 'medium') {
-      return (
-        <span 
-          className="w-2.5 h-2.5 rounded-full bg-stone-500/70 shrink-0" 
-          title={isEn ? 'Medium' : 'متوسط'}
-        />
-      );
-    }
-    return (
-      <span 
-        className="w-2.5 h-2.5 rounded-full bg-stone-700/60 shrink-0" 
-        title={isEn ? 'Normal' : 'عادی'}
-      />
-    );
-  };
+  // Priority / Category hollow circle color
+  const circleBorderColor =
+    reminder.priority === 'high'
+      ? 'border-red-500 text-red-400 hover:bg-red-500/15 ring-2 ring-red-500/20'
+      : reminder.category === 'work'
+      ? 'border-cyan-400 text-cyan-400 hover:bg-cyan-400/15'
+      : reminder.category === 'family'
+      ? 'border-rose-400 text-rose-400 hover:bg-rose-400/15'
+      : 'border-indigo-400 text-indigo-400 hover:bg-indigo-400/15';
+
+  const completedCircleColor =
+    reminder.priority === 'high'
+      ? 'border-red-500 bg-red-500/20 text-red-400'
+      : reminder.category === 'work'
+      ? 'border-cyan-400 bg-cyan-400/20 text-cyan-300'
+      : reminder.category === 'family'
+      ? 'border-rose-400 bg-rose-400/20 text-rose-300'
+      : 'border-indigo-400 bg-indigo-400/20 text-indigo-300';
 
   const relativeTime = getPersianRelativeTime(reminder.dueTimestamp, language);
   const formattedTime = formatJalaliFull(reminder.dueTimestamp, language);
@@ -135,27 +128,28 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
       dir={isEn ? 'ltr' : 'rtl'}
     >
       <div className="flex items-start justify-between gap-3.5 sm:gap-4">
-        {/* Toggle completion button */}
+        {/* Toggle completion button (Larger Hollow Colored Circle with Checkmark) */}
         <button
           type="button"
           onClick={() => onToggleComplete(reminder.id)}
-          className={`mt-0.5 w-6 h-6 rounded-lg border flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-95 ${
-            isCompleted
-              ? 'bg-emerald-600 border-emerald-500 text-white'
-              : 'border-stone-700 bg-stone-800/90 text-transparent hover:border-stone-500 hover:text-stone-400'
+          className={`mt-0.5 w-6.5 h-6.5 rounded-full border-[2.5px] flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-90 group ${
+            isCompleted ? completedCircleColor : `bg-transparent ${circleBorderColor}`
           }`}
           title={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'علامت به عنوان انجام شده')}
           aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'علامت به عنوان انجام شده')}
         >
-          <Check className="w-4 h-4 stroke-[2.8]" />
+          <Check
+            className={`w-3.5 h-3.5 stroke-[3] transition-all duration-150 ${
+              isCompleted ? 'opacity-100 scale-100' : 'opacity-0 scale-50 group-hover:opacity-60 group-hover:scale-90'
+            }`}
+          />
         </button>
 
-        {/* Card Main Body: Category Icon, Priority Dot, Title, Time */}
+        {/* Card Main Body: Category Icon, Title, Time */}
         <div className="flex-1 min-w-0">
-          {/* Metadata Row: Category icon and Priority dot */}
+          {/* Metadata Row: Category icon */}
           <div className="flex items-center gap-2 mb-1.5">
             {renderCategoryIcon()}
-            {renderPriorityDot()}
           </div>
 
           {/* Title - Prominent and bold subject */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Reminder, Category, Priority, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
-import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText } from './utils/jalali';
+import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
 import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { TimelineWidget } from './components/TimelineWidget';
@@ -59,7 +59,8 @@ import {
   GeofenceTriggerEvent,
   SavedLocationTriggerEvent
 } from './utils/geofenceManager';
-import { getT } from './utils/i18n';
+import { getT, formatSavedLocationTitle } from './utils/i18n';
+import { APP_VERSION } from './utils/version';
 import { 
   Plus, 
   BarChart3, 
@@ -92,7 +93,11 @@ import {
   Crosshair,
   Moon,
   Sun,
-  Smartphone
+  Smartphone,
+  ShieldCheck,
+  Info,
+  Mail,
+  ExternalLink
 } from 'lucide-react';
 
 const REMINDERS_STORAGE_KEY = 'fa_reminder_app_data_v2';
@@ -100,6 +105,7 @@ const IDEAS_STORAGE_KEY = 'fa_ideas_app_data_v1';
 const LOCATIONS_STORAGE_KEY = 'fa_locations_app_data_v1';
 const SETTINGS_STORAGE_KEY = 'fa_settings_app_data_v1';
 const DEFAULT_THEME_MIGRATION_KEY = 'yaad_default_theme_midnight_v1';
+const DEFAULT_LANG_FA_MIGRATION_KEY = 'yaad_default_lang_fa_v2';
 
 export default function App() {
   // Theme and Settings state
@@ -113,6 +119,14 @@ export default function App() {
           parsed.theme = 'midnight_blue_silver';
           localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(parsed));
         }
+        if (!localStorage.getItem(DEFAULT_LANG_FA_MIGRATION_KEY)) {
+          localStorage.setItem(DEFAULT_LANG_FA_MIGRATION_KEY, 'true');
+          parsed.language = 'fa';
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(parsed));
+        }
+        if (!parsed.language) {
+          parsed.language = 'fa';
+        }
         return parsed;
       }
     } catch {
@@ -120,6 +134,7 @@ export default function App() {
     }
     try {
       localStorage.setItem(DEFAULT_THEME_MIGRATION_KEY, 'true');
+      localStorage.setItem(DEFAULT_LANG_FA_MIGRATION_KEY, 'true');
     } catch {
       // Ignore
     }
@@ -566,25 +581,46 @@ export default function App() {
     }
     prevModalOpenRef.current = isAnyModalCurrentlyOpen;
   }, [isAnyModalCurrentlyOpen]);
-  // App startup splash screen (fade in & fade out in <= 2s)
+  // App startup splash screen (fade in & fade out in <= 1.5s, then immediately open + menu)
   const [showSplash, setShowSplash] = useState<boolean>(true);
   const [appVisible, setAppVisible] = useState<boolean>(false);
   const handleStartExitSplash = useCallback(() => {
     setAppVisible(true);
+    setIsCreateChoiceOpen(true);
   }, []);
   const handleFinishSplash = useCallback(() => {
     setAppVisible(true);
     setShowSplash(false);
+    setIsCreateChoiceOpen(true);
   }, []);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isLogoMenuOpen, setIsLogoMenuOpen] = useState(false);
+  const [logoMenuInfoSection, setLogoMenuInfoSection] = useState<'privacy' | 'about' | null>(null);
+  const logoMenuRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const fabMenuRef = useRef<HTMLDivElement>(null);
   const fabBtnRef = useRef<HTMLButtonElement>(null);
   const [categoryFilter, setCategoryFilter] = useState<'all' | Category | 'completed'>('all');
   const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
+
+  // Close logo menu when clicking outside
+  useEffect(() => {
+    if (!isLogoMenuOpen) return;
+    const handlePointerDownOutsideLogo = (e: PointerEvent | MouseEvent) => {
+      const target = e.target as Node | null;
+      if (target && logoMenuRef.current && !logoMenuRef.current.contains(target)) {
+        setIsLogoMenuOpen(false);
+        setLogoMenuInfoSection(null);
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDownOutsideLogo, true);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownOutsideLogo, true);
+    };
+  }, [isLogoMenuOpen]);
 
   // Close + 4-option menu when clicking anywhere on the screen outside the 4-option menu
   useEffect(() => {
@@ -950,15 +986,16 @@ export default function App() {
           // 1. Evaluate saved location geofences (حصارهای مکانی ثبت‌شده)
           if (hasActiveLocationCheckpoints) {
             evaluateSavedLocationGeofences(userPos, savedLocations, (event: SavedLocationTriggerEvent) => {
+              const displayLocTitle = formatSavedLocationTitle(event.location.title, settings.language);
               const actionText = event.triggerType === 'enter' 
                 ? (isEn ? 'Entered radius of' : 'ورود به محدوده') 
                 : (isEn ? 'Exited radius of' : 'خروج از محدوده');
               const titleText = isEn 
-                ? `📍 Geofence Alert: ${event.location.title}` 
-                : `📍 اعلام حصار مکانی: ${event.location.title}`;
+                ? `📍 Geofence Alert: ${displayLocTitle}` 
+                : `📍 اعلام حصار مکانی: ${displayLocTitle}`;
               const bodyText = event.location.geofence?.customMessage 
                 ? event.location.geofence.customMessage 
-                : `${actionText} ${event.location.title} (${isEn ? `Distance: ${Math.round(event.distance)}m` : `فاصله: ${toPersianDigits(Math.round(event.distance))} متر`})`;
+                : `${actionText} ${displayLocTitle} (${isEn ? `Distance: ${Math.round(event.distance)}m` : `فاصله: ${toPersianDigits(Math.round(event.distance))} متر`})`;
 
               // Native push notification
               fireImmediateLocalNotification(titleText, bodyText, { locationId: event.location.id, geofence: true });
@@ -968,7 +1005,7 @@ export default function App() {
               // Audio alarm and speech
               if (event.location.geofence?.playAudio !== false) {
                 playPhoneAlarmSound('radar');
-                speakReminderText(bodyText);
+                speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
               }
 
               // Update savedLocation state
@@ -1069,22 +1106,23 @@ export default function App() {
   };
 
   const handleSimulateLocationCheckpointTrigger = (location: SavedLocation, type: 'enter' | 'exit') => {
+    const displayLocTitle = formatSavedLocationTitle(location.title, settings.language);
     const actionText = type === 'enter' 
       ? (isEn ? 'Entered radius of' : 'ورود به محدوده') 
       : (isEn ? 'Exited radius of' : 'خروج از محدوده');
     const titleText = isEn 
-      ? `📍 Geofence Alert: ${location.title}` 
-      : `📍 اعلام حصار مکانی: ${location.title}`;
+      ? `📍 Geofence Alert: ${displayLocTitle}` 
+      : `📍 اعلام حصار مکانی: ${displayLocTitle}`;
     const bodyText = location.geofence?.customMessage 
       ? location.geofence.customMessage 
-      : `${actionText} ${location.title} (${isEn ? 'Simulation Test' : 'تست شبیه‌سازی'})`;
+      : `${actionText} ${displayLocTitle} (${isEn ? 'Simulation Test' : 'تست شبیه‌سازی'})`;
 
     fireImmediateLocalNotification(titleText, bodyText, { locationId: location.id, geofence: true });
     showSyncNotification(`${titleText} — ${bodyText}`);
 
     if (location.geofence?.playAudio !== false) {
       playPhoneAlarmSound('radar');
-      speakReminderText(bodyText);
+      speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
     }
   };
 
@@ -1733,7 +1771,7 @@ export default function App() {
     }
   };
 
-  // Filtered list (using normalized search across title, description/notes, location, category, priority, and date)
+  // Filtered lists across ALL user-entered collections (Reminders, Ideas, Saved Locations, Occasions) supporting Persian & English
   const filteredReminders = activeReminders.filter((r) => {
     if (categoryFilter === 'completed') {
       if (r.status !== 'completed') return false;
@@ -1746,21 +1784,54 @@ export default function App() {
     }
 
     if (searchQuery.trim()) {
-      const qNorm = normalizeSearchText(searchQuery);
-      if (!qNorm) return true;
-      const catFa = r.category === 'work' ? 'کار کاری' : r.category === 'family' ? 'خانواده خانوادگی' : 'سایر عمومی';
-      const prioFa = r.priority === 'high' ? 'فوری بالا' : r.priority === 'medium' ? 'متوسط' : 'عادی پایین';
-      const fullDateFa = formatJalaliFull(r.dueTimestamp, 'fa');
-      const fullDateEn = formatJalaliFull(r.dueTimestamp, 'en');
-      const haystack = normalizeSearchText(
-        `${r.title} ${r.description || ''} ${r.geofence?.locationName || ''} ${r.geofence?.address || ''} ${catFa} ${r.category} ${prioFa} ${r.priority} ${fullDateFa} ${fullDateEn}`
-      );
-      const tokens = qNorm.split(' ').filter(Boolean);
-      return tokens.every((tok) => haystack.includes(tok));
+      return matchesReminderSearch(r, searchQuery);
     }
 
     return true;
   });
+
+  const filteredGlobalIdeas = useMemo(
+    () => (searchQuery.trim() ? activeIdeas.filter((i) => matchesIdeaSearch(i, searchQuery)) : activeIdeas),
+    [activeIdeas, searchQuery]
+  );
+
+  const filteredGlobalLocations = useMemo(
+    () => (searchQuery.trim() ? activeSavedLocations.filter((l) => matchesLocationSearch(l, searchQuery)) : activeSavedLocations),
+    [activeSavedLocations, searchQuery]
+  );
+
+  const filteredGlobalOccasions = useMemo(
+    () => (searchQuery.trim() ? activeOccasions.filter((o) => matchesOccasionSearch(o, searchQuery)) : activeOccasions),
+    [activeOccasions, searchQuery]
+  );
+
+  const totalGlobalSearchMatches =
+    filteredReminders.length +
+    filteredGlobalIdeas.length +
+    filteredGlobalLocations.length +
+    filteredGlobalOccasions.length;
+
+  // Automatically switch to the first tab with results if current tab has 0 matches during global search
+  useEffect(() => {
+    if (!searchQuery.trim() || totalGlobalSearchMatches === 0) return;
+    if (activeMainTab === 'reminders' && filteredReminders.length > 0) return;
+    if (activeMainTab === 'occasions' && filteredGlobalOccasions.length > 0) return;
+    if (activeMainTab === 'locations' && filteredGlobalLocations.length > 0) return;
+    if (activeMainTab === 'ideas' && filteredGlobalIdeas.length > 0) return;
+
+    if (filteredReminders.length > 0) setActiveMainTab('reminders');
+    else if (filteredGlobalOccasions.length > 0) setActiveMainTab('occasions');
+    else if (filteredGlobalLocations.length > 0) setActiveMainTab('locations');
+    else if (filteredGlobalIdeas.length > 0) setActiveMainTab('ideas');
+  }, [
+    searchQuery,
+    totalGlobalSearchMatches,
+    activeMainTab,
+    filteredReminders.length,
+    filteredGlobalOccasions.length,
+    filteredGlobalLocations.length,
+    filteredGlobalIdeas.length,
+  ]);
 
   const sortedReminders = [...filteredReminders].sort((a, b) => {
     if (a.status === 'completed' && b.status !== 'completed') return 1;
@@ -1874,21 +1945,25 @@ export default function App() {
           : 'bg-white/95 border-stone-200 text-stone-900 shadow-sm'
       }`}>
         <div className="w-full px-2.5 sm:px-4 md:px-6 h-16 sm:h-18 flex items-center justify-between gap-2">
-          {/* Main App Logo & Title (لمس آیکون برنامه برای بازگشت به صفحه اصلی) */}
-          <div className="flex items-center gap-2.5 flex-shrink-0">
+          {/* Main App Logo & Title (کادر لوگو هم‌اندازه کادر جستجو و تنظیمات، ثابت در تمام صفحات با منوی مینیمال اطلاعات و لینک‌ها) */}
+          <div className="flex items-center gap-2.5 flex-shrink-0 relative" ref={logoMenuRef}>
             <button
+              id="header-logo-menu-btn"
               type="button"
               onClick={() => {
-                setActiveMainTab('reminders');
-                setEditingReminder(null);
-                setIsFormOpen(false);
-                setIsIdeaModalOpen(false);
-                setIsLocationModalOpen(false);
-                setIsSettingsOpen(false);
-                window.scrollTo({ top: 0, behavior: 'smooth' });
+                setIsLogoMenuOpen((prev) => {
+                  const next = !prev;
+                  if (!next) setLogoMenuInfoSection(null);
+                  return next;
+                });
               }}
-              className="w-10 h-10 sm:w-11 sm:h-11 rounded-2xl p-0.5 bg-stone-950 border border-amber-500/40 flex items-center justify-center flex-shrink-0 group cursor-pointer active:scale-95 transition-all duration-200 shadow-md shadow-amber-500/10 hover:border-amber-400"
-              title={settings.language === 'en' ? 'YAAD - Go to Home' : 'یاد • بازگشت به صفحه اصلی'}
+              className={`min-h-[48px] min-w-[48px] w-12 h-12 rounded-2xl p-1 border flex items-center justify-center flex-shrink-0 group cursor-pointer active:scale-95 transition-all duration-200 shadow-md ${
+                isLogoMenuOpen
+                  ? 'bg-stone-900 border-indigo-500 ring-1 ring-indigo-400/50 shadow-indigo-500/20'
+                  : 'bg-stone-950 border-stone-700/90 hover:border-amber-400/80 shadow-amber-500/10'
+              }`}
+              title={isEn ? 'App Info & Support' : 'اطلاعات برنامه و پشتیبانی'}
+              aria-label={isEn ? 'App Info & Support' : 'اطلاعات برنامه و پشتیبانی'}
             >
               <img
                 src={appIcon}
@@ -1897,6 +1972,96 @@ export default function App() {
                 draggable={false}
               />
             </button>
+
+            {/* Minimal App Info, Privacy, About & Support Dropdown Menu */}
+            {isLogoMenuOpen && (
+              <div
+                dir={isEn ? 'ltr' : 'rtl'}
+                className={`absolute top-full mt-2 ${
+                  isEn ? 'left-0' : 'right-0'
+                } w-64 sm:w-72 rounded-2xl bg-stone-900/98 border border-stone-800 p-3 shadow-2xl backdrop-blur-xl z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150`}
+              >
+                {/* 1. App Version */}
+                <div className="flex items-center justify-between px-2.5 py-2 rounded-xl bg-stone-950/80 border border-stone-800/80">
+                  <div className="flex items-center gap-2">
+                    <img src={appIcon} alt="YAAD" className="w-5 h-5 rounded-md object-cover" />
+                    <span className="text-xs font-bold text-stone-200">
+                      {isEn ? 'App Version' : 'ورژن اپ'}
+                    </span>
+                  </div>
+                  <span className="font-mono text-xs font-black text-indigo-400 bg-indigo-500/10 border border-indigo-500/25 px-2 py-0.5 rounded-lg" dir="ltr">
+                    v{APP_VERSION}
+                  </span>
+                </div>
+
+                {/* 2. Privacy Policy Link */}
+                <button
+                  type="button"
+                  onClick={() => setLogoMenuInfoSection(logoMenuInfoSection === 'privacy' ? null : 'privacy')}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs font-bold flex items-center justify-between transition-all cursor-pointer ${
+                    logoMenuInfoSection === 'privacy'
+                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                      : 'bg-stone-950/60 hover:bg-stone-800/90 border-stone-800/80 text-stone-300 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <span>{isEn ? 'Privacy Policy' : 'حریم خصوصی'}</span>
+                  </div>
+                  <span className="text-[10px] text-stone-400">{logoMenuInfoSection === 'privacy' ? '▲' : '▼'}</span>
+                </button>
+
+                {logoMenuInfoSection === 'privacy' && (
+                  <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed animate-in fade-in">
+                    {isEn
+                      ? 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and never shared externally.'
+                      : 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه ذخیره می‌شوند و به هیچ سروری ارسال نمی‌گردند.'}
+                  </div>
+                )}
+
+                {/* 3. About Link */}
+                <button
+                  type="button"
+                  onClick={() => setLogoMenuInfoSection(logoMenuInfoSection === 'about' ? null : 'about')}
+                  className={`w-full px-3 py-2 rounded-xl border text-xs font-bold flex items-center justify-between transition-all cursor-pointer ${
+                    logoMenuInfoSection === 'about'
+                      ? 'bg-indigo-500/20 border-indigo-500/50 text-indigo-300'
+                      : 'bg-stone-950/60 hover:bg-stone-800/90 border-stone-800/80 text-stone-300 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Info className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <span>{isEn ? 'About YAAD' : 'درباره‌ی'}</span>
+                  </div>
+                  <span className="text-[10px] text-stone-400">{logoMenuInfoSection === 'about' ? '▲' : '▼'}</span>
+                </button>
+
+                {logoMenuInfoSection === 'about' && (
+                  <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed animate-in fade-in">
+                    {isEn
+                      ? `Smart assistant for spoken reminders, occasions, ideas, and location Geofence alerts • Version ${APP_VERSION}`
+                      : `دستیار هوشمند یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار زمانی مکان‌محور (Geofence) • نسخه ${APP_VERSION}`}
+                  </div>
+                )}
+
+                {/* 4. Support Email Link (mailto:YAADreminder@gmail.com) */}
+                <a
+                  href="mailto:YAADreminder@gmail.com?subject=YAAD%20App%20Support"
+                  className="w-full px-3 py-2.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/35 text-indigo-300 hover:text-white text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Mail className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <div className="flex flex-col min-w-0">
+                      <span>{isEn ? 'Support' : 'پشتیبانی'}</span>
+                      <span className="text-[10px] font-mono text-stone-400 truncate" dir="ltr">
+                        YAADreminder@gmail.com
+                      </span>
+                    </div>
+                  </div>
+                  <ExternalLink className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                </a>
+              </div>
+            )}
 
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5">
@@ -2056,7 +2221,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Expandable Search Input Bar (ظاهر شدن فیلد تایپ و جستجو بعد از کلیک ذره‌بین) */}
+        {/* Expandable Search Input Bar (جستجوی جامع دو زبانه در همه اطلاعات وارد شده توسط کاربر) */}
         {isSearchOpen && (
           <div className="w-full px-3 sm:px-6 py-2.5 bg-stone-900 border-t border-stone-800/90 animate-in slide-in-from-top-2 duration-150">
             <div className="max-w-2xl mx-auto space-y-2" dir={isEn ? 'ltr' : 'rtl'}>
@@ -2065,14 +2230,16 @@ export default function App() {
                 <input
                   ref={searchInputRef}
                   type="text"
+                  dir="auto"
                   value={searchQuery}
                   onChange={(e) => {
                     setSearchQuery(e.target.value);
-                    if (activeMainTab !== 'reminders') {
-                      setActiveMainTab('reminders');
-                    }
                   }}
-                  placeholder={isEn ? 'Search reminders by title, note, date, or place...' : 'جستجو در یادآورها، متن، توضیحات، تاریخ یا مکان...'}
+                  placeholder={
+                    isEn
+                      ? 'Search all reminders, ideas, notes, places & occasions (EN / FA)...'
+                      : 'جستجو در همه اطلاعات: یادآورها، ایده‌ها، مکان‌ها، مناسبت‌ها، متن و تاریخ (فارسی و انگلیسی)...'
+                  }
                   className={`w-full bg-stone-950 border border-stone-700 focus:border-indigo-500 rounded-2xl ${
                     isEn ? 'pl-10 pr-10' : 'pr-10 pl-10'
                   } py-2.5 text-xs sm:text-sm text-white placeholder-stone-500 focus:outline-none transition-all shadow-inner`}
@@ -2092,16 +2259,16 @@ export default function App() {
                 )}
               </div>
 
-              {/* Inline Search Feedback right in the search bar area (در همان محل) */}
+              {/* Unified Search Feedback across all 4 user collections */}
               {searchQuery.trim() && (
-                filteredReminders.length === 0 ? (
+                totalGlobalSearchMatches === 0 ? (
                   <div className="px-3.5 py-2.5 rounded-xl bg-rose-500/10 border border-rose-500/30 flex items-center justify-between gap-2 text-xs text-rose-300 animate-in fade-in duration-150">
                     <div className="flex items-center gap-2 font-bold">
                       <Search className="w-4 h-4 text-rose-400 shrink-0" />
                       <span>
                         {isEn
-                          ? `Reminder not found — no match for "${searchQuery}"`
-                          : `یادآور یافت نشد — موردی با «${searchQuery}» در یادآورها، متن و توضیحات وجود ندارد`}
+                          ? `No results found — "${searchQuery}" does not exist in Reminders, Ideas, Places, or Occasions`
+                          : `موردی یافت نشد — «${searchQuery}» در یادآورها، ایده‌ها، مکان‌ها و مناسبت‌ها وجود ندارد`}
                       </span>
                     </div>
                   </div>
@@ -2110,32 +2277,130 @@ export default function App() {
                     <div className="flex items-center justify-between text-[11px] text-indigo-300 font-bold">
                       <span>
                         {isEn
-                          ? `${filteredReminders.length} reminder(s) found`
-                          : `${toPersianDigits(filteredReminders.length)} یادآور یافت شد`}
+                          ? `${totalGlobalSearchMatches} match(es) found across your data`
+                          : `${toPersianDigits(totalGlobalSearchMatches)} مورد در اطلاعات شما یافت شد`}
                       </span>
                       <span className="text-stone-400 text-[10px]">
-                        {isEn ? 'Tap item to edit' : 'برای مشاهده یا ویرایش روی مورد کلیک کنید'}
+                        {isEn ? 'Tap any item to view or edit' : 'برای مشاهده یا ویرایش روی مورد کلیک کنید'}
                       </span>
                     </div>
-                    <div className="max-h-40 overflow-y-auto space-y-1 pr-0.5">
-                      {filteredReminders.slice(0, 5).map((rem) => (
+                    <div className="max-h-52 overflow-y-auto space-y-1 pr-0.5">
+                      {/* 1. Matching Reminders */}
+                      {filteredReminders.map((rem) => (
                         <button
-                          key={rem.id}
+                          key={`search-rem-${rem.id}`}
                           type="button"
                           onClick={() => {
+                            setActiveMainTab('reminders');
                             setEditingReminder(rem);
                             setIsFormOpen(true);
                           }}
                           className="w-full text-start p-2 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800/80 flex items-center justify-between gap-2 transition-colors cursor-pointer"
                         >
                           <div className="min-w-0 flex-1">
-                            <p className="text-xs font-bold text-white truncate">{rem.title}</p>
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded-md bg-indigo-500/15 text-indigo-300 text-[9px] font-bold shrink-0">
+                                {isEn ? 'Reminder' : 'یادآور'}
+                              </span>
+                              <p className="text-xs font-bold text-white truncate">{rem.title}</p>
+                            </div>
                             {rem.description && (
-                              <p className="text-[10px] text-stone-400 truncate">{rem.description}</p>
+                              <p className="text-[10px] text-stone-400 truncate mt-0.5">{rem.description}</p>
                             )}
                           </div>
                           <span className="text-[10px] font-mono text-indigo-300 shrink-0">
                             {formatJalaliFull(rem.dueTimestamp, isEn ? 'en' : 'fa')}
+                          </span>
+                        </button>
+                      ))}
+
+                      {/* 2. Matching Occasions */}
+                      {filteredGlobalOccasions.map((occ) => (
+                        <button
+                          key={`search-occ-${occ.id}`}
+                          type="button"
+                          onClick={() => {
+                            setActiveMainTab('occasions');
+                            setEditingOccasion(occ);
+                            setIsOccasionModalOpen(true);
+                          }}
+                          className="w-full text-start p-2 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800/80 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded-md bg-pink-500/15 text-pink-300 text-[9px] font-bold shrink-0">
+                                {isEn ? 'Occasion' : 'مناسبت'}
+                              </span>
+                              <p className="text-xs font-bold text-white truncate">{occ.title}</p>
+                            </div>
+                            {(occ.personName || occ.customNote) && (
+                              <p className="text-[10px] text-stone-400 truncate mt-0.5">
+                                {[occ.personName, occ.customNote].filter(Boolean).join(' • ')}
+                              </p>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-mono text-indigo-300 shrink-0">
+                            {isEn ? `${occ.solarMonth}/${occ.solarDay}` : toPersianDigits(`${occ.solarMonth}/${occ.solarDay}`)}
+                          </span>
+                        </button>
+                      ))}
+
+                      {/* 3. Matching Saved Locations */}
+                      {filteredGlobalLocations.map((loc) => (
+                        <button
+                          key={`search-loc-${loc.id}`}
+                          type="button"
+                          onClick={() => {
+                            setActiveMainTab('locations');
+                            setEditingLocation(loc);
+                            setIsLocationModalOpen(true);
+                          }}
+                          className="w-full text-start p-2 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800/80 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 text-[9px] font-bold shrink-0">
+                                {isEn ? 'Place' : 'مکان'}
+                              </span>
+                              <p className="text-xs font-bold text-white truncate">{formatSavedLocationTitle(loc.title, settings.language)}</p>
+                            </div>
+                            {(loc.address || loc.description) && (
+                              <p className="text-[10px] text-stone-400 truncate mt-0.5">
+                                {loc.address || loc.description}
+                              </p>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-mono text-indigo-300 shrink-0">
+                            {formatJalaliFull(loc.createdAt, isEn ? 'en' : 'fa')}
+                          </span>
+                        </button>
+                      ))}
+
+                      {/* 4. Matching Ideas & Notes */}
+                      {filteredGlobalIdeas.map((idea) => (
+                        <button
+                          key={`search-idea-${idea.id}`}
+                          type="button"
+                          onClick={() => {
+                            setActiveMainTab('ideas');
+                            setEditingIdea(idea);
+                            setIsIdeaModalOpen(true);
+                          }}
+                          className="w-full text-start p-2 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-800/80 flex items-center justify-between gap-2 transition-colors cursor-pointer"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-300 text-[9px] font-bold shrink-0">
+                                {isEn ? 'Idea' : 'ایده'}
+                              </span>
+                              <p className="text-xs font-bold text-white truncate">{idea.title}</p>
+                            </div>
+                            {idea.content && (
+                              <p className="text-[10px] text-stone-400 truncate mt-0.5">{idea.content}</p>
+                            )}
+                          </div>
+                          <span className="text-[10px] font-mono text-indigo-300 shrink-0">
+                            {formatJalaliFull(idea.createdAt, isEn ? 'en' : 'fa')}
                           </span>
                         </button>
                       ))}
@@ -2151,7 +2416,6 @@ export default function App() {
       {/* Main Container - Maximum Width coverage across screen with ample padding for bottom nav and FAB */}
       <main className="flex-1 w-full px-3 sm:px-6 py-4 sm:py-6 space-y-6 pb-36 sm:pb-44">
         
-        {/* VIEW 1: REMINDERS TAB */}
         {/* VIEW 1: REMINDERS TAB - SINGLE VERTICAL TIMELINE */}
         {activeMainTab === 'reminders' && (
           <VerticalTimelineView
@@ -2196,9 +2460,9 @@ export default function App() {
               </button>
             </div>
 
-            {activeIdeas.length > 0 ? (
+            {filteredGlobalIdeas.length > 0 ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {activeIdeas.map((idea) => (
+                {filteredGlobalIdeas.map((idea) => (
                   <IdeaCard
                     key={idea.id}
                     idea={idea}
@@ -2219,7 +2483,9 @@ export default function App() {
                 </div>
                 <div className="space-y-1">
                   <h4 className="font-bold text-base text-white">
-                    {isEn ? 'No ideas recorded yet!' : 'هنوز ایده‌ای ثبت نکرده‌اید!'}
+                    {searchQuery.trim()
+                      ? (isEn ? 'No matching ideas found' : 'ایده‌ای با این عبارت یافت نشد')
+                      : (isEn ? 'No ideas recorded yet!' : 'هنوز ایده‌ای ثبت نکرده‌اید!')}
                   </h4>
                   <p className="text-xs text-stone-400 max-w-sm mx-auto leading-relaxed">
                     {isEn 
@@ -2243,6 +2509,14 @@ export default function App() {
         {/* VIEW 3: LOCATIONS TAB (ثبت لوکیشن با تکیه بر GPS و گوگل مپ) */}
         {activeMainTab === 'locations' && (() => {
           const activeGeofencesCount = activeSavedLocations.filter((l) => l.geofence && l.geofence.enabled).length;
+          const effectiveLocationQuery = locationSearchQuery.trim() || searchQuery.trim();
+          const displayedLocations = activeSavedLocations.filter((loc) => {
+            if (locationFilter === 'checkpoints' && (!loc.geofence || !loc.geofence.enabled)) {
+              return false;
+            }
+            if (!effectiveLocationQuery) return true;
+            return matchesLocationSearch(loc, effectiveLocationQuery);
+          });
 
           return (
             <section className="space-y-4 animate-in fade-in">
@@ -2322,9 +2596,10 @@ export default function App() {
                   <Search className="w-4 h-4 text-stone-400 absolute start-3 top-1/2 -translate-y-1/2" />
                   <input
                     type="text"
+                    dir="auto"
                     value={locationSearchQuery}
                     onChange={(e) => setLocationSearchQuery(e.target.value)}
-                    placeholder={isEn ? 'Search places by name or address...' : 'جست‌وجوی مکان بر اساس نام، آدرس یا توضیحات...'}
+                    placeholder={isEn ? 'Search places by name, address or notes (FA/EN)...' : 'جست‌وجوی مکان بر اساس نام، آدرس یا توضیحات (فارسی/انگلیسی)...'}
                     className="w-full ps-9 pe-3 py-2 rounded-xl bg-stone-900 border border-stone-800 text-white placeholder-stone-500 text-xs focus:outline-none focus:border-indigo-500"
                   />
                   {locationSearchQuery && (
@@ -2360,22 +2635,9 @@ export default function App() {
                 </div>
               </div>
 
-              {activeSavedLocations.length > 0 ? (
+              {displayedLocations.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {activeSavedLocations
-                    .filter((loc) => {
-                      if (locationFilter === 'checkpoints' && (!loc.geofence || !loc.geofence.enabled)) {
-                        return false;
-                      }
-                      if (!locationSearchQuery.trim()) return true;
-                      const q = locationSearchQuery.toLowerCase();
-                      return (
-                        loc.title.toLowerCase().includes(q) ||
-                        (loc.description && loc.description.toLowerCase().includes(q)) ||
-                        (loc.address && loc.address.toLowerCase().includes(q))
-                      );
-                    })
-                    .map((loc) => (
+                  {displayedLocations.map((loc) => (
                       <SavedLocationCard
                         key={loc.id}
                         location={loc}
@@ -2414,7 +2676,9 @@ export default function App() {
                 </div>
                 <div className="space-y-1">
                   <h4 className="font-bold text-base text-white">
-                    {isEn ? 'No locations saved yet!' : 'هنوز مکانی ثبت نکرده‌اید!'}
+                    {effectiveLocationQuery
+                      ? (isEn ? 'No matching locations found' : 'مکانی با این مشخصات یافت نشد')
+                      : (isEn ? 'No locations saved yet!' : 'هنوز مکانی ثبت نکرده‌اید!')}
                   </h4>
                   <p className="text-xs text-stone-400 max-w-sm mx-auto leading-relaxed">
                     {isEn 
@@ -2451,6 +2715,7 @@ export default function App() {
             onDelete={handleDeleteOccasion}
             onCreateReminder={handleCreateReminderFromOccasion}
             language={settings.language}
+            globalSearchQuery={searchQuery}
           />
         )}
 
@@ -2850,13 +3115,13 @@ export default function App() {
 
       </div>
       
-      {/* APP STARTUP SPLASH SCREEN (FADE OUT IN 2 SECONDS WITH LOGO & DYNAMIC VERSION) */}
+      {/* APP STARTUP SPLASH SCREEN (SMOOTHER ANIMATION IN <= 2 SECONDS WITH FADE-OUT INTO APP) */}
       {showSplash && (
         <SplashScreen 
           onStartExit={handleStartExitSplash} 
           onFinish={handleFinishSplash} 
-          totalDurationMs={2000}
-          fadeOutMs={700}
+          totalDurationMs={1950}
+          fadeOutMs={500}
           language={settings.language}
         />
       )}

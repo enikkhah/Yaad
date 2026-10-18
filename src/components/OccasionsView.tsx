@@ -11,7 +11,7 @@ import {
 import { Occasion, OccasionType } from '../types';
 import { OccasionCard } from './OccasionCard';
 import { OCCASION_TYPES, calculateNextOccasionOccurrence } from '../utils/occasionUtils';
-import { toPersianDigits } from '../utils/jalali';
+import { toPersianDigits, matchesOccasionSearch } from '../utils/jalali';
 import { AppLanguage } from '../utils/i18n';
 
 interface OccasionsViewProps {
@@ -21,6 +21,8 @@ interface OccasionsViewProps {
   onDelete: (id: string) => void;
   onCreateReminder: (occasion: Occasion) => void;
   language?: AppLanguage;
+  globalSearchQuery?: string;
+  onTriggerNotFoundPopup?: (query: string) => void;
 }
 
 export const OccasionsView: React.FC<OccasionsViewProps> = ({
@@ -30,10 +32,14 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
   onDelete,
   onCreateReminder,
   language = 'fa',
+  globalSearchQuery = '',
+  onTriggerNotFoundPopup,
 }) => {
   const isEn = language === 'en';
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<OccasionType | 'all'>('all');
+
+  const effectiveQuery = searchQuery.trim() || globalSearchQuery.trim();
 
   // Filter out deleted occasions (سطل بازیافت)
   const nonDeletedOccasions = occasions.filter((o) => !o.deletedAt);
@@ -49,13 +55,8 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
     if (selectedTypeFilter !== 'all' && occ.type !== selectedTypeFilter) {
       return false;
     }
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    return (
-      occ.title.toLowerCase().includes(q) ||
-      (occ.personName && occ.personName.toLowerCase().includes(q)) ||
-      (occ.customNote && occ.customNote.toLowerCase().includes(q))
-    );
+    if (!effectiveQuery) return true;
+    return matchesOccasionSearch(occ, effectiveQuery);
   });
 
   const todayCount = nonDeletedOccasions.filter((o) => calculateNextOccasionOccurrence(o).isToday).length;
@@ -103,9 +104,10 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
           <Search className="w-4 h-4 text-stone-400 absolute start-3 top-1/2 -translate-y-1/2" />
           <input
             type="text"
+            dir="auto"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={isEn ? 'Search occasions by title, name or notes...' : 'جست‌وجوی مناسبت بر اساس عنوان، نام شخص یا یادداشت...'}
+            placeholder={isEn ? 'Search occasions by title, name, date or notes (FA/EN)...' : 'جست‌وجوی مناسبت بر اساس عنوان، نام شخص، تاریخ یا یادداشت (فارسی/انگلیسی)...'}
             className="w-full ps-9 pe-3 py-2 rounded-xl bg-stone-900 border border-stone-800 text-white placeholder-stone-500 text-xs focus:outline-none focus:border-indigo-500"
           />
           {searchQuery && (

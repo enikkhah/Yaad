@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { SavedLocation } from '../types';
 import { formatJalaliFull, toPersianDigits } from '../utils/jalali';
-import { AppLanguage } from '../utils/i18n';
+import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { calculateHaversineDistance } from '../utils/geofenceManager';
 
 interface SavedLocationCardProps {
@@ -56,9 +56,10 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   const [copied, setCopied] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
   const formattedDate = formatJalaliFull(location.createdAt, language);
+  const displayTitle = formatSavedLocationTitle(location.title, language);
 
   const copyToClipboard = () => {
-    const textToCopy = `${location.title}\nCoordinates: ${location.latitude}, ${location.longitude}\nGoogle Maps: ${location.googleMapsUrl}`;
+    const textToCopy = `${displayTitle}\nCoordinates: ${location.latitude}, ${location.longitude}\nGoogle Maps: ${location.googleMapsUrl}`;
     navigator.clipboard.writeText(textToCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -104,12 +105,12 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 <h4 className="font-black text-base sm:text-lg text-white leading-snug tracking-tight line-clamp-2">
-                  {location.title}
+                  {displayTitle}
                 </h4>
                 {isCheckpointActive && (
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-stone-800 text-stone-300 font-bold border border-stone-700 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
-                    <span>{isEn ? 'Geofence Active' : 'حصار مکانی فعال'}</span>
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    <span>{isEn ? 'Geofence' : 'حصار زمانی'}</span>
                   </span>
                 )}
               </div>
@@ -201,20 +202,20 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
           )}
         </div>
 
-        {/* GEOFENCE SUB-FEATURE BOX (زیرمجموعه حصار مکانی و اعلام ورود/خروج) */}
+        {/* GEOFENCE SUB-FEATURE BOX (زیرمجموعه حصار زمانی و اعلام ورود/خروج) */}
         {hasGeofence ? (
-          <div className={`p-3 rounded-2xl border text-xs space-y-2 transition-all ${
+          <div className={`p-3.5 sm:p-4 rounded-2xl border-2 text-xs space-y-2.5 transition-all shadow-md ${
             isCheckpointActive
-              ? 'bg-emerald-950/30 border-emerald-500/40'
-              : 'bg-stone-950/80 border-stone-800 text-stone-400'
+              ? 'bg-emerald-950/45 border-emerald-500/60 ring-1 ring-emerald-500/20'
+              : 'bg-stone-950/90 border-stone-700/80 text-stone-400'
           }`}>
             <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5">
-                <Radio className={`w-3.5 h-3.5 ${isCheckpointActive ? 'text-emerald-400 animate-pulse' : 'text-stone-500'}`} />
-                <span className="font-bold text-white text-[11px]">
+              <div className="flex items-center gap-2">
+                <Radio className={`w-4 h-4 ${isCheckpointActive ? 'text-emerald-400 animate-pulse' : 'text-stone-500'}`} />
+                <span className="font-black text-white text-xs sm:text-sm">
                   {isCheckpointActive 
-                    ? (isEn ? 'Location Fence (Geofence)' : 'حصار مکانی (Geofence)') 
-                    : (isEn ? 'Geofence Paused' : 'حصار مکانی غیرفعال')}
+                    ? (isEn ? 'Geofence' : 'حصار زمانی') 
+                    : (isEn ? 'Geofence (Paused)' : 'حصار زمانی (غیرفعال)')}
                 </span>
               </div>
 
@@ -309,10 +310,10 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
             <button
               type="button"
               onClick={() => onEdit(location)}
-              className="w-full py-1.5 px-2.5 rounded-xl border border-dashed border-stone-700 bg-stone-950/60 hover:bg-stone-800 text-stone-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              className="w-full min-h-[46px] py-2.5 px-3.5 rounded-2xl border-2 border-dashed border-emerald-500/40 bg-emerald-950/20 hover:bg-emerald-950/40 hover:border-emerald-400/70 text-emerald-200 text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
             >
-              <Radio className="w-3.5 h-3.5 text-stone-400" />
-              <span>{isEn ? '+ Configure Geofence' : '+ فعال‌سازی حصار مکانی و محدوده شعاع (Geofence)'}</span>
+              <Radio className="w-4 h-4 text-emerald-400" />
+              <span>{isEn ? '+ Geofence' : '+ حصار زمانی'}</span>
             </button>
           )
         )}

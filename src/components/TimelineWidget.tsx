@@ -83,29 +83,29 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
     }
   };
 
-  // Render priority dot
-  const renderPriorityDot = (priority: Reminder['priority']) => {
-    if (priority === 'high') {
-      return (
-        <span 
-          className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-sm shrink-0" 
-          title={isEn ? 'Urgent' : 'فوری'} 
-        />
-      );
-    }
-    if (priority === 'medium') {
-      return (
-        <span 
-          className="w-2.5 h-2.5 rounded-full bg-stone-500/70 shrink-0" 
-          title={isEn ? 'Medium' : 'متوسط'} 
-        />
-      );
-    }
+  // Render hollow colored circle with checkmark completion
+  const renderCategoryPriorityCircle = (rem: Reminder) => {
+    const borderClass =
+      rem.priority === 'high'
+        ? 'border-red-500 text-red-400 hover:bg-red-500/15 ring-2 ring-red-500/20'
+        : rem.category === 'work'
+        ? 'border-cyan-400 text-cyan-400 hover:bg-cyan-400/15'
+        : rem.category === 'family'
+        ? 'border-rose-400 text-rose-400 hover:bg-rose-400/15'
+        : 'border-indigo-400 text-indigo-400 hover:bg-indigo-400/15';
+
     return (
-      <span 
-        className="w-2.5 h-2.5 rounded-full bg-stone-700/60 shrink-0" 
-        title={isEn ? 'Normal' : 'عادی'} 
-      />
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleComplete(rem.id);
+        }}
+        className={`w-6 h-6 rounded-full border-[2.5px] bg-transparent flex items-center justify-center shrink-0 transition-all cursor-pointer active:scale-90 group ${borderClass}`}
+        title={isEn ? 'Mark as completed' : 'انجام شد'}
+      >
+        <CheckCircle2 className="w-3.5 h-3.5 opacity-0 group-hover:opacity-70 transition-opacity" />
+      </button>
     );
   };
 
@@ -150,9 +150,9 @@ export const TimelineWidget: React.FC<TimelineWidgetProps> = ({
               <span>{isEn ? 'Next Reminder' : 'یادآور بعدی'}</span>
             </span>
 
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2">
               {renderCategoryIcon(nextPendingReminder.category)}
-              {renderPriorityDot(nextPendingReminder.priority)}
+              {renderCategoryPriorityCircle(nextPendingReminder)}
             </div>
           </div>
 
