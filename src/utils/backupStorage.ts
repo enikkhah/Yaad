@@ -413,25 +413,41 @@ export async function requestLocalFolderPermission(
   }
 
   // 3. Request Android storage permission & create physical "Yaad reminder" folder via @capacitor/filesystem
+  // Writes to Directory.External (no permission needed on Android 11-15), Directory.Documents, Directory.ExternalStorage, and Directory.Data
   try {
     if (Capacitor.isNativePlatform() || (window as any).Capacitor?.Plugins?.Filesystem) {
       await Promise.race([
         Filesystem.requestPermissions(),
-        new Promise((resolve) => setTimeout(resolve, 4000)),
+        new Promise((resolve) => setTimeout(resolve, 3500)),
       ]).catch(() => {});
 
-      const cleanSubName = effectiveFolderName.replace(/^Documents\//i, '').trim() || LOCAL_BACKUP_FOLDER_NAME;
-      await Filesystem.mkdir({
-        path: cleanSubName,
-        directory: Directory.Documents,
-        recursive: true,
-      }).catch(() => {});
+      const cleanSubName =
+        effectiveFolderName
+          .replace(/^(Documents|Download|InternalStorage)\//i, '')
+          .trim() || LOCAL_BACKUP_FOLDER_NAME;
 
-      await Filesystem.mkdir({
-        path: cleanSubName,
-        directory: Directory.Data,
-        recursive: true,
-      }).catch(() => {});
+      const targetDirs = [
+        Directory.External,
+        Directory.Documents,
+        Directory.ExternalStorage,
+        Directory.Data,
+      ];
+
+      for (const dir of targetDirs) {
+        await Filesystem.mkdir({
+          path: cleanSubName,
+          directory: dir,
+          recursive: true,
+        }).catch(() => {});
+      }
+
+      if (/^Download\//i.test(effectiveFolderName)) {
+        await Filesystem.mkdir({
+          path: `Download/${cleanSubName}`,
+          directory: Directory.ExternalStorage,
+          recursive: true,
+        }).catch(() => {});
+      }
     }
   } catch {
     // ignore
@@ -692,23 +708,36 @@ export async function performAutoBackup(
 
     // 4. Save to Native Capacitor Filesystem '<localFolder>/yaad_backup.json' if available
     try {
-      const cleanSubName = localFolder.replace(/^Documents\//i, '').trim() || LOCAL_BACKUP_FOLDER_NAME;
+      const cleanSubName =
+        localFolder.replace(/^(Documents|Download|InternalStorage)\//i, '').trim() ||
+        LOCAL_BACKUP_FOLDER_NAME;
       const jsonData = JSON.stringify(payload, null, 2);
-      await Filesystem.writeFile({
-        path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
-        data: jsonData,
-        directory: Directory.Documents,
-        encoding: Encoding.UTF8,
-        recursive: true,
-      }).catch(() => {});
 
-      await Filesystem.writeFile({
-        path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
-        data: jsonData,
-        directory: Directory.Data,
-        encoding: Encoding.UTF8,
-        recursive: true,
-      }).catch(() => {});
+      const writeDirs = [
+        Directory.External,
+        Directory.Documents,
+        Directory.ExternalStorage,
+        Directory.Data,
+      ];
+      for (const dir of writeDirs) {
+        await Filesystem.writeFile({
+          path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
+          data: jsonData,
+          directory: dir,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        }).catch(() => {});
+      }
+
+      if (/^Download\//i.test(localFolder)) {
+        await Filesystem.writeFile({
+          path: `Download/${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
+          data: jsonData,
+          directory: Directory.ExternalStorage,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        }).catch(() => {});
+      }
     } catch {
       // ignore
     }
@@ -871,8 +900,15 @@ export async function retrieveFromLocalYaadFolder(customLocalFolder?: string): P
 
   // 2. Native Android Capacitor Filesystem ('<targetFolder>/yaad_backup.json')
   try {
-    const cleanSubName = targetFolder.replace(/^Documents\//i, '').trim() || LOCAL_BACKUP_FOLDER_NAME;
-    for (const dir of [Directory.Documents, Directory.Data]) {
+    const cleanSubName =
+      targetFolder.replace(/^(Documents|Download|InternalStorage)\//i, '').trim() ||
+      LOCAL_BACKUP_FOLDER_NAME;
+    for (const dir of [
+      Directory.External,
+      Directory.Documents,
+      Directory.ExternalStorage,
+      Directory.Data,
+    ]) {
       const res = await Filesystem.readFile({
         path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
         directory: dir,

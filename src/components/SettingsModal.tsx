@@ -1317,11 +1317,75 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.storage ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
                     <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
-                      {isFa ? 'پوشه یاد' : 'Folder'}
+                      {isFa ? 'پوشه و حافظه' : 'Folders'}
                     </span>
                     <span className={`text-[9px] font-bold ${nativePerms.storage ? 'text-emerald-400' : 'text-indigo-400'}`}>
                       {nativePerms.storage ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
                     </span>
+                  </div>
+                </div>
+
+                {/* 3.1B Dedicated Folder & Storage Permission Card inside App Permissions */}
+                <div className="p-3 rounded-2xl bg-stone-900/80 border border-emerald-500/30 space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 text-xs font-bold text-white">
+                      <FolderOpen className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span>
+                        {isFa
+                          ? 'دسترسی به پوشه‌ها و حافظه (پوشه Yaad reminder)'
+                          : 'Folders & Storage Access (Yaad reminder)'}
+                      </span>
+                    </div>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                        nativePerms.storage
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
+                          : 'bg-amber-500/20 text-amber-300 border-amber-400/40'
+                      }`}
+                    >
+                      {nativePerms.storage
+                        ? isFa
+                          ? 'فعال ✓'
+                          : 'Active ✓'
+                        : isFa
+                          ? 'آماده فعال‌سازی'
+                          : 'Ready'}
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-stone-300 leading-relaxed">
+                    {isFa
+                      ? 'نکته اندروید ۱۱ تا ۱۵: در نسخه‌های جدید اندروید، گزینه «دسترسی به پوشه‌ها» از داخل لیست عادی App Permissions حذف شده و به بخش «دسترسی ویژه برنامه‌ها ← دسترسی به همه فایل‌ها (All files access)» منتقل شده است. با دکمه‌های زیر می‌توانید مستقیماً پوشه Yaad reminder را ایجاد کنید یا صفحه دسترسی به همه فایل‌ها را باز نمایید:'
+                      : 'Android 11–15 Note: Folder access is no longer inside standard App Permissions; Android moved it to "Special app access -> All files access". Use the buttons below to create the Yaad reminder folder directly or open All Files Access:'}
+                  </p>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={isLocalSyncing}
+                      onClick={() => finalizeLocalFolderSelection(localFolderInput, false)}
+                      className="min-h-[40px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-black flex items-center justify-center gap-1.5 shadow-sm cursor-pointer active:scale-95 transition-all"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {isFa
+                          ? 'ایجاد مستقیم پوشه Yaad reminder'
+                          : 'Create Yaad reminder Folder'}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openAndroidSettings('all_files')}
+                      className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-700 text-stone-200 hover:text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                      <span>
+                        {isFa
+                          ? 'باز کردن «دسترسی به همه فایل‌ها» در اندروید'
+                          : 'Open Android "All Files Access"'}
+                      </span>
+                    </button>
                   </div>
                 </div>
 
@@ -2475,14 +2539,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   <button
                     type="button"
-                    onClick={() => openAndroidSettings('storage')}
-                    className="w-full min-h-[36px] py-1.5 px-3 rounded-xl bg-stone-950/90 hover:bg-stone-800 border border-stone-700 text-stone-300 hover:text-white font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
+                    onClick={() => openAndroidSettings('all_files')}
+                    className="w-full min-h-[38px] py-1.5 px-3 rounded-xl bg-stone-950/90 hover:bg-stone-800 border border-stone-700 text-stone-300 hover:text-white font-bold text-[11px] flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <ExternalLink className="w-3.5 h-3.5 text-teal-400 shrink-0" />
                     <span>
                       {isFa
-                        ? 'باز کردن تنظیمات مجوز حافظه در اندروید (در صورت مسدود بودن)'
-                        : 'Open Android Storage Permission Settings'}
+                        ? 'باز کردن صفحه «دسترسی به همه فایل‌ها (All files access)» در اندروید'
+                        : 'Open Android "All Files Access" Settings'}
                     </span>
                   </button>
                 </div>
@@ -2599,7 +2663,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <button
                   type="button"
                   onClick={() => {
-                    handleExportData();
+                    handleDownloadBackup();
                   }}
                   className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 border border-stone-700 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                 >

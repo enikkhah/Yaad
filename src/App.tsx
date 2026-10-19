@@ -323,7 +323,7 @@ export default function App() {
   const [isVaultInitialized, setIsVaultInitialized] = useState(false);
 
   const applyRestoredBackupIfNeeded = useCallback(
-    (backup: any, source: 'google_drive' | 'local_folder' | 'none') => {
+    (backup: any, source: 'google_drive' | 'local_folder' | 'none' | null) => {
       if (!backup) return false;
 
       const curReminders = remindersRef.current;
@@ -1034,7 +1034,7 @@ export default function App() {
           // Trigger continuous out-of-app notification (via Service Worker / Native / Notification API) alongside in-app modal until user reacts
           triggerOutOfAppPersistentNotification(
             r,
-            settings.language === 'en' ? 'en' : 'fa'
+            settings
           ).catch(() => {});
         }
       });

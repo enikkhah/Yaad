@@ -1146,7 +1146,6 @@ export async function triggerOutOfAppPersistentNotification(
             body,
             channelId: targetChannelId,
             sound: soundFile,
-            priority: 2,
             ongoing: true,
             autoCancel: false,
             actionTypeId: NOTIFICATION_ACTION_TYPE_ID,

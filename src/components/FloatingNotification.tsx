@@ -55,7 +55,9 @@ export const FloatingNotification: React.FC<FloatingNotificationProps> = ({
     playRingTune(upcomingReminder.category);
     speakReminderText(
       upcomingReminder.title,
-      upcomingReminder.category === 'work' ? 'کاری' : upcomingReminder.category === 'family' ? 'خانوادگی' : 'سایر'
+      upcomingReminder.category,
+      1.0,
+      isEn ? 'en' : 'fa'
     );
   };
 

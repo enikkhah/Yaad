@@ -148,16 +148,19 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
   };
 }
 
-export type AndroidPermissionType = 'notifications' | 'location' | 'microphone' | 'camera' | 'battery' | 'storage' | 'app_details';
+export type AndroidPermissionType = 'notifications' | 'location' | 'microphone' | 'camera' | 'battery' | 'storage' | 'all_files' | 'app_details';
 
 /**
- * Directs the user to the relevant Android Settings screen for the specified feature
+ * Directs the user to the relevant Android Settings screen for the specified feature.
+ * Note: On Android 11+ (API 30+), Folder / All Files Access (MANAGE_EXTERNAL_STORAGE) is NOT inside
+ * standard "App Permissions"—it is located in "Special app access -> All files access"
+ * (android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).
  */
 export function openAndroidSettings(section: AndroidPermissionType = 'app_details'): void {
   if (typeof window === 'undefined') return;
 
   const pkg = 'com.yaad.reminder';
-  let intentUrl = `intent:#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;package=${pkg};end`;
+  let intentUrl = `intent:#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;data=package:${pkg};end`;
 
   switch (section) {
     case 'notifications':
@@ -173,6 +176,12 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
       intentUrl = `intent:#Intent;action=android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS;end`;
       break;
     case 'storage':
+    case 'all_files':
+      // On Android 11-15, Folder / All Files Access is in Special App Access -> All files access, NOT in App Permissions!
+      intentUrl = `intent:#Intent;action=android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION;data=package:${pkg};S.browser_fallback_url=${encodeURIComponent(
+        `intent:#Intent;action=android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION;end`
+      )};end`;
+      break;
     case 'microphone':
     case 'camera':
     case 'app_details':
