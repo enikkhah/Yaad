@@ -320,7 +320,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const clamped = Math.max(0.0, Math.min(1.0, newVolume));
     onUpdateSettings({ alarmVolume: clamped });
     setGlobalVolume(clamped);
-    syncNotificationSoundAndVolume(settings.alarmSound || 'digital-beep', clamped).catch(() => {});
+    syncNotificationSoundAndVolume(settings.alarmSound || 'digital_beep', clamped).catch(() => {});
   };
 
   const themes: { id: AppTheme; name: string; subtitle?: string; preview: string }[] = [
@@ -1095,7 +1095,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   <div className="space-y-1.5 max-h-60 overflow-y-auto pr-1">
                     {PHONE_ALARM_SOUNDS.map((soundItem) => {
-                      const isSelected = (settings.alarmSound || 'digital-beep') === soundItem.id;
+                      const isSelected = (settings.alarmSound || 'digital_beep') === soundItem.id;
                       const isPlaying = playingSoundId === soundItem.id;
 
                       return (

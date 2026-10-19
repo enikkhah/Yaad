@@ -13,8 +13,28 @@ import '@fontsource/vazirmatn/900.css';
 import '@fontsource/jetbrains-mono/400.css';
 import '@fontsource/jetbrains-mono/700.css';
 
-// Immediate early registration of service worker for PWA installability in Chrome/Android with auto-update
-if ('serviceWorker' in navigator) {
+import { Capacitor } from '@capacitor/core';
+
+// In Capacitor native Android environment, all web assets are bundled locally inside the APK.
+// An active Service Worker or stale HTTP cache can prevent newly installed APK updates from displaying.
+// Therefore, on native platform, completely unregister any active Service Workers and clear browser caches.
+if (Capacitor.isNativePlatform()) {
+  if (typeof window !== 'undefined') {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((registrations) => {
+        for (const registration of registrations) {
+          registration.unregister().catch(() => {});
+        }
+      }).catch(() => {});
+    }
+    if ('caches' in window) {
+      caches.keys().then((keys) => {
+        return Promise.all(keys.map((k) => caches.delete(k)));
+      }).catch(() => {});
+    }
+  }
+} else if ('serviceWorker' in navigator) {
+  // Web / PWA browser environment: register service worker for offline caching and installability
   const registerSW = () => {
     navigator.serviceWorker
       .register('/sw.js', { scope: '/' })

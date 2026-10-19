@@ -25,22 +25,27 @@ export async function dismissDeliveredNotifications(_reminderId?: string | numbe
 }
 
 export const SOUND_FILE_MAP: Record<string, string> = {
+  'digital_beep': 'digital_beep.wav',
   'digital-beep': 'digital_beep.wav',
   'radar': 'radar.wav',
   'marimba': 'marimba.wav',
+  'morning_chime': 'morning_chime.wav',
   'morning-chime': 'morning_chime.wav',
+  'urgent_bell': 'urgent_bell.wav',
+  'urgent-bell': 'urgent_bell.wav',
+  'beep': 'beep.wav',
   'zen-bowl': 'morning_chime.wav',
   'soft-harp': 'morning_chime.wav',
   'ocean-drop': 'morning_chime.wav',
   'wind-chimes': 'morning_chime.wav',
   'warm-pad': 'morning_chime.wav',
   'calm-piano': 'morning_chime.wav',
-  'urgent-bell': 'urgent_bell.wav',
 };
 
 export function getSoundFileName(soundType?: string): string {
   if (!soundType) return 'digital_beep.wav';
-  return SOUND_FILE_MAP[soundType] || 'digital_beep.wav';
+  const normalized = soundType.replace(/-/g, '_');
+  return SOUND_FILE_MAP[soundType] || SOUND_FILE_MAP[normalized] || 'digital_beep.wav';
 }
 
 export function getChannelIdForConfig(soundType?: string, volume: number = 0.85): string {
@@ -100,6 +105,7 @@ export async function initNotificationChannel(): Promise<void> {
       { id: 'yaad_channel_marimba', name: 'یادآورهای YAAD (ماریمبا)', sound: 'marimba.wav' },
       { id: 'yaad_channel_morning_chime', name: 'یادآورهای YAAD (صبحگاهی)', sound: 'morning_chime.wav' },
       { id: 'yaad_channel_urgent_bell', name: 'یادآورهای YAAD (زنگ فوری)', sound: 'urgent_bell.wav' },
+      { id: 'yaad_channel_beep', name: 'یادآورهای YAAD (بوق ساده)', sound: 'beep.wav' },
     ];
 
     for (const sc of soundChannels) {
@@ -404,8 +410,8 @@ export async function scheduleReminderNotification(
     : `زمان انجام یادآور: ${timeFormatted}`;
 
   // 1. Resolve user-configured alarm sound and volume according to rule:
-  // Only if reminder.ringTune is one of the 5 valid IDs (digital-beep, radar, marimba, morning-chime, urgent-bell), use it;
-  // otherwise use settings.alarmSound, and if none, fallback to digital-beep.
+  // Only if reminder.ringTune is one of the valid IDs (digital_beep, radar, marimba, morning_chime, urgent_bell, beep), use it;
+  // otherwise use settings.alarmSound, and if none, fallback to digital_beep.
   const appSettings = currentSettings || getSavedAppSettings();
   const soundType: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, appSettings?.alarmSound);
   const volume = appSettings?.alarmVolume !== undefined ? appSettings.alarmVolume : 0.85;

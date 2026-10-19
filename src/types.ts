@@ -4,16 +4,20 @@ export type ReminderStatus = 'pending' | 'completed' | 'postponed' | 'cancelled'
 export type AppTheme = 'system' | 'dark-gold' | 'dark-slate' | 'light-clean' | 'sketch-contrast' | 'jade_warm_light' | 'midnight_blue_silver';
 
 export type PhoneAlarmSound =
-  | 'digital-beep'
+  | 'digital_beep'
   | 'radar'
   | 'marimba'
-  | 'morning-chime'
+  | 'morning_chime'
+  | 'urgent_bell'
+  | 'beep'
   | 'zen-bowl'
   | 'soft-harp'
   | 'ocean-drop'
   | 'wind-chimes'
   | 'warm-pad'
   | 'calm-piano'
+  | 'digital-beep'
+  | 'morning-chime'
   | 'urgent-bell';
 
 export type RecurrenceType = 'none' | 'hourly' | 'daily' | 'weekly' | 'monthly' | 'custom_dates';

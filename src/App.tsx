@@ -24,6 +24,7 @@ import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
 import { useFabVisibility } from './hooks/useFabVisibility';
 import { App as CapacitorApp } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import { 
   initGoogleAuth, 
   signInWithGoogle, 
@@ -153,7 +154,7 @@ export default function App() {
       systemNotificationsEnabled: true,
       ttsVoiceRate: 0.95,
       defaultRingTune: 'work',
-      alarmSound: 'digital-beep',
+      alarmSound: 'digital_beep',
       alarmVolume: 0.85,
       autoVoiceInput: false,
       googleMapsApiKey: '',
@@ -892,9 +893,25 @@ export default function App() {
       }
     );
 
-    // Register Service Worker for PWA offline caching
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    // Register Service Worker for PWA offline caching only in web browser environment
+    if (!Capacitor.isNativePlatform()) {
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      }
+    } else {
+      // In native Android APK, all assets are bundled locally; unregister SW and purge cache
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((registrations) => {
+          for (const reg of registrations) {
+            reg.unregister().catch(() => {});
+          }
+        }).catch(() => {});
+      }
+      if ('caches' in window) {
+        caches.keys().then((keys) => {
+          keys.forEach((k) => caches.delete(k).catch(() => {}));
+        }).catch(() => {});
+      }
     }
 
     // Listen for Service Worker notification actions (complete, snooze, stop, open)

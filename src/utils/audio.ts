@@ -44,11 +44,31 @@ export const unlockAudio = () => {
   }
 };
 
+export const SOUND_FILE_MAP: Record<string, string> = {
+  'digital_beep': 'digital_beep.wav',
+  'digital-beep': 'digital_beep.wav',
+  'radar': 'radar.wav',
+  'marimba': 'marimba.wav',
+  'morning_chime': 'morning_chime.wav',
+  'morning-chime': 'morning_chime.wav',
+  'urgent_bell': 'urgent_bell.wav',
+  'urgent-bell': 'urgent_bell.wav',
+  'beep': 'beep.wav',
+  'zen-bowl': 'morning_chime.wav',
+  'soft-harp': 'morning_chime.wav',
+  'ocean-drop': 'morning_chime.wav',
+  'wind-chimes': 'morning_chime.wav',
+  'warm-pad': 'morning_chime.wav',
+  'calm-piano': 'morning_chime.wav',
+};
+
 export const PHONE_ALARM_SOUNDS: { id: PhoneAlarmSound; label: string; labelEn: string; desc: string; descEn: string }[] = [
-  { id: 'digital-beep', label: 'زنگ دیجیتال کلاسیک', labelEn: 'Classic Digital Beep', desc: 'بوق استاندارد ساعت‌های دیجیتال (پیشنهادی)', descEn: 'Standard digital clock beep (Recommended)' },
+  { id: 'digital_beep', label: 'زنگ دیجیتال کلاسیک', labelEn: 'Classic Digital Beep', desc: 'بوق استاندارد ساعت‌های دیجیتال (پیشنهادی)', descEn: 'Standard digital clock beep (Recommended)' },
   { id: 'radar', label: 'آلارم پالس رادار', labelEn: 'Radar Pulse Alarm', desc: 'صدای موجی و ملایم مشابه هشدار گوشی‌های هوشمند', descEn: 'Smooth wave pulse similar to smartphone alerts' },
   { id: 'marimba', label: 'ملودی ماریمبا و چوب', labelEn: 'Warm Marimba Melody', desc: 'ریتم گرم و دلنشین چوبی با گام بالارونده', descEn: 'Pleasant wooden rhythm with ascending scale' },
-  { id: 'morning-chime', label: 'زنگ ملایم صبحگاهی', labelEn: 'Gentle Morning Chime', desc: 'زنگ آرام و شفاف برای یادآوری بدون استرس', descEn: 'Clear, stress-free morning chime' },
+  { id: 'morning_chime', label: 'زنگ ملایم صبحگاهی', labelEn: 'Gentle Morning Chime', desc: 'زنگ آرام و شفاف برای یادآوری بدون استرس', descEn: 'Clear, stress-free morning chime' },
+  { id: 'urgent_bell', label: 'زنگ فوری و هشدار', labelEn: 'Urgent Bell Alert', desc: 'صدای زنگ پرانرژی و متناوب برای یادآوری‌های حساس', descEn: 'High-energy alternating bell for urgent reminders' },
+  { id: 'beep', label: 'بوق ساده', labelEn: 'Simple Beep', desc: 'تک بوق تمیز و کوتاه برای اعلان‌های سریع', descEn: 'Clean short beep for quick alerts' },
   { id: 'zen-bowl', label: 'کاسه تبتی آرامش‌بخش', labelEn: 'Soothing Zen Bowl', desc: 'طنین عمیق، ملایم و آرامش‌بخش مدیتیشن', descEn: 'Deep, calming meditation bowl resonance' },
   { id: 'soft-harp', label: 'آرپژ چنگ ملایم', labelEn: 'Soft Harp Arpeggio', desc: 'نوازشگر، لطیف و رویایی با نت‌های نرم چنگ', descEn: 'Dreamy, delicate harp notes' },
   { id: 'ocean-drop', label: 'قطرات آرام آب', labelEn: 'Calm Water Drops', desc: 'صدای لطیف و طبیعی چکه آب در سکوت آرام', descEn: 'Natural, gentle water droplets in calm silence' },
@@ -62,21 +82,30 @@ const VALID_ALARM_SOUND_IDS = new Set<string>(PHONE_ALARM_SOUNDS.map((s) => s.id
 /**
  * Resolves the effective PhoneAlarmSound from a reminder's ringTune or global settings.
  * Priority:
- * 1. Valid PhoneAlarmSound stored in reminder.ringTune
+ * 1. Valid PhoneAlarmSound stored in reminder.ringTune (with underscore normalization)
  * 2. Valid PhoneAlarmSound in fallbackAlarmSound (settings.alarmSound)
- * 3. Default 'digital-beep'
+ * 3. Default 'digital_beep'
  */
 export const resolveAlarmSound = (
   ringTune?: string,
   fallbackAlarmSound?: PhoneAlarmSound
 ): PhoneAlarmSound => {
-  if (ringTune && VALID_ALARM_SOUND_IDS.has(ringTune)) {
-    return ringTune as PhoneAlarmSound;
-  }
-  if (fallbackAlarmSound && VALID_ALARM_SOUND_IDS.has(fallbackAlarmSound)) {
-    return fallbackAlarmSound;
-  }
-  return 'digital-beep';
+  const normalize = (val?: string): PhoneAlarmSound | undefined => {
+    if (!val) return undefined;
+    if (val === 'digital-beep') return 'digital_beep';
+    if (val === 'morning-chime') return 'morning_chime';
+    if (val === 'urgent-bell') return 'urgent_bell';
+    if (VALID_ALARM_SOUND_IDS.has(val)) return val as PhoneAlarmSound;
+    return undefined;
+  };
+
+  const resolvedRingTune = normalize(ringTune);
+  if (resolvedRingTune) return resolvedRingTune;
+
+  const resolvedFallback = normalize(fallbackAlarmSound);
+  if (resolvedFallback) return resolvedFallback;
+
+  return 'digital_beep';
 };
 
 /**
@@ -142,6 +171,120 @@ const playSoftTone = (
   osc.stop(startTime + duration + 0.03);
 };
 
+const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
+  const ctx = getAudioContext();
+  const now = ctx.currentTime;
+
+  if (sound === 'digital_beep' || sound === 'digital-beep') {
+    // Classic digital watch/phone double-beep-beep: 4 rapid 880Hz pulses
+    const pulses = [0, 0.14, 0.28, 0.42];
+    pulses.forEach((offset) => {
+      playTone(ctx, 987.77, now + offset, 0.09, 'square', 0.16, vol); // B5
+    });
+  } else if (sound === 'beep') {
+    // Clean single standard beep
+    playTone(ctx, 880, now, 0.15, 'sine', 0.25, vol);
+  } else if (sound === 'radar') {
+    // iOS Radar-like rising chime pulse
+    const notes = [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5];
+    notes.forEach((freq, i) => {
+      playTone(ctx, freq, now + i * 0.12, 0.2, 'triangle', 0.28, vol);
+    });
+  } else if (sound === 'marimba') {
+    // Warm wooden rhythmic arpeggio
+    const pattern = [
+      { freq: 392.0, time: 0.0, dur: 0.18 },   // G4
+      { freq: 493.88, time: 0.14, dur: 0.18 }, // B4
+      { freq: 587.33, time: 0.28, dur: 0.18 }, // D5
+      { freq: 783.99, time: 0.42, dur: 0.25 }, // G5
+      { freq: 587.33, time: 0.60, dur: 0.18 }, // D5
+      { freq: 783.99, time: 0.75, dur: 0.35 }, // G5
+    ];
+    pattern.forEach((n) => {
+      playTone(ctx, n.freq, now + n.time, n.dur, 'sine', 0.32, vol);
+    });
+  } else if (sound === 'morning_chime' || sound === 'morning-chime') {
+    // Gentle calming harmonic chord progression
+    const notes = [
+      { freq: 440.0, time: 0.0, dur: 0.5 },   // A4
+      { freq: 554.37, time: 0.2, dur: 0.5 },  // C#5
+      { freq: 659.25, time: 0.4, dur: 0.6 },  // E5
+      { freq: 880.0, time: 0.65, dur: 0.8 },  // A5
+    ];
+    notes.forEach((n) => {
+      playTone(ctx, n.freq, now + n.time, n.dur, 'sine', 0.24, vol);
+    });
+  } else if (sound === 'zen-bowl') {
+    // Tibetan Singing Bowl: deep warm fundamental + harmonic overtones with slow gentle decay
+    playSoftTone(ctx, 256.0, now, 0.12, 2.2, 'sine', 0.24, vol);
+    playSoftTone(ctx, 512.0, now + 0.02, 0.15, 1.8, 'sine', 0.11, vol);
+    playSoftTone(ctx, 768.0, now + 0.05, 0.18, 1.4, 'sine', 0.06, vol);
+  } else if (sound === 'soft-harp') {
+    // Soft Angelic Harp Arpeggio (Fmaj7: F4, A4, C5, E5, A5)
+    const harpNotes = [349.23, 440.0, 523.25, 659.25, 880.0];
+    harpNotes.forEach((freq, idx) => {
+      playSoftTone(ctx, freq, now + idx * 0.15, 0.04, 1.2, 'sine', 0.18, vol);
+    });
+  } else if (sound === 'ocean-drop') {
+    // Gentle Water Droplets: smooth upward pitch-gliding sine drops
+    const drops = [
+      { start: 0.0, f1: 520, f2: 1040 },
+      { start: 0.42, f1: 620, f2: 1240 },
+      { start: 0.92, f1: 480, f2: 960 },
+    ];
+    drops.forEach(({ start, f1, f2 }) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(f1, now + start);
+      osc.frequency.exponentialRampToValueAtTime(f2, now + start + 0.11);
+      gain.gain.setValueAtTime(0.0001, now + start);
+      gain.gain.linearRampToValueAtTime(Math.max(0.0005, 0.22 * vol), now + start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + start + 0.35);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + start);
+      osc.stop(now + start + 0.38);
+    });
+  } else if (sound === 'wind-chimes') {
+    // Delicate Pentatonic Wind Chimes
+    const chimes = [
+      { freq: 1046.5, time: 0.0, dur: 1.1 },  // C6
+      { freq: 1174.66, time: 0.2, dur: 1.0 }, // D6
+      { freq: 1318.51, time: 0.42, dur: 1.1 },// E6
+      { freq: 1567.98, time: 0.65, dur: 1.2 },// G6
+      { freq: 1318.51, time: 0.95, dur: 1.2 },// E6
+    ];
+    chimes.forEach((c) => {
+      playSoftTone(ctx, c.freq, now + c.time, 0.03, c.dur, 'sine', 0.14, vol);
+    });
+  } else if (sound === 'warm-pad') {
+    // Soothing Ambient Warm Pad Chord (C4, E4, G4, B4) with slow swell
+    const chord = [261.63, 329.63, 392.0, 493.88];
+    chord.forEach((freq) => {
+      playSoftTone(ctx, freq, now, 0.6, 2.2, 'sine', 0.10, vol);
+    });
+  } else if (sound === 'calm-piano') {
+    // Calm Evening Piano Notes (D4, A4, D5, C5)
+    const piano = [
+      { freq: 293.66, time: 0.0, dur: 1.3 },
+      { freq: 440.0, time: 0.25, dur: 1.2 },
+      { freq: 587.33, time: 0.5, dur: 1.1 },
+      { freq: 523.25, time: 0.8, dur: 1.3 },
+    ];
+    piano.forEach((p) => {
+      playSoftTone(ctx, p.freq, now + p.time, 0.03, p.dur, 'sine', 0.20, vol);
+      playSoftTone(ctx, p.freq * 2, now + p.time, 0.02, p.dur * 0.4, 'triangle', 0.04, vol);
+    });
+  } else if (sound === 'urgent_bell' || sound === 'urgent-bell') {
+    // Urgent dual-frequency bell ring
+    for (let i = 0; i < 6; i++) {
+      const freq = i % 2 === 0 ? 880 : 1174.66; // A5 / D6
+      playTone(ctx, freq, now + i * 0.11, 0.1, 'sawtooth', 0.18, vol);
+    }
+  }
+};
+
 /**
  * Play selected phone alarm sound pattern
  */
@@ -150,114 +293,25 @@ export const playPhoneAlarmSound = (sound: PhoneAlarmSound, volumeOverride?: num
     const vol = volumeOverride !== undefined ? volumeOverride : globalAlarmVolume;
     if (vol <= 0.001) return;
 
-    const ctx = getAudioContext();
-    const now = ctx.currentTime;
-
-    if (sound === 'digital-beep') {
-      // Classic digital watch/phone double-beep-beep: 4 rapid 880Hz pulses
-      const pulses = [0, 0.14, 0.28, 0.42];
-      pulses.forEach((offset) => {
-        playTone(ctx, 987.77, now + offset, 0.09, 'square', 0.16, vol); // B5
-      });
-    } else if (sound === 'radar') {
-      // iOS Radar-like rising chime pulse
-      const notes = [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5];
-      notes.forEach((freq, i) => {
-        playTone(ctx, freq, now + i * 0.12, 0.2, 'triangle', 0.28, vol);
-      });
-    } else if (sound === 'marimba') {
-      // Warm wooden rhythmic arpeggio
-      const pattern = [
-        { freq: 392.0, time: 0.0, dur: 0.18 },   // G4
-        { freq: 493.88, time: 0.14, dur: 0.18 }, // B4
-        { freq: 587.33, time: 0.28, dur: 0.18 }, // D5
-        { freq: 783.99, time: 0.42, dur: 0.25 }, // G5
-        { freq: 587.33, time: 0.60, dur: 0.18 }, // D5
-        { freq: 783.99, time: 0.75, dur: 0.35 }, // G5
-      ];
-      pattern.forEach((n) => {
-        playTone(ctx, n.freq, now + n.time, n.dur, 'sine', 0.32, vol);
-      });
-    } else if (sound === 'morning-chime') {
-      // Gentle calming harmonic chord progression
-      const notes = [
-        { freq: 440.0, time: 0.0, dur: 0.5 },   // A4
-        { freq: 554.37, time: 0.2, dur: 0.5 },  // C#5
-        { freq: 659.25, time: 0.4, dur: 0.6 },  // E5
-        { freq: 880.0, time: 0.65, dur: 0.8 },  // A5
-      ];
-      notes.forEach((n) => {
-        playTone(ctx, n.freq, now + n.time, n.dur, 'sine', 0.24, vol);
-      });
-    } else if (sound === 'zen-bowl') {
-      // Tibetan Singing Bowl: deep warm fundamental + harmonic overtones with slow gentle decay
-      playSoftTone(ctx, 256.0, now, 0.12, 2.2, 'sine', 0.24, vol);
-      playSoftTone(ctx, 512.0, now + 0.02, 0.15, 1.8, 'sine', 0.11, vol);
-      playSoftTone(ctx, 768.0, now + 0.05, 0.18, 1.4, 'sine', 0.06, vol);
-    } else if (sound === 'soft-harp') {
-      // Soft Angelic Harp Arpeggio (Fmaj7: F4, A4, C5, E5, A5)
-      const harpNotes = [349.23, 440.0, 523.25, 659.25, 880.0];
-      harpNotes.forEach((freq, idx) => {
-        playSoftTone(ctx, freq, now + idx * 0.15, 0.04, 1.2, 'sine', 0.18, vol);
-      });
-    } else if (sound === 'ocean-drop') {
-      // Gentle Water Droplets: smooth upward pitch-gliding sine drops
-      const drops = [
-        { start: 0.0, f1: 520, f2: 1040 },
-        { start: 0.42, f1: 620, f2: 1240 },
-        { start: 0.92, f1: 480, f2: 960 },
-      ];
-      drops.forEach(({ start, f1, f2 }) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(f1, now + start);
-        osc.frequency.exponentialRampToValueAtTime(f2, now + start + 0.11);
-        gain.gain.setValueAtTime(0.0001, now + start);
-        gain.gain.linearRampToValueAtTime(Math.max(0.0005, 0.22 * vol), now + start + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.0001, now + start + 0.35);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start(now + start);
-        osc.stop(now + start + 0.38);
-      });
-    } else if (sound === 'wind-chimes') {
-      // Delicate Pentatonic Wind Chimes
-      const chimes = [
-        { freq: 1046.5, time: 0.0, dur: 1.1 },  // C6
-        { freq: 1174.66, time: 0.2, dur: 1.0 }, // D6
-        { freq: 1318.51, time: 0.42, dur: 1.1 },// E6
-        { freq: 1567.98, time: 0.65, dur: 1.2 },// G6
-        { freq: 1318.51, time: 0.95, dur: 1.2 },// E6
-      ];
-      chimes.forEach((c) => {
-        playSoftTone(ctx, c.freq, now + c.time, 0.03, c.dur, 'sine', 0.14, vol);
-      });
-    } else if (sound === 'warm-pad') {
-      // Soothing Ambient Warm Pad Chord (C4, E4, G4, B4) with slow swell
-      const chord = [261.63, 329.63, 392.0, 493.88];
-      chord.forEach((freq) => {
-        playSoftTone(ctx, freq, now, 0.6, 2.2, 'sine', 0.10, vol);
-      });
-    } else if (sound === 'calm-piano') {
-      // Calm Evening Piano Notes (D4, A4, D5, C5)
-      const piano = [
-        { freq: 293.66, time: 0.0, dur: 1.3 },
-        { freq: 440.0, time: 0.25, dur: 1.2 },
-        { freq: 587.33, time: 0.5, dur: 1.1 },
-        { freq: 523.25, time: 0.8, dur: 1.3 },
-      ];
-      piano.forEach((p) => {
-        playSoftTone(ctx, p.freq, now + p.time, 0.03, p.dur, 'sine', 0.20, vol);
-        playSoftTone(ctx, p.freq * 2, now + p.time, 0.02, p.dur * 0.4, 'triangle', 0.04, vol);
-      });
-    } else if (sound === 'urgent-bell') {
-      // Urgent dual-frequency bell ring
-      for (let i = 0; i < 6; i++) {
-        const freq = i % 2 === 0 ? 880 : 1174.66; // A5 / D6
-        playTone(ctx, freq, now + i * 0.11, 0.1, 'sawtooth', 0.18, vol);
+    // Check if we can play the actual bundled WAV file for maximum fidelity
+    const soundFile = SOUND_FILE_MAP[sound] || SOUND_FILE_MAP[sound.replace(/-/g, '_')];
+    if (typeof window !== 'undefined' && soundFile) {
+      try {
+        const audio = new Audio(`/${soundFile}`);
+        audio.volume = Math.max(0, Math.min(1, vol));
+        const playPromise = audio.play();
+        if (playPromise) {
+          playPromise.catch(() => {
+            playSynthesizedSound(sound, vol);
+          });
+        }
+        return;
+      } catch {
+        // Fallback to Web Audio synthesis
       }
     }
+
+    playSynthesizedSound(sound, vol);
   } catch (e) {
     console.warn('Audio play error:', e);
   }
@@ -306,12 +360,12 @@ export const playRingTune = (category: Category | string, volumeOverride?: numbe
  */
 export const startAlarmRinging = (
   category: Category,
-  alarmSound: PhoneAlarmSound = 'digital-beep',
+  alarmSound: PhoneAlarmSound = 'digital_beep',
   volumeOverride?: number
 ) => {
   stopAlarmRinging();
 
-  const effectiveSound = resolveAlarmSound(alarmSound, 'digital-beep');
+  const effectiveSound = resolveAlarmSound(alarmSound, 'digital_beep');
   const vol = volumeOverride !== undefined ? volumeOverride : globalAlarmVolume;
 
   const triggerCycle = () => {

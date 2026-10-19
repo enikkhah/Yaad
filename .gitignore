@@ -15,4 +15,6 @@ GoogleService-Info.plist
 *.jks
 Yaad reminder/
 YAAD REMIDER/
+dev-dist/
+.aistudio/
 

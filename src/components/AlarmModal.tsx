@@ -55,7 +55,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
     }, 10000);
 
-    // Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital-beep)
+    // Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital_beep)
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
