@@ -227,30 +227,32 @@ export default function App() {
       .catch(() => {});
   }, [settings.alarmSound, settings.alarmVolume, reminders]);
 
-  // Ideas & Thoughts state
+  // Ideas & Thoughts state: Initialized to empty array, all mock data removed
   const [ideas, setIdeas] = useState<IdeaNote[]>(() => {
     try {
       const saved = localStorage.getItem(IDEAS_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((i: any) => i && i.id !== 'idea-1' && !i.id?.startsWith('seed-'));
+        }
+      }
     } catch {
       // Fallback
     }
-    return [
-      {
-        id: 'idea-1',
-        title: 'طرح بهبود ساختار داشبورد یادآورها',
-        content: 'امکان دسته‌بندی موضوعی افکار، استفاده از قلم رسم، تایپ صوتی بدون مکث و یکپارچگی سریع با تقویم',
-        createdAt: Date.now() - 3600000 * 4,
-        category: 'work',
-      }
-    ];
+    return [];
   });
 
-  // Locations state (ثبت موقعیت مکانی با GPS و گوگل‌مپ)
+  // Locations state (ثبت موقعیت مکانی با GPS و گوگل‌مپ): Initialized to empty array
   const [savedLocations, setSavedLocations] = useState<SavedLocation[]>(() => {
     try {
       const saved = localStorage.getItem(LOCATIONS_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((l: any) => l && !l.id?.startsWith('seed-') && !l.id?.startsWith('sample_'));
+        }
+      }
     } catch {
       // Fallback
     }
@@ -266,42 +268,27 @@ export default function App() {
     }
   }, [savedLocations]);
 
-  // Occasions state (مناسبت‌ها: تولد، سالگردها و رویدادهای مهم)
+  // Occasions state (مناسبت‌ها: تولد، سالگردها و رویدادهای مهم): Initialized to empty array, all mock data removed
   const [occasions, setOccasions] = useState<Occasion[]>(() => {
     try {
       const saved = localStorage.getItem(OCCASIONS_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter(
+            (o: any) =>
+              o &&
+              o.id !== 'sample_occ_1' &&
+              o.id !== 'sample_occ_2' &&
+              !o.id?.startsWith('sample_') &&
+              !o.id?.startsWith('seed-')
+          );
+        }
+      }
     } catch {
       // Fallback
     }
-    return [
-      {
-        id: 'sample_occ_1',
-        title: 'تولد علی',
-        personName: 'علی',
-        type: 'birthday',
-        solarYear: 1374,
-        solarMonth: 1,
-        solarDay: 25,
-        notifyDaysBefore: 1,
-        notifyTime: '09:00',
-        customNote: 'علاقه‌مند به کتاب و ساعت',
-        createdAt: Date.now() - 86400000,
-      },
-      {
-        id: 'sample_occ_2',
-        title: 'سالگرد ازدواج',
-        personName: 'همسر',
-        type: 'wedding',
-        solarYear: 1398,
-        solarMonth: 6,
-        solarDay: 15,
-        notifyDaysBefore: 3,
-        notifyTime: '10:00',
-        customNote: 'رزرو رستوران و تهیه گل',
-        createdAt: Date.now() - 86400000,
-      }
-    ];
+    return [];
   });
 
   // Persistent occasions storage
@@ -332,70 +319,93 @@ export default function App() {
       const curOccasions = occasionsRef.current;
 
       const isRemindersEmpty = curReminders.length === 0;
-      const isIdeasDefaultOrEmpty =
-        curIdeas.length === 0 || (curIdeas.length === 1 && curIdeas[0].id === 'idea-1');
+      const isIdeasEmpty = curIdeas.length === 0;
       const isLocationsEmpty = curLocations.length === 0;
-      const isOccasionsDefaultOrEmpty =
-        curOccasions.length === 0 ||
-        (curOccasions.length === 2 && curOccasions[0].id === 'sample_occ_1');
+      const isOccasionsEmpty = curOccasions.length === 0;
 
       let restoredAny = false;
 
       // Merge or restore reminders from backup if local state is empty or backup has additional items
       if (Array.isArray(backup.reminders) && backup.reminders.length > 0) {
-        if (isRemindersEmpty) {
-          setReminders(backup.reminders);
-          restoredAny = true;
-        } else {
-          const existingIds = new Set(curReminders.map((r) => r.id));
-          const missing = backup.reminders.filter((r: Reminder) => r?.id && !existingIds.has(r.id));
-          if (missing.length > 0) {
-            setReminders((prev) => [...missing, ...prev]);
+        const cleanReminders = backup.reminders.filter(
+          (r: Reminder) => r?.id && !r.id.startsWith('seed-')
+        );
+        if (cleanReminders.length > 0) {
+          if (isRemindersEmpty) {
+            setReminders(cleanReminders);
             restoredAny = true;
+          } else {
+            const existingIds = new Set(curReminders.map((r) => r.id));
+            const missing = cleanReminders.filter((r: Reminder) => !existingIds.has(r.id));
+            if (missing.length > 0) {
+              setReminders((prev) => [...missing, ...prev]);
+              restoredAny = true;
+            }
           }
         }
       }
 
       if (Array.isArray(backup.ideas) && backup.ideas.length > 0) {
-        if (isIdeasDefaultOrEmpty) {
-          setIdeas(backup.ideas);
-          restoredAny = true;
-        } else {
-          const existingIds = new Set(curIdeas.map((i) => i.id));
-          const missing = backup.ideas.filter((i: IdeaNote) => i?.id && !existingIds.has(i.id));
-          if (missing.length > 0) {
-            setIdeas((prev) => [...missing, ...prev]);
+        const cleanIdeas = backup.ideas.filter(
+          (i: IdeaNote) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-')
+        );
+        if (cleanIdeas.length > 0) {
+          if (isIdeasEmpty) {
+            setIdeas(cleanIdeas);
             restoredAny = true;
+          } else {
+            const existingIds = new Set(curIdeas.map((i) => i.id));
+            const missing = cleanIdeas.filter((i: IdeaNote) => !existingIds.has(i.id));
+            if (missing.length > 0) {
+              setIdeas((prev) => [...missing, ...prev]);
+              restoredAny = true;
+            }
           }
         }
       }
 
       if (Array.isArray(backup.savedLocations) && backup.savedLocations.length > 0) {
-        if (isLocationsEmpty) {
-          setSavedLocations(backup.savedLocations);
-          restoredAny = true;
-        } else {
-          const existingIds = new Set(curLocations.map((l) => l.id));
-          const missing = backup.savedLocations.filter(
-            (l: SavedLocation) => l?.id && !existingIds.has(l.id)
-          );
-          if (missing.length > 0) {
-            setSavedLocations((prev) => [...missing, ...prev]);
+        const cleanLocations = backup.savedLocations.filter(
+          (l: SavedLocation) =>
+            l?.id && !l.id.startsWith('seed-') && !l.id.startsWith('sample_')
+        );
+        if (cleanLocations.length > 0) {
+          if (isLocationsEmpty) {
+            setSavedLocations(cleanLocations);
             restoredAny = true;
+          } else {
+            const existingIds = new Set(curLocations.map((l) => l.id));
+            const missing = cleanLocations.filter(
+              (l: SavedLocation) => !existingIds.has(l.id)
+            );
+            if (missing.length > 0) {
+              setSavedLocations((prev) => [...missing, ...prev]);
+              restoredAny = true;
+            }
           }
         }
       }
 
       if (Array.isArray(backup.occasions) && backup.occasions.length > 0) {
-        if (isOccasionsDefaultOrEmpty) {
-          setOccasions(backup.occasions);
-          restoredAny = true;
-        } else {
-          const existingIds = new Set(curOccasions.map((o) => o.id));
-          const missing = backup.occasions.filter((o: Occasion) => o?.id && !existingIds.has(o.id));
-          if (missing.length > 0) {
-            setOccasions((prev) => [...missing, ...prev]);
+        const cleanOccasions = backup.occasions.filter(
+          (o: Occasion) =>
+            o?.id &&
+            o.id !== 'sample_occ_1' &&
+            o.id !== 'sample_occ_2' &&
+            !o.id.startsWith('sample_') &&
+            !o.id.startsWith('seed-')
+        );
+        if (cleanOccasions.length > 0) {
+          if (isOccasionsEmpty) {
+            setOccasions(cleanOccasions);
             restoredAny = true;
+          } else {
+            const existingIds = new Set(curOccasions.map((o) => o.id));
+            const missing = cleanOccasions.filter((o: Occasion) => !existingIds.has(o.id));
+            if (missing.length > 0) {
+              setOccasions((prev) => [...missing, ...prev]);
+              restoredAny = true;
+            }
           }
         }
       }
@@ -1572,38 +1582,81 @@ export default function App() {
     mode: 'replace' | 'merge'
   ) => {
     if (mode === 'replace') {
-      if (data.reminders) setReminders(data.reminders);
-      if (data.ideas) setIdeas(data.ideas);
-      if (data.savedLocations) setSavedLocations(data.savedLocations);
-      if (data.occasions) setOccasions(data.occasions);
+      if (data.reminders) {
+        setReminders(data.reminders.filter((r) => r?.id && !r.id.startsWith('seed-')));
+      }
+      if (data.ideas) {
+        setIdeas(data.ideas.filter((i) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-')));
+      }
+      if (data.savedLocations) {
+        setSavedLocations(
+          data.savedLocations.filter(
+            (l) => l?.id && !l.id.startsWith('seed-') && !l.id.startsWith('sample_')
+          )
+        );
+      }
+      if (data.occasions) {
+        setOccasions(
+          data.occasions.filter(
+            (o) =>
+              o?.id &&
+              o.id !== 'sample_occ_1' &&
+              o.id !== 'sample_occ_2' &&
+              !o.id.startsWith('sample_') &&
+              !o.id.startsWith('seed-')
+          )
+        );
+      }
       if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
     } else {
       // Merge mode
       if (data.reminders && data.reminders.length > 0) {
         setReminders((prev) => {
           const existingIds = new Set(prev.map((r) => r.id));
-          const newItems = data.reminders!.filter((r) => !existingIds.has(r.id));
+          const newItems = data.reminders!.filter(
+            (r) => r?.id && !r.id.startsWith('seed-') && !existingIds.has(r.id)
+          );
           return [...newItems, ...prev];
         });
       }
       if (data.occasions && data.occasions.length > 0) {
         setOccasions((prev) => {
           const existingIds = new Set(prev.map((o) => o.id));
-          const newItems = data.occasions!.filter((o) => !existingIds.has(o.id));
+          const newItems = data.occasions!.filter(
+            (o) =>
+              o?.id &&
+              o.id !== 'sample_occ_1' &&
+              o.id !== 'sample_occ_2' &&
+              !o.id.startsWith('sample_') &&
+              !o.id.startsWith('seed-') &&
+              !existingIds.has(o.id)
+          );
           return [...newItems, ...prev];
         });
       }
       if (data.ideas && data.ideas.length > 0) {
         setIdeas((prev) => {
           const existingIds = new Set(prev.map((i) => i.id));
-          const newItems = data.ideas!.filter((i) => !existingIds.has(i.id));
+          const newItems = data.ideas!.filter(
+            (i) =>
+              i?.id &&
+              i.id !== 'idea-1' &&
+              !i.id.startsWith('seed-') &&
+              !existingIds.has(i.id)
+          );
           return [...newItems, ...prev];
         });
       }
       if (data.savedLocations && data.savedLocations.length > 0) {
         setSavedLocations((prev) => {
           const existingIds = new Set(prev.map((l) => l.id));
-          const newItems = data.savedLocations!.filter((l) => !existingIds.has(l.id));
+          const newItems = data.savedLocations!.filter(
+            (l) =>
+              l?.id &&
+              !l.id.startsWith('seed-') &&
+              !l.id.startsWith('sample_') &&
+              !existingIds.has(l.id)
+          );
           return [...newItems, ...prev];
         });
       }

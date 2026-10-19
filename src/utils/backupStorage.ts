@@ -51,13 +51,24 @@ function isValidSnapshot(data: any): data is AutoBackupSnapshot {
 
 export function getSnapshotItemCount(snap: AutoBackupSnapshot | null | undefined): number {
   if (!snap) return 0;
-  const rCount = Array.isArray(snap.reminders) ? snap.reminders.length : 0;
-  const lCount = Array.isArray(snap.savedLocations) ? snap.savedLocations.length : 0;
+  const rCount = Array.isArray(snap.reminders)
+    ? snap.reminders.filter((r) => r?.id && !r.id.startsWith('seed-')).length
+    : 0;
+  const lCount = Array.isArray(snap.savedLocations)
+    ? snap.savedLocations.filter((l) => l?.id && !l.id.startsWith('seed-') && !l.id.startsWith('sample_')).length
+    : 0;
   const iCount = Array.isArray(snap.ideas)
-    ? snap.ideas.filter((i) => i.id !== 'idea-1').length
+    ? snap.ideas.filter((i) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-')).length
     : 0;
   const oCount = Array.isArray(snap.occasions)
-    ? snap.occasions.filter((o) => o.id !== 'sample_occ_1' && o.id !== 'sample_occ_2').length
+    ? snap.occasions.filter(
+        (o) =>
+          o?.id &&
+          o.id !== 'sample_occ_1' &&
+          o.id !== 'sample_occ_2' &&
+          !o.id.startsWith('sample_') &&
+          !o.id.startsWith('seed-')
+      ).length
     : 0;
   return rCount + lCount + iCount + oCount;
 }
