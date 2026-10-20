@@ -82,14 +82,15 @@ jobs:
                       1
                   )
 
+          if 'android:allowBackup="true"' in text:
+              text = text.replace('android:allowBackup="true"', 'android:allowBackup="false"')
+
           if 'android:requestLegacyExternalStorage="true"' not in text:
               text = text.replace(
                   "<application",
-                  '<application\n        android:allowBackup="false"\n        android:fullBackupContent="false"\n        android:requestLegacyExternalStorage="true"',
+                  '<application\n        android:requestLegacyExternalStorage="true"',
                   1
               )
-          elif 'android:allowBackup="true"' in text:
-              text = text.replace('android:allowBackup="true"', 'android:allowBackup="false"\n        android:fullBackupContent="false"')
 
           path.write_text(text)
           PY
