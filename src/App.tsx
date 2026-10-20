@@ -610,14 +610,18 @@ export default function App() {
     }
   }, [isDarkMode, settings.theme]);
 
-  // 2. HARDWARE & BROWSER BACK BUTTON HANDLER (بسته شدن پنجره‌ها با دکمه بازگشت گوشی)
+  // 2. HARDWARE & BROWSER BACK BUTTON HANDLER (بسته شدن پنجره‌ها با دکمه بازگشت گوشی، به جز آلارم فعال که نیازمند واکنش قطعی کاربر است)
   const isAnyModalCurrentlyOpen = Boolean(
     isFormOpen || isStatsOpen || isSettingsOpen || isIdeaModalOpen ||
     isLocationModalOpen || isLocationReminderModalOpen || isOccasionModalOpen ||
-    isCreateChoiceOpen || viewingImageUrl || isInstallModalOpen || activeAlarmReminder
+    isCreateChoiceOpen || viewingImageUrl || isInstallModalOpen
   );
 
   const closeTopModal = useCallback((): boolean => {
+    // If an alarm is actively ringing on screen, block accidental Back/Escape dismissal until user clicks Done/Snooze/Dismiss!
+    if (activeAlarmReminder) {
+      return true;
+    }
     if (viewingImageUrl) { setViewingImageUrl(null); return true; }
     if (isCreateChoiceOpen) { setIsCreateChoiceOpen(false); return true; }
     if (isInstallModalOpen) { setIsInstallModalOpen(false); return true; }
@@ -628,7 +632,6 @@ export default function App() {
     if (isFormOpen) { setIsFormOpen(false); setEditingReminder(null); return true; }
     if (isSettingsOpen) { setIsSettingsOpen(false); return true; }
     if (isStatsOpen) { setIsStatsOpen(false); return true; }
-    if (activeAlarmReminder) { setActiveAlarmReminder(null); return true; }
     return false;
   }, [
     viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
@@ -706,17 +709,27 @@ export default function App() {
     }
     prevModalOpenRef.current = isAnyModalCurrentlyOpen;
   }, [isAnyModalCurrentlyOpen]);
-  // App startup splash screen (fade in & fade out in <= 1.5s, then immediately open + menu)
+  // App startup splash screen (fade in & fade out in <= 1.5s, then immediately open + menu unless an alarm is ringing)
   const [showSplash, setShowSplash] = useState<boolean>(true);
   const [appVisible, setAppVisible] = useState<boolean>(false);
   const handleStartExitSplash = useCallback(() => {
     setAppVisible(true);
-    setIsCreateChoiceOpen(true);
+    setActiveAlarmReminder((currAlarm) => {
+      if (!currAlarm) {
+        setIsCreateChoiceOpen(true);
+      }
+      return currAlarm;
+    });
   }, []);
   const handleFinishSplash = useCallback(() => {
     setAppVisible(true);
     setShowSplash(false);
-    setIsCreateChoiceOpen(true);
+    setActiveAlarmReminder((currAlarm) => {
+      if (!currAlarm) {
+        setIsCreateChoiceOpen(true);
+      }
+      return currAlarm;
+    });
     // Request ONLY Notification permission on initial app entry/install (most important permission)
     requestNotificationPermission().catch(() => {});
   }, []);

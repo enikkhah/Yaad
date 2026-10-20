@@ -97,9 +97,84 @@ if (!notificationStorageContent.includes('foreground$i')) {
     );
 }
 
-// 3. Patch LocalNotificationManager.kt so background action buttons use PendingIntent.getBroadcast instead of PendingIntent.getActivity
+// 3. Patch LocalNotificationManager.kt:
+// - Do NOT auto-dismiss notification on body tap (DEFAULT_PRESS_ACTION) when ongoing/persistent
+// - Apply FLAG_ONGOING_EVENT, FLAG_NO_CLEAR, and FLAG_INSISTENT (continuous audio loop) when ongoing == true
+// - Use PendingIntent.getBroadcast for action buttons so app never opens on action button click
+// - Distinguish swipe deleteIntent ("swipe_dismiss") from explicit "dismiss" button
 const managerPath = path.join(pluginDir, 'LocalNotificationManager.kt');
 let managerContent = fs.readFileSync(managerPath, 'utf8');
+
+const origHandleAction = `        val existing = notificationStorage.getSavedNotification(notificationId.toString())
+        if (isSafeToForget(existing)) {
+            notificationStorage.deleteNotification(notificationId.toString())
+        }
+        val dataJson = JSObject()
+
+        val results = RemoteInput.getResultsFromIntent(data)
+        if (results != null) {
+            val input = results.getCharSequence(REMOTE_INPUT_KEY)
+            dataJson.put("inputValue", input?.toString())
+        }
+        val menuAction = data.getStringExtra(ACTION_INTENT_KEY)
+
+        dismissVisibleNotification(notificationId)`;
+
+const patchedHandleAction = `        val existing = notificationStorage.getSavedNotification(notificationId.toString())
+        val dataJson = JSObject()
+
+        val results = RemoteInput.getResultsFromIntent(data)
+        if (results != null) {
+            val input = results.getCharSequence(REMOTE_INPUT_KEY)
+            dataJson.put("inputValue", input?.toString())
+        }
+        val menuAction = data.getStringExtra(ACTION_INTENT_KEY)
+
+        // Do NOT dismiss or delete persistent/ongoing notification when user taps the notification body ("tap"):
+        // Notification must stay in status bar until user explicitly taps Done, Snooze, or Dismiss!
+        val isBodyTapOnPersistent = (menuAction == DEFAULT_PRESS_ACTION || menuAction == null) &&
+            (existing?.ongoing == true || existing?.autoCancel == false)
+        if (!isBodyTapOnPersistent) {
+            if (isSafeToForget(existing)) {
+                notificationStorage.deleteNotification(notificationId.toString())
+            }
+            dismissVisibleNotification(notificationId)
+        }`;
+
+if (managerContent.includes(origHandleAction)) {
+  managerContent = managerContent.replace(origHandleAction, patchedHandleAction);
+}
+
+const origBuildFlags = `        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        mBuilder.setOnlyAlertOnce(true)`;
+
+const patchedBuildFlags = `        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
+        if (localNotification.ongoing) {
+            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
+            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
+        }`;
+
+if (managerContent.includes(origBuildFlags)) {
+  managerContent = managerContent.replace(origBuildFlags, patchedBuildFlags);
+}
+
+const origBuildNotif = `        createActionIntents(localNotification, mBuilder)
+        val buildNotification = mBuilder.build()`;
+
+const patchedBuildNotif = `        createActionIntents(localNotification, mBuilder)
+        val buildNotification = mBuilder.build()
+        if (localNotification.ongoing || !localNotification.autoCancel) {
+            buildNotification.flags = buildNotification.flags or
+                Notification.FLAG_ONGOING_EVENT or
+                Notification.FLAG_NO_CLEAR or
+                Notification.FLAG_INSISTENT
+        }`;
+
+if (managerContent.includes(origBuildNotif) && !managerContent.includes('Notification.FLAG_INSISTENT')) {
+  managerContent = managerContent.replace(origBuildNotif, patchedBuildNotif);
+}
+
 const targetActionLoop = `        // Build action types
         val actionTypeId = localNotification.actionTypeId
         if (actionTypeId != null) {
@@ -177,7 +252,122 @@ if (managerContent.includes(targetActionLoop)) {
   managerContent = managerContent.replace(targetActionLoop, replacementActionLoop);
 }
 
-// 4. Patch NotificationDismissReceiver.kt to handle background action button clicks without launching MainActivity
+const origDeleteIntent = `        // Dismiss intent
+        val dismissIntent = Intent(context, NotificationDismissReceiver::class.java)
+        dismissIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        dismissIntent.putExtra(NOTIFICATION_INTENT_KEY, id)
+        dismissIntent.putExtra(ACTION_INTENT_KEY, "dismiss")`;
+
+const patchedDeleteIntent = `        // Dismiss intent (when user swipes notification away in shade)
+        val dismissIntent = Intent(context, NotificationDismissReceiver::class.java)
+        dismissIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        dismissIntent.putExtra(NOTIFICATION_INTENT_KEY, id)
+        dismissIntent.putExtra(ACTION_INTENT_KEY, "swipe_dismiss")
+        dismissIntent.putExtra(NOTIFICATION_OBJ_INTENT_KEY, localNotification.source)`;
+
+if (managerContent.includes(origDeleteIntent)) {
+  managerContent = managerContent.replace(origDeleteIntent, patchedDeleteIntent);
+}
+
+// 4. Patch TimedNotificationPublisher.kt to enforce FLAG_ONGOING_EVENT, FLAG_NO_CLEAR, and FLAG_INSISTENT when alarm triggers
+const publisherPath = path.join(pluginDir, 'TimedNotificationPublisher.kt');
+const publisherContent = `package com.capacitorjs.plugins.localnotifications
+
+import android.app.AlarmManager
+import android.app.Notification
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.os.Build
+import com.getcapacitor.Logger
+import java.text.SimpleDateFormat
+import java.util.Date
+
+/**
+ * Creates a notification from a timer event. Registered as a broadcast receiver
+ * in AndroidManifest.
+ */
+class TimedNotificationPublisher : BroadcastReceiver() {
+
+    override fun onReceive(context: Context, intent: Intent) {
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        val notification: Notification? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            intent.getParcelableExtra(NOTIFICATION_KEY, Notification::class.java)
+        } else {
+            @Suppress("DEPRECATION")
+            intent.getParcelableExtra(NOTIFICATION_KEY)
+        }
+        if (notification == null) return
+
+        notification.\`when\` = System.currentTimeMillis()
+
+        val id = intent.getIntExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, Int.MIN_VALUE)
+        if (id == Int.MIN_VALUE) {
+            Logger.error(Logger.tags("LN"), "No valid id supplied", null)
+        }
+        val storage = NotificationStorage(context)
+        val notificationJson = storage.getSavedNotificationAsJSObject(id.toString())
+        val isOngoing = notificationJson?.getBoolean("ongoing", true) ?: true
+        val isAutoCancel = notificationJson?.getBoolean("autoCancel", false) ?: false
+        if (isOngoing || !isAutoCancel) {
+            notification.flags = notification.flags or
+                Notification.FLAG_ONGOING_EVENT or
+                Notification.FLAG_NO_CLEAR or
+                Notification.FLAG_INSISTENT
+        }
+        LocalNotificationsPlugin.fireReceived(notificationJson)
+        notificationManager.notify(id, notification)
+        rescheduleNotificationIfNeeded(context, intent, id)
+    }
+
+    private fun rescheduleNotificationIfNeeded(context: Context, intent: Intent, id: Int): Boolean {
+        val dateString = intent.getStringExtra(CRON_KEY) ?: return false
+
+        val date = DateMatch.fromMatchString(dateString)
+        val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+
+        val trigger = date.nextTrigger(Date())
+        val clone = intent.clone() as Intent
+        var flags = PendingIntent.FLAG_CANCEL_CURRENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags = flags or PendingIntent.FLAG_MUTABLE
+        }
+        val pendingIntent = PendingIntent.getBroadcast(context, id, clone, flags)
+        val storedNotification = NotificationStorage(context).getSavedNotificationAsJSObject(id.toString())
+        val wantsExact = storedNotification?.getBoolean("isExactNotification", true) ?: true
+        val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+        if (wantsExact && canExact) {
+            alarmManager.setExact(AlarmManager.RTC, trigger, pendingIntent)
+        } else {
+            if (wantsExact) {
+                Logger.warn("Capacitor/LocalNotification", "Exact alarms not allowed in user settings.  Notification scheduled with non-exact alarm.")
+            }
+            alarmManager.set(AlarmManager.RTC, trigger, pendingIntent)
+        }
+        val sdf = SimpleDateFormat("yyyy/MM/dd HH:mm:ss")
+        Logger.debug(Logger.tags("LN"), "notification " + id + " will next fire at " + sdf.format(Date(trigger)))
+        return true
+    }
+
+    companion object {
+        const val NOTIFICATION_KEY = "NotificationPublisher.notification"
+        const val CRON_KEY = "NotificationPublisher.cron"
+    }
+}
+`;
+
+// 5. Patch NotificationChannelManager.kt to use AudioAttributes.USAGE_ALARM so notification sound loops continuously on Alarm stream
+const channelManagerPath = path.join(pluginDir, 'NotificationChannelManager.kt');
+let channelManagerContent = fs.readFileSync(channelManagerPath, 'utf8');
+channelManagerContent = channelManagerContent.replace(
+  '.setUsage(AudioAttributes.USAGE_NOTIFICATION)',
+  '.setUsage(AudioAttributes.USAGE_ALARM)'
+);
+
+// 6. Patch NotificationDismissReceiver.kt to re-post swiped ongoing notifications and only dismiss when user clicks an action button
 const dismissReceiverContent = `package com.capacitorjs.plugins.localnotifications
 
 import android.app.AlarmManager
@@ -194,7 +384,7 @@ import com.getcapacitor.Logger
 import java.util.Date
 
 /**
- * Receiver called when a notification is dismissed or when a background action button (foreground: false) is clicked.
+ * Receiver called when a notification is swiped or when a background action button (Done, Snooze, Dismiss/Stop) is clicked.
  */
 class NotificationDismissReceiver : BroadcastReceiver() {
 
@@ -205,18 +395,35 @@ class NotificationDismissReceiver : BroadcastReceiver() {
             return
         }
 
-        val actionId = intent.getStringExtra(LocalNotificationManager.ACTION_INTENT_KEY) ?: "dismiss"
+        val actionId = intent.getStringExtra(LocalNotificationManager.ACTION_INTENT_KEY) ?: "swipe_dismiss"
         val storage = NotificationStorage(context)
 
-        if (actionId == "dismiss") {
+        // If user swiped the notification without clicking an action button (Done / Snooze / Dismiss):
+        // Re-post it immediately if it is an ongoing/persistent notification!
+        if (actionId == "swipe_dismiss") {
             val existing = storage.getSavedNotification(intExtra.toString())
+            if (existing != null && !existing.cancelled && (existing.ongoing || !existing.autoCancel)) {
+                try {
+                    val savedJson = storage.getSavedNotificationAsJSObject(intExtra.toString())
+                    if (savedJson != null) {
+                        val immediateJson = JSObject(savedJson.toString())
+                        immediateJson.remove("schedule")
+                        val localNotif = LocalNotification.buildNotificationFromJSObject(immediateJson)
+                        val manager = LocalNotificationManager(storage, null, context, CapConfig.loadDefault(context))
+                        manager.schedule(null, listOf(localNotif))
+                    }
+                } catch (e: Exception) {
+                    Logger.error(Logger.tags("LN"), "Failed to restore swiped ongoing notification", e)
+                }
+                return
+            }
             if (LocalNotificationManager.isSafeToForget(existing)) {
                 storage.deleteNotification(intExtra.toString())
             }
             return
         }
 
-        // Background action button clicked (e.g., done, snooze, stop) — NEVER launch MainActivity!
+        // Explicit background action button clicked (done, complete, snooze, stop, dismiss) — NEVER launch MainActivity!
         val notificationManager = NotificationManagerCompat.from(context)
         notificationManager.cancel(intExtra)
 
@@ -334,7 +541,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
 }
 `;
 
-// 5. Patch LocalNotificationsPlugin.kt to add fireActionPerformed and background action queue
+// 7. Patch LocalNotificationsPlugin.kt to add fireActionPerformed and background action queue
 const pluginPath = path.join(pluginDir, 'LocalNotificationsPlugin.kt');
 let pluginContent = fs.readFileSync(pluginPath, 'utf8');
 if (!pluginContent.includes('fireActionPerformed')) {
@@ -356,7 +563,9 @@ if (!pluginContent.includes('fireActionPerformed')) {
 fs.writeFileSync(path.join(pluginDir, 'NotificationAction.kt'), notificationActionContent, 'utf8');
 fs.writeFileSync(notificationStoragePath, notificationStorageContent, 'utf8');
 fs.writeFileSync(managerPath, managerContent, 'utf8');
+fs.writeFileSync(publisherPath, publisherContent, 'utf8');
+fs.writeFileSync(channelManagerPath, channelManagerContent, 'utf8');
 fs.writeFileSync(path.join(pluginDir, 'NotificationDismissReceiver.kt'), dismissReceiverContent, 'utf8');
 fs.writeFileSync(pluginPath, pluginContent, 'utf8');
 
-console.log('[patch-capacitor-notifications] Successfully patched @capacitor/local-notifications for background actions.');
+console.log('[patch-capacitor-notifications] Successfully patched @capacitor/local-notifications for persistent notifications, continuous alarm looping, and background actions.');

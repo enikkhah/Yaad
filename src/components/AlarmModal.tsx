@@ -37,7 +37,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
   const isEn = settings?.language === 'en';
 
   useEffect(() => {
-    if (!reminder) {
+    if (!reminder?.id) {
       stopAlarmRinging();
       return;
     }
@@ -55,7 +55,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
     }, 10000);
 
-    // Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital_beep)
+    // Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital_beep) and loop continuously
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
@@ -77,7 +77,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       clearInterval(outOfAppRepeatInterval);
       stopAlarmRinging();
     };
-  }, [reminder, settings?.alarmSound, settings?.alarmVolume, settings?.language, settings?.ttsVoiceRate]);
+  }, [reminder?.id, reminder?.ringTune, settings?.alarmSound, settings?.alarmVolume, settings?.language, settings?.ttsVoiceRate]);
 
   if (!reminder) return null;
 
@@ -144,12 +144,12 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           </div>
         </div>
 
-        {/* Minimal Close button */}
+        {/* Minimal Stop Alarm button */}
         <button 
           type="button"
           onClick={handleDismiss}
           className="p-2 rounded-xl text-stone-400 hover:text-white hover:bg-stone-900 transition-colors cursor-pointer"
-          title={isEn ? 'Close' : 'بستن'}
+          title={isEn ? 'Dismiss Alarm' : 'توقف هشدار'}
         >
           <X className="w-5 h-5" />
         </button>
@@ -226,7 +226,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             className="col-span-2 sm:col-span-1 py-3 px-3 rounded-xl bg-stone-900/70 hover:bg-stone-800 text-stone-400 hover:text-stone-200 font-bold text-xs sm:text-sm border border-stone-800/80 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
           >
             <X className="w-3.5 h-3.5" />
-            <span>{isEn ? 'Dismiss' : 'بستن'}</span>
+            <span>{isEn ? 'Dismiss Alarm' : 'توقف هشدار'}</span>
           </button>
         </div>
       </div>

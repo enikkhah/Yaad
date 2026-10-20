@@ -37,15 +37,12 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
   const isEn = language === 'en';
 
   useEffect(() => {
-    if (!reminder) {
+    if (!reminder?.id) {
       stopAlarmRinging();
       return;
     }
 
-    // Dismiss system notification so two sounds don't play simultaneously
-    dismissDeliveredNotifications(reminder.id).catch(() => {});
-
-    // Play alarm audio sound & vibration using resolved sound
+    // Play alarm audio sound & vibration using resolved sound in a continuous loop
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
@@ -53,31 +50,33 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
     return () => {
       stopAlarmRinging();
     };
-  }, [reminder]);
+  }, [reminder?.id]);
 
   if (!reminder) return null;
 
   const handleComplete = (e: React.MouseEvent) => {
     e.stopPropagation();
     stopAlarmRinging();
+    dismissDeliveredNotifications(reminder.id).catch(() => {});
     onComplete(reminder.id);
   };
 
   const handlePostpone = (e: React.MouseEvent, minutes: number = 15) => {
     e.stopPropagation();
     stopAlarmRinging();
+    dismissDeliveredNotifications(reminder.id).catch(() => {});
     onPostpone(reminder.id, minutes);
   };
 
   const handleDismiss = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     stopAlarmRinging();
+    dismissDeliveredNotifications(reminder.id).catch(() => {});
     onDismiss();
   };
 
   const handleCardClick = () => {
     if (onOpenDetails) {
-      stopAlarmRinging();
       onOpenDetails(reminder);
     } else {
       setIsExpanded((prev) => !prev);

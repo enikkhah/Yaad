@@ -3,10 +3,20 @@ import { Category, PhoneAlarmSound } from '../types';
 
 let audioCtx: AudioContext | null = null;
 let alarmIntervalId: number | null = null;
+let activeAlarmAudio: HTMLAudioElement | null = null;
+let previewAudio: HTMLAudioElement | null = null;
+let isAlarmLooping: boolean = false;
 let globalAlarmVolume: number = 0.85; // 0.0 to 1.0
 
 export const setGlobalVolume = (vol: number) => {
   globalAlarmVolume = Math.max(0, Math.min(1, vol));
+  if (activeAlarmAudio) {
+    try {
+      activeAlarmAudio.volume = globalAlarmVolume;
+    } catch {
+      // ignore
+    }
+  }
 };
 
 export const getGlobalVolume = (): number => {
@@ -54,12 +64,18 @@ export const SOUND_FILE_MAP: Record<string, string> = {
   'urgent_bell': 'urgent_bell.wav',
   'urgent-bell': 'urgent_bell.wav',
   'beep': 'beep.wav',
-  'zen-bowl': 'morning_chime.wav',
-  'soft-harp': 'morning_chime.wav',
-  'ocean-drop': 'morning_chime.wav',
-  'wind-chimes': 'morning_chime.wav',
-  'warm-pad': 'morning_chime.wav',
-  'calm-piano': 'morning_chime.wav',
+  'zen-bowl': 'zen_bowl.wav',
+  'zen_bowl': 'zen_bowl.wav',
+  'soft-harp': 'soft_harp.wav',
+  'soft_harp': 'soft_harp.wav',
+  'ocean-drop': 'ocean_drop.wav',
+  'ocean_drop': 'ocean_drop.wav',
+  'wind-chimes': 'wind_chimes.wav',
+  'wind_chimes': 'wind_chimes.wav',
+  'warm-pad': 'warm_pad.wav',
+  'warm_pad': 'warm_pad.wav',
+  'calm-piano': 'calm_piano.wav',
+  'calm_piano': 'calm_piano.wav',
 };
 
 export const PHONE_ALARM_SOUNDS: { id: PhoneAlarmSound; label: string; labelEn: string; desc: string; descEn: string }[] = [
@@ -82,7 +98,7 @@ const VALID_ALARM_SOUND_IDS = new Set<string>(PHONE_ALARM_SOUNDS.map((s) => s.id
 /**
  * Resolves the effective PhoneAlarmSound from a reminder's ringTune or global settings.
  * Priority:
- * 1. Valid PhoneAlarmSound stored in reminder.ringTune (with underscore normalization)
+ * 1. Valid PhoneAlarmSound stored in reminder.ringTune (with underscore/hyphen normalization)
  * 2. Valid PhoneAlarmSound in fallbackAlarmSound (settings.alarmSound)
  * 3. Default 'digital_beep'
  */
@@ -95,7 +111,9 @@ export const resolveAlarmSound = (
     if (val === 'digital-beep') return 'digital_beep';
     if (val === 'morning-chime') return 'morning_chime';
     if (val === 'urgent-bell') return 'urgent_bell';
+    const hyphenated = val.replace(/_/g, '-');
     if (VALID_ALARM_SOUND_IDS.has(val)) return val as PhoneAlarmSound;
+    if (VALID_ALARM_SOUND_IDS.has(hyphenated)) return hyphenated as PhoneAlarmSound;
     return undefined;
   };
 
@@ -286,18 +304,22 @@ const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
 };
 
 /**
- * Play selected phone alarm sound pattern
+ * Play selected phone alarm sound pattern (single preview play)
  */
 export const playPhoneAlarmSound = (sound: PhoneAlarmSound, volumeOverride?: number) => {
   try {
     const vol = volumeOverride !== undefined ? volumeOverride : globalAlarmVolume;
     if (vol <= 0.001) return;
 
-    // Check if we can play the actual bundled WAV file for maximum fidelity
     const soundFile = SOUND_FILE_MAP[sound] || SOUND_FILE_MAP[sound.replace(/-/g, '_')];
     if (typeof window !== 'undefined' && soundFile) {
       try {
+        if (previewAudio) {
+          previewAudio.pause();
+          previewAudio.currentTime = 0;
+        }
         const audio = new Audio(`/${soundFile}`);
+        previewAudio = audio;
         audio.volume = Math.max(0, Math.min(1, vol));
         const playPromise = audio.play();
         if (playPromise) {
@@ -356,7 +378,8 @@ export const playRingTune = (category: Category | string, volumeOverride?: numbe
 };
 
 /**
- * Starts continuous phone alarm ringing (loops every 1.8s) + vibration if supported
+ * Starts continuous, persistent phone alarm ringing & vibration loop
+ * that never stops until stopAlarmRinging() is explicitly called by user action (Done / Snooze / Dismiss).
  */
 export const startAlarmRinging = (
   category: Category,
@@ -364,29 +387,94 @@ export const startAlarmRinging = (
   volumeOverride?: number
 ) => {
   stopAlarmRinging();
+  isAlarmLooping = true;
 
   const effectiveSound = resolveAlarmSound(alarmSound, 'digital_beep');
   const vol = volumeOverride !== undefined ? volumeOverride : globalAlarmVolume;
+  const clampedVol = Math.max(0, Math.min(1, vol));
+  const soundFile = SOUND_FILE_MAP[effectiveSound] || SOUND_FILE_MAP[effectiveSound.replace(/-/g, '_')] || 'digital_beep.wav';
 
-  const triggerCycle = () => {
-    playPhoneAlarmSound(effectiveSound, vol);
+  // 1. Setup persistent looping HTMLAudioElement so the single MediaPlayer instance loops continuously
+  if (typeof window !== 'undefined' && clampedVol > 0.001) {
+    try {
+      const audio = new Audio(`/${soundFile}`);
+      audio.loop = true;
+      audio.volume = clampedVol;
+      // Fallback loop handler in case browser/WebView ignores .loop
+      audio.addEventListener('ended', () => {
+        if (isAlarmLooping && activeAlarmAudio === audio) {
+          audio.currentTime = 0;
+          audio.play().catch(() => {});
+        }
+      });
+      activeAlarmAudio = audio;
+      const playPromise = audio.play();
+      if (playPromise) {
+        playPromise.catch(() => {
+          if (isAlarmLooping) {
+            playSynthesizedSound(effectiveSound, clampedVol);
+          }
+        });
+      }
+    } catch {
+      playSynthesizedSound(effectiveSound, clampedVol);
+    }
+  }
+
+  // 2. Continuous vibration + audio watchdog loop every 1.6s until user explicitly stops/completes
+  const triggerVibrationAndWatchdog = () => {
+    if (!isAlarmLooping) return;
+
     if ('vibrate' in navigator) {
       try {
-        navigator.vibrate([300, 150, 300]);
+        navigator.vibrate([500, 200, 500, 200, 500]);
       } catch {
         // Ignore vibration errors on unsupported browsers
       }
     }
+
+    if (clampedVol > 0.001) {
+      if (activeAlarmAudio) {
+        if (activeAlarmAudio.paused || activeAlarmAudio.ended) {
+          activeAlarmAudio.currentTime = 0;
+          activeAlarmAudio.play().catch(() => {
+            playSynthesizedSound(effectiveSound, clampedVol);
+          });
+        }
+      } else {
+        playSynthesizedSound(effectiveSound, clampedVol);
+      }
+    }
   };
 
-  triggerCycle();
-  alarmIntervalId = window.setInterval(triggerCycle, 1800);
+  triggerVibrationAndWatchdog();
+  alarmIntervalId = window.setInterval(triggerVibrationAndWatchdog, 1600);
 };
 
 export const stopAlarmRinging = () => {
+  isAlarmLooping = false;
   if (alarmIntervalId !== null) {
     clearInterval(alarmIntervalId);
     alarmIntervalId = null;
+  }
+  if (activeAlarmAudio) {
+    try {
+      activeAlarmAudio.loop = false;
+      activeAlarmAudio.pause();
+      activeAlarmAudio.currentTime = 0;
+    } catch {
+      // Ignore
+    }
+    activeAlarmAudio = null;
+  }
+  if (previewAudio) {
+    try {
+      previewAudio.pause();
+      previewAudio.currentTime = 0;
+    } catch {
+      // Ignore
+    }
+    previewAudio = null;
   }
   if ('vibrate' in navigator) {
     try {

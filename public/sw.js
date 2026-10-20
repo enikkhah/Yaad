@@ -94,18 +94,18 @@ self.addEventListener('message', (event) => {
 // Handle notification interaction so window remains active until user reacts
 // When user taps an action button (Done / Snooze / Stop / Dismiss), process strictly in background WITHOUT opening the app
 self.addEventListener('notificationclick', (event) => {
-  // 1. Always close the notification first
-  event.notification.close();
-
-  const reminderId = event.notification.data?.reminderId;
+  const notif = event.notification;
+  const data = notif?.data || {};
+  const reminderId = data.reminderId;
   const action = event.action;
 
-  if (reminderId) {
-    acknowledgedAlarmIds.add(String(reminderId));
-  }
-
-  // 2. If user clicked quick action button (done, snooze, dismiss, stop), apply strictly in background WITHOUT opening or focusing the app!
+  // 1. If user clicked quick action button (done, snooze, dismiss, stop), close notification & apply strictly in background WITHOUT opening or focusing the app!
   if (action === 'done' || action === 'snooze' || action === 'dismiss' || action === 'stop' || action === 'complete') {
+    if (reminderId) {
+      acknowledgedAlarmIds.add(String(reminderId));
+    }
+    notif.close();
+
     event.waitUntil(
       (async () => {
         // Broadcast action to all existing clients silently
@@ -133,27 +133,27 @@ self.addEventListener('notificationclick', (event) => {
                 const store = tx.objectStore('app_backups');
                 const getReq = store.get('latest_vault');
                 getReq.onsuccess = () => {
-                  const data = getReq.result;
-                  if (data && Array.isArray(data.reminders)) {
+                  const vaultData = getReq.result;
+                  if (vaultData && Array.isArray(vaultData.reminders)) {
                     if (action === 'done' || action === 'complete') {
-                      data.reminders = data.reminders.map((r) =>
+                      vaultData.reminders = vaultData.reminders.map((r) =>
                         r.id === reminderId ? { ...r, status: 'completed', completedAt: Date.now(), acknowledged: true, lastActionAt: Date.now() } : r
                       );
                     } else if (action === 'snooze') {
-                      data.reminders = data.reminders.map((r) =>
+                      vaultData.reminders = vaultData.reminders.map((r) =>
                         r.id === reminderId
                           ? { ...r, dueTimestamp: (r.dueTimestamp || Date.now()) + 15 * 60000, postponeCount: (r.postponeCount || 0) + 1, status: 'postponed', postponedAt: Date.now(), acknowledged: false, lastActionAt: Date.now() }
                           : r
                       );
                     } else if (action === 'stop' || action === 'dismiss') {
-                      data.reminders = data.reminders.map((r) =>
+                      vaultData.reminders = vaultData.reminders.map((r) =>
                         r.id === reminderId
                           ? { ...r, acknowledged: true, notifiedAt: Date.now(), lastActionAt: Date.now() }
                           : r
                       );
                     }
-                    data.updatedAt = Date.now();
-                    store.put(data);
+                    vaultData.updatedAt = Date.now();
+                    store.put(vaultData);
                   }
                   tx.oncomplete = () => resolve(null);
                   tx.onerror = () => resolve(null);
@@ -171,12 +171,39 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
-  // 3. Only if action is empty (user tapped directly on notification body itself), open / focus the app
+  // 2. User tapped directly on notification body itself (not an action button):
+  // Open / focus the app AND keep the notification visible in the top bar until user explicitly taps Done / Snooze / Dismiss!
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+    (async () => {
+      // Re-show the notification immediately in case the OS auto-closed it on body tap
+      if (reminderId && !acknowledgedAlarmIds.has(String(reminderId))) {
+        try {
+          await self.registration.showNotification(notif.title, {
+            body: notif.body,
+            icon: notif.icon || '/pwa-192x192.png',
+            badge: notif.badge || '/favicon.ico',
+            tag: notif.tag || `yaad-rem-${reminderId}`,
+            renotify: false,
+            requireInteraction: true,
+            data: {
+              ...data,
+              persistentUntilReaction: true,
+            },
+            actions: data.actions || [
+              { action: 'done', title: '✓ انجام شد' },
+              { action: 'snooze', title: '⏱ تعویق' },
+              { action: 'dismiss', title: '✕ توقف هشدار' },
+            ],
+          });
+        } catch {
+          // ignore
+        }
+      }
+
+      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
       for (const client of clientList) {
         if (client.url && 'focus' in client) {
-          client.focus();
+          await client.focus();
           if (reminderId) {
             client.postMessage({
               type: 'YAAD_NOTIFICATION_ACTION',
@@ -191,11 +218,11 @@ self.addEventListener('notificationclick', (event) => {
         const urlToOpen = reminderId ? `/?alarmId=${encodeURIComponent(reminderId)}` : '/';
         return self.clients.openWindow(urlToOpen);
       }
-    })
+    })()
   );
 });
 
-// If user swipes/closes the out-of-app notification WITHOUT reacting (Complete / Snooze / Stop),
+// If user swipes/closes the out-of-app notification WITHOUT reacting (Done / Snooze / Dismiss),
 // re-show it continuously so the out-of-app notification persists until user reaction!
 self.addEventListener('notificationclose', (event) => {
   const notif = event.notification;
@@ -226,15 +253,15 @@ self.addEventListener('notificationclose', (event) => {
             },
             actions: data.actions || [
               { action: 'done', title: '✓ انجام شد' },
-              { action: 'snooze', title: '⏱ تعویق ۱۵ دقیقه' },
-              { action: 'stop', title: '✕ توقف هشدار' },
+              { action: 'snooze', title: '⏱ تعویق' },
+              { action: 'dismiss', title: '✕ توقف هشدار' },
             ],
           });
         } catch (err) {
           console.warn('[SW] Re-show persistent notification error:', err);
         }
         resolve(null);
-      }, 2000);
+      }, 1200);
     })
   );
 });
