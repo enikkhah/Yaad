@@ -1,12 +1,14 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 
 const DEFAULT_BACKUP_FOLDER_NAME = 'Yaad reminder';
+const SERVER_BACKUP_ROOT = path.join(os.tmpdir(), 'yaad_server_backups');
 
 function getSafeFolderDir(folderName?: string) {
   const raw = (folderName || DEFAULT_BACKUP_FOLDER_NAME).trim();
@@ -18,10 +20,11 @@ function getSafeFolderDir(folderName?: string) {
       .replace(/[<>:"\\|?*\x00-\x1F]/g, '_')
       .replace(/^\/+|\/+$/g, '')
       .trim() || DEFAULT_BACKUP_FOLDER_NAME;
+  const dirPath = path.resolve(SERVER_BACKUP_ROOT, cleaned);
   return {
     folderName: cleaned,
-    dirPath: path.resolve(process.cwd(), cleaned),
-    filePath: path.join(path.resolve(process.cwd(), cleaned), 'yaad_backup.json'),
+    dirPath,
+    filePath: path.join(dirPath, 'yaad_backup.json'),
   };
 }
 

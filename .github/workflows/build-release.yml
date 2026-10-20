@@ -90,9 +90,11 @@ jobs:
           if 'android:requestLegacyExternalStorage="true"' not in text:
               text = text.replace(
                   "<application",
-                  '<application\n        android:requestLegacyExternalStorage="true"',
+                  '<application\n        android:allowBackup="false"\n        android:fullBackupContent="false"\n        android:requestLegacyExternalStorage="true"',
                   1
               )
+          elif 'android:allowBackup="true"' in text:
+              text = text.replace('android:allowBackup="true"', 'android:allowBackup="false"\n        android:fullBackupContent="false"')
 
           path.write_text(text)
           PY
@@ -115,6 +117,9 @@ jobs:
           cp public/splash.png resources/splash.png
           cp public/splash.png resources/splash-dark.png
           npx capacitor-assets generate --android
+
+      - name: Patch Capacitor LocalNotifications for Background Actions
+        run: node scripts/patch-capacitor-notifications.mjs
 
       - name: Sync Capacitor
         run: npx cap sync android

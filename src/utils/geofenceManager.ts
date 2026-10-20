@@ -56,13 +56,13 @@ export function calculateHaversineDistance(
  * Checks if geofence tracking is enabled in localStorage
  */
 export function isGeofenceTrackingEnabled(): boolean {
-  if (typeof window === 'undefined') return true;
+  if (typeof window === 'undefined') return false;
   try {
     const val = localStorage.getItem(GEOFENCE_TRACKING_ENABLED_KEY);
-    if (val === null) return true; // Enabled by default
+    if (val === null) return false; // Disabled by default until enabled inside the app
     return JSON.parse(val) === true;
   } catch {
-    return true;
+    return false;
   }
 }
 

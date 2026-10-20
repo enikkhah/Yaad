@@ -357,7 +357,12 @@ export function getAllNotificationIdsForReminder(reminderId: string | number): n
  * Checks if notification permission is currently granted on Android.
  */
 export async function checkNotificationPermission(): Promise<boolean> {
-  if (!isNativeApp()) return true; // On web browser, bypass native check
+  if (!isNativeApp()) {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      return Notification.permission === 'granted';
+    }
+    return true;
+  }
   try {
     const status = await LocalNotifications.checkPermissions();
     return status.display === 'granted';
@@ -368,10 +373,21 @@ export async function checkNotificationPermission(): Promise<boolean> {
 }
 
 /**
- * Requests Notification permission on Android (compatible with Android 13+ POST_NOTIFICATIONS).
+ * Requests Notification permission on Android (compatible with Android 13+ POST_NOTIFICATIONS) and Web/PWA.
  */
 export async function requestNotificationPermission(): Promise<boolean> {
-  if (!isNativeApp()) return true;
+  if (!isNativeApp()) {
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'granted') return true;
+      try {
+        const res = await Notification.requestPermission();
+        return res === 'granted';
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
   try {
     await initNotificationChannel();
     const current = await LocalNotifications.checkPermissions();
@@ -400,9 +416,9 @@ export async function scheduleReminderNotification(
   reminder: Reminder,
   currentSettings?: AppSettings
 ): Promise<boolean> {
-  // Only pending reminders in the future should be scheduled
+  // Only pending or postponed reminders in the future should be scheduled
   const now = Date.now();
-  if (reminder.status !== 'pending' || reminder.dueTimestamp <= now) {
+  if ((reminder.status !== 'pending' && reminder.status !== 'postponed') || reminder.dueTimestamp <= now) {
     return false;
   }
 
@@ -1080,7 +1096,7 @@ export async function syncAllRemindersWithLocalNotifications(
   const appSettings = currentSettings || getSavedAppSettings();
   const now = Date.now();
   const upcomingPending = (reminders || []).filter(
-    (r) => r.status === 'pending' && r.dueTimestamp > now
+    (r) => (r.status === 'pending' || r.status === 'postponed') && r.dueTimestamp > now
   );
 
   for (const reminder of upcomingPending) {

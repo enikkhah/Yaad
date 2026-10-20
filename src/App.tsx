@@ -467,12 +467,6 @@ export default function App() {
     let isMounted = true;
     const autoRestoreOnOpen = async () => {
       try {
-        // Ensure local folder "YAAD REMIDER" is initialized on startup / reinstall
-        await requestLocalFolderPermission(
-          false,
-          settingsRef.current?.localBackupFolderName
-        ).catch(() => {});
-
         const { snapshot, source } = await retrieveLatestBackupWithPriority(
           undefined,
           settingsRef.current
@@ -723,6 +717,8 @@ export default function App() {
     setAppVisible(true);
     setShowSplash(false);
     setIsCreateChoiceOpen(true);
+    // Request ONLY Notification permission on initial app entry/install (most important permission)
+    requestNotificationPermission().catch(() => {});
   }, []);
 
   // Filters & Search
@@ -1005,8 +1001,10 @@ export default function App() {
     };
     navigator.serviceWorker?.addEventListener('message', handleSwMessage);
 
-    // Initialize Android Notification Channel & Listeners for native Local Notifications
-    initNotificationChannel().catch(() => {});
+    // Initialize Android Notification Channel & request Notification permission on initial install/entry
+    initNotificationChannel()
+      .then(() => requestNotificationPermission())
+      .catch(() => {});
     setupNotificationListeners(
       (id) => {
         handleCompleteReminderRef.current(id);
@@ -1019,7 +1017,7 @@ export default function App() {
       },
       (id) => {
         const found = remindersRef.current?.find((r) => r.id === id);
-        if (found && found.status === 'pending' && !found.acknowledged) {
+        if (found && (found.status === 'pending' || found.status === 'postponed') && !found.acknowledged) {
           setActiveAlarmReminder(found);
         }
       }
@@ -1033,20 +1031,14 @@ export default function App() {
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
 
-    // When the app is installed or re-installed, ensure Persian default language, request folder permission and recall backup automatically
+    // When the app is installed or re-installed, ensure Persian default language and request Notification permission first
     const handleAppInstalled = () => {
       setIsAppInstalled(true);
       setInstallPromptEvent(null);
       if (localStorage.getItem(USER_EXPLICIT_LANG_KEY) !== 'true') {
         setSettings((prev) => ({ ...prev, language: 'fa' }));
       }
-      requestLocalFolderPermission(false, settingsRef.current?.localBackupFolderName)
-        .then((res) => {
-          if (res.restoredSnapshot) {
-            applyRestoredBackupIfNeeded(res.restoredSnapshot, 'local_folder');
-          }
-        })
-        .catch(() => {});
+      requestNotificationPermission().catch(() => {});
     };
 
     window.addEventListener('appinstalled', handleAppInstalled);
@@ -1133,9 +1125,9 @@ export default function App() {
           return;
         }
 
-        // Trigger if pending, due now or within past 24 hours, and not already triggered
+        // Trigger if pending or postponed, due now or within past 24 hours, and not already triggered
         if (
-          r.status === 'pending' &&
+          (r.status === 'pending' || r.status === 'postponed') &&
           r.dueTimestamp <= now &&
           now - r.dueTimestamp < 24 * 3600 * 1000 &&
           !triggeredAlarmsRef.current.has(r.id)
@@ -1206,7 +1198,21 @@ export default function App() {
     let isMounted = true;
     let timerId: any = null;
 
-    const runGeofenceCheck = () => {
+    const runGeofenceCheck = async () => {
+      // Never prompt for Location permission automatically in background/startup;
+      // only poll GPS if geolocation permission has already been granted inside the app.
+      if (navigator.permissions && navigator.permissions.query) {
+        try {
+          const permStatus = await navigator.permissions.query({ name: 'geolocation' as any });
+          if (permStatus.state !== 'granted') {
+            return;
+          }
+        } catch {
+          // ignore
+        }
+      }
+      if (!isMounted) return;
+
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           if (!isMounted) return;
@@ -1314,6 +1320,9 @@ export default function App() {
     setIsGeofenceActive((prev) => {
       const nextVal = typeof newState === 'boolean' ? newState : !prev;
       setGeofenceTrackingEnabled(nextVal);
+      if (nextVal) {
+        requestLocationPermission().catch(() => {});
+      }
       showSyncNotification(
         nextVal
           ? (isEn ? 'Geofence radar activated' : 'رادار پایش حصار مکانی فعال شد')
@@ -1481,8 +1490,10 @@ export default function App() {
       });
     }
 
-    // If geofence is enabled, ensure location permission is active
+    // If geofence is enabled, ensure location permission is active and enable geofence tracking
     if (data.geofence?.enabled) {
+      setIsGeofenceActive(true);
+      setGeofenceTrackingEnabled(true);
       requestLocationPermission().then((locGranted) => {
         if (!locGranted) {
           setAndroidPermissionModal({
@@ -1588,6 +1599,11 @@ export default function App() {
     newLocData: Omit<SavedLocation, 'id' | 'createdAt'>,
     alsoCreateReminder?: boolean
   ) => {
+    if (newLocData.geofence?.enabled) {
+      setIsGeofenceActive(true);
+      setGeofenceTrackingEnabled(true);
+      requestLocationPermission().catch(() => {});
+    }
     if (editingLocation) {
       setSavedLocations((prev) =>
         prev.map((l) => (l.id === editingLocation.id ? { ...l, ...newLocData } : l))
@@ -1836,22 +1852,26 @@ export default function App() {
               // Schedule next recurrence in Android Local Notifications
               scheduleReminderNotification(recurringUpdated, settings).catch(() => {});
 
-              confetti({
-                particleCount: 50,
-                spread: 60,
-                origin: { y: 0.8 },
-              });
+              if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+                confetti({
+                  particleCount: 50,
+                  spread: 60,
+                  origin: { y: 0.8 },
+                });
+              }
               showSyncNotification(`✓ انجام شد! نوبت بعدی برای ${formatJalaliFull(nextDue)} زمان‌بندی شد.`);
               return recurringUpdated;
             }
           }
 
           // Non-recurring or completed custom dates
-          confetti({
-            particleCount: 50,
-            spread: 60,
-            origin: { y: 0.8 },
-          });
+          if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+            confetti({
+              particleCount: 50,
+              spread: 60,
+              origin: { y: 0.8 },
+            });
+          }
           return {
             ...r,
             status: 'completed' as ReminderStatus,

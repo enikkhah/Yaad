@@ -15,6 +15,11 @@ GoogleService-Info.plist
 *.jks
 Yaad reminder/
 YAAD REMIDER/
+InternalStorage/
+Documents/
+Download/
+*yaad_backup.json
 dev-dist/
 .aistudio/
+
 
