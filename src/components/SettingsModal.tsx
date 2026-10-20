@@ -78,6 +78,8 @@ import {
   selectUserCloudSpaceFolder,
   uploadToCustomCloudUrl,
   shareBackupToAnyCloudApp,
+  safeParseJsonFromReadFileData,
+  getSnapshotItemCount,
   LOCAL_BACKUP_FOLDER_NAME
 } from '../utils/backupStorage';
 import {
@@ -88,6 +90,7 @@ import {
 import { CloudBackupProvider } from '../types';
 import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume } from '../utils/audio';
 import { syncNotificationSoundAndVolume, syncAllRemindersWithLocalNotifications } from '../utils/nativeLocalNotifications';
+import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 import { User } from 'firebase/auth';
 import appIcon from '../assets/images/icon.png';
 
@@ -222,11 +225,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     recycleBin: false,
   });
 
-  const toggleSection = (section: keyof typeof openSections) => {
-    setOpenSections((prev) => ({
-      ...prev,
-      [section]: !prev[section],
-    }));
+  const toggleSection = (section: keyof typeof openSections, targetEl?: HTMLElement | null) => {
+    setOpenSections((prev) => {
+      const willOpen = !prev[section];
+      if (willOpen && targetEl) {
+        scrollAccordionHeaderIntoView(targetEl, 38);
+      }
+      return {
+        ...prev,
+        [section]: willOpen,
+      };
+    });
   };
 
   const deletedReminders = (reminders || []).filter((r) => !!r.deletedAt);
@@ -377,27 +386,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     reader.onload = (event) => {
       try {
         const text = event.target?.result as string;
-        const parsed = JSON.parse(text);
-
-        // Basic verification
-        if (!parsed || (typeof parsed !== 'object')) {
-          throw new Error('فرمت فایل نامعتبر است.');
+        if (!text) {
+          throw new Error(isFa ? 'فایل خالی است.' : 'File is empty.');
         }
 
-        const validReminders = Array.isArray(parsed.reminders) ? parsed.reminders : [];
-        const validIdeas = Array.isArray(parsed.ideas) ? parsed.ideas : [];
-        const validLocations = Array.isArray(parsed.savedLocations) ? parsed.savedLocations : [];
-        const validOccasions = Array.isArray(parsed.occasions) ? parsed.occasions : [];
-        const validSettings = parsed.settings && typeof parsed.settings === 'object' ? parsed.settings : undefined;
+        const parsed = safeParseJsonFromReadFileData(text);
 
-        if (
-          validReminders.length === 0 &&
-          validIdeas.length === 0 &&
-          validLocations.length === 0 &&
-          validOccasions.length === 0 &&
-          !validSettings
-        ) {
-          throw new Error('در این فایل هیچ یادآور، مناسبت، ایده یا تنظیمی یافت نشد.');
+        // Basic verification
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error(isFa ? 'فرمت فایل یا کدگذاری نامعتبر است.' : 'Invalid file format or encoding.');
+        }
+
+        const validReminders = Array.isArray(parsed.reminders)
+          ? parsed.reminders.filter((r: any) => r?.id && !r.id.startsWith('seed-'))
+          : [];
+        const validIdeas = Array.isArray(parsed.ideas)
+          ? parsed.ideas.filter((i: any) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-'))
+          : [];
+        const validLocations = Array.isArray(parsed.savedLocations)
+          ? parsed.savedLocations.filter(
+              (l: any) => l?.id && !l.id.startsWith('seed-') && !l.id.startsWith('sample_')
+            )
+          : [];
+        const validOccasions = Array.isArray(parsed.occasions)
+          ? parsed.occasions.filter(
+              (o: any) =>
+                o?.id &&
+                o.id !== 'sample_occ_1' &&
+                o.id !== 'sample_occ_2' &&
+                !o.id.startsWith('sample_') &&
+                !o.id.startsWith('seed-')
+            )
+          : [];
+        const validSettings =
+          parsed.settings && typeof parsed.settings === 'object' ? parsed.settings : undefined;
+
+        const totalItems =
+          validReminders.length + validIdeas.length + validLocations.length + validOccasions.length;
+
+        if (totalItems === 0 && !validSettings) {
+          throw new Error(
+            isFa
+              ? 'در این فایل هیچ یادآور، مناسبت، ایده یا تنظیمی یافت نشد.'
+              : 'No items or settings found in this file.'
+          );
         }
 
         setPendingRestoreData({
@@ -408,15 +440,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           settings: validSettings,
         });
         setBackupErrorMessage(null);
+        setBackupSuccessMessage(
+          isFa
+            ? `فایل «${file.name}» با موفقیت خوانده شد (${toPersianDigits(totalItems)} مورد). نحوه اعمال را در کادر زیر انتخاب کنید.`
+            : `File "${file.name}" loaded (${totalItems} items). Confirm below.`
+        );
       } catch (err: any) {
-        setBackupErrorMessage(err.message || 'خطا در خواندن فایل JSON. لطفاً از صحت فایل پشتیبان مطمئن شوید.');
+        setBackupErrorMessage(
+          err.message || (isFa ? 'خطا در خواندن فایل JSON.' : 'Error parsing JSON file.')
+        );
         setPendingRestoreData(null);
       }
     };
     reader.onerror = () => {
-      setBackupErrorMessage('خطا در بارگذاری فایل از حافظه.');
+      setBackupErrorMessage(isFa ? 'خطا در بارگذاری فایل از حافظه.' : 'Failed to read file from storage.');
     };
-    reader.readAsText(file);
+    reader.readAsText(file, 'UTF-8');
 
     // Reset input
     if (e.target) {
@@ -429,9 +468,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
     onRestoreData(pendingRestoreData, mode);
     setBackupSuccessMessage(
-      mode === 'replace' 
-        ? 'داده‌ها با موفقیت بازیابی و جایگزین شدند.' 
-        : 'داده‌های فایل پشتیبان با موفقیت ادغام شدند.'
+      mode === 'replace'
+        ? (isFa ? 'داده‌ها با موفقیت بازیابی، ذخیره و جایگزین شدند.' : 'Data successfully restored and replaced.')
+        : (isFa ? 'داده‌های فایل پشتیبان با موفقیت ادغام و ذخیره شدند.' : 'Backup data successfully merged.')
     );
     setPendingRestoreData(null);
     setTimeout(() => setBackupSuccessMessage(null), 4000);
@@ -488,10 +527,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleRecallFromLocalFolder = async () => {
     setIsLocalSyncing(true);
     setBackupErrorMessage(null);
+    setBackupSuccessMessage(null);
     try {
       const targetName = normalizeFolderName(localFolderInput);
       const snap = await retrieveFromLocalYaadFolder(targetName);
-      if (snap) {
+      const itemsCount = snap ? getSnapshotItemCount(snap) : 0;
+      if (snap && itemsCount > 0) {
         setPendingRestoreData({
           reminders: snap.reminders || [],
           ideas: snap.ideas || [],
@@ -501,18 +542,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         });
         setBackupSuccessMessage(
           isFa
-            ? `نسخه پشتیبان از پوشه محلی «${targetName}» فراخوانی شد. نحوه اعمال را در کادر زیر انتخاب کنید.`
-            : `Backup loaded from local folder "${targetName}". Confirm below.`
+            ? `نسخه پشتیبان از پوشه محلی «${targetName}» با موفقیت فراخوانی شد (${toPersianDigits(itemsCount)} مورد). نحوه اعمال را در کادر زیر انتخاب کنید.`
+            : `Backup loaded from local folder "${targetName}" (${itemsCount} items). Confirm below.`
         );
       } else {
+        // Fallback for Android 11+ scoped storage when app is reinstalled:
+        // Automatically open the system file picker so user can pick the file with 100% permission!
         setBackupErrorMessage(
           isFa
-            ? `در پوشه محلی «${targetName}» هنوز فایل پشتیبانی یافت نشد.`
-            : `No backup found in local folder "${targetName}".`
+            ? `دسترسی مستقیم اندروید محدود شد (نصب مجدد یا محدودیت امنیتی). لطفاً در پنجره‌ای که باز می‌شود فایل پشتیبان (yaad_backup.json) را انتخاب کنید.`
+            : `Direct folder access restricted. Opening file picker to select backup file.`
         );
+        setTimeout(() => {
+          fileInputRef.current?.click();
+        }, 500);
       }
     } catch {
-      setBackupErrorMessage(isFa ? 'خطا در فراخوانی از پوشه محلی.' : 'Error reading from local folder.');
+      setBackupErrorMessage(
+        isFa
+          ? 'خطا در فراخوانی مستقیم از پوشه. لطفاً فایل پشتیبان را به صورت دستی انتخاب نمایید...'
+          : 'Direct folder read error. Please pick file manually...'
+      );
+      setTimeout(() => {
+        fileInputRef.current?.click();
+      }, 500);
     } finally {
       setIsLocalSyncing(false);
     }
@@ -777,6 +830,78 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
         {/* Settings Body */}
         <div className="flex-1 overflow-y-auto px-2.5 py-4 sm:p-5 space-y-3.5">
+
+          {/* ========================================================= */}
+          {/* TOP LANGUAGE SWITCHER (کلید کشویی مینیمال در صدر صفحه تنظیمات) */}
+          {/* ========================================================= */}
+          <div className="p-2.5 sm:p-3 rounded-2xl border border-stone-800/80 bg-stone-900/70 backdrop-blur-md flex items-center justify-between gap-3 shadow-xs">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
+                <Globe className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <span className="text-xs sm:text-sm font-black text-white block truncate">
+                  {isFa ? 'زبان برنامه' : 'Language'}
+                </span>
+                <span className="text-[10px] sm:text-[11px] text-stone-400 block truncate">
+                  {isFa ? 'فارسی / English' : 'Persian / English'}
+                </span>
+              </div>
+            </div>
+
+            {/* کلید کشویی مینیمال (Minimal Sliding Toggle Switch) */}
+            <div
+              onClick={() => {
+                const nextLang = isFa ? 'en' : 'fa';
+                try {
+                  localStorage.setItem('yaad_user_explicit_lang_choice', 'true');
+                } catch {}
+                onUpdateSettings({ language: nextLang });
+              }}
+              className="relative inline-flex items-center p-1 rounded-xl bg-stone-950 border border-stone-800 cursor-pointer select-none shrink-0"
+              role="switch"
+              aria-checked={!isFa}
+            >
+              {/* Sliding thumb indicator */}
+              <div
+                className={`absolute top-1 bottom-1 w-[calc(50%-4px)] rounded-lg bg-indigo-600 shadow-sm transition-all duration-200 ease-out pointer-events-none ${
+                  isFa ? 'start-1' : 'start-[calc(50%+2px)]'
+                }`}
+              />
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  try {
+                    localStorage.setItem('yaad_user_explicit_lang_choice', 'true');
+                  } catch {}
+                  onUpdateSettings({ language: 'fa' });
+                }}
+                className={`relative z-10 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors duration-150 cursor-pointer ${
+                  isFa ? 'text-white font-black' : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                فارسی
+              </button>
+
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  try {
+                    localStorage.setItem('yaad_user_explicit_lang_choice', 'true');
+                  } catch {}
+                  onUpdateSettings({ language: 'en' });
+                }}
+                className={`relative z-10 px-3.5 py-1.5 rounded-lg text-xs font-bold transition-colors duration-150 cursor-pointer ${
+                  !isFa ? 'text-white font-black' : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                English
+              </button>
+            </div>
+          </div>
           
           {/* ========================================================= */}
           {/* 1. APPEARANCE & THEMES (ظاهر و پوسته‌ها) */}
@@ -784,7 +909,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
             <button
               type="button"
-              onClick={() => toggleSection('appearance')}
+              onClick={(e) => toggleSection('appearance', e.currentTarget)}
               className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
             >
               <div className="flex items-center gap-3 min-w-0">
@@ -797,8 +922,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </h4>
                   <p className="text-[11px] text-stone-400 truncate">
                     {isFa
-                      ? `پوسته: ${themes.find((th) => th.id === settings.theme)?.name || 'پیش‌فرض'} • اندازه فونت • زبان`
-                      : `Theme: ${settings.theme} • Font Size • Language`}
+                      ? `پوسته: ${themes.find((th) => th.id === settings.theme)?.name || 'پیش‌فرض'} • اندازه فونت`
+                      : `Theme: ${settings.theme} • Font Size`}
                   </p>
                 </div>
               </div>
@@ -834,57 +959,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
 
-                {/* 1.3 App Language */}
-                <div className="space-y-2 pt-2 border-t border-stone-800/80">
-                  <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
-                    <Globe className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>{isFa ? 'زبان برنامه (App Language)' : 'Language'}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        try {
-                          localStorage.setItem('yaad_user_explicit_lang_choice', 'true');
-                        } catch {}
-                        onUpdateSettings({ language: 'fa' });
-                      }}
-                      className={`min-h-[48px] p-2.5 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
-                        (settings.language || 'fa') === 'fa'
-                          ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/30 font-bold'
-                          : 'border-stone-800 bg-stone-900/60 hover:bg-stone-900'
-                      }`}
-                    >
-                      <span className="text-xs font-bold">فارسی (Persian)</span>
-                      {(settings.language || 'fa') === 'fa' && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        try {
-                          localStorage.setItem('yaad_user_explicit_lang_choice', 'true');
-                        } catch {}
-                        onUpdateSettings({ language: 'en' });
-                      }}
-                      className={`min-h-[48px] p-2.5 rounded-xl border text-center transition-all flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 text-white ${
-                        settings.language === 'en'
-                          ? 'border-indigo-500 bg-indigo-500/15 ring-1 ring-indigo-500/30 font-bold'
-                          : 'border-stone-800 bg-stone-900/60 hover:bg-stone-900'
-                      }`}
-                    >
-                      <span className="text-xs font-bold">English (انگلیسی)</span>
-                      {settings.language === 'en' && <CheckCircle2 className="w-4 h-4 text-indigo-400" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* 1.4 Font Size Slider */}
+                {/* 1.2 Font Size Slider */}
                 <div className="space-y-2 pt-2 border-t border-stone-800/80">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
                       <Type className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>{isFa ? 'اندازه قلم و فونت متن‌ها' : 'Font Size'}</span>
+                      <span>{isFa ? 'اندازه قلم' : 'Font Size'}</span>
                     </div>
                     <span className="font-mono text-xs text-indigo-300 font-black bg-stone-900 px-2 py-0.5 rounded-lg border border-indigo-500/30">
                       {isFa ? toPersianDigits(
@@ -976,7 +1056,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
             <button
               type="button"
-              onClick={() => toggleSection('sound')}
+              onClick={(e) => toggleSection('sound', e.currentTarget)}
               className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
             >
               <div className="flex items-center gap-3 min-w-0">
@@ -1157,21 +1237,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     })}
                   </div>
                 </div>
-
-                {/* 2.3 Additional Alarm Preferences */}
-                <div className="pt-2 border-t border-stone-800/80">
-                  <label className="min-h-[48px] flex items-center justify-between p-2.5 rounded-xl bg-stone-900/70 border border-stone-800 cursor-pointer">
-                    <span className="text-xs font-bold text-white">
-                      {settings.language === 'en' ? t.autoMicInput : 'میکروفون خودکار فرم'}
-                    </span>
-                    <input
-                      type="checkbox"
-                      checked={settings.autoVoiceInput}
-                      onChange={(e) => onUpdateSettings({ autoVoiceInput: e.target.checked })}
-                      className="w-4 h-4 rounded accent-indigo-500"
-                    />
-                  </label>
-                </div>
               </div>
             )}
           </div>
@@ -1182,7 +1247,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
             <button
               type="button"
-              onClick={() => toggleSection('permissions')}
+              onClick={(e) => toggleSection('permissions', e.currentTarget)}
               className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
             >
               <div className="flex items-center gap-3 min-w-0">
@@ -1355,29 +1420,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
                   <p className="text-[11px] text-stone-300 leading-relaxed">
                     {isFa
-                      ? 'نکته اندروید ۱۱ تا ۱۵: در نسخه‌های جدید اندروید، گزینه «دسترسی به پوشه‌ها» از داخل لیست عادی App Permissions حذف شده و به بخش «دسترسی ویژه برنامه‌ها ← دسترسی به همه فایل‌ها (All files access)» منتقل شده است. با دکمه‌های زیر می‌توانید مستقیماً پوشه Yaad reminder را ایجاد کنید یا صفحه دسترسی به همه فایل‌ها را باز نمایید:'
-                      : 'Android 11–15 Note: Folder access is no longer inside standard App Permissions; Android moved it to "Special app access -> All files access". Use the buttons below to create the Yaad reminder folder directly or open All Files Access:'}
+                      ? 'نکته اندروید ۱۱ تا ۱۵: در نسخه‌های جدید اندروید، گزینه «دسترسی به پوشه‌ها» از داخل لیست عادی App Permissions حذف شده و به بخش «دسترسی ویژه برنامه‌ها ← دسترسی به همه فایل‌ها (All files access)» منتقل شده است. با دکمه زیر می‌توانید صفحه دسترسی به همه فایل‌ها را باز نمایید:'
+                      : 'Android 11–15 Note: Folder access is no longer inside standard App Permissions; Android moved it to "Special app access -> All files access". Use the button below to open All Files Access:'}
                   </p>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      disabled={isLocalSyncing}
-                      onClick={() => finalizeLocalFolderSelection(localFolderInput, false)}
-                      className="min-h-[40px] px-3 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-black flex items-center justify-center gap-1.5 shadow-sm cursor-pointer active:scale-95 transition-all"
-                    >
-                      <FolderOpen className="w-3.5 h-3.5 shrink-0" />
-                      <span>
-                        {isFa
-                          ? 'ایجاد مستقیم پوشه Yaad reminder'
-                          : 'Create Yaad reminder Folder'}
-                      </span>
-                    </button>
-
+                  <div>
                     <button
                       type="button"
                       onClick={() => openAndroidSettings('all_files')}
-                      className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-700 text-stone-200 hover:text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                      className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-700 text-stone-200 hover:text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
                     >
                       <ExternalLink className="w-3.5 h-3.5 text-teal-400 shrink-0" />
                       <span>
@@ -1413,7 +1464,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
             <button
               type="button"
-              onClick={() => toggleSection('sync')}
+              onClick={(e) => toggleSection('sync', e.currentTarget)}
               className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
             >
               <div className="flex items-center gap-3 min-w-0">
@@ -1594,7 +1645,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="rounded-2xl border border-stone-800 bg-stone-950/60 overflow-hidden transition-all shadow-sm">
             <button
               type="button"
-              onClick={() => toggleSection('backup')}
+              onClick={(e) => toggleSection('backup', e.currentTarget)}
               className="w-full min-h-[48px] p-3.5 sm:p-4 bg-stone-900/60 hover:bg-stone-900 border-b border-stone-800/80 flex items-center justify-between gap-3 transition-colors cursor-pointer text-start"
             >
               <div className="flex items-center gap-3 min-w-0">
@@ -1693,7 +1744,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 pt-1">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
                     <button
                       type="button"
                       disabled={isLocalSyncing}
@@ -1710,7 +1761,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isLocalSyncing ? 'animate-spin' : ''}`} />
-                      <span>{isFa ? 'فراخوانی از پوشه محلی' : 'Recall from Local Folder'}</span>
+                      <span>{isFa ? 'فراخوانی خودکار از پوشه' : 'Auto Recall from Folder'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="min-h-[40px] px-3 py-2 rounded-xl bg-indigo-950/60 hover:bg-indigo-900/60 border border-indigo-700/60 text-indigo-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>{isFa ? 'انتخاب فایل از پوشه (نصب مجدد)' : 'Pick File from Folder'}</span>
                     </button>
                   </div>
                 </div>
@@ -2105,7 +2164,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div className="border border-stone-800 rounded-2xl overflow-hidden bg-stone-900/40">
             <button
               type="button"
-              onClick={() => toggleSection('recycleBin')}
+              onClick={(e) => toggleSection('recycleBin', e.currentTarget)}
               className="w-full flex items-center justify-between p-3.5 sm:p-4 bg-stone-900/80 hover:bg-stone-800/80 transition-colors text-right cursor-pointer"
             >
               <div className="flex items-center gap-2.5">
@@ -2372,7 +2431,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <p>
                     {isFa
-                      ? `دستیار هوشمند مدیریت زمان، یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار زمانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`
+                      ? `دستیار هوشمند مدیریت زمان، یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار مکانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`
                       : `Smart time management assistant for spoken reminders, occasions, ideas, and location-based Geofence alerts • Version ${APP_VERSION}`}
                   </p>
                 </div>

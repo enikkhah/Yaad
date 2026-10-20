@@ -111,6 +111,7 @@ export interface Reminder {
   description?: string;
   category: Category;
   priority: Priority;
+  priorityLevel?: number; // 1 to 5, 1 to 10 numerical priority score
   dueTimestamp: number; // Unix timestamp (ms)
   status: ReminderStatus;
   createdAt: number;
@@ -118,12 +119,16 @@ export interface Reminder {
   postponedAt?: number;
   postponeCount: number;
   cancelledAt?: number;
+  acknowledged?: boolean;
+  notifiedAt?: number;
+  lastActionAt?: number;
   imageUrl?: string;
   sourceApp?: 'sms' | 'manual' | 'voice' | 'other';
   ringTune: Category | string; // Ring tune or category sound
   voiceReadAloud: boolean;
   recurrence?: RecurrenceType;
   recurrenceInterval?: number; // e.g. every 1, 2, 3 hours
+  recurrenceCount?: number; // Total number of times to repeat (تعداد دفعات تکرار)
   recurrenceDaysOfWeek?: number[]; // [0..6] (0=شنبه, 1=یکشنبه, ..., 6=جمعه)
   recurrenceCustomDates?: string[]; // array of Jalali date strings "1404/01/25"
   googleCalendarEventId?: string;

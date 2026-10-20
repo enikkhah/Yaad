@@ -92,21 +92,23 @@ self.addEventListener('message', (event) => {
 });
 
 // Handle notification interaction so window remains active until user reacts
-// When user taps an action button (Complete / Snooze / Stop), process in background WITHOUT opening the app
+// When user taps an action button (Done / Snooze / Stop / Dismiss), process strictly in background WITHOUT opening the app
 self.addEventListener('notificationclick', (event) => {
+  // 1. Always close the notification first
+  event.notification.close();
+
   const reminderId = event.notification.data?.reminderId;
   const action = event.action;
 
   if (reminderId) {
     acknowledgedAlarmIds.add(String(reminderId));
   }
-  event.notification.close();
 
-  // If user clicked quick action button (complete, snooze, stop), apply directly WITHOUT opening or focusing the app!
-  if (action === 'complete' || action === 'snooze' || action === 'stop') {
+  // 2. If user clicked quick action button (done, snooze, dismiss, stop), apply strictly in background WITHOUT opening or focusing the app!
+  if (action === 'done' || action === 'snooze' || action === 'dismiss' || action === 'stop' || action === 'complete') {
     event.waitUntil(
       (async () => {
-        // 1. Notify any active clients silently
+        // Broadcast action to all existing clients silently
         const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
         for (const client of clientList) {
           client.postMessage({
@@ -116,7 +118,7 @@ self.addEventListener('notificationclick', (event) => {
           });
         }
 
-        // 2. Also directly update IndexedDB vault if reminderId exists
+        // Also directly update IndexedDB vault if reminderId exists
         if (reminderId && 'indexedDB' in self) {
           try {
             await new Promise((resolve) => {
@@ -133,14 +135,20 @@ self.addEventListener('notificationclick', (event) => {
                 getReq.onsuccess = () => {
                   const data = getReq.result;
                   if (data && Array.isArray(data.reminders)) {
-                    if (action === 'complete') {
+                    if (action === 'done' || action === 'complete') {
                       data.reminders = data.reminders.map((r) =>
-                        r.id === reminderId ? { ...r, status: 'completed' } : r
+                        r.id === reminderId ? { ...r, status: 'completed', completedAt: Date.now(), acknowledged: true, lastActionAt: Date.now() } : r
                       );
                     } else if (action === 'snooze') {
                       data.reminders = data.reminders.map((r) =>
                         r.id === reminderId
-                          ? { ...r, dueTimestamp: (r.dueTimestamp || Date.now()) + 15 * 60000, postponeCount: (r.postponeCount || 0) + 1 }
+                          ? { ...r, dueTimestamp: (r.dueTimestamp || Date.now()) + 15 * 60000, postponeCount: (r.postponeCount || 0) + 1, status: 'postponed', postponedAt: Date.now(), acknowledged: false, lastActionAt: Date.now() }
+                          : r
+                      );
+                    } else if (action === 'stop' || action === 'dismiss') {
+                      data.reminders = data.reminders.map((r) =>
+                        r.id === reminderId
+                          ? { ...r, acknowledged: true, notifiedAt: Date.now(), lastActionAt: Date.now() }
                           : r
                       );
                     }
@@ -163,7 +171,7 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
-  // Only if clicked on notification body itself (no action button), open / focus the app
+  // 3. Only if action is empty (user tapped directly on notification body itself), open / focus the app
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {
@@ -217,7 +225,7 @@ self.addEventListener('notificationclose', (event) => {
               persistentUntilReaction: true,
             },
             actions: data.actions || [
-              { action: 'complete', title: '✓ انجام شد' },
+              { action: 'done', title: '✓ انجام شد' },
               { action: 'snooze', title: '⏱ تعویق ۱۵ دقیقه' },
               { action: 'stop', title: '✕ توقف هشدار' },
             ],

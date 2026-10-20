@@ -2,7 +2,7 @@ import { Capacitor } from '@capacitor/core';
 import { LocalNotifications, PermissionStatus } from '@capacitor/local-notifications';
 import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliTime } from './jalali';
-import { resolveAlarmSound } from './audio';
+import { resolveAlarmSound, stopAlarmRinging } from './audio';
 
 export const NOTIFICATION_CHANNEL_ID = 'yaad_reminders_channel';
 export const NOTIFICATION_ACTION_TYPE_ID = 'YAAD_REMINDER_ACTIONS';
@@ -10,15 +10,21 @@ export const NOTIFICATION_ACTION_TYPE_ID = 'YAAD_REMINDER_ACTIONS';
 let isChannelInitialized = false;
 
 /**
- * Dismisses delivered system notifications when the in-app alarm screen opens,
+ * Dismisses delivered system notifications when the in-app alarm screen opens or an action is clicked,
  * preventing duplicate alarm sounds/banners from ringing simultaneously.
- * (Calls LocalNotifications.removeAllDeliveredNotifications)
+ * (Calls LocalNotifications.removeDeliveredNotifications / removeAllDeliveredNotifications)
  */
-export async function dismissDeliveredNotifications(_reminderId?: string | number): Promise<void> {
+export async function dismissDeliveredNotifications(reminderId?: string | number): Promise<void> {
   if (!isNativeApp()) return;
   try {
-    // Close all delivered notifications per user requirement
-    await LocalNotifications.removeAllDeliveredNotifications().catch(() => {});
+    if (reminderId !== undefined && reminderId !== null) {
+      const allIds = getAllNotificationIdsForReminder(reminderId);
+      await LocalNotifications.removeDeliveredNotifications({
+        notifications: allIds.map((id) => ({ id, title: '', body: '' })),
+      }).catch(() => {});
+    } else {
+      await LocalNotifications.removeAllDeliveredNotifications().catch(() => {});
+    }
   } catch (err) {
     console.warn('Could not remove delivered notifications:', err);
   }
@@ -121,14 +127,14 @@ export async function initNotificationChannel(): Promise<void> {
     }
 
     // Register quick notification actions (Done, Snooze 15m, Stop)
-    // foreground: false ensures the reaction executes cleanly in background without launching/opening the app!
+    // foreground: false ensures the action executes strictly in background without launching/opening the app!
     await LocalNotifications.registerActionTypes({
       types: [
         {
           id: NOTIFICATION_ACTION_TYPE_ID,
           actions: [
             {
-              id: 'complete',
+              id: 'done',
               title: '✓ انجام شد',
               foreground: false,
             },
@@ -1084,12 +1090,13 @@ export async function syncAllRemindersWithLocalNotifications(
 
 /**
  * Sets up listeners for user tapping the notification or selecting quick actions (Done, Snooze, Stop).
- * Actions with foreground: false run in the background without launching or opening the app.
+ * Actions with foreground: false run strictly in the background without launching or opening the app.
  */
 export function setupNotificationListeners(
   onComplete?: (reminderId: string) => void,
   onSnooze?: (reminderId: string, minutes: number) => void,
-  onStop?: (reminderId: string) => void
+  onStop?: (reminderId: string) => void,
+  onOpen?: (reminderId: string) => void
 ): void {
   if (!isNativeApp()) return;
 
@@ -1098,17 +1105,27 @@ export function setupNotificationListeners(
       const reminderId = action.notification.extra?.reminderId;
       if (!reminderId) return;
 
-      // When user reacts, cancel repeating notifications for this reminder
-      cancelReminderNotification(reminderId).catch(() => {});
+      const actionId = action.actionId;
 
-      if (action.actionId === 'complete') {
+      // 1. Immediately stop any internal audio ringing or vibration
+      try {
+        stopAlarmRinging();
+      } catch {}
+
+      // 2. Immediately cancel repeating notifications and dismiss delivered notifications banner
+      cancelReminderNotification(reminderId).catch(() => {});
+      dismissDeliveredNotifications(reminderId).catch(() => {});
+
+      // 3. Apply corresponding background action without opening the in-app alarm modal
+      if (actionId === 'done' || actionId === 'complete') {
         if (onComplete) onComplete(reminderId);
-      } else if (action.actionId === 'snooze') {
+      } else if (actionId === 'snooze') {
         if (onSnooze) onSnooze(reminderId, 15);
-      } else if (action.actionId === 'stop') {
-        if (onStop) {
-          onStop(reminderId);
-        }
+      } else if (actionId === 'stop' || actionId === 'dismiss') {
+        if (onStop) onStop(reminderId);
+      } else {
+        // User explicitly tapped the notification body itself (no action button)
+        if (onOpen) onOpen(reminderId);
       }
     });
   } catch (err) {
@@ -1173,7 +1190,7 @@ export async function triggerOutOfAppPersistentNotification(
   // 2. Web / PWA Service Worker persistent notification with renotify: true & action buttons
   if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
     const actions = [
-      { action: 'complete', title: isEn ? '✓ Mark Done' : '✓ انجام شد' },
+      { action: 'done', title: isEn ? '✓ Mark Done' : '✓ انجام شد' },
       { action: 'snooze', title: isEn ? '⏱ Snooze 15m' : '⏱ تعویق ۱۵ دقیقه' },
       { action: 'stop', title: isEn ? '✕ Dismiss' : '✕ توقف هشدار' },
     ];

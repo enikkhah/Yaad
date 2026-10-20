@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Reminder } from '../types';
-import { formatJalaliFull, getPersianRelativeTime } from '../utils/jalali';
+import { formatJalaliFull, getPersianRelativeTime, toPersianDigits } from '../utils/jalali';
 import { AppLanguage } from '../utils/i18n';
 import { 
   Check, 
@@ -147,9 +147,32 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
 
         {/* Card Main Body: Category Icon, Title, Time */}
         <div className="flex-1 min-w-0">
-          {/* Metadata Row: Category icon */}
-          <div className="flex items-center gap-2 mb-1.5">
+          {/* Metadata Row: Category icon & Priority badge */}
+          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
             {renderCategoryIcon()}
+            {reminder.priorityLevel && reminder.priorityLevel > 1 ? (
+              <span className={`text-[10px] font-bold px-1.5 py-0.2 rounded-md border flex items-center gap-0.5 ${
+                reminder.priorityLevel >= 5
+                  ? 'bg-red-500/15 border-red-500/40 text-red-300'
+                  : reminder.priorityLevel >= 4
+                  ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                  : reminder.priorityLevel >= 2
+                  ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
+                  : 'bg-stone-800 border-stone-700 text-stone-400'
+              }`}>
+                <span>
+                  {reminder.priorityLevel >= 5
+                    ? (isEn ? 'Urgent' : 'فوری')
+                    : reminder.priorityLevel >= 4
+                    ? (isEn ? 'High' : 'مهم')
+                    : (isEn ? 'Medium' : 'متوسط')}
+                </span>
+              </span>
+            ) : reminder.priority === 'high' ? (
+              <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-md border bg-red-500/15 border-red-500/40 text-red-300">
+                {isEn ? 'Urgent' : 'فوری'}
+              </span>
+            ) : null}
           </div>
 
           {/* Title - Prominent and bold subject */}

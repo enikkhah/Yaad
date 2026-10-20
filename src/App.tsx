@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Reminder, Category, Priority, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
+import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
 import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
 import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
@@ -19,7 +19,7 @@ import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
 import { AndroidPermissionType, openAndroidSettings, requestNotificationPermission, requestLocationPermission } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
-import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, requestLocalFolderPermission } from './utils/backupStorage';
+import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, requestLocalFolderPermission, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
 import { useFabVisibility } from './hooks/useFabVisibility';
@@ -424,6 +424,28 @@ export default function App() {
       }
 
       if (restoredAny) {
+        try {
+          if (Array.isArray(backup.reminders) && backup.reminders.length > 0 && isRemindersEmpty) {
+            const clean = backup.reminders.filter((r: any) => r?.id && !r.id.startsWith('seed-'));
+            localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(clean));
+            syncAllRemindersWithLocalNotifications(clean, settingsRef.current).catch(() => {});
+          }
+          if (Array.isArray(backup.ideas) && backup.ideas.length > 0 && isIdeasEmpty) {
+            const clean = backup.ideas.filter((i: any) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-'));
+            localStorage.setItem(IDEAS_STORAGE_KEY, JSON.stringify(clean));
+          }
+          if (Array.isArray(backup.savedLocations) && backup.savedLocations.length > 0 && isLocationsEmpty) {
+            const clean = backup.savedLocations.filter((l: any) => l?.id && !l.id.startsWith('seed-') && !l.id.startsWith('sample_'));
+            localStorage.setItem(LOCATIONS_STORAGE_KEY, JSON.stringify(clean));
+          }
+          if (Array.isArray(backup.occasions) && backup.occasions.length > 0 && isOccasionsEmpty) {
+            const clean = backup.occasions.filter((o: any) => o?.id && !o.id.startsWith('seed-') && !o.id.startsWith('sample_'));
+            localStorage.setItem(OCCASIONS_STORAGE_KEY, JSON.stringify(clean));
+          }
+        } catch {
+          // ignore
+        }
+
         const cloudLabel = settingsRef.current?.cloudSpaceLabel || (settingsRef.current?.cloudBackupFolderName || 'Yaad reminder');
         const srcText =
           source === 'google_drive'
@@ -477,13 +499,17 @@ export default function App() {
   // Automatic backup to local "YAAD REMIDER" folder (and Google Drive if enabled by user) after every change
   useEffect(() => {
     if (isVaultInitialized) {
-      performAutoBackup({
-        reminders,
-        ideas,
-        savedLocations,
-        occasions,
-        settings,
-      });
+      // SAFETY: Never overwrite an existing backup on disk with empty state during initial mount / startup
+      const totalItems = reminders.length + ideas.length + savedLocations.length + occasions.length;
+      if (totalItems > 0) {
+        performAutoBackup({
+          reminders,
+          ideas,
+          savedLocations,
+          occasions,
+          settings,
+        });
+      }
     }
   }, [reminders, ideas, savedLocations, occasions, settings, isVaultInitialized]);
 
@@ -869,6 +895,45 @@ export default function App() {
 
   const handleCompleteReminderRef = useRef<(id: string) => void>(() => {});
   const handlePostponeRef = useRef<(id: string, mins: number) => void>(() => {});
+  const handleStopOrDismissReminderRef = useRef<(id: string) => void>(() => {});
+  const ACTIONED_REMINDERS_KEY = 'yaad_actioned_reminders_map';
+  const recentNotificationActionsRef = useRef<Map<string, number>>(new Map());
+
+  // Restore actioned reminder timestamps from localStorage on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(ACTIONED_REMINDERS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const map = new Map<string, number>();
+        for (const [k, v] of Object.entries(parsed)) {
+          if (typeof v === 'number') {
+            map.set(k, v);
+          }
+        }
+        recentNotificationActionsRef.current = map;
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const recordNotificationAction = (id: string) => {
+    const now = Date.now();
+    recentNotificationActionsRef.current.set(id, now);
+    try {
+      const raw = localStorage.getItem(ACTIONED_REMINDERS_KEY);
+      const map: Record<string, number> = raw ? JSON.parse(raw) : {};
+      map[id] = now;
+      const cutoff = now - 24 * 3600 * 1000;
+      for (const k of Object.keys(map)) {
+        if (map[k] < cutoff) delete map[k];
+      }
+      localStorage.setItem(ACTIONED_REMINDERS_KEY, JSON.stringify(map));
+    } catch {
+      // ignore
+    }
+  };
 
   // Setup Google Auth listener and background alarm listeners on mount
   useEffect(() => {
@@ -914,22 +979,25 @@ export default function App() {
       }
     }
 
-    // Listen for Service Worker notification actions (complete, snooze, stop, open)
+    // Listen for Service Worker notification actions (done, complete, snooze, stop, dismiss, open)
     const handleSwMessage = (event: MessageEvent) => {
       if (event.data?.type === 'YAAD_NOTIFICATION_ACTION') {
         const { action, reminderId } = event.data;
         if (!reminderId) return;
+
+        // 1. Immediately stop audio ringing and dismiss delivered notification banner
+        stopAlarmRinging();
         clearOutOfAppPersistentNotification(reminderId);
-        if (action === 'complete') {
+
+        if (action === 'complete' || action === 'done') {
           handleCompleteReminderRef.current(reminderId);
         } else if (action === 'snooze') {
           handlePostponeRef.current(reminderId, 15);
-        } else if (action === 'stop') {
-          stopAlarmRinging();
-          setActiveAlarmReminder(null);
-        } else {
+        } else if (action === 'stop' || action === 'dismiss') {
+          handleStopOrDismissReminderRef.current(reminderId);
+        } else if (action === 'open') {
           const found = remindersRef.current?.find((r) => r.id === reminderId);
-          if (found) {
+          if (found && found.status === 'pending' && !found.acknowledged) {
             setActiveAlarmReminder(found);
           }
         }
@@ -941,17 +1009,19 @@ export default function App() {
     initNotificationChannel().catch(() => {});
     setupNotificationListeners(
       (id) => {
-        clearOutOfAppPersistentNotification(id);
         handleCompleteReminderRef.current(id);
       },
       (id, mins) => {
-        clearOutOfAppPersistentNotification(id);
         handlePostponeRef.current(id, mins);
       },
       (id) => {
-        clearOutOfAppPersistentNotification(id);
-        stopAlarmRinging();
-        setActiveAlarmReminder(null);
+        handleStopOrDismissReminderRef.current(id);
+      },
+      (id) => {
+        const found = remindersRef.current?.find((r) => r.id === id);
+        if (found && found.status === 'pending' && !found.acknowledged) {
+          setActiveAlarmReminder(found);
+        }
       }
     );
 
@@ -1032,7 +1102,7 @@ export default function App() {
         window.history.replaceState({}, '', cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : ''));
 
         const found = reminders.find((r) => r.id === queryAlarmId);
-        if (found) {
+        if (found && found.status === 'pending' && !found.acknowledged) {
           setActiveAlarmReminder(found);
         }
       }
@@ -1048,6 +1118,21 @@ export default function App() {
       setCurrentTime(now);
 
       reminders.forEach((r) => {
+        // Check if this reminder was actioned recently (e.g. Done, Snooze, or Stop via notification)
+        const lastActionTime = recentNotificationActionsRef.current.get(r.id) || r.lastActionAt || 0;
+        const isRecentlyActioned = (now - lastActionTime) < 300000; // 5 min protection window
+
+        // If reminder is completed, cancelled, acknowledged, or actioned via notification, NEVER trigger in-app alarm!
+        if (
+          r.status === 'completed' ||
+          r.status === 'cancelled' ||
+          r.acknowledged === true ||
+          isRecentlyActioned
+        ) {
+          triggeredAlarmsRef.current.add(r.id);
+          return;
+        }
+
         // Trigger if pending, due now or within past 24 hours, and not already triggered
         if (
           r.status === 'pending' &&
@@ -1429,10 +1514,13 @@ export default function App() {
 
     if (editingReminder) {
       triggeredAlarmsRef.current.delete(editingReminder.id);
+      recentNotificationActionsRef.current.delete(editingReminder.id);
       const updatedReminder: Reminder = {
         ...editingReminder,
         ...data,
         status: data.dueTimestamp >= Date.now() ? 'pending' : editingReminder.status,
+        acknowledged: false,
+        lastActionAt: undefined,
         googleCalendarEventId: calendarEventId || editingReminder.googleCalendarEventId,
       };
 
@@ -1453,6 +1541,7 @@ export default function App() {
         notificationId: getNotificationId(newId),
         createdAt: Date.now(),
         status: 'pending',
+        acknowledged: false,
         postponeCount: 0,
         googleCalendarEventId: calendarEventId,
       };
@@ -1596,118 +1685,153 @@ export default function App() {
       occasions?: Occasion[];
       settings?: Partial<AppSettings>;
     },
-    mode: 'replace' | 'merge'
+    mode: 'replace' | 'merge',
+    shouldReload = false
   ) => {
+    // 1. Sanitize incoming arrays
+    const cleanReminders = (data.reminders || []).filter(
+      (r) => r?.id && !r.id.startsWith('seed-')
+    );
+    const cleanIdeas = (data.ideas || []).filter(
+      (i) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-')
+    );
+    const cleanLocations = (data.savedLocations || []).filter(
+      (l) => l?.id && !l.id.startsWith('seed-') && !l.id.startsWith('sample_')
+    );
+    const cleanOccasions = (data.occasions || []).filter(
+      (o) =>
+        o?.id &&
+        o.id !== 'sample_occ_1' &&
+        o.id !== 'sample_occ_2' &&
+        !o.id.startsWith('sample_') &&
+        !o.id.startsWith('seed-')
+    );
+
+    let finalReminders: Reminder[] = [];
+    let finalIdeas: IdeaNote[] = [];
+    let finalLocations: SavedLocation[] = [];
+    let finalOccasions: Occasion[] = [];
+    let finalSettings: AppSettings = settingsRef.current;
+
     if (mode === 'replace') {
-      if (data.reminders) {
-        setReminders(data.reminders.filter((r) => r?.id && !r.id.startsWith('seed-')));
-      }
-      if (data.ideas) {
-        setIdeas(data.ideas.filter((i) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-')));
-      }
-      if (data.savedLocations) {
-        setSavedLocations(
-          data.savedLocations.filter(
-            (l) => l?.id && !l.id.startsWith('seed-') && !l.id.startsWith('sample_')
-          )
-        );
-      }
-      if (data.occasions) {
-        setOccasions(
-          data.occasions.filter(
-            (o) =>
-              o?.id &&
-              o.id !== 'sample_occ_1' &&
-              o.id !== 'sample_occ_2' &&
-              !o.id.startsWith('sample_') &&
-              !o.id.startsWith('seed-')
-          )
-        );
-      }
-      if (data.settings) setSettings((prev) => ({ ...prev, ...data.settings }));
-    } else {
-      // Merge mode
-      if (data.reminders && data.reminders.length > 0) {
-        setReminders((prev) => {
-          const existingIds = new Set(prev.map((r) => r.id));
-          const newItems = data.reminders!.filter(
-            (r) => r?.id && !r.id.startsWith('seed-') && !existingIds.has(r.id)
-          );
-          return [...newItems, ...prev];
-        });
-      }
-      if (data.occasions && data.occasions.length > 0) {
-        setOccasions((prev) => {
-          const existingIds = new Set(prev.map((o) => o.id));
-          const newItems = data.occasions!.filter(
-            (o) =>
-              o?.id &&
-              o.id !== 'sample_occ_1' &&
-              o.id !== 'sample_occ_2' &&
-              !o.id.startsWith('sample_') &&
-              !o.id.startsWith('seed-') &&
-              !existingIds.has(o.id)
-          );
-          return [...newItems, ...prev];
-        });
-      }
-      if (data.ideas && data.ideas.length > 0) {
-        setIdeas((prev) => {
-          const existingIds = new Set(prev.map((i) => i.id));
-          const newItems = data.ideas!.filter(
-            (i) =>
-              i?.id &&
-              i.id !== 'idea-1' &&
-              !i.id.startsWith('seed-') &&
-              !existingIds.has(i.id)
-          );
-          return [...newItems, ...prev];
-        });
-      }
-      if (data.savedLocations && data.savedLocations.length > 0) {
-        setSavedLocations((prev) => {
-          const existingIds = new Set(prev.map((l) => l.id));
-          const newItems = data.savedLocations!.filter(
-            (l) =>
-              l?.id &&
-              !l.id.startsWith('seed-') &&
-              !l.id.startsWith('sample_') &&
-              !existingIds.has(l.id)
-          );
-          return [...newItems, ...prev];
-        });
-      }
+      finalReminders = cleanReminders;
+      finalIdeas = cleanIdeas;
+      finalLocations = cleanLocations;
+      finalOccasions = cleanOccasions;
       if (data.settings) {
-        setSettings((prev) => ({ ...prev, ...data.settings }));
+        finalSettings = { ...settingsRef.current, ...data.settings };
+      }
+    } else {
+      // Merge mode: keep unique IDs
+      const curR = remindersRef.current;
+      const curRIds = new Set(curR.map((r) => r.id));
+      const newR = cleanReminders.filter((r) => !curRIds.has(r.id));
+      finalReminders = [...newR, ...curR];
+
+      const curI = ideasRef.current;
+      const curIIds = new Set(curI.map((i) => i.id));
+      const newI = cleanIdeas.filter((i) => !curIIds.has(i.id));
+      finalIdeas = [...newI, ...curI];
+
+      const curL = savedLocationsRef.current;
+      const curLIds = new Set(curL.map((l: SavedLocation) => l.id));
+      const newL = cleanLocations.filter((l: SavedLocation) => !curLIds.has(l.id));
+      finalLocations = [...newL, ...curL];
+
+      const curO = occasionsRef.current;
+      const curOIds = new Set(curO.map((o) => o.id));
+      const newO = cleanOccasions.filter((o) => !curOIds.has(o.id));
+      finalOccasions = [...newO, ...curO];
+
+      if (data.settings) {
+        finalSettings = { ...settingsRef.current, ...data.settings };
       }
     }
-    showSyncNotification('داده‌ها با موفقیت بازیابی شدند.');
+
+    // 2. Persist directly and immediately into the exact localStorage keys
+    try {
+      localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(finalReminders));
+      localStorage.setItem(IDEAS_STORAGE_KEY, JSON.stringify(finalIdeas));
+      localStorage.setItem(LOCATIONS_STORAGE_KEY, JSON.stringify(finalLocations));
+      localStorage.setItem(OCCASIONS_STORAGE_KEY, JSON.stringify(finalOccasions));
+      if (finalSettings) {
+        localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(finalSettings));
+      }
+
+      // Also update backup vault in localStorage
+      const vaultPayload = {
+        version: 3,
+        updatedAt: Date.now(),
+        folder: finalSettings?.localBackupFolderName || 'Yaad reminder',
+        source: 'local_folder',
+        reminders: finalReminders,
+        ideas: finalIdeas,
+        savedLocations: finalLocations,
+        occasions: finalOccasions,
+        settings: finalSettings,
+      };
+      localStorage.setItem(AUTO_BACKUP_STORAGE_KEY, JSON.stringify(vaultPayload));
+      localStorage.setItem(LAST_LOCAL_BACKUP_KEY, String(Date.now()));
+    } catch (err) {
+      console.warn('[handleRestoreData] Error writing to localStorage:', err);
+    }
+
+    // 3. Update React states
+    setReminders(finalReminders);
+    setIdeas(finalIdeas);
+    setSavedLocations(finalLocations);
+    setOccasions(finalOccasions);
+    setSettings(finalSettings);
+
+    // 4. Re-schedule local notifications for all pending restored reminders
+    syncAllRemindersWithLocalNotifications(finalReminders, finalSettings).catch(() => {});
+
+    // 5. Success toast
+    const totalCount =
+      finalReminders.length + finalIdeas.length + finalLocations.length + finalOccasions.length;
+    showSyncNotification(
+      settingsRef.current?.language === 'en'
+        ? `Data restored successfully (${totalCount} items).`
+        : `داده‌ها با موفقیت بازیابی و در حافظه ذخیره شدند (${toPersianDigits(totalCount)} مورد).`
+    );
+
+    if (shouldReload) {
+      setTimeout(() => {
+        window.location.reload();
+      }, 1200);
+    }
   };
 
   // Handler: Complete reminder explicitly (called by Alarm Modal, notifications, and complete actions)
   // Guarantees stopping sound, closing modal, and prevents re-triggering
   const handleCompleteReminder = (id: string) => {
     stopAlarmRinging();
-    setActiveAlarmReminder(null);
+    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
     triggeredAlarmsRef.current.add(id);
+    recordNotificationAction(id);
 
     // Clear continuous out-of-app & Android Local Notification for completed reminder
     clearOutOfAppPersistentNotification(id);
     cancelReminderNotification(id).catch(() => {});
+    dismissDeliveredNotifications(id).catch(() => {});
 
-    setReminders((prev) =>
-      prev.map((r) => {
+    setReminders((prev) => {
+      const updated = prev.map((r) => {
         if (r.id === id) {
-          // If recurring reminder is being marked completed, advance to next recurrence
-          if (r.recurrence && r.recurrence !== 'none') {
+          // If recurring reminder is being marked completed, advance to next recurrence (unless recurrenceCount reached 1)
+          const hasRemainingRepeats = r.recurrenceCount === undefined || r.recurrenceCount > 1;
+          if (r.recurrence && r.recurrence !== 'none' && hasRemainingRepeats) {
             const nextDue = getNextRecurrenceTimestamp(r, Date.now());
             if (nextDue) {
               const recurringUpdated: Reminder = {
                 ...r,
                 dueTimestamp: nextDue,
+                recurrenceCount: r.recurrenceCount && r.recurrenceCount > 1 ? r.recurrenceCount - 1 : undefined,
                 status: 'pending',
                 completedAt: undefined,
                 postponeCount: 0,
+                acknowledged: false,
+                lastActionAt: Date.now(),
               };
               // Schedule next recurrence in Android Local Notifications
               scheduleReminderNotification(recurringUpdated, settings).catch(() => {});
@@ -1730,13 +1854,22 @@ export default function App() {
           });
           return {
             ...r,
-            status: 'completed',
+            status: 'completed' as ReminderStatus,
             completedAt: Date.now(),
+            acknowledged: true,
+            lastActionAt: Date.now(),
           };
         }
         return r;
-      })
-    );
+      });
+
+      try {
+        localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(updated));
+      } catch (err) {
+        console.error('Failed to sync completed reminder to localStorage:', err);
+      }
+      return updated;
+    });
   };
 
   handleCompleteReminderRef.current = handleCompleteReminder;
@@ -1751,9 +1884,11 @@ export default function App() {
       if (!target) return prev;
       if (target.status !== 'completed') {
         triggeredAlarmsRef.current.add(id);
+        recordNotificationAction(id);
         // Clear continuous out-of-app & Android Local Notification
         clearOutOfAppPersistentNotification(id);
         cancelReminderNotification(id).catch(() => {});
+        dismissDeliveredNotifications(id).catch(() => {});
 
         confetti({
           particleCount: 50,
@@ -1761,78 +1896,146 @@ export default function App() {
           origin: { y: 0.8 },
         });
 
-        if (target.recurrence && target.recurrence !== 'none') {
+        const hasRemainingRepeats = target.recurrenceCount === undefined || target.recurrenceCount > 1;
+        if (target.recurrence && target.recurrence !== 'none' && hasRemainingRepeats) {
           const nextDue = getNextRecurrenceTimestamp(target, Date.now());
           if (nextDue) {
             const recurringNext: Reminder = {
               ...target,
               dueTimestamp: nextDue,
+              recurrenceCount: target.recurrenceCount && target.recurrenceCount > 1 ? target.recurrenceCount - 1 : undefined,
               status: 'pending',
               completedAt: undefined,
               postponeCount: 0,
+              acknowledged: false,
+              lastActionAt: Date.now(),
             };
             scheduleReminderNotification(recurringNext, settings).catch(() => {});
 
             showSyncNotification(`✓ انجام شد! نوبت بعدی برای ${formatJalaliFull(nextDue)} زمان‌بندی شد.`);
-            return prev.map((r) => (r.id === id ? recurringNext : r));
+            const nextList = prev.map((r) => (r.id === id ? recurringNext : r));
+            try {
+              localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(nextList));
+            } catch {}
+            return nextList;
           }
         }
 
-        return prev.map((r) =>
+        const nextList = prev.map((r) =>
           r.id === id
             ? {
                 ...r,
-                status: 'completed',
+                status: 'completed' as const,
                 completedAt: Date.now(),
+                acknowledged: true,
+                lastActionAt: Date.now(),
               }
             : r
         );
+        try {
+          localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(nextList));
+        } catch {}
+        return nextList;
       }
 
       // If user deliberately un-completes a completed reminder in the list
       triggeredAlarmsRef.current.delete(id);
       if (target.dueTimestamp > Date.now()) {
-        scheduleReminderNotification({ ...target, status: 'pending' }, settings).catch(() => {});
+        scheduleReminderNotification({ ...target, status: 'pending', acknowledged: false }, settings).catch(() => {});
       }
-      return prev.map((r) =>
+      const nextList = prev.map((r) =>
         r.id === id
           ? {
               ...r,
-              status: 'pending',
+              status: 'pending' as const,
               completedAt: undefined,
+              acknowledged: false,
             }
           : r
       );
+      try {
+        localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(nextList));
+      } catch {}
+      return nextList;
     });
   };
 
   // Handler: Postpone reminder
   const handlePostpone = (id: string, minutes: number) => {
     stopAlarmRinging();
-    setActiveAlarmReminder(null);
+    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+    recordNotificationAction(id);
     clearOutOfAppPersistentNotification(id);
-    setReminders((prev) =>
-      prev.map((r) => {
+    cancelReminderNotification(id).catch(() => {});
+    dismissDeliveredNotifications(id).catch(() => {});
+
+    setReminders((prev) => {
+      const updated = prev.map((r) => {
         if (r.id === id) {
           const newDue = Math.max(Date.now(), r.dueTimestamp) + minutes * 60000;
           triggeredAlarmsRef.current.delete(id);
           const postponedRem: Reminder = {
             ...r,
             dueTimestamp: newDue,
-            status: 'postponed',
+            status: 'postponed' as ReminderStatus,
             postponedAt: Date.now(),
-            postponeCount: r.postponeCount + 1,
+            postponeCount: (r.postponeCount || 0) + 1,
+            acknowledged: false,
+            lastActionAt: Date.now(),
           };
           // Reschedule notification for the new postponed time
           rescheduleReminderNotification(id, postponedRem, settings).catch(() => {});
           return postponedRem;
         }
         return r;
-      })
-    );
+      });
+
+      try {
+        localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(updated));
+      } catch (err) {
+        console.error('Failed to sync postponed reminder to localStorage:', err);
+      }
+      return updated;
+    });
   };
 
   handlePostponeRef.current = handlePostpone;
+
+  // Handler: Stop / Dismiss alarm explicitly (called by Alarm Modal onDismiss, notification Stop action)
+  const handleStopOrDismissReminder = (id: string) => {
+    stopAlarmRinging();
+    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+    triggeredAlarmsRef.current.add(id);
+    recordNotificationAction(id);
+
+    // Cancel continuous out-of-app & Android Local Notification immediately
+    clearOutOfAppPersistentNotification(id);
+    cancelReminderNotification(id).catch(() => {});
+    dismissDeliveredNotifications(id).catch(() => {});
+
+    setReminders((prev) => {
+      const updated = prev.map((r) => {
+        if (r.id === id) {
+          return {
+            ...r,
+            acknowledged: true,
+            notifiedAt: Date.now(),
+            lastActionAt: Date.now(),
+          };
+        }
+        return r;
+      });
+
+      try {
+        localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(updated));
+      } catch (err) {
+        console.error('Failed to sync dismissed reminder to localStorage:', err);
+      }
+      return updated;
+    });
+  };
+
+  handleStopOrDismissReminderRef.current = handleStopOrDismissReminder;
 
   // Handler: Delete reminder (soft delete into Recycle Bin)
   const handleDelete = (id: string) => {
@@ -2251,7 +2454,7 @@ export default function App() {
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed animate-in fade-in">
                     {isEn
                       ? `Smart assistant for spoken reminders, occasions, ideas, and location Geofence alerts • Version ${APP_VERSION}`
-                      : `دستیار هوشمند یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار زمانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`}
+                      : `دستیار هوشمند یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار مکانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`}
                   </div>
                 )}
 
@@ -3276,8 +3479,9 @@ export default function App() {
           settings={settings}
           onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
           onDismiss={() => {
-            stopAlarmRinging();
-            setActiveAlarmReminder(null);
+            if (activeAlarmReminder) {
+              handleStopOrDismissReminder(activeAlarmReminder.id);
+            }
             setActiveMainTab('reminders');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}

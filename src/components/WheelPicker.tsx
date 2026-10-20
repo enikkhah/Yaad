@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
-import { ChevronUp, ChevronDown, Keyboard } from 'lucide-react';
+import { Keyboard } from 'lucide-react';
 
 interface WheelPickerProps {
   items?: Array<{ value: number; label: string }>;
@@ -211,56 +211,66 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
     }
   };
 
-  const totalHeight = itemHeight * visibleCount;
-  const paddingY = itemHeight * Math.floor(visibleCount / 2);
+  const totalHeight = Math.round(itemHeight * visibleCount);
+  const paddingY = Math.max(0, Math.round((totalHeight - itemHeight) / 2));
 
   return (
     <div className="flex flex-col items-center select-none w-full px-0 mx-0">
-      {/* Header Label and Quick Type Button */}
-      <div className="w-full flex items-center justify-between px-1 mb-1.5">
-        {label && (
+      {/* Header Label and Quick Type Button (only rendered if label is explicitly provided) */}
+      {label ? (
+        <div className="w-full flex items-center justify-between px-1 mb-1.5">
           <span className="text-xs sm:text-sm font-bold text-stone-200">{label}</span>
-        )}
+          <button
+            type="button"
+            onClick={() => {
+              if (isTypingMode) {
+                handleTypedSubmit();
+              } else {
+                setIsTypingMode(true);
+              }
+            }}
+            className={`p-1 rounded-lg text-xs flex items-center gap-1 transition-all cursor-pointer ${
+              isTypingMode
+                ? 'bg-teal-500/20 text-teal-300 font-bold border border-teal-500/30'
+                : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
+            }`}
+            title="تایپ مستقیم عدد با کیبورد"
+          >
+            <Keyboard className="w-3.5 h-3.5" />
+            <span className="text-[10px] hidden sm:inline">
+              {isTypingMode ? 'بستن' : 'تایپ'}
+            </span>
+          </button>
+        </div>
+      ) : null}
+
+      {/* Main Wheel Cylinder Area (Arrows removed, rounded cylinder with top/bottom fade) */}
+      <div 
+        onDoubleClick={() => setIsTypingMode(true)}
+        className="relative w-full overflow-hidden bg-stone-950 rounded-2xl border border-teal-500/35 shadow-inner group cursor-pointer"
+        style={{ height: totalHeight }}
+      >
+        {/* Quick Keyboard Direct Typing Icon at top corner */}
         <button
           type="button"
-          onClick={() => {
+          onClick={(e) => {
+            e.stopPropagation();
             if (isTypingMode) {
               handleTypedSubmit();
             } else {
               setIsTypingMode(true);
             }
           }}
-          className={`p-1 rounded-lg text-xs flex items-center gap-1 transition-all cursor-pointer ${
-            isTypingMode
-              ? 'bg-teal-500/20 text-teal-300 font-bold border border-teal-500/30'
-              : 'text-stone-400 hover:text-stone-200 hover:bg-stone-800'
+          className={`absolute top-1.5 right-1.5 z-20 p-1 rounded-md transition-colors cursor-pointer ${
+            isTypingMode ? 'bg-teal-500/30 text-teal-200' : 'text-stone-500 hover:text-teal-300 opacity-60 hover:opacity-100'
           }`}
-          title="تایپ مستقیم عدد با کیبورد"
+          title="تایپ مستقیم عدد"
         >
-          <Keyboard className="w-3.5 h-3.5" />
-          <span className="text-[10px] hidden sm:inline">
-            {isTypingMode ? 'بستن' : 'تایپ'}
-          </span>
+          <Keyboard className="w-3 h-3" />
         </button>
-      </div>
 
-      {/* Up Button - Steps to previous number (e.g. 00 -> 23 or 00 -> 59 seamlessly) */}
-      <button
-        type="button"
-        onClick={() => handleStep('up')}
-        className="w-full py-2.5 flex items-center justify-center text-teal-300 hover:text-white active:scale-95 transition-colors rounded-t-2xl bg-stone-900 hover:bg-stone-800 border-t border-x border-teal-500/30 shadow-sm cursor-pointer"
-        aria-label="عدد قبلی"
-      >
-        <ChevronUp className="w-5 h-5" />
-      </button>
-
-      {/* Main Wheel Cylinder Area */}
-      <div 
-        onDoubleClick={() => setIsTypingMode(true)}
-        className="relative w-full overflow-hidden bg-stone-950 border-x border-teal-500/30 shadow-inner group cursor-pointer"
-      >
-        {/* Top Fade Gradient */}
-        <div className="absolute top-0 inset-x-0 h-10 bg-gradient-to-b from-stone-950 via-stone-950/70 to-transparent pointer-events-none z-10" />
+        {/* Top Fade Gradient (subtle so half-number at top remains visible) */}
+        <div className="absolute top-0 inset-x-0 h-3 bg-gradient-to-b from-stone-950/85 to-transparent pointer-events-none z-10" />
 
         {/* Center Target Selection Highlight Bar */}
         <div
@@ -274,13 +284,15 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
         {/* Direct typing overlay input: auto-submits on blur or clicking outside */}
         {isTypingMode ? (
           <div 
-            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-stone-950/95 backdrop-blur-md p-2"
+            className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-stone-950/95 backdrop-blur-md p-1"
             onClick={handleTypedSubmit}
           >
             <div className="flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
               <input
                 ref={inputRef}
                 type="number"
+                inputMode="numeric"
+                pattern="[0-9]*"
                 min={min}
                 max={max}
                 value={typedInput}
@@ -293,7 +305,7 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
                 }}
                 onBlur={handleTypedSubmit}
                 onKeyDown={handleKeyDown}
-                className="w-24 sm:w-28 text-center py-1.5 text-5xl sm:text-6xl font-mono font-black text-white bg-stone-900 border-2 border-teal-500 rounded-2xl focus:outline-none leading-none shadow-lg shadow-teal-500/20"
+                className="w-16 text-center py-0.5 text-2xl sm:text-3xl font-mono font-black text-white bg-stone-900 border-2 border-teal-500 rounded-xl focus:outline-none leading-none shadow-md shadow-teal-500/20"
               />
             </div>
           </div>
@@ -328,8 +340,8 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
                 }}
                 className={`flex items-center justify-center cursor-pointer transition-all duration-150 font-mono tracking-tight select-none w-full ${
                   isSelected
-                    ? 'text-white font-black text-5xl sm:text-6xl md:text-7xl leading-none drop-shadow-md scale-100 opacity-100'
-                    : 'text-stone-400 hover:text-stone-200 font-extrabold text-3xl sm:text-4xl scale-90 opacity-60'
+                    ? 'text-white font-black text-2xl sm:text-3xl leading-none drop-shadow-md scale-100 opacity-100'
+                    : 'text-stone-400 hover:text-stone-200 font-bold text-base sm:text-lg scale-95 opacity-65'
                 }`}
               >
                 {item.label}
@@ -338,19 +350,9 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
           })}
         </div>
 
-        {/* Bottom Fade Gradient */}
-        <div className="absolute bottom-0 inset-x-0 h-10 bg-gradient-to-t from-stone-950 via-stone-950/70 to-transparent pointer-events-none z-10" />
+        {/* Bottom Fade Gradient (subtle so half-number at bottom remains visible) */}
+        <div className="absolute bottom-0 inset-x-0 h-3 bg-gradient-to-t from-stone-950/85 to-transparent pointer-events-none z-10" />
       </div>
-
-      {/* Down Button - Steps to next number (e.g. 23 -> 00 or 59 -> 00 seamlessly) */}
-      <button
-        type="button"
-        onClick={() => handleStep('down')}
-        className="w-full py-2.5 flex items-center justify-center text-teal-300 hover:text-white active:scale-95 transition-colors rounded-b-2xl bg-stone-900 hover:bg-stone-800 border-b border-x border-teal-500/30 shadow-sm cursor-pointer"
-        aria-label="عدد بعدی"
-      >
-        <ChevronDown className="w-5 h-5" />
-      </button>
     </div>
   );
 };

@@ -49,6 +49,74 @@ function isValidSnapshot(data: any): data is AutoBackupSnapshot {
   );
 }
 
+/**
+ * Safely decodes and parses readFile result data to a JSON snapshot object.
+ * Handles: plain JSON string, Base64 string, Uint8Array/ArrayBuffer, or pre-parsed object.
+ */
+export function safeParseJsonFromReadFileData(data: any): any {
+  if (!data) return null;
+
+  if (typeof data === 'object') {
+    if (
+      Array.isArray(data.reminders) ||
+      Array.isArray(data.ideas) ||
+      Array.isArray(data.savedLocations) ||
+      Array.isArray(data.occasions) ||
+      data.app
+    ) {
+      return data;
+    }
+  }
+
+  let text = '';
+  if (typeof data === 'string') {
+    text = data.trim();
+  } else if (data instanceof ArrayBuffer) {
+    try {
+      text = new TextDecoder('utf-8').decode(data).trim();
+    } catch {
+      // ignore
+    }
+  } else if (data instanceof Uint8Array) {
+    try {
+      text = new TextDecoder('utf-8').decode(data).trim();
+    } catch {
+      // ignore
+    }
+  }
+
+  if (!text) return null;
+
+  // 1. Try direct JSON.parse first
+  try {
+    const direct = JSON.parse(text);
+    if (direct && typeof direct === 'object') {
+      return direct;
+    }
+  } catch {
+    // String might be Base64 encoded or data URI
+  }
+
+  // 2. Try Base64 decoding
+  try {
+    const cleanBase64 = text.includes(',') ? text.split(',')[1] : text;
+    const binary = atob(cleanBase64.replace(/\s/g, ''));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    const decodedUtf8 = new TextDecoder('utf-8').decode(bytes);
+    const parsed = JSON.parse(decodedUtf8);
+    if (parsed && typeof parsed === 'object') {
+      return parsed;
+    }
+  } catch {
+    // ignore
+  }
+
+  return null;
+}
+
 export function getSnapshotItemCount(snap: AutoBackupSnapshot | null | undefined): number {
   if (!snap) return 0;
   const rCount = Array.isArray(snap.reminders)
@@ -722,6 +790,32 @@ export async function performAutoBackup(
       const cleanSubName =
         localFolder.replace(/^(Documents|Download|InternalStorage)\//i, '').trim() ||
         LOCAL_BACKUP_FOLDER_NAME;
+      const newItemsCount = getSnapshotItemCount(payload);
+
+      // SAFETY GUARD: If payload has 0 items (e.g. app freshly mounted or reinstalled with empty initial arrays),
+      // NEVER overwrite an existing backup on disk that contains items!
+      if (newItemsCount === 0) {
+        let existingBackupHasItems = false;
+        for (const dir of [Directory.External, Directory.Documents, Directory.ExternalStorage]) {
+          const existing = await Filesystem.readFile({
+            path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
+            directory: dir,
+            encoding: Encoding.UTF8,
+          }).catch(() => null);
+          if (existing?.data) {
+            const parsed = safeParseJsonFromReadFileData(existing.data);
+            if (getSnapshotItemCount(parsed) > 0) {
+              existingBackupHasItems = true;
+              break;
+            }
+          }
+        }
+        if (existingBackupHasItems) {
+          console.warn('[performAutoBackup] Preserving existing backup file on disk with items; avoiding overwrite with empty initial state.');
+          return false;
+        }
+      }
+
       const jsonData = JSON.stringify(payload, null, 2);
 
       const writeDirs = [
@@ -909,29 +1003,104 @@ export async function retrieveFromLocalYaadFolder(customLocalFolder?: string): P
     // ignore
   }
 
-  // 2. Native Android Capacitor Filesystem ('<targetFolder>/yaad_backup.json')
+  // 2. Native Android Capacitor Filesystem (smart readdir + readFile with Encoding.UTF8)
   try {
     const cleanSubName =
       targetFolder.replace(/^(Documents|Download|InternalStorage)\//i, '').trim() ||
       LOCAL_BACKUP_FOLDER_NAME;
-    for (const dir of [
+
+    const searchDirs = [
       Directory.External,
       Directory.Documents,
       Directory.ExternalStorage,
       Directory.Data,
-    ]) {
-      const res = await Filesystem.readFile({
-        path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
-        directory: dir,
-        encoding: Encoding.UTF8,
-      }).catch(() => null);
-      if (res?.data) {
-        const parsed = typeof res.data === 'string' ? JSON.parse(res.data) : res.data;
-        if (isValidSnapshot(parsed)) candidates.push(parsed);
+    ];
+
+    const folderPathsToTry = [
+      cleanSubName,
+      `Download/${cleanSubName}`,
+      `Documents/${cleanSubName}`,
+      'Download',
+      'Documents',
+      '',
+    ];
+
+    for (const dir of searchDirs) {
+      for (const folderPath of folderPathsToTry) {
+        try {
+          // A) Try readdir to discover all .json files in this folder
+          const dirInfo = await Filesystem.readdir({
+            path: folderPath,
+            directory: dir,
+          }).catch(() => null);
+
+          if (dirInfo && Array.isArray(dirInfo.files)) {
+            const jsonCandidates: { name: string; mtime: number }[] = [];
+
+            for (const fileItem of dirInfo.files) {
+              const fname = typeof fileItem === 'string' ? fileItem : fileItem?.name;
+              if (fname && fname.toLowerCase().endsWith('.json')) {
+                const mtime = typeof fileItem === 'object' && fileItem?.mtime ? fileItem.mtime : 0;
+                jsonCandidates.push({ name: fname, mtime });
+              }
+            }
+
+            // Sort: prioritize newest mtime, or matching yaad/backup in name
+            jsonCandidates.sort((a, b) => {
+              if (a.mtime && b.mtime && a.mtime !== b.mtime) {
+                return b.mtime - a.mtime;
+              }
+              const aPriority =
+                a.name.toLowerCase().includes('yaad') || a.name.toLowerCase().includes('backup') ? 1 : 0;
+              const bPriority =
+                b.name.toLowerCase().includes('yaad') || b.name.toLowerCase().includes('backup') ? 1 : 0;
+              if (aPriority !== bPriority) return bPriority - aPriority;
+              return b.name.localeCompare(a.name);
+            });
+
+            // Read the json files found in this directory
+            for (const item of jsonCandidates) {
+              const fullFilePath = folderPath ? `${folderPath}/${item.name}` : item.name;
+              const fileRes = await Filesystem.readFile({
+                path: fullFilePath,
+                directory: dir,
+                encoding: Encoding.UTF8,
+              }).catch(() => null);
+
+              if (fileRes?.data) {
+                const parsed = safeParseJsonFromReadFileData(fileRes.data);
+                if (isValidSnapshot(parsed)) {
+                  candidates.push(parsed);
+                }
+              }
+            }
+          }
+
+          // B) Direct readFile for standard file names as extra fallback
+          const standardPaths = [
+            folderPath ? `${folderPath}/${LOCAL_BACKUP_FILE_NAME}` : LOCAL_BACKUP_FILE_NAME,
+            folderPath ? `${folderPath}/yaad_backup.json` : 'yaad_backup.json',
+          ];
+          for (const sPath of standardPaths) {
+            const res = await Filesystem.readFile({
+              path: sPath,
+              directory: dir,
+              encoding: Encoding.UTF8,
+            }).catch(() => null);
+            if (res?.data) {
+              const parsed = safeParseJsonFromReadFileData(res.data);
+              if (isValidSnapshot(parsed)) {
+                candidates.push(parsed);
+              }
+            }
+          }
+        } catch {
+          // continue next search candidate
+        }
       }
     }
-  } catch {
-    // ignore
+  } catch (err) {
+    console.warn('[retrieveFromLocalYaadFolder] Filesystem scan error:', err);
   }
 
   // 3. OPFS 'YAAD REMIDER/yaad_backup.json'

@@ -28,6 +28,7 @@ import { ValidationAlertModal } from './ValidationAlertModal';
 import { LocationReminderModal } from './LocationReminderModal';
 import { openAndroidSettings } from '../utils/nativePermissions';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
+import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 
 interface LocationCaptureModalProps {
   isOpen: boolean;
@@ -555,11 +556,17 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               </div>
             </div>
 
-            {/* Collapsible Section: Geofence (حصار زمانی) - Larger & More Distinct Frame with White Text & Lighter Background */}
+            {/* Collapsible Section: Geofence (حصار مکانی) - Larger & More Distinct Frame with White Text & Lighter Background */}
             <div className="pt-1.5">
               <button
                 type="button"
-                onClick={() => setShowCollapsibleMediaAndGeofence(!showCollapsibleMediaAndGeofence)}
+                onClick={(e) => {
+                  const willOpen = !showCollapsibleMediaAndGeofence;
+                  setShowCollapsibleMediaAndGeofence(willOpen);
+                  if (willOpen) {
+                    scrollAccordionHeaderIntoView(e.currentTarget, 38);
+                  }
+                }}
                 style={{ color: '#FFFFFF' }}
                 className={`w-full min-h-[58px] sm:min-h-[64px] py-3.5 sm:py-4 px-4 sm:px-5 rounded-2xl border-2 text-sm sm:text-base font-black flex items-center justify-between transition-all cursor-pointer shadow-md !text-white ${
                   showCollapsibleMediaAndGeofence || enableGeofence
@@ -572,7 +579,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                     <Radio className={`w-5 h-5 ${enableGeofence ? 'animate-pulse text-white' : 'text-emerald-200'}`} />
                   </div>
                   <span style={{ color: '#FFFFFF' }} className="tracking-wide text-sm sm:text-base font-black !text-white drop-shadow-xs">
-                    {isEn ? 'Geofence' : 'حصار زمانی'}
+                    {isEn ? 'Geofence' : 'حصار مکانی'}
                   </span>
                   {(photoUrl || enableGeofence) && (
                     <span style={{ color: '#FFFFFF' }} className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/35 !text-white border border-emerald-300/50 font-bold">
@@ -591,7 +598,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
 
               {showCollapsibleMediaAndGeofence && (
                 <div className="mt-3 space-y-4 animate-in fade-in duration-200">
-                  {/* زیرمجموعه حصار زمانی و اعلام ورود/خروج (Geofence Sub-Feature) */}
+                  {/* زیرمجموعه حصار مکانی و اعلام ورود/خروج (Geofence Sub-Feature) */}
                   <div className={`rounded-2xl border-2 transition-all p-4 sm:p-5 shadow-md ${
               enableGeofence 
                 ? 'bg-emerald-500/12 border-emerald-400/75 ring-2 ring-emerald-500/20' 
@@ -608,7 +615,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   </div>
                   <div className="min-w-0">
                     <h4 style={{ color: '#FFFFFF' }} className="text-sm sm:text-base font-black !text-white flex items-center gap-1.5">
-                      <span>{isEn ? 'Geofence' : 'حصار زمانی'}</span>
+                      <span>{isEn ? 'Geofence' : 'حصار مکانی'}</span>
                       {enableGeofence && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-200 font-bold border border-emerald-400/50">
                           {isEn ? 'Active' : 'فعال'}
@@ -630,7 +637,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   aria-checked={enableGeofence}
                   onClick={() => setEnableGeofence(!enableGeofence)}
                   className="flex items-center gap-2 shrink-0 cursor-pointer group focus:outline-none"
-                  title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار زمانی') : (isEn ? 'Enable Geofence' : 'فعال کردن حصار زمانی')}
+                  title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار مکانی') : (isEn ? 'Enable Geofence' : 'فعال کردن حصار مکانی')}
                 >
                   <span className={`text-xs font-black transition-colors ${
                     enableGeofence ? 'text-emerald-300' : 'text-stone-300 group-hover:text-white'

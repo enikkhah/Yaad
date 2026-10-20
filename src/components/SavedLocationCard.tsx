@@ -110,7 +110,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                 {isCheckpointActive && (
                   <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/40 flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                    <span>{isEn ? 'Geofence' : 'حصار زمانی'}</span>
+                    <span>{isEn ? 'Geofence' : 'حصار مکانی'}</span>
                   </span>
                 )}
               </div>
@@ -202,7 +202,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
           )}
         </div>
 
-        {/* GEOFENCE SUB-FEATURE BOX (زیرمجموعه حصار زمانی و اعلام ورود/خروج) */}
+        {/* GEOFENCE SUB-FEATURE BOX (زیرمجموعه حصار مکانی و اعلام ورود/خروج) */}
         {hasGeofence ? (
           <div className={`p-3.5 sm:p-4 rounded-2xl border-2 text-xs space-y-2.5 transition-all shadow-md ${
             isCheckpointActive
@@ -214,8 +214,8 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                 <Radio className={`w-4 h-4 ${isCheckpointActive ? 'text-emerald-400 animate-pulse' : 'text-stone-500'}`} />
                 <span className="font-black text-white text-xs sm:text-sm">
                   {isCheckpointActive 
-                    ? (isEn ? 'Geofence' : 'حصار زمانی') 
-                    : (isEn ? 'Geofence (Paused)' : 'حصار زمانی (غیرفعال)')}
+                    ? (isEn ? 'Geofence' : 'حصار مکانی') 
+                    : (isEn ? 'Geofence (Paused)' : 'حصار مکانی (غیرفعال)')}
                 </span>
               </div>
 
@@ -313,7 +313,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               className="w-full min-h-[46px] py-2.5 px-3.5 rounded-2xl border-2 border-dashed border-emerald-500/40 bg-emerald-950/20 hover:bg-emerald-950/40 hover:border-emerald-400/70 text-emerald-200 text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
             >
               <Radio className="w-4 h-4 text-emerald-400" />
-              <span>{isEn ? '+ Geofence' : '+ حصار زمانی'}</span>
+              <span>{isEn ? '+ Geofence' : '+ حصار مکانی'}</span>
             </button>
           )
         )}
