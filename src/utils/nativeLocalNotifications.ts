@@ -346,19 +346,20 @@ export function getNotificationId(reminderId: string | number): number {
 
 /**
  * Repeat intervals in minutes for continuous background alarm alerts until user reaction
+ * (Each notification loops audio via FLAG_INSISTENT and replaces previous active card via TimedNotificationPublisher)
  */
 export const NOTIFICATION_REPEAT_OFFSETS_MINUTES = [
-  0.5, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 25, 30, 35, 40, 45, 50, 60
+  2, 5, 10, 15, 20, 30, 45, 60
 ];
 
 /**
- * Resolves all notification IDs for a reminder (primary ID + repeating alarms)
+ * Resolves all notification IDs for a reminder (primary ID + all 25 repeat alarm slots)
  */
 export function getAllNotificationIdsForReminder(reminderId: string | number): number[] {
   const baseId = getNotificationId(reminderId);
   return [
     baseId,
-    ...NOTIFICATION_REPEAT_OFFSETS_MINUTES.map((_, index) => (baseId + 1000 + index + 1) % 2147483647),
+    ...Array.from({ length: 25 }, (_, index) => (baseId + 1000 + index + 1) % 2147483647),
   ];
 }
 
@@ -1124,7 +1125,7 @@ export async function syncAllRemindersWithLocalNotifications(
  */
 export function setupNotificationListeners(
   onComplete?: (reminderId: string) => void,
-  onSnooze?: (reminderId: string, minutes: number) => void,
+  onSnooze?: (reminderId: string, minutes: number, snoozedUntil?: number) => void,
   onStop?: (reminderId: string) => void,
   onOpen?: (reminderId: string) => void
 ): void {
@@ -1132,10 +1133,33 @@ export function setupNotificationListeners(
 
   try {
     LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
-      const reminderId = action.notification.extra?.reminderId;
-      if (!reminderId) return;
-
       const actionId = action.actionId;
+      const notifId = action.notification?.id;
+      const reminderId = action.notification?.extra?.reminderId;
+      const snoozedUntil =
+        typeof (action as any).snoozedUntil === 'number' ? (action as any).snoozedUntil : undefined;
+
+      // Handle notifications without reminderId (e.g. Geofence alerts or 60s test notification)
+      if (!reminderId) {
+        if (
+          actionId === 'done' ||
+          actionId === 'complete' ||
+          actionId === 'snooze' ||
+          actionId === 'stop' ||
+          actionId === 'dismiss'
+        ) {
+          try {
+            stopAlarmRinging();
+          } catch {}
+          if (typeof notifId === 'number') {
+            LocalNotifications.cancel({ notifications: [{ id: notifId }] }).catch(() => {});
+            LocalNotifications.removeDeliveredNotifications({
+              notifications: [{ id: notifId, title: '', body: '' }],
+            }).catch(() => {});
+          }
+        }
+        return;
+      }
 
       // Only stop alarm and remove notification when user explicitly taps an action button (Done, Snooze, Dismiss/Stop)
       if (actionId === 'done' || actionId === 'complete') {
@@ -1151,7 +1175,7 @@ export function setupNotificationListeners(
         } catch {}
         cancelReminderNotification(reminderId).catch(() => {});
         dismissDeliveredNotifications(reminderId).catch(() => {});
-        if (onSnooze) onSnooze(reminderId, 15);
+        if (onSnooze) onSnooze(reminderId, 15, snoozedUntil);
       } else if (actionId === 'stop' || actionId === 'dismiss') {
         try {
           stopAlarmRinging();

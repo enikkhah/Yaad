@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { APP_VERSION } from '../utils/version';
 import { AppLanguage } from '../utils/i18n';
+import transparentLogo from '../assets/images/logo-transparent.png';
 
 interface SplashScreenProps {
   onStartExit?: () => void;
@@ -13,7 +14,7 @@ interface SplashScreenProps {
 export const SplashScreen: React.FC<SplashScreenProps> = ({
   onStartExit,
   onFinish,
-  totalDurationMs = 1950,
+  totalDurationMs = 2400,
   fadeOutMs = 500,
   language = 'fa',
 }) => {
@@ -27,7 +28,8 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   const isEn = language === 'en';
 
   useEffect(() => {
-    const safeDuration = Math.min(totalDurationMs, 2000);
+    // Maximum 2.5 seconds (2500ms) per user requirement
+    const safeDuration = Math.min(totalDurationMs, 2500);
     const fadeOutStartTime = Math.max(0, safeDuration - fadeOutMs);
 
     const exitTimer = setTimeout(() => {
@@ -72,60 +74,63 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
       dir={isEn ? 'ltr' : 'rtl'}
     >
       <style>{`
-        @keyframes splashLogoZoomInSmooth {
+        @keyframes splashPinDropAndGlow {
           0% {
             opacity: 0;
-            transform: scale(0.45) translate3d(0, 10px, 0);
-            filter: drop-shadow(0 0 0px rgba(245, 166, 35, 0));
+            transform: translate3d(0, -34px, 0) scale(0.48);
+            filter: drop-shadow(0 0 0px rgba(246, 165, 47, 0));
           }
-          45% {
+          42% {
             opacity: 1;
-            transform: scale(1.0) translate3d(0, 0px, 0);
-            filter: drop-shadow(0 0 24px rgba(245, 166, 35, 0.5));
+            transform: translate3d(0, 5px, 0) scale(1.04);
+            filter: drop-shadow(0 6px 26px rgba(246, 165, 47, 0.58));
+          }
+          68% {
+            opacity: 1;
+            transform: translate3d(0, -4px, 0) scale(0.98);
+            filter: drop-shadow(0 8px 22px rgba(246, 165, 47, 0.48));
           }
           100% {
             opacity: 1;
-            transform: scale(1.08) translate3d(0, -2px, 0);
-            filter: drop-shadow(0 0 34px rgba(245, 166, 35, 0.68));
-          }
-        }
-        @keyframes splashClockHandSweep {
-          0% {
-            transform: rotate(-135deg);
-          }
-          65% {
-            transform: rotate(4deg);
-          }
-          100% {
-            transform: rotate(0deg);
+            transform: translate3d(0, 0px, 0) scale(1.05);
+            filter: drop-shadow(0 10px 34px rgba(246, 165, 47, 0.72));
           }
         }
         @keyframes splashRadarRing {
           0% {
-            opacity: 0.6;
-            transform: scale(0.6);
+            opacity: 0.65;
+            transform: scale(0.55);
           }
           100% {
             opacity: 0;
-            transform: scale(1.85);
+            transform: scale(1.9);
           }
         }
-        .animate-splash-zoom-in {
-          will-change: transform, opacity, filter;
-          animation: splashLogoZoomInSmooth 1.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        @keyframes splashTitleReveal {
+          0% {
+            opacity: 0;
+            transform: translate3d(0, 10px, 0);
+          }
+          100% {
+            opacity: 1;
+            transform: translate3d(0, 0, 0);
+          }
         }
-        .animate-splash-hand {
-          transform-origin: 100px 82px;
-          will-change: transform;
-          animation: splashClockHandSweep 1.2s cubic-bezier(0.22, 1, 0.36, 1) 0.08s both;
+        .animate-splash-pin {
+          will-change: transform, opacity, filter;
+          animation: splashPinDropAndGlow 1.85s cubic-bezier(0.22, 1, 0.36, 1) forwards;
         }
         .animate-splash-radar-1 {
           will-change: transform, opacity;
-          animation: splashRadarRing 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.1s infinite;
+          animation: splashRadarRing 1.75s cubic-bezier(0.22, 1, 0.36, 1) 0.28s infinite;
         }
         .animate-splash-radar-2 {
           will-change: transform, opacity;
-          animation: splashRadarRing 1.5s cubic-bezier(0.22, 1, 0.36, 1) 0.5s infinite;
+          animation: splashRadarRing 1.75s cubic-bezier(0.22, 1, 0.36, 1) 0.72s infinite;
+        }
+        .animate-splash-meta {
+          will-change: transform, opacity;
+          animation: splashTitleReveal 0.85s cubic-bezier(0.22, 1, 0.36, 1) 0.15s both;
         }
       `}</style>
 
@@ -136,57 +141,24 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         }`}
       />
 
-      {/* Transparent Animated Logo (No black background box) with Smooth Zoom-In effect */}
-      <div className="relative flex flex-col items-center justify-center animate-splash-zoom-in">
-        <div className="relative flex items-center justify-center w-32 h-32 sm:w-40 sm:h-40">
+      {/* Transparent New Logo (No background box) with Smooth Pin Drop & Radar Pulse Animation */}
+      <div className="relative flex flex-col items-center justify-center">
+        <div className="relative flex items-center justify-center w-36 h-36 sm:w-44 sm:h-44">
           {/* App-themed Location & Time Radar Ripple Rings */}
           <div className="absolute w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 border-amber-400/40 pointer-events-none animate-splash-radar-1" />
           <div className="absolute w-24 h-24 sm:w-28 sm:h-28 rounded-full border border-sky-400/35 pointer-events-none animate-splash-radar-2" />
 
-          {/* Pure Transparent Vector Logo: Location Pin + Animated Clock Hands */}
-          <svg
-            viewBox="0 0 200 200"
-            className="relative w-28 h-28 sm:w-36 sm:h-36 overflow-visible"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            {/* Location Pin Outline */}
-            <path
-              d="M100 24C64.6538 24 36 52.6538 36 88C36 128.5 100 180 100 180C100 180 164 128.5 164 88C164 52.6538 135.346 24 100 24Z"
-              stroke="#F5A623"
-              strokeWidth="17"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-            {/* Fixed 12-o'clock Hour Hand */}
-            <line
-              x1="100"
-              y1="82"
-              x2="100"
-              y2="52"
-              stroke="#F5A623"
-              strokeWidth="16"
-              strokeLinecap="round"
-            />
-            {/* Sweeping Minute Hand (animates clockwise to 4 o'clock) */}
-            <g className="animate-splash-hand">
-              <line
-                x1="100"
-                y1="82"
-                x2="126"
-                y2="98"
-                stroke="#F5A623"
-                strokeWidth="16"
-                strokeLinecap="round"
-              />
-            </g>
-            {/* Center Clock Pivot Dot */}
-            <circle cx="100" cy="82" r="8" fill="#F5A623" />
-          </svg>
+          {/* New Resized Transparent Icon Image */}
+          <img
+            src={transparentLogo}
+            alt="YAAD"
+            className="relative w-32 h-32 sm:w-40 sm:h-40 object-contain select-none pointer-events-none animate-splash-pin"
+            draggable={false}
+          />
         </div>
 
-        {/* App Title and English Version Badge */}
-        <div className="mt-3 sm:mt-4 flex flex-col items-center gap-1.5 text-center">
+        {/* App Title and English Version Badge (Dimensions and font unchanged) */}
+        <div className="mt-3 sm:mt-4 flex flex-col items-center gap-1.5 text-center animate-splash-meta">
           <span className="text-base sm:text-lg font-black text-white tracking-wider drop-shadow-sm">
             {isEn ? 'YAAD' : 'یاد • YAAD'}
           </span>

@@ -903,7 +903,7 @@ export default function App() {
   }, [applyRestoredBackupIfNeeded]);
 
   const handleCompleteReminderRef = useRef<(id: string) => void>(() => {});
-  const handlePostponeRef = useRef<(id: string, mins: number) => void>(() => {});
+  const handlePostponeRef = useRef<(id: string, mins: number, explicitDueTimestamp?: number) => void>(() => {});
   const handleStopOrDismissReminderRef = useRef<(id: string) => void>(() => {});
   const ACTIONED_REMINDERS_KEY = 'yaad_actioned_reminders_map';
   const recentNotificationActionsRef = useRef<Map<string, number>>(new Map());
@@ -1022,8 +1022,8 @@ export default function App() {
       (id) => {
         handleCompleteReminderRef.current(id);
       },
-      (id, mins) => {
-        handlePostponeRef.current(id, mins);
+      (id, mins, snoozedUntil) => {
+        handlePostponeRef.current(id, mins, snoozedUntil);
       },
       (id) => {
         handleStopOrDismissReminderRef.current(id);
@@ -1994,7 +1994,7 @@ export default function App() {
   };
 
   // Handler: Postpone reminder
-  const handlePostpone = (id: string, minutes: number) => {
+  const handlePostpone = (id: string, minutes: number, explicitDueTimestamp?: number) => {
     stopAlarmRinging();
     setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
     recordNotificationAction(id);
@@ -2005,7 +2005,10 @@ export default function App() {
     setReminders((prev) => {
       const updated = prev.map((r) => {
         if (r.id === id) {
-          const newDue = Math.max(Date.now(), r.dueTimestamp) + minutes * 60000;
+          const newDue =
+            typeof explicitDueTimestamp === 'number' && explicitDueTimestamp > 0
+              ? explicitDueTimestamp
+              : Math.max(Date.now(), r.dueTimestamp) + minutes * 60000;
           triggeredAlarmsRef.current.delete(id);
           const postponedRem: Reminder = {
             ...r,
@@ -2016,8 +2019,10 @@ export default function App() {
             acknowledged: false,
             lastActionAt: Date.now(),
           };
-          // Reschedule notification for the new postponed time
-          rescheduleReminderNotification(id, postponedRem, settings).catch(() => {});
+          // Reschedule notification for the new postponed time if it is still in the future
+          if (newDue > Date.now()) {
+            rescheduleReminderNotification(id, postponedRem, settings).catch(() => {});
+          }
           return postponedRem;
         }
         return r;
@@ -3564,12 +3569,12 @@ export default function App() {
 
       </div>
       
-      {/* APP STARTUP SPLASH SCREEN (SMOOTHER ANIMATION IN <= 2 SECONDS WITH FADE-OUT INTO APP) */}
+      {/* APP STARTUP SPLASH SCREEN (SMOOTHER ANIMATION IN <= 2.5 SECONDS WITH FADE-OUT INTO APP) */}
       {showSplash && (
         <SplashScreen 
           onStartExit={handleStartExitSplash} 
           onFinish={handleFinishSplash} 
-          totalDurationMs={1950}
+          totalDurationMs={2400}
           fadeOutMs={500}
           language={settings.language}
         />

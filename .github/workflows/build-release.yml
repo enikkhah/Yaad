@@ -112,7 +112,7 @@ jobs:
           cp public/icon.png resources/icon.png
           cp public/splash.png resources/splash.png
           cp public/splash.png resources/splash-dark.png
-          npx capacitor-assets generate --android
+          npx capacitor-assets generate --android --iconBackgroundColor '#000000' --iconBackgroundColorDark '#000000' --splashBackgroundColor '#000000' --splashBackgroundColorDark '#000000'
 
       - name: Patch Capacitor LocalNotifications for Background Actions
         run: node scripts/patch-capacitor-notifications.mjs
