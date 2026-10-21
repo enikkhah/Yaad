@@ -78,6 +78,7 @@ import {
   selectUserCloudSpaceFolder,
   uploadToCustomCloudUrl,
   shareBackupToAnyCloudApp,
+  ensureCloudFolderOnDevice,
   safeParseJsonFromReadFileData,
   getSnapshotItemCount,
   LOCAL_BACKUP_FOLDER_NAME
@@ -85,7 +86,9 @@ import {
 import {
   uploadBackupToGoogleDrive,
   downloadBackupFromGoogleDrive,
+  findOrCreateDriveFolder,
   openGoogleCalendarAccount,
+  GOOGLE_CALENDAR_DIRECT_TOKEN,
   DRIVE_BACKUP_FOLDER_NAME
 } from '../utils/googleSync';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -601,7 +604,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         );
       } else {
         setBackupErrorMessage(
-          'setting, apps, 3 point menu, special access, all files access, Yaad slide key'
+          isFa
+            ? 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
+            : 'To create the backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key'
         );
         setTimeout(() => {
           fileInputRef.current?.click();
@@ -609,7 +614,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
     } catch {
       setBackupErrorMessage(
-        'setting, apps, 3 point menu, special access, all files access, Yaad slide key'
+        isFa
+          ? 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
+          : 'To create the backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key'
       );
       setTimeout(() => {
         fileInputRef.current?.click();
@@ -632,37 +639,63 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const finalizeCloudFolderSelection = async (chosenFolder: string, serviceLabel?: string) => {
     const finalFolder = chosenFolder.trim() || DRIVE_BACKUP_FOLDER_NAME;
     const finalLabel = (serviceLabel !== undefined ? serviceLabel : cloudSpaceLabelInput).trim();
+    const isGoogleDriveSelected =
+      /google\s*drive/i.test(finalLabel) || /^googledrive\//i.test(finalFolder) || cloudProvider === 'google_drive';
+    const nextProvider = isGoogleDriveSelected ? 'google_drive' : 'custom_cloud_folder';
+
     setIsCloudSyncing(true);
     setBackupErrorMessage(null);
     try {
       setCloudFolderInput(finalFolder);
+      setCloudProvider(nextProvider);
       if (finalLabel) setCloudSpaceLabelInput(finalLabel);
+
+      const nextSettings: AppSettings = {
+        ...settings,
+        cloudBackupEnabled: true,
+        cloudBackupProvider: nextProvider,
+        cloudBackupFolderName: finalFolder,
+        cloudSpaceLabel: finalLabel || undefined,
+      };
       onUpdateSettings({
         cloudBackupEnabled: true,
-        cloudBackupProvider: 'custom_cloud_folder',
+        cloudBackupProvider: nextProvider,
         cloudBackupFolderName: finalFolder,
         cloudSpaceLabel: finalLabel || undefined,
       });
+
+      const snapshotPayload = {
+        version: 3,
+        updatedAt: Date.now(),
+        folder: finalFolder,
+        reminders,
+        ideas,
+        savedLocations,
+        occasions,
+        settings: nextSettings,
+      };
+
+      await ensureCloudFolderOnDevice(finalFolder, snapshotPayload);
+
+      if (googleToken && googleToken !== GOOGLE_CALENDAR_DIRECT_TOKEN) {
+        await findOrCreateDriveFolder(googleToken, true, finalFolder);
+        await uploadBackupToGoogleDrive(snapshotPayload, googleToken, finalFolder);
+      }
+
       await performAutoBackup(
         {
           reminders,
           ideas,
           savedLocations,
           occasions,
-          settings: {
-            ...settings,
-            cloudBackupEnabled: true,
-            cloudBackupProvider: 'custom_cloud_folder',
-            cloudBackupFolderName: finalFolder,
-            cloudSpaceLabel: finalLabel || undefined,
-          },
+          settings: nextSettings,
         },
         { immediateCloud: true, forceCloud: true, googleToken }
       );
       setBackupSuccessMessage(
         isFa
-          ? `محل فضای ابری مورد نظر («${finalFolder}») ثبت شد و پشتیبان‌گیری انجام گردید.`
-          : `Cloud space location ("${finalFolder}") configured and backed up.`
+          ? `پوشه فضای ابری («${finalFolder}») ایجاد و ثبت شد و پشتیبان‌گیری انجام گردید.`
+          : `Cloud folder ("${finalFolder}") created and backed up.`
       );
       setTimeout(() => setBackupSuccessMessage(null), 5000);
     } catch {
@@ -673,23 +706,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  // Save Cloud Space Configuration (any provider, folder name, or custom URL)
-  const handleSaveCloudFolder = () => {
+  // Save Cloud Space Configuration & Create Cloud Folder immediately
+  const handleSaveCloudFolder = async () => {
     const cleanedFolder = cloudFolderInput.trim() || DRIVE_BACKUP_FOLDER_NAME;
     setCloudFolderInput(cleanedFolder);
+    setIsCloudSyncing(true);
+    setBackupErrorMessage(null);
+
+    const updatedSettings: AppSettings = {
+      ...settings,
+      cloudBackupEnabled: true,
+      cloudBackupProvider: cloudProvider,
+      cloudBackupFolderName: cleanedFolder,
+      cloudSpaceLabel: cloudSpaceLabelInput.trim() || undefined,
+      cloudCustomUrl: cloudUrlInput.trim() || undefined,
+      cloudCustomAuth: cloudAuthInput.trim() || undefined,
+    };
+
     onUpdateSettings({
+      cloudBackupEnabled: true,
       cloudBackupProvider: cloudProvider,
       cloudBackupFolderName: cleanedFolder,
       cloudSpaceLabel: cloudSpaceLabelInput.trim() || undefined,
       cloudCustomUrl: cloudUrlInput.trim() || undefined,
       cloudCustomAuth: cloudAuthInput.trim() || undefined,
     });
-    setBackupSuccessMessage(
-      isFa
-        ? `تنظیمات فضای ابری و پوشه «${cleanedFolder}» با موفقیت ذخیره شد.`
-        : `Cloud space configuration and folder "${cleanedFolder}" saved.`
-    );
-    setTimeout(() => setBackupSuccessMessage(null), 3500);
+
+    try {
+      const snapshotPayload = {
+        version: 3,
+        updatedAt: Date.now(),
+        folder: cleanedFolder,
+        reminders,
+        ideas,
+        savedLocations,
+        occasions,
+        settings: updatedSettings,
+      };
+
+      // 1. Always create the folder on device / OPFS / local cloud sync path
+      await ensureCloudFolderOnDevice(cleanedFolder, snapshotPayload);
+
+      // 2. If Google Drive is selected and a real OAuth token is available, create folder on Google Drive API immediately
+      if (cloudProvider === 'google_drive' && googleToken && googleToken !== GOOGLE_CALENDAR_DIRECT_TOKEN) {
+        await findOrCreateDriveFolder(googleToken, true, cleanedFolder);
+        await uploadBackupToGoogleDrive(snapshotPayload, googleToken, cleanedFolder);
+      }
+
+      setBackupSuccessMessage(
+        isFa
+          ? `پوشه «${cleanedFolder}» ایجاد شد و تنظیمات فضای ابری با موفقیت ذخیره گردید.`
+          : `Folder "${cleanedFolder}" created and cloud configuration saved.`
+      );
+      setTimeout(() => setBackupSuccessMessage(null), 4000);
+    } catch {
+      setBackupErrorMessage(
+        isFa ? 'خطا در ایجاد پوشه فضای ابری.' : 'Failed to create cloud folder.'
+      );
+    } finally {
+      setIsCloudSyncing(false);
+    }
   };
 
   // Execute confirmed upload to the user's selected Cloud Space (Custom Cloud Folder, WebDAV/URL, or Google Drive)
@@ -701,6 +777,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       const targetCloudFolder = cloudFolderInput.trim() || DRIVE_BACKUP_FOLDER_NAME;
       const updatedSettings: AppSettings = {
         ...settings,
+        cloudBackupEnabled: true,
         cloudBackupProvider: cloudProvider,
         cloudBackupFolderName: targetCloudFolder,
         cloudSpaceLabel: cloudSpaceLabelInput.trim() || undefined,
@@ -708,6 +785,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         cloudCustomAuth: cloudAuthInput.trim() || undefined,
       };
       onUpdateSettings({
+        cloudBackupEnabled: true,
         cloudBackupProvider: cloudProvider,
         cloudBackupFolderName: targetCloudFolder,
         cloudSpaceLabel: cloudSpaceLabelInput.trim() || undefined,
@@ -726,15 +804,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         settings: updatedSettings,
       };
 
+      await ensureCloudFolderOnDevice(targetCloudFolder, snapshotPayload);
+
       if (cloudProvider === 'google_drive') {
-        const ok = await uploadBackupToGoogleDrive(snapshotPayload, googleToken, targetCloudFolder);
+        const hasRealDriveToken = Boolean(googleToken && googleToken !== GOOGLE_CALENDAR_DIRECT_TOKEN);
+        let ok = false;
+        if (hasRealDriveToken) {
+          ok = await uploadBackupToGoogleDrive(snapshotPayload, googleToken, targetCloudFolder);
+        }
         if (!ok) {
-          setBackupErrorMessage(
-            isFa
-              ? 'ارتباط با گوگل درایو برقرار نشد. لطفاً ابتدا وارد حساب گوگل شوید یا فضای ابری دیگری انتخاب کنید.'
-              : 'Could not upload to Google Drive. Please sign in or select another cloud space.'
-          );
-          return;
+          // On Android or when direct OAuth token is not active, also invoke native Share/Save to Google Drive app
+          const sharedToDriveApp = await shareBackupToAnyCloudApp(snapshotPayload, targetCloudFolder);
+          if (!sharedToDriveApp) {
+            await performAutoBackup(
+              {
+                reminders,
+                ideas,
+                savedLocations,
+                occasions,
+                settings: updatedSettings,
+              },
+              { immediateCloud: true, forceCloud: true, googleToken }
+            );
+          }
         }
       } else if (cloudProvider === 'webdav_url') {
         if (!cloudUrlInput.trim()) {
@@ -1459,10 +1551,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {showStoragePermNotice && !nativePerms.storage && (
                   <div
                     onClick={() => openAndroidSettings('all_files')}
-                    dir="ltr"
-                    className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-mono font-bold flex items-center justify-between gap-2 cursor-pointer"
+                    dir={isFa ? 'rtl' : 'ltr'}
+                    className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-start justify-between gap-2.5 cursor-pointer leading-relaxed"
                   >
-                    <span>setting, apps, 3 point menu, special access, all files access, Yaad slide key</span>
+                    <div className="space-y-1.5">
+                      <p className="font-bold text-amber-100">
+                        {isFa
+                          ? 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:'
+                          : 'To create the backup folder, please grant the required permission from the following path:'}
+                      </p>
+                      <p className="font-black text-amber-300">
+                        {isFa
+                          ? 'تنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
+                          : 'Setting → Apps → 3-point menu → Special access → All files access → Yaad slide key'}
+                      </p>
+                    </div>
                     <button
                       type="button"
                       onClick={(e) => {
@@ -1804,8 +1907,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 )}
                 {backupErrorMessage && (
-                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2 animate-in fade-in">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400" />
+                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2 animate-in fade-in whitespace-pre-line leading-relaxed">
+                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400 mt-0.5" />
                     <span>{backupErrorMessage}</span>
                   </div>
                 )}
@@ -2079,12 +2182,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
 
                   {/* Provider-specific & Universal Cloud Sync Controls */}
-                  {cloudProvider === 'google_drive' && !googleUser && (
+                  {cloudProvider === 'google_drive' && (!googleUser || googleToken === GOOGLE_CALENDAR_DIRECT_TOKEN) && (
                     <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 flex items-center justify-between gap-2">
                       <span className="text-[11px] text-stone-400">
                         {isFa
-                          ? 'در صورت تمایل به استفاده از گوگل درایو، وارد حساب شوید:'
-                          : 'Sign in with Google if you wish to use Google Drive:'}
+                          ? 'برای همگام‌سازی مستقیم با گوگل درایو یا ارسال به برنامه Google Drive گوشی:'
+                          : 'Connect to Google Drive or send to your phone Google Drive app:'}
                       </span>
                       <button
                         type="button"
@@ -2101,7 +2204,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       >
                         {isSigningIn
                           ? isFa ? 'اتصال...' : 'Connecting...'
-                          : isFa ? 'ورود با گوگل' : 'Sign in with Google'}
+                          : isFa ? 'اتصال به گوگل درایو' : 'Connect Google Drive'}
                       </button>
                     </div>
                   )}

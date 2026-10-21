@@ -134,14 +134,12 @@ async function resolveFirebaseAuth(): Promise<Auth | null> {
 
   configPromise = (async () => {
     try {
-      // 1. Check build-time / environment variables ONLY if they explicitly belong to a YAAD project
+      // 1. Check build-time / environment variables
       const envKey = (import.meta as any).env?.VITE_FIREBASE_API_KEY;
       const envProjectId = String((import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || '');
       const envAuthDomain = String((import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || '');
-      const isYaadProject =
-        /yaad/i.test(envProjectId) || /yaad/i.test(envAuthDomain);
 
-      if (envKey && envProjectId && isYaadProject) {
+      if (envKey && envProjectId && envKey !== 'MY_FIREBASE_API_KEY') {
         const envConfig = {
           apiKey: envKey,
           authDomain: envAuthDomain || `${envProjectId}.firebaseapp.com`,
@@ -161,9 +159,7 @@ async function resolveFirebaseAuth(): Promise<Auth | null> {
       const res = await fetch('/api/firebase-config');
       if (res.ok) {
         const data = await res.json();
-        const cfgProjectId = String(data?.config?.projectId || '');
-        const cfgAuthDomain = String(data?.config?.authDomain || '');
-        if (data?.ok && data.config?.apiKey && (/yaad/i.test(cfgProjectId) || /yaad/i.test(cfgAuthDomain))) {
+        if (data?.ok && data.config?.apiKey && data.config?.projectId) {
           const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(data.config);
           cachedAuthInstance = getAuth(app);
           return cachedAuthInstance;
@@ -241,8 +237,9 @@ export const initGoogleAuth = (
   };
 };
 
-export const signInWithGoogle = async (): Promise<{ user: User; accessToken: string }> => {
+export const signInWithGoogle = async (options?: { openCalendar?: boolean }): Promise<{ user: User; accessToken: string }> => {
   isSigningIn = true;
+  const shouldOpenCalendar = options?.openCalendar !== false;
   try {
     const authInstance = await resolveFirebaseAuth();
     if (authInstance && !isNativeAndroidWebView()) {
@@ -252,21 +249,27 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
         if (credential?.accessToken) {
           cachedAccessToken = credential.accessToken;
           isSigningIn = false;
-          openGoogleCalendarAccount();
+          if (shouldOpenCalendar) {
+            openGoogleCalendarAccount();
+          }
           return { user: result.user, accessToken: credential.accessToken };
         }
       } catch {
-        // Fallback to direct Google Calendar connection if popup is blocked or disallowed
+        // Fallback if popup is blocked or disallowed
       }
     }
 
-    // Direct Google Calendar connection (opens Google Calendar app / https://calendar.google.com)
+    // Direct Google Calendar connection fallback
     try {
       localStorage.setItem(GOOGLE_CALENDAR_CONNECTED_KEY, 'true');
     } catch {}
     cachedAccessToken = GOOGLE_CALENDAR_DIRECT_TOKEN;
     isSigningIn = false;
-    openGoogleCalendarAccount();
+    if (shouldOpenCalendar) {
+      openGoogleCalendarAccount();
+    } else {
+      openExternalHttpsUrl('https://drive.google.com/drive/my-drive');
+    }
     return {
       user: createDirectCalendarUser(),
       accessToken: GOOGLE_CALENDAR_DIRECT_TOKEN,
@@ -307,7 +310,10 @@ export async function findOrCreateDriveFolder(
   createIfMissing: boolean = true,
   customFolderName?: string
 ): Promise<string | null> {
-  const targetFolder = (customFolderName || DRIVE_BACKUP_FOLDER_NAME).trim() || DRIVE_BACKUP_FOLDER_NAME;
+  const cleanedCustom = (customFolderName || DRIVE_BACKUP_FOLDER_NAME)
+    .replace(/^(GoogleDrive|Google Drive|OneDrive|Dropbox|iCloudDrive|MEGA|Documents|Download|InternalStorage)\//i, '')
+    .trim();
+  const targetFolder = cleanedCustom || DRIVE_BACKUP_FOLDER_NAME;
 
   try {
     const escapedTarget = targetFolder.replace(/'/g, "\\'");

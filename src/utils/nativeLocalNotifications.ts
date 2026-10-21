@@ -525,6 +525,9 @@ export async function scheduleReminderNotification(
     const targetChannelId = getChannelIdForConfig(soundType, volume);
     const soundFile = isSilent ? undefined : getSoundFileName(soundType);
 
+    const appTheme = appSettings?.theme || 'dark-gold';
+    const appLang = appSettings?.language || 'fa';
+
     // Build notification queue: Primary notification + Repeating alarm notifications
     // Configured with ongoing: true, autoCancel: false and priority: 2 (PRIORITY_MAX)
     // so notification takes precedence over other apps and window stays open until user acts.
@@ -548,6 +551,8 @@ export async function scheduleReminderNotification(
           dueTimestamp: reminder.dueTimestamp,
           sound: soundType,
           volume,
+          theme: appTheme,
+          language: appLang,
           isRepeat: false,
         },
       },
@@ -572,6 +577,8 @@ export async function scheduleReminderNotification(
           dueTimestamp: reminder.dueTimestamp,
           sound: soundType,
           volume,
+          theme: appTheme,
+          language: appLang,
           isRepeat: true,
           repeatIndex: index + 1,
         },
@@ -762,6 +769,7 @@ export async function testAndroidNotification60Seconds(): Promise<LocalNotificat
   try {
     await initNotificationChannel();
 
+    const savedSettings = getSavedAppSettings();
     // Direct schedule call with persistent ongoing + autoCancel: false
     const scheduleResult = await LocalNotifications.schedule({
       notifications: [
@@ -777,6 +785,11 @@ export async function testAndroidNotification60Seconds(): Promise<LocalNotificat
           ongoing: true,
           autoCancel: false,
           actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
+          extra: {
+            test: true,
+            theme: savedSettings?.theme || 'dark-gold',
+            language: savedSettings?.language || 'fa',
+          },
         },
       ],
     });
@@ -1081,7 +1094,11 @@ export async function fireImmediateLocalNotification(
           actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
           smallIcon: 'ic_stat_notification',
           largeIcon: 'ic_stat_notification',
-          extra: extraData || {},
+          extra: {
+            theme: settings?.theme || 'dark-gold',
+            language: settings?.language || 'fa',
+            ...(extraData || {}),
+          },
         },
       ],
     });
@@ -1273,6 +1290,8 @@ export async function triggerOutOfAppPersistentNotification(
               dueTimestamp: reminder.dueTimestamp,
               sound: soundType,
               volume,
+              theme: settings?.theme || 'dark-gold',
+              language: settings?.language || 'fa',
               persistentUntilReaction: true,
             },
           },

@@ -40,10 +40,10 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
           color: 'text-teal-400 bg-teal-500/10 border-teal-500/30',
           titleFa: 'دسترسی به حافظه',
           titleEn: 'Storage Access',
-          descFa: 'setting, apps, 3 point menu, special access, all files access, Yaad slide key',
-          descEn: 'setting, apps, 3 point menu, special access, all files access, Yaad slide key',
-          sectionNameFa: 'setting, apps, 3 point menu, special access, all files access, Yaad slide key',
-          sectionNameEn: 'setting, apps, 3 point menu, special access, all files access, Yaad slide key',
+          descFa: 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد',
+          descEn: 'To create the backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key',
+          sectionNameFa: 'تنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد',
+          sectionNameEn: 'Setting → Apps → 3-point menu → Special access → All files access → Yaad slide key',
         };
       case 'notifications':
         return {
@@ -149,7 +149,7 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
 
         {/* Explanation */}
         <div className="p-3.5 rounded-2xl bg-stone-950/70 border border-stone-800/80 space-y-2">
-          <p className="text-xs sm:text-sm text-stone-300 leading-relaxed">
+          <p className="text-xs sm:text-sm text-stone-300 leading-relaxed whitespace-pre-line">
             {isEn ? details.descEn : details.descFa}
           </p>
           <div className="flex items-center gap-1.5 text-[11px] text-indigo-300 font-medium pt-1">

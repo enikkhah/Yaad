@@ -209,6 +209,7 @@ const patchedHandleAction = `        val existing = notificationStorage.getSaved
             }
             dismissVisibleNotification(notificationId)
             cancelMuteTimerForNotification(notificationId)
+            YaadAlarmPopupActivity.dismissIfMatching(notificationId)
         }`;
 
 const legacyHandleActionV1 = `        val existing = notificationStorage.getSavedNotification(notificationId.toString())
@@ -238,8 +239,31 @@ managerContent = applyPatchOrVerify(
   'handleNotificationActionPerformed persistent body tap',
   origHandleAction,
   patchedHandleAction,
-  'cancelMuteTimerForNotification(notificationId)',
-  [legacyHandleActionV1]
+  'YaadAlarmPopupActivity.dismissIfMatching(notificationId)',
+  [
+    legacyHandleActionV1,
+    `        val existing = notificationStorage.getSavedNotification(notificationId.toString())
+        val dataJson = JSObject()
+
+        val results = RemoteInput.getResultsFromIntent(data)
+        if (results != null) {
+            val input = results.getCharSequence(REMOTE_INPUT_KEY)
+            dataJson.put("inputValue", input?.toString())
+        }
+        val menuAction = data.getStringExtra(ACTION_INTENT_KEY)
+
+        // Do NOT dismiss or delete persistent/ongoing notification when user taps the notification body ("tap"):
+        // Notification must stay in status bar until user explicitly taps Done, Snooze, Edit, or Dismiss!
+        val isBodyTapOnPersistent = (menuAction == DEFAULT_PRESS_ACTION || menuAction == null) &&
+            (existing?.ongoing == true || existing?.autoCancel == false)
+        if (!isBodyTapOnPersistent) {
+            if (isSafeToForget(existing)) {
+                notificationStorage.deleteNotification(notificationId.toString())
+            }
+            dismissVisibleNotification(notificationId)
+            cancelMuteTimerForNotification(notificationId)
+        }`,
+  ]
 );
 
 const origRequestFallback = `        try {
@@ -344,7 +368,54 @@ const legacyBuildNotifV1 = `        createActionIntents(localNotification, mBuil
                 Notification.FLAG_INSISTENT
         }`;
 
+const legacyBuildNotifV2 = `        createActionIntents(localNotification, mBuilder)
+        val buildNotification = mBuilder.build()
+        if (localNotification.ongoing || !localNotification.autoCancel) {
+            buildNotification.flags = buildNotification.flags or
+                Notification.FLAG_ONGOING_EVENT or
+                Notification.FLAG_NO_CLEAR or
+                (if (isSilentChannel) Notification.FLAG_ONLY_ALERT_ONCE else Notification.FLAG_INSISTENT)
+        }
+        if (localNotification.ongoing || !localNotification.autoCancel) {
+            buildNotification.flags = buildNotification.flags or
+                Notification.FLAG_ONGOING_EVENT or
+                Notification.FLAG_NO_CLEAR or
+                Notification.FLAG_INSISTENT
+        }`;
+
+const legacyBuildNotifV3 = `        createActionIntents(localNotification, mBuilder)
+        val buildNotification = mBuilder.build()
+        if (localNotification.ongoing || !localNotification.autoCancel) {
+            buildNotification.flags = buildNotification.flags or
+                Notification.FLAG_ONGOING_EVENT or
+                Notification.FLAG_NO_CLEAR or
+                (if (isSilentChannel) Notification.FLAG_ONLY_ALERT_ONCE else Notification.FLAG_INSISTENT)
+        }`;
+
 const patchedBuildNotif = `        createActionIntents(localNotification, mBuilder)
+        if (!isSilentChannel && (localNotification.ongoing || !localNotification.autoCancel)) {
+            localNotification.id?.let { notifId ->
+                val fullScreenIntent = Intent(context, YaadAlarmPopupActivity::class.java)
+                fullScreenIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+                    Intent.FLAG_ACTIVITY_NO_USER_ACTION
+                fullScreenIntent.putExtra(NOTIFICATION_INTENT_KEY, notifId)
+                fullScreenIntent.putExtra(NOTIFICATION_OBJ_INTENT_KEY, localNotification.source)
+                var fsFlags = PendingIntent.FLAG_UPDATE_CURRENT
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    fsFlags = fsFlags or PendingIntent.FLAG_MUTABLE
+                }
+                val fullScreenPendingIntent = PendingIntent.getActivity(
+                    context,
+                    notifId + 700000,
+                    fullScreenIntent,
+                    fsFlags
+                )
+                mBuilder.setFullScreenIntent(fullScreenPendingIntent, true)
+            }
+        }
         val buildNotification = mBuilder.build()
         if (localNotification.ongoing || !localNotification.autoCancel) {
             buildNotification.flags = buildNotification.flags or
@@ -356,11 +427,11 @@ const patchedBuildNotif = `        createActionIntents(localNotification, mBuild
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'buildNotification FLAG_INSISTENT and silent mode',
+  'buildNotification fullScreenIntent, FLAG_INSISTENT and silent mode',
   origBuildNotif,
   patchedBuildNotif,
-  '(if (isSilentChannel) Notification.FLAG_ONLY_ALERT_ONCE else Notification.FLAG_INSISTENT)',
-  [legacyBuildNotifV1]
+  'mBuilder.setFullScreenIntent(fullScreenPendingIntent, true)',
+  [legacyBuildNotifV2, legacyBuildNotifV3, legacyBuildNotifV1]
 );
 
 const origImmediateNotify = `            try {
@@ -370,7 +441,7 @@ const origImmediateNotify = `            try {
             }
             localNotification.id?.let { notificationManager.notify(it, buildNotification) }`;
 
-const patchedImmediateNotify = `            if (!isSilentChannel) {
+const legacyImmediateNotifyV1 = `            if (!isSilentChannel) {
                 try {
                     val notificationJson = JSObject(localNotification.source ?: "{}")
                     LocalNotificationsPlugin.fireReceived(notificationJson)
@@ -384,13 +455,29 @@ const patchedImmediateNotify = `            if (!isSilentChannel) {
                 }
             }`;
 
+const patchedImmediateNotify = `            if (!isSilentChannel) {
+                try {
+                    val notificationJson = JSObject(localNotification.source ?: "{}")
+                    LocalNotificationsPlugin.fireReceived(notificationJson)
+                } catch (e: JSONException) {
+                }
+            }
+            localNotification.id?.let {
+                notificationManager.notify(it, buildNotification)
+                if (!isSilentChannel && (buildNotification.flags and Notification.FLAG_INSISTENT) != 0) {
+                    scheduleMuteAfterOneMinute(it, localNotification.source)
+                    YaadAlarmPopupActivity.launch(context, it, localNotification.source)
+                }
+            }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'scheduleMuteAfterOneMinute on immediate notify',
+  'scheduleMuteAfterOneMinute and YaadAlarmPopupActivity on immediate notify',
   origImmediateNotify,
   patchedImmediateNotify,
-  'scheduleMuteAfterOneMinute(it, localNotification.source)'
+  'YaadAlarmPopupActivity.launch(context, it, localNotification.source)',
+  [legacyImmediateNotifyV1]
 );
 
 const origOpenIntent = `        // Open intent
@@ -639,6 +726,8 @@ const patchedDismissVisible = `    private fun scheduleMuteAfterOneMinute(id: In
     }
 
     private fun dismissVisibleNotification(notificationId: Int) {
+        cancelMuteTimerForNotification(notificationId)
+        YaadAlarmPopupActivity.dismissIfMatching(notificationId)
         NotificationManagerCompat.from(context).cancel(notificationId)
     }`;
 
@@ -743,6 +832,7 @@ class TimedNotificationPublisher : BroadcastReceiver() {
         notificationManager.notify(id, notification)
         if (id != Int.MIN_VALUE && (notification.flags and Notification.FLAG_INSISTENT) != 0) {
             scheduleMuteAfterOneMinute(context, id, notificationJson.toString())
+            YaadAlarmPopupActivity.launch(context, id, notificationJson.toString())
         }
         rescheduleNotificationIfNeeded(context, intent, id)
     }
@@ -915,8 +1005,9 @@ class NotificationDismissReceiver : BroadcastReceiver() {
         }
         val reminderId = requestJson?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
 
-        // After 1 minute of continuous alarm ringing, silence the alarm audio while keeping the notification open in the shade
+        // After 1 minute of continuous alarm ringing, silence the alarm audio and close the standalone popup card while keeping the notification open in the shade
         if (actionId == "mute_after_1m") {
+            YaadAlarmPopupActivity.dismissIfMatching(intExtra)
             try {
                 val sysNotifManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 var isStillActive = false
@@ -983,6 +1074,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                 } else {
                     // Emergency escape after 4 consecutive swipes: clean up and stop alarm
                     prefs.edit().remove(swipeKey).apply()
+                    YaadAlarmPopupActivity.dismissIfMatching(intExtra)
                     val notificationManager = NotificationManagerCompat.from(context)
                     cancelAllRelatedNotifications(context, storage, notificationManager, intExtra, reminderId)
                     return
@@ -997,6 +1089,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
 
         // Explicit background action button clicked (done, complete, snooze, stop, dismiss) — NEVER launch MainActivity!
         prefs.edit().remove(swipeKey).apply()
+        YaadAlarmPopupActivity.dismissIfMatching(intExtra)
         val notificationManager = NotificationManagerCompat.from(context)
         notificationManager.cancel(intExtra)
 
@@ -1644,6 +1737,674 @@ pluginContent = applyPatchOrVerify(
   [legacyCompanionFire]
 );
 
+// 8. Create standalone YaadAlarmPopupActivity.kt (Out-of-app minimal theme-matched 1-minute notification card)
+const popupActivityPath = path.join(pluginDir, 'YaadAlarmPopupActivity.kt');
+const popupActivityContent = `package com.capacitorjs.plugins.localnotifications
+
+import android.app.Activity
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.res.Configuration
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.os.Build
+import android.os.Bundle
+import android.os.CountDownTimer
+import android.text.TextUtils
+import android.util.TypedValue
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.view.Window
+import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import androidx.core.app.NotificationManagerCompat
+import com.getcapacitor.JSObject
+import java.lang.ref.WeakReference
+
+/**
+ * Standalone out-of-app minimal notification card that displays for 1 minute alongside the alarm
+ * without opening the main YAAD app (unless the user explicitly clicks the "Edit" button).
+ * Matches the user's selected app theme.
+ */
+class YaadAlarmPopupActivity : Activity() {
+
+    private var notificationId: Int = Int.MIN_VALUE
+    private var sourceJson: String? = null
+    private var requestJson: JSObject? = null
+    private var countDownTimer: CountDownTimer? = null
+    private var progressFillView: View? = null
+    private var progressTrackView: FrameLayout? = null
+    private var timerTextView: TextView? = null
+    private var isPersian: Boolean = true
+
+    data class ThemePalette(
+        val cardBg: Int,
+        val cardBorder: Int,
+        val titleColor: Int,
+        val bodyColor: Int,
+        val mutedColor: Int,
+        val accentColor: Int,
+        val doneBtnBg: Int,
+        val doneBtnText: Int,
+        val secondaryBtnBg: Int,
+        val secondaryBtnBorder: Int,
+        val secondaryBtnText: Int,
+        val editBtnBg: Int,
+        val editBtnBorder: Int,
+        val editBtnText: Int
+    )
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        requestWindowFeature(Window.FEATURE_NO_TITLE)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            setShowWhenLocked(true)
+            setTurnScreenOn(true)
+        }
+        @Suppress("DEPRECATION")
+        window.addFlags(
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                WindowManager.LayoutParams.FLAG_DIM_BEHIND
+        )
+        window.setDimAmount(0.55f)
+        setFinishOnTouchOutside(false)
+
+        activeInstance = WeakReference(this)
+        bindFromIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        if (intent != null) {
+            setIntent(intent)
+            bindFromIntent(intent)
+        }
+    }
+
+    private fun dp(value: Float): Int {
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value,
+            resources.displayMetrics
+        ).toInt()
+    }
+
+    private fun toPersianDigits(input: String): String {
+        val persian = charArrayOf('۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹')
+        val sb = StringBuilder(input.length)
+        for (ch in input) {
+            if (ch in '0'..'9') {
+                sb.append(persian[ch - '0'])
+            } else {
+                sb.append(ch)
+            }
+        }
+        return sb.toString()
+    }
+
+    private fun resolvePalette(themeName: String): ThemePalette {
+        return when (themeName) {
+            "dark-slate" -> ThemePalette(
+                cardBg = Color.parseColor("#11223D"),
+                cardBorder = Color.parseColor("#0EA5E9"),
+                titleColor = Color.parseColor("#EFF6FF"),
+                bodyColor = Color.parseColor("#BAE6FD"),
+                mutedColor = Color.parseColor("#7DD3FC"),
+                accentColor = Color.parseColor("#38BDF8"),
+                doneBtnBg = Color.parseColor("#0284C7"),
+                doneBtnText = Color.parseColor("#FFFFFF"),
+                secondaryBtnBg = Color.parseColor("#193154"),
+                secondaryBtnBorder = Color.parseColor("#274875"),
+                secondaryBtnText = Color.parseColor("#EFF6FF"),
+                editBtnBg = Color.parseColor("#0E1F38"),
+                editBtnBorder = Color.parseColor("#0EA5E9"),
+                editBtnText = Color.parseColor("#38BDF8")
+            )
+            "system" -> {
+                val isNight = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+                if (isNight) {
+                    ThemePalette(
+                        cardBg = Color.parseColor("#1C2126"),
+                        cardBorder = Color.parseColor("#14B8A6"),
+                        titleColor = Color.parseColor("#F1F5F9"),
+                        bodyColor = Color.parseColor("#CBD5E1"),
+                        mutedColor = Color.parseColor("#94A3B8"),
+                        accentColor = Color.parseColor("#2DD4BF"),
+                        doneBtnBg = Color.parseColor("#0D9488"),
+                        doneBtnText = Color.parseColor("#FFFFFF"),
+                        secondaryBtnBg = Color.parseColor("#252C33"),
+                        secondaryBtnBorder = Color.parseColor("#333D47"),
+                        secondaryBtnText = Color.parseColor("#F1F5F9"),
+                        editBtnBg = Color.parseColor("#191E23"),
+                        editBtnBorder = Color.parseColor("#14B8A6"),
+                        editBtnText = Color.parseColor("#2DD4BF")
+                    )
+                } else {
+                    ThemePalette(
+                        cardBg = Color.parseColor("#FFFFFF"),
+                        cardBorder = Color.parseColor("#0D9488"),
+                        titleColor = Color.parseColor("#0F172A"),
+                        bodyColor = Color.parseColor("#334155"),
+                        mutedColor = Color.parseColor("#64748B"),
+                        accentColor = Color.parseColor("#0D9488"),
+                        doneBtnBg = Color.parseColor("#0D9488"),
+                        doneBtnText = Color.parseColor("#FFFFFF"),
+                        secondaryBtnBg = Color.parseColor("#F1F5F9"),
+                        secondaryBtnBorder = Color.parseColor("#CBD5E1"),
+                        secondaryBtnText = Color.parseColor("#0F172A"),
+                        editBtnBg = Color.parseColor("#F0FDFA"),
+                        editBtnBorder = Color.parseColor("#0D9488"),
+                        editBtnText = Color.parseColor("#0F766E")
+                    )
+                }
+            }
+            "light-clean" -> ThemePalette(
+                cardBg = Color.parseColor("#FFFFFF"),
+                cardBorder = Color.parseColor("#0D9488"),
+                titleColor = Color.parseColor("#1C1917"),
+                bodyColor = Color.parseColor("#44403C"),
+                mutedColor = Color.parseColor("#78716C"),
+                accentColor = Color.parseColor("#0D9488"),
+                doneBtnBg = Color.parseColor("#0D9488"),
+                doneBtnText = Color.parseColor("#FFFFFF"),
+                secondaryBtnBg = Color.parseColor("#F5F5F4"),
+                secondaryBtnBorder = Color.parseColor("#D6D3D1"),
+                secondaryBtnText = Color.parseColor("#1C1917"),
+                editBtnBg = Color.parseColor("#F0FDFA"),
+                editBtnBorder = Color.parseColor("#0D9488"),
+                editBtnText = Color.parseColor("#0F766E")
+            )
+            "jade_warm_light" -> ThemePalette(
+                cardBg = Color.parseColor("#F7F6F0"),
+                cardBorder = Color.parseColor("#168779"),
+                titleColor = Color.parseColor("#202A29"),
+                bodyColor = Color.parseColor("#3D4B49"),
+                mutedColor = Color.parseColor("#5C6B68"),
+                accentColor = Color.parseColor("#168779"),
+                doneBtnBg = Color.parseColor("#168779"),
+                doneBtnText = Color.parseColor("#FFFFFF"),
+                secondaryBtnBg = Color.parseColor("#EFEFE8"),
+                secondaryBtnBorder = Color.parseColor("#DDE1DA"),
+                secondaryBtnText = Color.parseColor("#202A29"),
+                editBtnBg = Color.parseColor("#DDEFEA"),
+                editBtnBorder = Color.parseColor("#168779"),
+                editBtnText = Color.parseColor("#168779")
+            )
+            "midnight_blue_silver" -> ThemePalette(
+                cardBg = Color.parseColor("#202B3A"),
+                cardBorder = Color.parseColor("#9CBCE0"),
+                titleColor = Color.parseColor("#F0F3F7"),
+                bodyColor = Color.parseColor("#C5D9EE"),
+                mutedColor = Color.parseColor("#9CBCE0"),
+                accentColor = Color.parseColor("#9CBCE0"),
+                doneBtnBg = Color.parseColor("#9CBCE0"),
+                doneBtnText = Color.parseColor("#101722"),
+                secondaryBtnBg = Color.parseColor("#172130"),
+                secondaryBtnBorder = Color.parseColor("#39475A"),
+                secondaryBtnText = Color.parseColor("#F0F3F7"),
+                editBtnBg = Color.parseColor("#293648"),
+                editBtnBorder = Color.parseColor("#9CBCE0"),
+                editBtnText = Color.parseColor("#C5D9EE")
+            )
+            "sketch-contrast" -> ThemePalette(
+                cardBg = Color.parseColor("#09090B"),
+                cardBorder = Color.parseColor("#2DD4BF"),
+                titleColor = Color.parseColor("#FFFFFF"),
+                bodyColor = Color.parseColor("#D4D4D8"),
+                mutedColor = Color.parseColor("#A1A1AA"),
+                accentColor = Color.parseColor("#2DD4BF"),
+                doneBtnBg = Color.parseColor("#0D9488"),
+                doneBtnText = Color.parseColor("#FFFFFF"),
+                secondaryBtnBg = Color.parseColor("#18181B"),
+                secondaryBtnBorder = Color.parseColor("#2DD4BF"),
+                secondaryBtnText = Color.parseColor("#5EEAD4"),
+                editBtnBg = Color.parseColor("#18181B"),
+                editBtnBorder = Color.parseColor("#FFFFFF"),
+                editBtnText = Color.parseColor("#FFFFFF")
+            )
+            else -> ThemePalette(
+                cardBg = Color.parseColor("#101222"),
+                cardBorder = Color.parseColor("#6366F1"),
+                titleColor = Color.parseColor("#F3F4F8"),
+                bodyColor = Color.parseColor("#C7CBF0"),
+                mutedColor = Color.parseColor("#8A90BD"),
+                accentColor = Color.parseColor("#818CF8"),
+                doneBtnBg = Color.parseColor("#4F46E5"),
+                doneBtnText = Color.parseColor("#FFFFFF"),
+                secondaryBtnBg = Color.parseColor("#191C33"),
+                secondaryBtnBorder = Color.parseColor("#282C4A"),
+                secondaryBtnText = Color.parseColor("#F3F4F8"),
+                editBtnBg = Color.parseColor("#191C33"),
+                editBtnBorder = Color.parseColor("#6366F1"),
+                editBtnText = Color.parseColor("#818CF8")
+            )
+        }
+    }
+
+    private fun makeRoundedDrawable(bgColor: Int, borderColor: Int, strokeDp: Float, radiusDp: Float): GradientDrawable {
+        val gd = GradientDrawable()
+        gd.shape = GradientDrawable.RECTANGLE
+        gd.setColor(bgColor)
+        gd.cornerRadius = dp(radiusDp).toFloat()
+        if (strokeDp > 0f) {
+            gd.setStroke(dp(strokeDp), borderColor)
+        }
+        return gd
+    }
+
+    private fun bindFromIntent(data: Intent?) {
+        if (data == null) {
+            finish()
+            return
+        }
+        notificationId = data.getIntExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, Int.MIN_VALUE)
+        activeNotificationId = notificationId
+        sourceJson = data.getStringExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY)
+
+        val storage = NotificationStorage(this)
+        if (sourceJson != null) {
+            try {
+                requestJson = JSObject(sourceJson)
+            } catch (e: Exception) {
+            }
+        }
+        if (requestJson == null && notificationId != Int.MIN_VALUE) {
+            requestJson = storage.getSavedNotificationAsJSObject(notificationId.toString())
+            if (sourceJson == null && requestJson != null) {
+                sourceJson = requestJson.toString()
+            }
+        }
+
+        val extraObj = requestJson?.optJSONObject("extra")
+        val themeName = extraObj?.optString("theme", "dark-gold")?.takeIf { it.isNotEmpty() } ?: "dark-gold"
+        val lang = extraObj?.optString("language", "fa")?.takeIf { it.isNotEmpty() } ?: "fa"
+        isPersian = lang != "en"
+
+        val rawTitle = requestJson?.getString("title") ?: (if (isPersian) "🔔 یادآور" else "🔔 Reminder")
+        val cleanTitle = rawTitle.replaceFirst("🔔 یادآور: ", "").replaceFirst("🔔 ", "").trim()
+        val bodyText = requestJson?.getString("body") ?: ""
+
+        val palette = resolvePalette(themeName)
+        buildMinimalCardUI(palette, cleanTitle, bodyText)
+        startOneMinuteCountdown()
+    }
+
+    private fun buildMinimalCardUI(palette: ThemePalette, titleStr: String, bodyStr: String) {
+        val root = FrameLayout(this)
+        root.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        root.setPadding(dp(16f), dp(36f), dp(16f), dp(16f))
+
+        val cardContainer = LinearLayout(this)
+        cardContainer.orientation = LinearLayout.VERTICAL
+        cardContainer.layoutDirection = if (isPersian) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+        cardContainer.background = makeRoundedDrawable(palette.cardBg, palette.cardBorder, 1.8f, 24f)
+        cardContainer.elevation = dp(16f).toFloat()
+
+        val cardParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        cardParams.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+        cardContainer.layoutParams = cardParams
+
+        // 1. Minimal 60s top progress bar inside card
+        val track = FrameLayout(this)
+        val trackParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(4f)
+        )
+        trackParams.setMargins(dp(18f), dp(12f), dp(18f), 0)
+        track.layoutParams = trackParams
+        track.background = makeRoundedDrawable(Color.argb(40, 128, 128, 128), Color.TRANSPARENT, 0f, 2f)
+
+        val fill = View(this)
+        val fillParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        fill.layoutParams = fillParams
+        fill.background = makeRoundedDrawable(palette.accentColor, Color.TRANSPARENT, 0f, 2f)
+        track.addView(fill)
+        progressTrackView = track
+        progressFillView = fill
+        cardContainer.addView(track)
+
+        // Inner content container
+        val content = LinearLayout(this)
+        content.orientation = LinearLayout.VERTICAL
+        content.setPadding(dp(18f), dp(14f), dp(18f), dp(18f))
+
+        // Header row: Brand label + 60s countdown + close button
+        val headerRow = LinearLayout(this)
+        headerRow.orientation = LinearLayout.HORIZONTAL
+        headerRow.gravity = Gravity.CENTER_VERTICAL
+
+        val brandTv = TextView(this)
+        brandTv.text = if (isPersian) "🔔 یادآور هوشمند یاد" else "🔔 YAAD Reminder"
+        brandTv.setTextColor(palette.accentColor)
+        brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        brandTv.setTypeface(Typeface.DEFAULT_BOLD)
+        val brandParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        brandTv.layoutParams = brandParams
+        headerRow.addView(brandTv)
+
+        val timerTv = TextView(this)
+        timerTv.text = if (isPersian) "۰۰:۶۰" else "00:60"
+        timerTv.setTextColor(palette.mutedColor)
+        timerTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        timerTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+        timerTv.setPadding(dp(8f), 0, dp(8f), 0)
+        timerTextView = timerTv
+        headerRow.addView(timerTv)
+
+        val closeTv = TextView(this)
+        closeTv.text = "✕"
+        closeTv.setTextColor(palette.mutedColor)
+        closeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        closeTv.setPadding(dp(6f), dp(2f), dp(6f), dp(2f))
+        closeTv.setOnClickListener {
+            performBackgroundAction("mute_after_1m")
+        }
+        headerRow.addView(closeTv)
+        content.addView(headerRow)
+
+        // Reminder Title
+        val titleTv = TextView(this)
+        titleTv.text = titleStr
+        titleTv.setTextColor(palette.titleColor)
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17.5f)
+        titleTv.setTypeface(Typeface.DEFAULT_BOLD)
+        titleTv.maxLines = 2
+        titleTv.ellipsize = TextUtils.TruncateAt.END
+        val titleParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        titleParams.topMargin = dp(10f)
+        titleTv.layoutParams = titleParams
+        content.addView(titleTv)
+
+        // Reminder Body / Time
+        if (bodyStr.isNotEmpty()) {
+            val bodyTv = TextView(this)
+            bodyTv.text = bodyStr
+            bodyTv.setTextColor(palette.bodyColor)
+            bodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            bodyTv.maxLines = 3
+            bodyTv.ellipsize = TextUtils.TruncateAt.END
+            val bodyParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            bodyParams.topMargin = dp(4f)
+            bodyTv.layoutParams = bodyParams
+            content.addView(bodyTv)
+        }
+
+        // Action Buttons Row: 1. Done (انجام شد), 2. Snooze (تعویق), 3. Edit (ویرایش)
+        val actionsRow = LinearLayout(this)
+        actionsRow.orientation = LinearLayout.HORIZONTAL
+        actionsRow.gravity = Gravity.CENTER
+        val actionsParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        actionsParams.topMargin = dp(16f)
+        actionsRow.layoutParams = actionsParams
+
+        // Button 1: Done (does NOT open app)
+        val doneBtn = buildActionButton(
+            text = if (isPersian) "✓ انجام شد" else "✓ Done",
+            bgColor = palette.doneBtnBg,
+            borderColor = Color.TRANSPARENT,
+            textColor = palette.doneBtnText,
+            strokeDp = 0f
+        ) {
+            performBackgroundAction("done")
+        }
+
+        // Button 2: Snooze (does NOT open app)
+        val snoozeBtn = buildActionButton(
+            text = if (isPersian) "⏱ تعویق" else "⏱ Snooze",
+            bgColor = palette.secondaryBtnBg,
+            borderColor = palette.secondaryBtnBorder,
+            textColor = palette.secondaryBtnText,
+            strokeDp = 1.2f
+        ) {
+            performBackgroundAction("snooze")
+        }
+
+        // Button 3: Edit (OPENS app and goes to Edit Reminder modal)
+        val editBtn = buildActionButton(
+            text = if (isPersian) "✎ ویرایش" else "✎ Edit",
+            bgColor = palette.editBtnBg,
+            borderColor = palette.editBtnBorder,
+            textColor = palette.editBtnText,
+            strokeDp = 1.2f
+        ) {
+            performEditAction()
+        }
+
+        val btnMargin = dp(4f)
+        (doneBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+        (snoozeBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+        (editBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+
+        actionsRow.addView(doneBtn)
+        actionsRow.addView(snoozeBtn)
+        actionsRow.addView(editBtn)
+        content.addView(actionsRow)
+
+        cardContainer.addView(content)
+        root.addView(cardContainer)
+        setContentView(root)
+    }
+
+    private fun buildActionButton(
+        text: String,
+        bgColor: Int,
+        borderColor: Int,
+        textColor: Int,
+        strokeDp: Float,
+        onClick: () -> Unit
+    ): TextView {
+        val btn = TextView(this)
+        btn.text = text
+        btn.gravity = Gravity.CENTER
+        btn.setTextColor(textColor)
+        btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        btn.setTypeface(Typeface.DEFAULT_BOLD)
+        btn.setSingleLine(true)
+        btn.ellipsize = TextUtils.TruncateAt.END
+        btn.setPadding(dp(8f), dp(11f), dp(8f), dp(11f))
+        btn.background = makeRoundedDrawable(bgColor, borderColor, strokeDp, 14f)
+        btn.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        btn.setOnClickListener { onClick() }
+        return btn
+    }
+
+    private fun startOneMinuteCountdown() {
+        countDownTimer?.cancel()
+        countDownTimer = object : CountDownTimer(60_000L, 1_000L) {
+            override fun onTick(millisUntilFinished: Long) {
+                val secs = ((millisUntilFinished + 999L) / 1000L).toInt().coerceIn(0, 60)
+                val formatted = String.format("00:%02d", secs)
+                timerTextView?.text = if (isPersian) toPersianDigits(formatted) else formatted
+                val trackWidth = progressTrackView?.width ?: 0
+                if (trackWidth > 0) {
+                    val newWidth = ((millisUntilFinished.toFloat() / 60_000f) * trackWidth).toInt().coerceAtLeast(0)
+                    val lp = progressFillView?.layoutParams
+                    if (lp != null) {
+                        lp.width = newWidth
+                        progressFillView?.layoutParams = lp
+                    }
+                }
+            }
+
+            override fun onFinish() {
+                performBackgroundAction("mute_after_1m")
+            }
+        }.start()
+    }
+
+    private fun performBackgroundAction(actionId: String) {
+        countDownTimer?.cancel()
+        try {
+            val broadcastIntent = Intent(this, NotificationDismissReceiver::class.java)
+            broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+            broadcastIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, actionId)
+            if (sourceJson != null) {
+                broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
+            }
+            sendBroadcast(broadcastIntent)
+        } catch (e: Exception) {
+        }
+        finish()
+        overridePendingTransition(0, 0)
+    }
+
+    private fun performEditAction() {
+        countDownTimer?.cancel()
+        try {
+            if (notificationId != Int.MIN_VALUE) {
+                NotificationManagerCompat.from(this).cancel(notificationId)
+                val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                val muteIntent = Intent(this, NotificationDismissReceiver::class.java)
+                var flags = PendingIntent.FLAG_NO_CREATE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    flags = flags or PendingIntent.FLAG_MUTABLE
+                }
+                val mutePi = PendingIntent.getBroadcast(this, notificationId + 500000, muteIntent, flags)
+                if (mutePi != null) {
+                    alarmManager.cancel(mutePi)
+                    mutePi.cancel()
+                }
+            }
+        } catch (e: Exception) {
+        }
+
+        val dataJson = JSObject()
+        dataJson.put("actionId", "edit")
+        dataJson.put("actionTimestamp", System.currentTimeMillis())
+        if (requestJson != null) {
+            dataJson.put("notification", requestJson)
+        }
+        val dispatched = LocalNotificationsPlugin.fireActionPerformed(dataJson)
+        if (!dispatched) {
+            LocalNotificationsPlugin.queueBackgroundAction(this, dataJson)
+        }
+
+        try {
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null) {
+                launchIntent.action = Intent.ACTION_MAIN
+                launchIntent.addCategory(Intent.CATEGORY_LAUNCHER)
+                launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                launchIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+                launchIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, "edit")
+                if (sourceJson != null) {
+                    launchIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
+                }
+                startActivity(launchIntent)
+            }
+        } catch (e: Exception) {
+        }
+        finish()
+        overridePendingTransition(0, 0)
+    }
+
+    override fun onDestroy() {
+        countDownTimer?.cancel()
+        if (activeInstance?.get() === this) {
+            activeInstance = null
+        }
+        super.onDestroy()
+    }
+
+    companion object {
+        private var activeInstance: WeakReference<YaadAlarmPopupActivity>? = null
+        private var activeNotificationId: Int = Int.MIN_VALUE
+
+        fun dismissIfMatching(notificationId: Int) {
+            val act = activeInstance?.get() ?: return
+            if (activeNotificationId == notificationId || notificationId == Int.MIN_VALUE) {
+                act.runOnUiThread {
+                    try {
+                        if (!act.isFinishing && !act.isDestroyed) {
+                            act.countDownTimer?.cancel()
+                            act.finish()
+                            act.overridePendingTransition(0, 0)
+                        }
+                    } catch (e: Exception) {
+                    }
+                }
+            }
+        }
+
+        fun launch(context: Context, notificationId: Int, sourceJson: String?) {
+            try {
+                val intent = Intent(context, YaadAlarmPopupActivity::class.java)
+                intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+                    Intent.FLAG_ACTIVITY_NO_USER_ACTION
+                intent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+                if (sourceJson != null) {
+                    intent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                // Handled by setFullScreenIntent when background activity start is restricted
+            }
+        }
+    }
+}
+`;
+
+// 9. Patch plugin AndroidManifest.xml to register YaadAlarmPopupActivity and USE_FULL_SCREEN_INTENT
+const manifestPath = path.join(pluginRoot, 'android/src/main/AndroidManifest.xml');
+if (fs.existsSync(manifestPath)) {
+  let manifestContent = fs.readFileSync(manifestPath, 'utf8');
+  if (!manifestContent.includes('YaadAlarmPopupActivity')) {
+    manifestContent = manifestContent.replace(
+      '<application>',
+      `<application>
+        <activity
+            android:name="com.capacitorjs.plugins.localnotifications.YaadAlarmPopupActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />`
+    );
+  }
+  if (!manifestContent.includes('android.permission.USE_FULL_SCREEN_INTENT')) {
+    manifestContent = manifestContent.replace(
+      '</manifest>',
+      `    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>\n</manifest>`
+    );
+  }
+  fs.writeFileSync(manifestPath, manifestContent, 'utf8');
+}
+
 fs.writeFileSync(path.join(pluginDir, 'NotificationAction.kt'), notificationActionContent, 'utf8');
 fs.writeFileSync(notificationStoragePath, notificationStorageContent, 'utf8');
 fs.writeFileSync(managerPath, managerContent, 'utf8');
@@ -1651,7 +2412,9 @@ fs.writeFileSync(publisherPath, publisherContent, 'utf8');
 fs.writeFileSync(channelManagerPath, channelManagerContent, 'utf8');
 fs.writeFileSync(path.join(pluginDir, 'NotificationDismissReceiver.kt'), dismissReceiverContent, 'utf8');
 fs.writeFileSync(pluginPath, pluginContent, 'utf8');
+fs.writeFileSync(popupActivityPath, popupActivityContent, 'utf8');
 
 console.log(
-  `[patch-capacitor-notifications] Successfully patched and verified @capacitor/local-notifications@${pluginVersion}.`
+  `[patch-capacitor-notifications] Successfully patched and verified @capacitor/local-notifications@${pluginVersion} (with YaadAlarmPopupActivity).`
 );
+

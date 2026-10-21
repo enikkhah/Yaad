@@ -407,6 +407,118 @@ export async function shareBackupToAnyCloudApp(
 }
 
 /**
+ * Ensures the specified cloud backup folder (e.g., "Yaad reminder" or "GoogleDrive/Yaad reminder")
+ * is physically created on device storage, OPFS, and server backup directory, and writes the backup file if provided.
+ */
+export async function ensureCloudFolderOnDevice(
+  customCloudFolder?: string,
+  payload?: AutoBackupSnapshot
+): Promise<boolean> {
+  const rawFolder = (customCloudFolder || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
+  const baseFolder =
+    rawFolder
+      .replace(/^(GoogleDrive|Google Drive|OneDrive|Dropbox|iCloudDrive|MEGA|Documents|Download|InternalStorage)\//i, '')
+      .trim() || LOCAL_BACKUP_FOLDER_NAME;
+
+  let createdAny = false;
+
+  // 1. Create on OPFS
+  try {
+    if (typeof navigator !== 'undefined' && navigator.storage && (navigator.storage as any).getDirectory) {
+      const rootDir = await (navigator.storage as any).getDirectory();
+      const dirHandle = await rootDir.getDirectoryHandle(baseFolder, { create: true });
+      if (payload && dirHandle) {
+        const fileHandle = await dirHandle.getFileHandle(LOCAL_BACKUP_FILE_NAME, { create: true });
+        if (fileHandle.createWritable) {
+          const writable = await fileHandle.createWritable();
+          await writable.write(JSON.stringify({ ...payload, folder: rawFolder }, null, 2));
+          await writable.close();
+        }
+      }
+      createdAny = true;
+    }
+  } catch {
+    // ignore
+  }
+
+  // 2. Create on Android Capacitor Filesystem (both full path like GoogleDrive/Yaad reminder and base folder Yaad reminder)
+  try {
+    if (Capacitor.isNativePlatform() || (window as any).Capacitor?.Plugins?.Filesystem) {
+      await Promise.race([
+        Filesystem.requestPermissions(),
+        new Promise((resolve) => setTimeout(resolve, 2500)),
+      ]).catch(() => {});
+
+      const targetDirs = [
+        Directory.External,
+        Directory.Documents,
+        Directory.ExternalStorage,
+        Directory.Data,
+      ];
+
+      const pathsToCreate = Array.from(new Set([rawFolder, baseFolder, `GoogleDrive/${baseFolder}`]));
+      const jsonStr = payload ? JSON.stringify({ ...payload, folder: rawFolder }, null, 2) : null;
+
+      for (const dir of targetDirs) {
+        for (const p of pathsToCreate) {
+          await Filesystem.mkdir({
+            path: p,
+            directory: dir,
+            recursive: true,
+          })
+            .then(() => {
+              createdAny = true;
+            })
+            .catch(() => {});
+
+          if (jsonStr) {
+            await Filesystem.writeFile({
+              path: `${p}/${LOCAL_BACKUP_FILE_NAME}`,
+              data: jsonStr,
+              directory: dir,
+              encoding: Encoding.UTF8,
+              recursive: true,
+            })
+              .then(() => {
+                createdAny = true;
+              })
+              .catch(() => {});
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 3. Mirror folder on server backup vault
+  try {
+    const bodyPayload = payload
+      ? { ...payload, folder: rawFolder }
+      : {
+          version: 3,
+          updatedAt: Date.now(),
+          folder: rawFolder,
+          source: 'google_drive',
+          reminders: [],
+          ideas: [],
+          savedLocations: [],
+          occasions: [],
+        };
+    const res = await fetch('/api/local-folder-backup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(bodyPayload),
+    });
+    if (res.ok) createdAny = true;
+  } catch {
+    // ignore
+  }
+
+  return createdAny;
+}
+
+/**
  * Initializes & verifies access to the local "YAAD REMIDER" folder.
  * When interactivePicker = true and supported by browser, opens directory picker
  * to create/select the "YAAD REMIDER" folder on device storage.
@@ -878,6 +990,12 @@ export async function performAutoBackup(
       const token = options?.googleToken || getCachedToken();
 
       const executeCloudSync = async () => {
+        // Ensure cloud folder exists on device / OPFS / server
+        await ensureCloudFolderOnDevice(cloudFolder, {
+          ...payload,
+          folder: cloudFolder,
+        });
+
         // A. User-selected Cloud Folder on device (OneDrive, Dropbox, iCloud, Mega, etc.)
         const customCloudHandle = await getDirectoryHandleFromDB('yaad_custom_cloud_dir');
         if (customCloudHandle) {
