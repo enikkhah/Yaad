@@ -204,8 +204,13 @@ export default function App() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          // Filter out any default seed reminders so they are never loaded again
-          return parsed.filter((r: any) => !r.id?.startsWith('seed-'));
+          const bootNow = Date.now();
+          // Filter out any default seed reminders and mark already-past reminders as acknowledged so they don't re-fire on boot
+          return parsed
+            .filter((r: any) => r && !r.id?.startsWith('seed-'))
+            .map((r: Reminder) =>
+              r.dueTimestamp <= bootNow - 60000 ? { ...r, acknowledged: true } : r
+            );
         }
       }
     } catch {
@@ -328,9 +333,16 @@ export default function App() {
 
       // Merge or restore reminders from backup if local state is empty or backup has additional items
       if (Array.isArray(backup.reminders) && backup.reminders.length > 0) {
-        const cleanReminders = backup.reminders.filter(
-          (r: Reminder) => r?.id && !r.id.startsWith('seed-')
-        );
+        const restoreNow = Date.now();
+        const cleanReminders = backup.reminders
+          .filter((r: Reminder) => r?.id && !r.id.startsWith('seed-'))
+          .map((r: Reminder) => {
+            if (r.dueTimestamp <= restoreNow || r.deletedAt) {
+              triggeredAlarmsRef.current.add(r.id);
+              return r.dueTimestamp <= restoreNow ? { ...r, acknowledged: true } : r;
+            }
+            return r;
+          });
         if (cleanReminders.length > 0) {
           if (isRemindersEmpty) {
             setReminders(cleanReminders);
@@ -426,7 +438,12 @@ export default function App() {
       if (restoredAny) {
         try {
           if (Array.isArray(backup.reminders) && backup.reminders.length > 0 && isRemindersEmpty) {
-            const clean = backup.reminders.filter((r: any) => r?.id && !r.id.startsWith('seed-'));
+            const restoreNow = Date.now();
+            const clean = backup.reminders
+              .filter((r: any) => r?.id && !r.id.startsWith('seed-'))
+              .map((r: Reminder) =>
+                r.dueTimestamp <= restoreNow ? { ...r, acknowledged: true } : r
+              );
             localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(clean));
             syncAllRemindersWithLocalNotifications(clean, settingsRef.current).catch(() => {});
           }
@@ -709,13 +726,15 @@ export default function App() {
     }
     prevModalOpenRef.current = isAnyModalCurrentlyOpen;
   }, [isAnyModalCurrentlyOpen]);
-  // App startup splash screen (fade in & fade out in <= 1.5s, then immediately open + menu unless an alarm is ringing)
+  const openedFromNotificationEditRef = useRef(false);
+
+  // App startup splash screen (fade in & fade out in <= 1.5s, then immediately open + menu unless an alarm or edit modal is active)
   const [showSplash, setShowSplash] = useState<boolean>(true);
   const [appVisible, setAppVisible] = useState<boolean>(false);
   const handleStartExitSplash = useCallback(() => {
     setAppVisible(true);
     setActiveAlarmReminder((currAlarm) => {
-      if (!currAlarm) {
+      if (!currAlarm && !openedFromNotificationEditRef.current) {
         setIsCreateChoiceOpen(true);
       }
       return currAlarm;
@@ -725,7 +744,7 @@ export default function App() {
     setAppVisible(true);
     setShowSplash(false);
     setActiveAlarmReminder((currAlarm) => {
-      if (!currAlarm) {
+      if (!currAlarm && !openedFromNotificationEditRef.current) {
         setIsCreateChoiceOpen(true);
       }
       return currAlarm;
@@ -988,7 +1007,43 @@ export default function App() {
       }
     }
 
-    // Listen for Service Worker notification actions (done, complete, snooze, stop, dismiss, open)
+    const openEditModalForReminderId = (targetId: string) => {
+      if (!targetId) return;
+      openedFromNotificationEditRef.current = true;
+      stopAlarmRinging();
+      clearOutOfAppPersistentNotification(targetId);
+      cancelReminderNotification(targetId).catch(() => {});
+      dismissDeliveredNotifications(targetId).catch(() => {});
+      triggeredAlarmsRef.current.add(targetId);
+      recordNotificationAction(targetId);
+
+      let found = remindersRef.current?.find((r) => r.id === targetId);
+      if (!found) {
+        try {
+          const raw = localStorage.getItem(REMINDERS_STORAGE_KEY);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+              found = parsed.find((r: Reminder) => r.id === targetId);
+            }
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (found) {
+        setShowSplash(false);
+        setAppVisible(true);
+        setIsCreateChoiceOpen(false);
+        setActiveAlarmReminder(null);
+        setActiveMainTab('reminders');
+        setEditingReminder(found);
+        setIsFormOpen(true);
+      }
+    };
+
+    // Listen for Service Worker notification actions (done, complete, snooze, edit, stop, dismiss, open)
     const handleSwMessage = (event: MessageEvent) => {
       if (event.data?.type === 'YAAD_NOTIFICATION_ACTION') {
         const { action, reminderId } = event.data;
@@ -1002,6 +1057,8 @@ export default function App() {
           handleCompleteReminderRef.current(reminderId);
         } else if (action === 'snooze') {
           handlePostponeRef.current(reminderId, 15);
+        } else if (action === 'edit') {
+          openEditModalForReminderId(reminderId);
         } else if (action === 'stop' || action === 'dismiss') {
           handleStopOrDismissReminderRef.current(reminderId);
         } else if (action === 'open') {
@@ -1033,6 +1090,9 @@ export default function App() {
         if (found && (found.status === 'pending' || found.status === 'postponed') && !found.acknowledged) {
           setActiveAlarmReminder(found);
         }
+      },
+      (id) => {
+        openEditModalForReminderId(id);
       }
     );
 
@@ -1094,11 +1154,33 @@ export default function App() {
     }
   }, [settings]);
 
-  // Check URL params for alarmId when launched from notification click
+  // Check URL params for alarmId or editReminderId when launched from notification click
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
       const params = new URLSearchParams(window.location.search);
+      const queryEditId = params.get('editReminderId');
+      if (queryEditId) {
+        const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('editReminderId');
+        window.history.replaceState({}, '', cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : ''));
+
+        const found = reminders.find((r) => r.id === queryEditId);
+        if (found) {
+          openedFromNotificationEditRef.current = true;
+          stopAlarmRinging();
+          clearOutOfAppPersistentNotification(found.id);
+          setShowSplash(false);
+          setAppVisible(true);
+          setIsCreateChoiceOpen(false);
+          setActiveAlarmReminder(null);
+          setActiveMainTab('reminders');
+          setEditingReminder(found);
+          setIsFormOpen(true);
+          return;
+        }
+      }
+
       const queryAlarmId = params.get('alarmId');
       if (queryAlarmId) {
         // Clear alarmId query from URL immediately so subsequent re-renders don't re-trigger it
@@ -1127,8 +1209,9 @@ export default function App() {
         const lastActionTime = recentNotificationActionsRef.current.get(r.id) || r.lastActionAt || 0;
         const isRecentlyActioned = (now - lastActionTime) < 300000; // 5 min protection window
 
-        // If reminder is completed, cancelled, acknowledged, or actioned via notification, NEVER trigger in-app alarm!
+        // If reminder is deleted (in recycle bin), completed, cancelled, acknowledged, or actioned via notification, NEVER trigger in-app alarm!
         if (
+          r.deletedAt ||
           r.status === 'completed' ||
           r.status === 'cancelled' ||
           r.acknowledged === true ||
@@ -1138,11 +1221,11 @@ export default function App() {
           return;
         }
 
-        // Trigger if pending or postponed, due now or within past 24 hours, and not already triggered
+        // Trigger if pending or postponed, due now (within live 2-minute window), and not already triggered
         if (
           (r.status === 'pending' || r.status === 'postponed') &&
           r.dueTimestamp <= now &&
-          now - r.dueTimestamp < 24 * 3600 * 1000 &&
+          now - r.dueTimestamp < 2 * 60 * 1000 &&
           !triggeredAlarmsRef.current.has(r.id)
         ) {
           triggeredAlarmsRef.current.add(r.id);
@@ -1461,9 +1544,9 @@ export default function App() {
       const result = await signInWithGoogle();
       setGoogleUser(result.user);
       setGoogleToken(result.accessToken);
-      showSyncNotification('با موفقیت به حساب گوگل متصل شدید.');
+      showSyncNotification('حساب تقویم گوگل (Google Calendar) متصل و باز شد.');
     } catch (err: any) {
-      alert('خطا در ورود به حساب گوگل: ' + (err.message || ''));
+      showSyncNotification('خطا در اتصال به تقویم گوگل: ' + (err?.message || ''));
     }
   };
 
@@ -1717,10 +1800,17 @@ export default function App() {
     mode: 'replace' | 'merge',
     shouldReload = false
   ) => {
-    // 1. Sanitize incoming arrays
-    const cleanReminders = (data.reminders || []).filter(
-      (r) => r?.id && !r.id.startsWith('seed-')
-    );
+    // 1. Sanitize incoming arrays (mark past-due restored reminders as acknowledged so they don't fire false alarms)
+    const restoreNow = Date.now();
+    const cleanReminders = (data.reminders || [])
+      .filter((r) => r?.id && !r.id.startsWith('seed-'))
+      .map((r) => {
+        if (r.dueTimestamp <= restoreNow || r.deletedAt) {
+          triggeredAlarmsRef.current.add(r.id);
+          return r.dueTimestamp <= restoreNow ? { ...r, acknowledged: true } : r;
+        }
+        return r;
+      });
     const cleanIdeas = (data.ideas || []).filter(
       (i) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-')
     );
@@ -2303,12 +2393,14 @@ export default function App() {
   const getThemeClass = (theme: AppTheme) => {
     if (theme === 'system') {
       return systemPrefersDark
-        ? 'bg-stone-950 text-stone-100 selection:bg-indigo-500 selection:text-white'
-        : 'bg-stone-50 text-stone-900 selection:bg-indigo-600 selection:text-white';
+        ? 'bg-[#14171A] text-[#F1F5F9] selection:bg-teal-500 selection:text-white'
+        : 'bg-[#F3F5F7] text-[#1E293B] selection:bg-teal-600 selection:text-white';
     }
     switch (theme) {
+      case 'dark-gold':
+        return 'bg-[#07070D] text-[#F3F4F8] selection:bg-indigo-500 selection:text-white';
       case 'dark-slate':
-        return 'bg-slate-950 text-slate-100 selection:bg-sky-500 selection:text-slate-950';
+        return 'bg-[#0A1628] text-[#EFF6FF] selection:bg-sky-500 selection:text-slate-950';
       case 'light-clean':
         return 'bg-stone-50 text-stone-900 selection:bg-indigo-600 selection:text-white';
       case 'sketch-contrast':
@@ -2318,7 +2410,7 @@ export default function App() {
       case 'midnight_blue_silver':
         return 'bg-[#101722] text-[#F0F3F7] selection:bg-[#9CBCE0] selection:text-[#101722]';
       default:
-        return 'bg-stone-950 text-stone-100 selection:bg-indigo-500 selection:text-white';
+        return 'bg-[#07070D] text-[#F3F4F8] selection:bg-indigo-500 selection:text-white';
     }
   };
 
@@ -2380,6 +2472,12 @@ export default function App() {
           ? 'bg-[#F7F6F0]/95 border-[#DDE1DA] text-[#202A29] shadow-xs'
           : settings.theme === 'midnight_blue_silver'
           ? 'bg-[#101722]/95 border-[#39475A] text-[#F0F3F7]'
+          : settings.theme === 'dark-slate'
+          ? 'bg-[#11223D]/95 border-[#1E3A5F] text-[#EFF6FF]'
+          : settings.theme === 'dark-gold'
+          ? 'bg-[#101222]/95 border-[#22253E] text-[#F3F4F8]'
+          : settings.theme === 'system'
+          ? (isDarkMode ? 'bg-[#1C2126]/95 border-[#2B333C] text-[#F1F5F9]' : 'bg-white/95 border-[#DCE3EA] text-[#1E293B] shadow-sm')
           : isDarkMode 
           ? 'bg-stone-900/95 border-stone-800/90 text-stone-100' 
           : 'bg-white/95 border-stone-200 text-stone-900 shadow-sm'
@@ -3044,21 +3142,24 @@ export default function App() {
 
               {/* Location Search Bar & Geofence Active Indicator */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
-                <div className="relative flex-1">
-                  <Search className="w-4 h-4 text-stone-400 absolute start-3 top-1/2 -translate-y-1/2" />
+                <div
+                  dir={isEn ? 'ltr' : 'rtl'}
+                  className="flex-1 flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-stone-900 border border-stone-800 focus-within:border-indigo-500 transition-colors"
+                >
+                  <Search className="w-4 h-4 text-indigo-400 shrink-0 stroke-[2.5]" />
                   <input
                     type="text"
-                    dir="auto"
+                    dir={isEn ? 'ltr' : 'rtl'}
                     value={locationSearchQuery}
                     onChange={(e) => setLocationSearchQuery(e.target.value)}
-                    placeholder={isEn ? 'Search places by name, address or notes (FA/EN)...' : 'جست‌وجوی مکان بر اساس نام، آدرس یا توضیحات (فارسی/انگلیسی)...'}
-                    className="w-full ps-9 pe-3 py-2 rounded-xl bg-stone-900 border border-stone-800 text-white placeholder-stone-500 text-xs focus:outline-none focus:border-indigo-500"
+                    placeholder={isEn ? 'Search places by name, address or notes...' : 'جست‌وجوی مکان بر اساس نام، آدرس یا توضیحات...'}
+                    className="w-full bg-transparent border-0 text-white placeholder-stone-400 text-xs focus:outline-none min-w-0"
                   />
                   {locationSearchQuery && (
                     <button
                       type="button"
                       onClick={() => setLocationSearchQuery('')}
-                      className="absolute end-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-white"
+                      className="p-1 text-stone-400 hover:text-white shrink-0 cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -3066,25 +3167,57 @@ export default function App() {
                 </div>
 
                 {/* Geofence Engine Status Toggle */}
-                <div className="flex items-center justify-between sm:justify-start gap-2 px-3 py-1.5 rounded-xl bg-stone-900 border border-stone-800 text-xs">
-                  <div className="flex items-center gap-1.5 text-stone-300">
-                    <span className={`w-2 h-2 rounded-full ${isGeofenceActive ? 'bg-indigo-400' : 'bg-stone-500'}`} />
-                    <span className="text-[11px] font-bold">
-                      {isEn ? 'Geofence Radar:' : 'رادار پایش حصار مکانی:'}
+                <button
+                  type="button"
+                  onClick={() => handleToggleGeofenceService()}
+                  style={
+                    isGeofenceActive
+                      ? {
+                          background: 'linear-gradient(135deg, rgba(6, 78, 59, 0.92) 0%, rgba(16, 185, 129, 0.35) 100%)',
+                          borderColor: '#34d399',
+                          color: '#ffffff',
+                        }
+                      : undefined
+                  }
+                  className={`flex items-center justify-between sm:justify-start gap-2.5 px-3.5 py-2 rounded-xl border text-xs transition-all cursor-pointer active:scale-95 ${
+                    isGeofenceActive
+                      ? 'geofence-radar-active shadow-md shadow-emerald-950/50'
+                      : 'bg-stone-900 border-stone-800 text-stone-400 hover:border-stone-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="relative flex h-2.5 w-2.5">
+                      {isGeofenceActive && (
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-75" />
+                      )}
+                      <span
+                        style={{ backgroundColor: isGeofenceActive ? '#34d399' : '#78716c' }}
+                        className="relative inline-flex rounded-full h-2.5 w-2.5"
+                      />
+                    </span>
+                    <Radio className={`w-3.5 h-3.5 ${isGeofenceActive ? 'text-emerald-300 animate-pulse' : 'text-stone-400'}`} />
+                    <span
+                      style={isGeofenceActive ? { color: '#ffffff' } : undefined}
+                      className="text-[11px] font-black"
+                    >
+                      {isEn ? 'Geofence Radar:' : 'پایش ورود/خروج حصارها:'}
                     </span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => handleToggleGeofenceService()}
-                    className={`text-[10px] px-2 py-0.5 rounded-lg font-black transition-colors cursor-pointer ${
+                  <span
+                    style={
                       isGeofenceActive
-                        ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40'
-                        : 'bg-stone-800 text-stone-400 border border-stone-700'
+                        ? { backgroundColor: '#10b981', borderColor: '#a7f3d0', color: '#ffffff' }
+                        : undefined
+                    }
+                    className={`text-[10px] px-2.5 py-0.5 rounded-lg font-black border transition-colors ${
+                      isGeofenceActive
+                        ? 'shadow-xs'
+                        : 'bg-stone-800 text-stone-400 border-stone-700'
                     }`}
                   >
-                    {isGeofenceActive ? (isEn ? 'ACTIVE' : 'فعال') : (isEn ? 'PAUSED' : 'غیرفعال')}
-                  </button>
-                </div>
+                    {isGeofenceActive ? (isEn ? 'ACTIVE ✓' : 'فعال ✓') : (isEn ? 'PAUSED' : 'غیرفعال')}
+                  </span>
+                </button>
               </div>
 
               {displayedLocations.length > 0 ? (
@@ -3532,6 +3665,13 @@ export default function App() {
           onPostpone={(id, mins) => {
             handlePostpone(id, mins);
             setActiveAlarmReminder(null);
+          }}
+          onEdit={(rem) => {
+            handleStopOrDismissReminder(rem.id);
+            setActiveAlarmReminder(null);
+            setActiveMainTab('reminders');
+            setEditingReminder(rem);
+            setIsFormOpen(true);
           }}
         />
       )}

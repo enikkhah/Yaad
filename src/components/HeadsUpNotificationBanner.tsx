@@ -9,6 +9,7 @@ import {
   Clock, 
   ChevronDown, 
   ChevronUp, 
+  Edit2,
   X, 
   Maximize2 
 } from 'lucide-react';
@@ -22,6 +23,7 @@ interface HeadsUpNotificationBannerProps {
   onPostpone: (id: string, minutes: number) => void;
   onDismiss: () => void;
   onOpenDetails?: (reminder: Reminder) => void;
+  onEdit?: (reminder: Reminder) => void;
 }
 
 export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps> = ({
@@ -32,6 +34,7 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
   onPostpone,
   onDismiss,
   onOpenDetails,
+  onEdit,
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const isEn = language === 'en';
@@ -42,7 +45,7 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
       return;
     }
 
-    // Play alarm audio sound & vibration using resolved sound in a continuous loop
+    // Play alarm audio sound & vibration using resolved sound in a continuous loop (for 1 minute)
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
@@ -66,6 +69,15 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
     stopAlarmRinging();
     dismissDeliveredNotifications(reminder.id).catch(() => {});
     onPostpone(reminder.id, minutes);
+  };
+
+  const handleEdit = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    stopAlarmRinging();
+    dismissDeliveredNotifications(reminder.id).catch(() => {});
+    if (onEdit) {
+      onEdit(reminder);
+    }
   };
 
   const handleDismiss = (e?: React.MouseEvent) => {
@@ -140,7 +152,7 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
           </div>
         </div>
 
-        {/* Quick Actions Direct Row (بدون نیاز به کلیک اضافه - نوتیف کرکره‌ای در دسترس فوری) */}
+        {/* Quick Actions Direct Row */}
         <div 
           onClick={(e) => e.stopPropagation()}
           className="mt-2 pt-2 border-t border-stone-800/80 flex items-center justify-between gap-1.5 px-0.5 text-xs animate-in fade-in"
@@ -153,7 +165,7 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
               className="flex-1 py-1.5 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black transition-all flex items-center justify-center gap-1.5 shadow-md shadow-emerald-950/40 active:scale-95 cursor-pointer text-xs"
             >
               <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>{isEn ? 'Done' : 'تیک / انجام شد'}</span>
+              <span>{isEn ? 'Done' : 'انجام شد'}</span>
             </button>
 
             {/* Snooze 15m */}
@@ -165,6 +177,18 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
               <Clock className="w-3.5 h-3.5" />
               <span>{isEn ? '+15m' : '+۱۵د'}</span>
             </button>
+
+            {/* Edit Reminder */}
+            {onEdit && (
+              <button
+                type="button"
+                onClick={handleEdit}
+                className="py-1.5 px-2.5 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-200 font-bold border border-indigo-500/40 transition-all flex items-center justify-center gap-1 active:scale-95 cursor-pointer text-xs shrink-0"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>{isEn ? 'Edit' : 'ویرایش'}</span>
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-1 shrink-0">

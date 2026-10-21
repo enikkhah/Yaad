@@ -64,10 +64,397 @@ h4 {
   color: #ffffff;
 }
 
-/* Theme variations */
+/* ==========================================================================
+   1. THEME: مشکی نیلی (Obsidian Indigo - dark-gold)
+   Deep Pitch-Black Obsidian with Vibrant Royal Indigo accents
+   ========================================================================== */
+[data-theme="dark-gold"] {
+  --brand-accent-border: rgba(99, 102, 241, 0.35);
+  --brand-accent-hover: rgba(129, 140, 248, 0.6);
+  background-color: #07070D !important;
+  color: #F3F4F8 !important;
+}
+
+[data-theme="dark-gold"] input,
+[data-theme="dark-gold"] textarea,
+[data-theme="dark-gold"] select {
+  color: #F3F4F8 !important;
+  background-color: #0E0F1B !important;
+  border-color: #22253E !important;
+}
+
+[data-theme="dark-gold"] input:focus,
+[data-theme="dark-gold"] textarea:focus,
+[data-theme="dark-gold"] select:focus {
+  border-color: #6366F1 !important;
+}
+
+[data-theme="dark-gold"] .bg-stone-950,
+[data-theme="dark-gold"] .bg-stone-950\/60,
+[data-theme="dark-gold"] .bg-stone-950\/70,
+[data-theme="dark-gold"] .bg-stone-950\/80,
+[data-theme="dark-gold"] .bg-stone-950\/95 {
+  background-color: #07070D !important;
+  color: #F3F4F8 !important;
+  border-color: #1E2036 !important;
+}
+
+[data-theme="dark-gold"] .bg-stone-900,
+[data-theme="dark-gold"] .bg-stone-900\/60,
+[data-theme="dark-gold"] .bg-stone-900\/70,
+[data-theme="dark-gold"] .bg-stone-900\/80,
+[data-theme="dark-gold"] .bg-stone-900\/85,
+[data-theme="dark-gold"] .bg-stone-900\/90,
+[data-theme="dark-gold"] .bg-stone-900\/95,
+[data-theme="dark-gold"] .bg-stone-900\/98 {
+  background-color: #101222 !important;
+  color: #F3F4F8 !important;
+  border-color: #22253E !important;
+}
+
+[data-theme="dark-gold"] .bg-stone-800,
+[data-theme="dark-gold"] .bg-stone-800\/80,
+[data-theme="dark-gold"] .bg-stone-800\/90,
+[data-theme="dark-gold"] .bg-stone-800\/95 {
+  background-color: #191C33 !important;
+  color: #F3F4F8 !important;
+  border-color: #282C4A !important;
+}
+
+[data-theme="dark-gold"] .border-stone-800,
+[data-theme="dark-gold"] .border-stone-800\/80,
+[data-theme="dark-gold"] .border-stone-800\/90,
+[data-theme="dark-gold"] .border-stone-700,
+[data-theme="dark-gold"] .border-stone-700\/80,
+[data-theme="dark-gold"] .border-stone-700\/90 {
+  border-color: #22253E !important;
+}
+
+[data-theme="dark-gold"] .text-stone-300 {
+  color: #C7CBF0 !important;
+}
+
+[data-theme="dark-gold"] .text-stone-400,
+[data-theme="dark-gold"] .text-stone-500 {
+  color: #8A90BD !important;
+}
+
+[data-theme="dark-gold"] .fab-add-btn {
+  background-color: #4F46E5 !important;
+  border-color: #6366F1 !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 8px 20px -4px rgba(79, 70, 229, 0.45) !important;
+}
+
+/* ==========================================================================
+   2. THEME: آبی تیره (Deep Ocean Blue - dark-slate)
+   Rich Deep Navy Blue surfaces with Crisp Sky-Cyan accents
+   ========================================================================== */
 [data-theme="dark-slate"] {
-  --brand-accent-border: rgba(99, 102, 241, 0.25);
-  --brand-accent-hover: rgba(99, 102, 241, 0.45);
+  --brand-accent-border: rgba(14, 165, 233, 0.35);
+  --brand-accent-hover: rgba(56, 189, 248, 0.6);
+  background-color: #0A1628 !important;
+  color: #EFF6FF !important;
+}
+
+[data-theme="dark-slate"] input,
+[data-theme="dark-slate"] textarea,
+[data-theme="dark-slate"] select {
+  color: #EFF6FF !important;
+  background-color: #0E1F38 !important;
+  border-color: #1E3A5F !important;
+}
+
+[data-theme="dark-slate"] input:focus,
+[data-theme="dark-slate"] textarea:focus,
+[data-theme="dark-slate"] select:focus {
+  border-color: #38BDF8 !important;
+}
+
+[data-theme="dark-slate"] .bg-stone-950,
+[data-theme="dark-slate"] .bg-stone-950\/60,
+[data-theme="dark-slate"] .bg-stone-950\/70,
+[data-theme="dark-slate"] .bg-stone-950\/80,
+[data-theme="dark-slate"] .bg-stone-950\/95 {
+  background-color: #0A1628 !important;
+  color: #EFF6FF !important;
+  border-color: #1A3354 !important;
+}
+
+[data-theme="dark-slate"] .bg-stone-900,
+[data-theme="dark-slate"] .bg-stone-900\/60,
+[data-theme="dark-slate"] .bg-stone-900\/70,
+[data-theme="dark-slate"] .bg-stone-900\/80,
+[data-theme="dark-slate"] .bg-stone-900\/85,
+[data-theme="dark-slate"] .bg-stone-900\/90,
+[data-theme="dark-slate"] .bg-stone-900\/95,
+[data-theme="dark-slate"] .bg-stone-900\/98 {
+  background-color: #11223D !important;
+  color: #EFF6FF !important;
+  border-color: #1E3A5F !important;
+}
+
+[data-theme="dark-slate"] .bg-stone-800,
+[data-theme="dark-slate"] .bg-stone-800\/80,
+[data-theme="dark-slate"] .bg-stone-800\/90,
+[data-theme="dark-slate"] .bg-stone-800\/95 {
+  background-color: #193154 !important;
+  color: #EFF6FF !important;
+  border-color: #274875 !important;
+}
+
+[data-theme="dark-slate"] .border-stone-800,
+[data-theme="dark-slate"] .border-stone-800\/80,
+[data-theme="dark-slate"] .border-stone-800\/90,
+[data-theme="dark-slate"] .border-stone-700,
+[data-theme="dark-slate"] .border-stone-700\/80,
+[data-theme="dark-slate"] .border-stone-700\/90 {
+  border-color: #1E3A5F !important;
+}
+
+[data-theme="dark-slate"] .text-stone-300 {
+  color: #BAE6FD !important;
+}
+
+[data-theme="dark-slate"] .text-stone-400,
+[data-theme="dark-slate"] .text-stone-500 {
+  color: #7DD3FC !important;
+  opacity: 0.78;
+}
+
+[data-theme="dark-slate"] .bg-indigo-500,
+[data-theme="dark-slate"] .bg-indigo-600 {
+  background-color: #0284C7 !important;
+  color: #FFFFFF !important;
+}
+
+[data-theme="dark-slate"] .text-indigo-300,
+[data-theme="dark-slate"] .text-indigo-400,
+[data-theme="dark-slate"] .text-indigo-500 {
+  color: #38BDF8 !important;
+}
+
+[data-theme="dark-slate"] .border-indigo-400,
+[data-theme="dark-slate"] .border-indigo-500 {
+  border-color: #0EA5E9 !important;
+}
+
+[data-theme="dark-slate"] .bg-indigo-500\/10,
+[data-theme="dark-slate"] .bg-indigo-500\/15,
+[data-theme="dark-slate"] .bg-indigo-500\/20 {
+  background-color: rgba(14, 165, 233, 0.16) !important;
+  color: #7DD3FC !important;
+}
+
+[data-theme="dark-slate"] .fab-add-btn {
+  background-color: #0284C7 !important;
+  border-color: #38BDF8 !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 8px 20px -4px rgba(14, 165, 233, 0.4) !important;
+}
+
+/* ==========================================================================
+   3. THEME: خودکار پیروی از گوشی (System Auto - system)
+   Follows OS Dark/Light preference with a Minimal Charcoal-Teal / Alabaster-Teal palette
+   ========================================================================== */
+html.dark[data-theme="system"] {
+  --brand-accent-border: rgba(20, 184, 166, 0.35);
+  --brand-accent-hover: rgba(45, 212, 191, 0.55);
+  background-color: #14171A !important;
+  color: #F1F5F9 !important;
+}
+
+html.dark[data-theme="system"] input,
+html.dark[data-theme="system"] textarea,
+html.dark[data-theme="system"] select {
+  color: #F1F5F9 !important;
+  background-color: #191E23 !important;
+  border-color: #2B333C !important;
+}
+
+html.dark[data-theme="system"] input:focus,
+html.dark[data-theme="system"] textarea:focus,
+html.dark[data-theme="system"] select:focus {
+  border-color: #14B8A6 !important;
+}
+
+html.dark[data-theme="system"] .bg-stone-950,
+html.dark[data-theme="system"] .bg-stone-950\/60,
+html.dark[data-theme="system"] .bg-stone-950\/70,
+html.dark[data-theme="system"] .bg-stone-950\/80,
+html.dark[data-theme="system"] .bg-stone-950\/95 {
+  background-color: #14171A !important;
+  color: #F1F5F9 !important;
+  border-color: #262D35 !important;
+}
+
+html.dark[data-theme="system"] .bg-stone-900,
+html.dark[data-theme="system"] .bg-stone-900\/60,
+html.dark[data-theme="system"] .bg-stone-900\/70,
+html.dark[data-theme="system"] .bg-stone-900\/80,
+html.dark[data-theme="system"] .bg-stone-900\/85,
+html.dark[data-theme="system"] .bg-stone-900\/90,
+html.dark[data-theme="system"] .bg-stone-900\/95,
+html.dark[data-theme="system"] .bg-stone-900\/98 {
+  background-color: #1C2126 !important;
+  color: #F1F5F9 !important;
+  border-color: #2B333C !important;
+}
+
+html.dark[data-theme="system"] .bg-stone-800,
+html.dark[data-theme="system"] .bg-stone-800\/80,
+html.dark[data-theme="system"] .bg-stone-800\/90,
+html.dark[data-theme="system"] .bg-stone-800\/95 {
+  background-color: #252C33 !important;
+  color: #F1F5F9 !important;
+  border-color: #333D47 !important;
+}
+
+html.dark[data-theme="system"] .border-stone-800,
+html.dark[data-theme="system"] .border-stone-800\/80,
+html.dark[data-theme="system"] .border-stone-800\/90,
+html.dark[data-theme="system"] .border-stone-700,
+html.dark[data-theme="system"] .border-stone-700\/80,
+html.dark[data-theme="system"] .border-stone-700\/90 {
+  border-color: #2B333C !important;
+}
+
+html.dark[data-theme="system"] .bg-indigo-500,
+html.dark[data-theme="system"] .bg-indigo-600 {
+  background-color: #0D9488 !important;
+  color: #FFFFFF !important;
+}
+
+html.dark[data-theme="system"] .text-indigo-300,
+html.dark[data-theme="system"] .text-indigo-400,
+html.dark[data-theme="system"] .text-indigo-500 {
+  color: #2DD4BF !important;
+}
+
+html.dark[data-theme="system"] .border-indigo-400,
+html.dark[data-theme="system"] .border-indigo-500 {
+  border-color: #14B8A6 !important;
+}
+
+html.dark[data-theme="system"] .bg-indigo-500\/10,
+html.dark[data-theme="system"] .bg-indigo-500\/15,
+html.dark[data-theme="system"] .bg-indigo-500\/20 {
+  background-color: rgba(20, 184, 166, 0.16) !important;
+  color: #5EEAD4 !important;
+}
+
+html.dark[data-theme="system"] .fab-add-btn {
+  background-color: #0D9488 !important;
+  border-color: #2DD4BF !important;
+  color: #FFFFFF !important;
+  box-shadow: 0 8px 20px -4px rgba(13, 148, 136, 0.4) !important;
+}
+
+html:not(.dark)[data-theme="system"] {
+  --brand-accent-border: rgba(13, 148, 136, 0.3);
+  --brand-accent-hover: rgba(13, 148, 136, 0.55);
+  background-color: #F3F5F7 !important;
+  color: #1E293B !important;
+}
+
+html:not(.dark)[data-theme="system"] input,
+html:not(.dark)[data-theme="system"] textarea,
+html:not(.dark)[data-theme="system"] select {
+  color: #1E293B !important;
+  background-color: #FFFFFF !important;
+  border-color: #D8E0E8 !important;
+}
+
+html:not(.dark)[data-theme="system"] .modal-title,
+html:not(.dark)[data-theme="system"] h1,
+html:not(.dark)[data-theme="system"] h2,
+html:not(.dark)[data-theme="system"] h3,
+html:not(.dark)[data-theme="system"] h4,
+html:not(.dark)[data-theme="system"] h5 {
+  color: #1E293B !important;
+}
+
+html:not(.dark)[data-theme="system"] .bg-stone-900,
+html:not(.dark)[data-theme="system"] .bg-stone-900\/80,
+html:not(.dark)[data-theme="system"] .bg-stone-900\/85,
+html:not(.dark)[data-theme="system"] .bg-stone-900\/90,
+html:not(.dark)[data-theme="system"] .bg-stone-900\/95,
+html:not(.dark)[data-theme="system"] .bg-stone-900\/98,
+html:not(.dark)[data-theme="system"] .bg-stone-950\/95 {
+  background-color: #FFFFFF !important;
+  color: #1E293B !important;
+  border-color: #DCE3EA !important;
+}
+
+html:not(.dark)[data-theme="system"] .bg-stone-950,
+html:not(.dark)[data-theme="system"] .bg-stone-950\/60,
+html:not(.dark)[data-theme="system"] .bg-stone-950\/70,
+html:not(.dark)[data-theme="system"] .bg-stone-950\/80,
+html:not(.dark)[data-theme="system"] .bg-stone-900\/60,
+html:not(.dark)[data-theme="system"] .bg-stone-900\/70 {
+  background-color: #F3F5F7 !important;
+  color: #1E293B !important;
+  border-color: #DCE3EA !important;
+}
+
+html:not(.dark)[data-theme="system"] .bg-stone-800,
+html:not(.dark)[data-theme="system"] .bg-stone-800\/80,
+html:not(.dark)[data-theme="system"] .bg-stone-800\/90,
+html:not(.dark)[data-theme="system"] .bg-stone-800\/95 {
+  background-color: #E8EEF3 !important;
+  color: #1E293B !important;
+  border-color: #D5DEE6 !important;
+}
+
+html:not(.dark)[data-theme="system"] .text-white,
+html:not(.dark)[data-theme="system"] .text-stone-100,
+html:not(.dark)[data-theme="system"] .text-stone-200,
+html:not(.dark)[data-theme="system"] .text-stone-300 {
+  color: #1E293B !important;
+}
+
+html:not(.dark)[data-theme="system"] .text-stone-400,
+html:not(.dark)[data-theme="system"] .text-stone-500 {
+  color: #64748B !important;
+}
+
+html:not(.dark)[data-theme="system"] .border-stone-800,
+html:not(.dark)[data-theme="system"] .border-stone-800\/80,
+html:not(.dark)[data-theme="system"] .border-stone-800\/90,
+html:not(.dark)[data-theme="system"] .border-stone-700,
+html:not(.dark)[data-theme="system"] .border-stone-700\/80,
+html:not(.dark)[data-theme="system"] .border-stone-700\/90 {
+  border-color: #DCE3EA !important;
+}
+
+html:not(.dark)[data-theme="system"] .bg-indigo-500,
+html:not(.dark)[data-theme="system"] .bg-indigo-600 {
+  background-color: #0D9488 !important;
+  color: #FFFFFF !important;
+}
+
+html:not(.dark)[data-theme="system"] .text-indigo-300,
+html:not(.dark)[data-theme="system"] .text-indigo-400,
+html:not(.dark)[data-theme="system"] .text-indigo-500 {
+  color: #0F766E !important;
+}
+
+html:not(.dark)[data-theme="system"] .border-indigo-400,
+html:not(.dark)[data-theme="system"] .border-indigo-500 {
+  border-color: #0D9488 !important;
+}
+
+html:not(.dark)[data-theme="system"] .bg-indigo-500\/10,
+html:not(.dark)[data-theme="system"] .bg-indigo-500\/15,
+html:not(.dark)[data-theme="system"] .bg-indigo-500\/20 {
+  background-color: #CCFBF1 !important;
+  color: #0F766E !important;
+}
+
+html:not(.dark)[data-theme="system"] .fab-add-btn {
+  background-color: #0D9488 !important;
+  border-color: #0D9488 !important;
+  color: #FFFFFF !important;
 }
 
 [data-theme="light-clean"] {
@@ -502,3 +889,36 @@ h4 {
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(99, 102, 241, 0.7);
 }
+
+/* Vivid green background highlight for granted permissions across all themes */
+.perm-card-granted,
+[data-theme="midnight_blue_silver"] .perm-card-granted,
+[data-theme="jade_warm_light"] .perm-card-granted,
+[data-theme="light_silver"] .perm-card-granted,
+[data-theme="light-clean"] .perm-card-granted {
+  background: linear-gradient(135deg, #059669 0%, #10b981 100%) !important;
+  background-color: #10b981 !important;
+  border-color: #6ee7b7 !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 14px -2px rgba(16, 185, 129, 0.45), inset 0 1px 0 0 rgba(255, 255, 255, 0.25) !important;
+}
+
+.perm-card-granted span,
+.perm-card-granted svg,
+[data-theme="midnight_blue_silver"] .perm-card-granted span,
+[data-theme="midnight_blue_silver"] .perm-card-granted svg,
+[data-theme="jade_warm_light"] .perm-card-granted span,
+[data-theme="jade_warm_light"] .perm-card-granted svg {
+  color: #ffffff !important;
+}
+
+/* Active Geofence Radar card & switch styling independent of theme overrides */
+.geofence-radar-active,
+[data-theme="midnight_blue_silver"] .geofence-radar-active,
+[data-theme="jade_warm_light"] .geofence-radar-active {
+  background: linear-gradient(135deg, rgba(6, 78, 59, 0.85) 0%, rgba(5, 150, 105, 0.45) 100%) !important;
+  border-color: #10b981 !important;
+  box-shadow: 0 4px 18px -3px rgba(16, 185, 129, 0.35), inset 0 1px 0 0 rgba(110, 231, 183, 0.25) !important;
+}
+
+

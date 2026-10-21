@@ -136,8 +136,9 @@ export async function initNotificationChannel(): Promise<void> {
       });
     }
 
-    // Register quick notification actions: «انجام شد» (Done), «تعویق» (Snooze), «توقف هشدار» (Dismiss)
-    // foreground: false ensures the action executes strictly in background without launching/opening the app!
+    // Register quick notification actions: «انجام شد» (Done), «تعویق» (Snooze), «ویرایش» (Edit)
+    // Only 'edit' has foreground: true so tapping Edit opens the app and navigates to the Edit Reminder modal,
+    // while Done and Snooze execute strictly in the background without opening the app.
     await LocalNotifications.registerActionTypes({
       types: [
         {
@@ -154,9 +155,9 @@ export async function initNotificationChannel(): Promise<void> {
               foreground: false,
             },
             {
-              id: 'dismiss',
-              title: '✕ توقف هشدار',
-              foreground: false,
+              id: 'edit',
+              title: '✎ ویرایش',
+              foreground: true,
             },
           ],
         },
@@ -345,12 +346,10 @@ export function getNotificationId(reminderId: string | number): number {
 }
 
 /**
- * Repeat intervals in minutes for continuous background alarm alerts until user reaction
- * (Each notification loops audio via FLAG_INSISTENT and replaces previous active card via TimedNotificationPublisher)
+ * Single persistent notification per reminder (no repeated notification spam).
+ * The notification stays open in the status bar while the alarm rings for 1 minute.
  */
-export const NOTIFICATION_REPEAT_OFFSETS_MINUTES = [
-  2, 5, 10, 15, 20, 30, 45, 60
-];
+export const NOTIFICATION_REPEAT_OFFSETS_MINUTES: number[] = [];
 
 /**
  * Resolves all notification IDs for a reminder (primary ID + all 25 repeat alarm slots)
@@ -427,9 +426,14 @@ export async function scheduleReminderNotification(
   reminder: Reminder,
   currentSettings?: AppSettings
 ): Promise<boolean> {
-  // Only pending or postponed reminders in the future should be scheduled
+  // Only active (non-deleted, non-acknowledged) pending or postponed reminders in the future should be scheduled
   const now = Date.now();
-  if ((reminder.status !== 'pending' && reminder.status !== 'postponed') || reminder.dueTimestamp <= now) {
+  if (
+    reminder.deletedAt ||
+    reminder.acknowledged === true ||
+    (reminder.status !== 'pending' && reminder.status !== 'postponed') ||
+    reminder.dueTimestamp <= now
+  ) {
     return false;
   }
 
@@ -1110,8 +1114,32 @@ export async function syncAllRemindersWithLocalNotifications(
   const appSettings = currentSettings || getSavedAppSettings();
   const now = Date.now();
   const upcomingPending = (reminders || []).filter(
-    (r) => (r.status === 'pending' || r.status === 'postponed') && r.dueTimestamp > now
+    (r) =>
+      !r.deletedAt &&
+      r.acknowledged !== true &&
+      (r.status === 'pending' || r.status === 'postponed') &&
+      r.dueTimestamp > now
   );
+
+  if (isNativeApp()) {
+    try {
+      const validIds = new Set<number>([999999]);
+      for (const r of upcomingPending) {
+        for (const id of getAllNotificationIdsForReminder(r.id)) {
+          validIds.add(id);
+        }
+      }
+      const pending = await LocalNotifications.getPending();
+      const staleToCancel = (pending.notifications || [])
+        .filter((n: any) => typeof n.id === 'number' && !validIds.has(n.id))
+        .map((n: any) => ({ id: n.id }));
+      if (staleToCancel.length > 0) {
+        await LocalNotifications.cancel({ notifications: staleToCancel }).catch(() => {});
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   for (const reminder of upcomingPending) {
     await scheduleReminderNotification(reminder, appSettings);
@@ -1119,15 +1147,16 @@ export async function syncAllRemindersWithLocalNotifications(
 }
 
 /**
- * Sets up listeners for user tapping the notification or selecting quick actions (Done, Snooze, Dismiss/Stop).
- * Actions with foreground: false run strictly in the background without launching or opening the app.
- * Tapping the notification body itself opens the app (AlarmModal) WITHOUT cancelling the notification or stopping the alarm!
+ * Sets up listeners for user selecting quick actions (Done, Snooze, Edit, Dismiss/Stop).
+ * Actions with foreground: false (Done, Snooze) run strictly in the background without launching or opening the app.
+ * ONLY the 'edit' action button has foreground: true, which launches the app and opens the Edit Reminder screen.
  */
 export function setupNotificationListeners(
   onComplete?: (reminderId: string) => void,
   onSnooze?: (reminderId: string, minutes: number, snoozedUntil?: number) => void,
   onStop?: (reminderId: string) => void,
-  onOpen?: (reminderId: string) => void
+  onOpen?: (reminderId: string) => void,
+  onEdit?: (reminderId: string) => void
 ): void {
   if (!isNativeApp()) return;
 
@@ -1145,6 +1174,7 @@ export function setupNotificationListeners(
           actionId === 'done' ||
           actionId === 'complete' ||
           actionId === 'snooze' ||
+          actionId === 'edit' ||
           actionId === 'stop' ||
           actionId === 'dismiss'
         ) {
@@ -1161,7 +1191,6 @@ export function setupNotificationListeners(
         return;
       }
 
-      // Only stop alarm and remove notification when user explicitly taps an action button (Done, Snooze, Dismiss/Stop)
       if (actionId === 'done' || actionId === 'complete') {
         try {
           stopAlarmRinging();
@@ -1176,6 +1205,13 @@ export function setupNotificationListeners(
         cancelReminderNotification(reminderId).catch(() => {});
         dismissDeliveredNotifications(reminderId).catch(() => {});
         if (onSnooze) onSnooze(reminderId, 15, snoozedUntil);
+      } else if (actionId === 'edit') {
+        try {
+          stopAlarmRinging();
+        } catch {}
+        cancelReminderNotification(reminderId).catch(() => {});
+        dismissDeliveredNotifications(reminderId).catch(() => {});
+        if (onEdit) onEdit(reminderId);
       } else if (actionId === 'stop' || actionId === 'dismiss') {
         try {
           stopAlarmRinging();
@@ -1183,9 +1219,8 @@ export function setupNotificationListeners(
         cancelReminderNotification(reminderId).catch(() => {});
         dismissDeliveredNotifications(reminderId).catch(() => {});
         if (onStop) onStop(reminderId);
-      } else {
-        // User tapped the notification body itself (not an action button):
-        // Open the app / AlarmModal, and DO NOT cancel the notification or stop the alarm until they tap Done/Snooze/Dismiss!
+      } else if (actionId === 'tap') {
+        // Notification body tap is configured as a no-op on Android so only 'edit' opens the app
         if (onOpen) onOpen(reminderId);
       }
     });
@@ -1195,8 +1230,8 @@ export function setupNotificationListeners(
 }
 
 /**
- * Triggers or refreshes a persistent, continuous out-of-app notification (Service Worker / OS Notification / Native)
- * that stays active and re-alerts until the user explicitly reacts (Complete / Snooze / Dismiss).
+ * Triggers a persistent out-of-app notification (Service Worker / OS Notification / Native)
+ * that stays open in the status bar while the alarm rings for 1 minute.
  */
 export async function triggerOutOfAppPersistentNotification(
   reminder: Reminder,
@@ -1212,7 +1247,7 @@ export async function triggerOutOfAppPersistentNotification(
     ? `Reminder due at ${timeFormatted} (Awaiting your action)`
     : `زمان انجام یادآور: ${timeFormatted} (در انتظار عکس‌العمل شما)`;
 
-  // 1. If running in Native Android Capacitor, also fire/refresh ongoing high-priority notification
+  // 1. If running in Native Android Capacitor, fire ongoing high-priority notification
   if (isNativeApp()) {
     try {
       const notifId = reminder.notificationId || getNotificationId(reminder.id);
@@ -1248,12 +1283,12 @@ export async function triggerOutOfAppPersistentNotification(
     }
   }
 
-  // 2. Web / PWA Service Worker persistent notification with renotify: true & action buttons
+  // 2. Web / PWA Service Worker persistent notification with action buttons
   if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
     const actions = [
       { action: 'done', title: isEn ? '✓ Done' : '✓ انجام شد' },
       { action: 'snooze', title: isEn ? '⏱ Snooze' : '⏱ تعویق' },
-      { action: 'dismiss', title: isEn ? '✕ Dismiss' : '✕ توقف هشدار' },
+      { action: 'edit', title: isEn ? '✎ Edit' : '✎ ویرایش' },
     ];
 
     try {

@@ -15,6 +15,7 @@ import {
   Heart, 
   Tag,
   Repeat,
+  Edit2,
   X
 } from 'lucide-react';
 
@@ -25,6 +26,7 @@ interface AlarmModalProps {
   onDismiss: () => void;
   onComplete: (id: string) => void;
   onPostpone: (id: string, minutes: number) => void;
+  onEdit?: (reminder: Reminder) => void;
 }
 
 export const AlarmModal: React.FC<AlarmModalProps> = ({
@@ -33,6 +35,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
   onDismiss,
   onComplete,
   onPostpone,
+  onEdit,
 }) => {
   const isEn = settings?.language === 'en';
 
@@ -49,13 +52,10 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       // ignore
     }
 
-    // Keep out-of-app notification continuous (alongside in-app alarm) until user reaction
+    // Trigger single persistent out-of-app notification (stays open without repeated notification spam)
     triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
-    const outOfAppRepeatInterval = setInterval(() => {
-      triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
-    }, 10000);
 
-    // Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital_beep) and loop continuously
+    // Resolve alarm sound (valid ringTune ID -> settings.alarmSound -> digital_beep) and ring for up to 1 minute
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
     startAlarmRinging(reminder.category, sound, vol);
@@ -74,7 +74,6 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
 
     return () => {
       if (ttsTimer) clearTimeout(ttsTimer);
-      clearInterval(outOfAppRepeatInterval);
       stopAlarmRinging();
     };
   }, [reminder?.id, reminder?.ringTune, settings?.alarmSound, settings?.alarmVolume, settings?.language, settings?.ttsVoiceRate]);
@@ -102,6 +101,14 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     stopAlarmRinging();
     clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
     onPostpone(reminder.id, minutes);
+  };
+
+  const handleEdit = () => {
+    stopAlarmRinging();
+    clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
+    if (onEdit) {
+      onEdit(reminder);
+    }
   };
 
   const handleDismiss = () => {
@@ -200,8 +207,8 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           <span>{isEn ? 'Done' : 'انجام شد'}</span>
         </button>
 
-        {/* Secondary Snooze & Dismiss Row */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+        {/* Secondary Snooze, Edit & Dismiss Row */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
           <button
             type="button"
             onClick={() => handlePostpone(15)}
@@ -220,10 +227,21 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             <span>{isEn ? '+1h Snooze' : '+۱ ساعت تعویق'}</span>
           </button>
 
+          {onEdit && (
+            <button
+              type="button"
+              onClick={handleEdit}
+              className="py-3 px-3 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 hover:text-white font-bold text-xs sm:text-sm border border-indigo-500/30 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
+            >
+              <Edit2 className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{isEn ? 'Edit' : 'ویرایش'}</span>
+            </button>
+          )}
+
           <button
             type="button"
             onClick={handleDismiss}
-            className="col-span-2 sm:col-span-1 py-3 px-3 rounded-xl bg-stone-900/70 hover:bg-stone-800 text-stone-400 hover:text-stone-200 font-bold text-xs sm:text-sm border border-stone-800/80 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
+            className={`${onEdit ? 'col-span-1' : 'col-span-2 sm:col-span-1'} py-3 px-3 rounded-xl bg-stone-900/70 hover:bg-stone-800 text-stone-400 hover:text-stone-200 font-bold text-xs sm:text-sm border border-stone-800/80 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5`}
           >
             <X className="w-3.5 h-3.5" />
             <span>{isEn ? 'Dismiss Alarm' : 'توقف هشدار'}</span>

@@ -92,14 +92,46 @@ self.addEventListener('message', (event) => {
 });
 
 // Handle notification interaction so window remains active until user reacts
-// When user taps an action button (Done / Snooze / Stop / Dismiss), process strictly in background WITHOUT opening the app
+// Done & Snooze execute strictly in background WITHOUT opening the app; ONLY the Edit button opens the app
 self.addEventListener('notificationclick', (event) => {
   const notif = event.notification;
   const data = notif?.data || {};
   const reminderId = data.reminderId;
   const action = event.action;
 
-  // 1. If user clicked quick action button (done, snooze, dismiss, stop), close notification & apply strictly in background WITHOUT opening or focusing the app!
+  // 1. If user clicked 'edit' action button, close notification, open/focus the app, and navigate to Edit Reminder modal
+  if (action === 'edit') {
+    if (reminderId) {
+      acknowledgedAlarmIds.add(String(reminderId));
+    }
+    notif.close();
+
+    event.waitUntil(
+      (async () => {
+        const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        for (const client of clientList) {
+          if (client.url && 'focus' in client) {
+            await client.focus();
+            if (reminderId) {
+              client.postMessage({
+                type: 'YAAD_NOTIFICATION_ACTION',
+                action: 'edit',
+                reminderId: reminderId,
+              });
+            }
+            return;
+          }
+        }
+        if (self.clients.openWindow) {
+          const urlToOpen = reminderId ? `/?editReminderId=${encodeURIComponent(reminderId)}` : '/';
+          return self.clients.openWindow(urlToOpen);
+        }
+      })()
+    );
+    return;
+  }
+
+  // 2. If user clicked quick action button (done, snooze, dismiss, stop), close notification & apply strictly in background WITHOUT opening or focusing the app!
   if (action === 'done' || action === 'snooze' || action === 'dismiss' || action === 'stop' || action === 'complete') {
     if (reminderId) {
       acknowledgedAlarmIds.add(String(reminderId));
@@ -171,11 +203,10 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
-  // 2. User tapped directly on notification body itself (not an action button):
-  // Open / focus the app AND keep the notification visible in the top bar until user explicitly taps Done / Snooze / Dismiss!
+  // 3. User tapped directly on notification body itself (not an action button):
+  // Keep the notification open in the status bar without opening the app (only 'edit' opens the app)
   event.waitUntil(
     (async () => {
-      // Re-show the notification immediately in case the OS auto-closed it on body tap
       if (reminderId && !acknowledgedAlarmIds.has(String(reminderId))) {
         try {
           await self.registration.showNotification(notif.title, {
@@ -192,38 +223,19 @@ self.addEventListener('notificationclick', (event) => {
             actions: data.actions || [
               { action: 'done', title: '✓ انجام شد' },
               { action: 'snooze', title: '⏱ تعویق' },
-              { action: 'dismiss', title: '✕ توقف هشدار' },
+              { action: 'edit', title: '✎ ویرایش' },
             ],
           });
         } catch {
           // ignore
         }
       }
-
-      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
-      for (const client of clientList) {
-        if (client.url && 'focus' in client) {
-          await client.focus();
-          if (reminderId) {
-            client.postMessage({
-              type: 'YAAD_NOTIFICATION_ACTION',
-              action: 'open',
-              reminderId: reminderId,
-            });
-          }
-          return;
-        }
-      }
-      if (self.clients.openWindow) {
-        const urlToOpen = reminderId ? `/?alarmId=${encodeURIComponent(reminderId)}` : '/';
-        return self.clients.openWindow(urlToOpen);
-      }
     })()
   );
 });
 
-// If user swipes/closes the out-of-app notification WITHOUT reacting (Done / Snooze / Dismiss),
-// re-show it continuously so the out-of-app notification persists until user reaction!
+// If user swipes/closes the out-of-app notification WITHOUT reacting (Done / Snooze / Edit),
+// keep it open silently (renotify: false) so the notification remains visible without repeat spam
 self.addEventListener('notificationclose', (event) => {
   const notif = event.notification;
   const data = notif?.data || {};
@@ -244,9 +256,9 @@ self.addEventListener('notificationclose', (event) => {
             icon: notif.icon || '/pwa-192x192.png',
             badge: notif.badge || '/favicon.ico',
             tag: notif.tag || `yaad-rem-${reminderId}`,
-            renotify: true,
+            renotify: false,
+            silent: true,
             requireInteraction: true,
-            vibrate: [500, 250, 500, 250, 500],
             data: {
               ...data,
               persistentUntilReaction: true,
@@ -254,7 +266,7 @@ self.addEventListener('notificationclose', (event) => {
             actions: data.actions || [
               { action: 'done', title: '✓ انجام شد' },
               { action: 'snooze', title: '⏱ تعویق' },
-              { action: 'dismiss', title: '✕ توقف هشدار' },
+              { action: 'edit', title: '✎ ویرایش' },
             ],
           });
         } catch (err) {

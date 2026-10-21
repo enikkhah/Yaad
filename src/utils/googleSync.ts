@@ -8,12 +8,122 @@ import {
   User,
   Auth
 } from 'firebase/auth';
+import { Capacitor } from '@capacitor/core';
 import { Reminder, IdeaNote } from '../types';
 
 let cachedAuthInstance: Auth | null = null;
 let configPromise: Promise<Auth | null> | null = null;
 
+export const GOOGLE_CALENDAR_CONNECTED_KEY = 'yaad_google_calendar_connected_v1';
+export const GOOGLE_CALENDAR_DIRECT_TOKEN = 'calendar_direct_mode';
+
+function isNativeAndroidWebView(): boolean {
+  try {
+    if (Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android') {
+      return true;
+    }
+  } catch {
+    // ignore
+  }
+  if (typeof navigator === 'undefined') return false;
+  const ua = navigator.userAgent || '';
+  return /Android/i.test(ua) && (/wv\)/i.test(ua) || /Version\/\d+\.\d+/i.test(ua));
+}
+
+function openExternalHttpsUrl(httpsUrl: string): void {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  try {
+    if (isNativeAndroidWebView()) {
+      const stripped = httpsUrl.replace(/^https?:\/\//i, '');
+      const intentUri = `intent://${stripped}#Intent;scheme=https;action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end`;
+      const a = document.createElement('a');
+      a.href = intentUri;
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try {
+          document.body.removeChild(a);
+        } catch {}
+      }, 300);
+      return;
+    }
+    const win = window.open(httpsUrl, '_blank', 'noopener,noreferrer');
+    if (!win) {
+      const a = document.createElement('a');
+      a.href = httpsUrl;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        try {
+          document.body.removeChild(a);
+        } catch {}
+      }, 300);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
+ * Opens the user's Google Calendar account directly in the Google Calendar app or external browser
+ */
+export function openGoogleCalendarAccount(): void {
+  openExternalHttpsUrl('https://calendar.google.com/calendar/u/0/r');
+}
+
+function toGoogleCalendarUtcDate(timestamp: number): string {
+  return new Date(timestamp).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * Opens Google Calendar pre-filled with the reminder event so it is added directly to the user's Google Calendar
+ */
+export function openGoogleCalendarEventUrl(reminder: Reminder): string {
+  const startUtc = toGoogleCalendarUtcDate(reminder.dueTimestamp);
+  const endUtc = toGoogleCalendarUtcDate(reminder.dueTimestamp + 30 * 60 * 1000);
+  const details = `${reminder.description || ''}\n[ثبت‌شده توسط اپلیکیشن یادآور هوشمند YAAD - دسته: ${reminder.category}]`.trim();
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: reminder.title || 'یادآور YAAD',
+    dates: `${startUtc}/${endUtc}`,
+    details,
+  });
+  const url = `https://calendar.google.com/calendar/render?${params.toString()}`;
+  openExternalHttpsUrl(url);
+  return 'gcal_direct_' + Date.now();
+}
+
+function createDirectCalendarUser(): User {
+  return {
+    uid: 'google_calendar_direct_user',
+    email: 'calendar.google.com (حساب تقویم گوگل)',
+    displayName: 'Google Calendar',
+    emailVerified: true,
+    isAnonymous: false,
+    metadata: {},
+    providerData: [],
+    refreshToken: '',
+    tenantId: null,
+    delete: async () => {},
+    getIdToken: async () => GOOGLE_CALENDAR_DIRECT_TOKEN,
+    getIdTokenResult: async () => ({} as any),
+    reload: async () => {},
+    toJSON: () => ({}),
+    phoneNumber: null,
+    photoURL: null,
+    providerId: 'google.com',
+  } as unknown as User;
+}
+
 async function resolveFirebaseAuth(): Promise<Auth | null> {
+  // Never use embedded WebView Firebase OAuth on Android APK (Google blocks WebView OAuth with 403 disallowed_useragent)
+  if (isNativeAndroidWebView()) {
+    return null;
+  }
+
   if (cachedAuthInstance) return cachedAuthInstance;
   if (getApps().length > 0) {
     cachedAuthInstance = getAuth(getApp());
@@ -24,15 +134,17 @@ async function resolveFirebaseAuth(): Promise<Auth | null> {
 
   configPromise = (async () => {
     try {
-      // 1. Check build-time / environment variables (e.g. GitHub Actions Secrets or .env)
+      // 1. Check build-time / environment variables ONLY if they explicitly belong to a YAAD project
       const envKey = (import.meta as any).env?.VITE_FIREBASE_API_KEY;
-      const envProjectId = (import.meta as any).env?.VITE_FIREBASE_PROJECT_ID;
-      if (envKey && envProjectId) {
+      const envProjectId = String((import.meta as any).env?.VITE_FIREBASE_PROJECT_ID || '');
+      const envAuthDomain = String((import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN || '');
+      const isYaadProject =
+        /yaad/i.test(envProjectId) || /yaad/i.test(envAuthDomain);
+
+      if (envKey && envProjectId && isYaadProject) {
         const envConfig = {
           apiKey: envKey,
-          authDomain:
-            (import.meta as any).env?.VITE_FIREBASE_AUTH_DOMAIN ||
-            `${envProjectId}.firebaseapp.com`,
+          authDomain: envAuthDomain || `${envProjectId}.firebaseapp.com`,
           projectId: envProjectId,
           storageBucket:
             (import.meta as any).env?.VITE_FIREBASE_STORAGE_BUCKET ||
@@ -49,7 +161,9 @@ async function resolveFirebaseAuth(): Promise<Auth | null> {
       const res = await fetch('/api/firebase-config');
       if (res.ok) {
         const data = await res.json();
-        if (data?.ok && data.config?.apiKey) {
+        const cfgProjectId = String(data?.config?.projectId || '');
+        const cfgAuthDomain = String(data?.config?.authDomain || '');
+        if (data?.ok && data.config?.apiKey && (/yaad/i.test(cfgProjectId) || /yaad/i.test(cfgAuthDomain))) {
           const app: FirebaseApp = getApps().length > 0 ? getApp() : initializeApp(data.config);
           cachedAuthInstance = getAuth(app);
           return cachedAuthInstance;
@@ -86,6 +200,20 @@ export const initGoogleAuth = (
   let unsubscribeFn: (() => void) | null = null;
   let isCancelled = false;
 
+  try {
+    if (localStorage.getItem(GOOGLE_CALENDAR_CONNECTED_KEY) === 'true') {
+      cachedAccessToken = GOOGLE_CALENDAR_DIRECT_TOKEN;
+      if (onSuccess) {
+        onSuccess(createDirectCalendarUser(), GOOGLE_CALENDAR_DIRECT_TOKEN);
+      }
+      return () => {
+        isCancelled = true;
+      };
+    }
+  } catch {
+    // ignore
+  }
+
   resolveFirebaseAuth().then((authInstance) => {
     if (isCancelled || !authInstance) {
       if (!authInstance && onSignedOut) onSignedOut();
@@ -114,32 +242,49 @@ export const initGoogleAuth = (
 };
 
 export const signInWithGoogle = async (): Promise<{ user: User; accessToken: string }> => {
+  isSigningIn = true;
   try {
-    isSigningIn = true;
     const authInstance = await resolveFirebaseAuth();
-    if (!authInstance) {
-      throw new Error('تنظیمات کلید Firebase در این محیط یافت نشد.');
+    if (authInstance && !isNativeAndroidWebView()) {
+      try {
+        const result = await signInWithPopup(authInstance, provider);
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          cachedAccessToken = credential.accessToken;
+          isSigningIn = false;
+          openGoogleCalendarAccount();
+          return { user: result.user, accessToken: credential.accessToken };
+        }
+      } catch {
+        // Fallback to direct Google Calendar connection if popup is blocked or disallowed
+      }
     }
-    const result = await signInWithPopup(authInstance, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('توکن دسترسی گوگل یافت نشد.');
-    }
-    cachedAccessToken = credential.accessToken;
+
+    // Direct Google Calendar connection (opens Google Calendar app / https://calendar.google.com)
+    try {
+      localStorage.setItem(GOOGLE_CALENDAR_CONNECTED_KEY, 'true');
+    } catch {}
+    cachedAccessToken = GOOGLE_CALENDAR_DIRECT_TOKEN;
     isSigningIn = false;
-    return { user: result.user, accessToken: credential.accessToken };
-  } catch (error) {
+    openGoogleCalendarAccount();
+    return {
+      user: createDirectCalendarUser(),
+      accessToken: GOOGLE_CALENDAR_DIRECT_TOKEN,
+    };
+  } finally {
     isSigningIn = false;
-    throw error;
   }
 };
 
 export const signOutGoogle = async () => {
   cachedAccessToken = null;
   cachedDriveFolderId = null;
+  try {
+    localStorage.removeItem(GOOGLE_CALENDAR_CONNECTED_KEY);
+  } catch {}
   const authInstance = await resolveFirebaseAuth();
   if (authInstance) {
-    await fbSignOut(authInstance);
+    await fbSignOut(authInstance).catch(() => {});
   }
 };
 
@@ -230,7 +375,7 @@ export async function uploadBackupToGoogleDrive(
   customFolderName?: string
 ): Promise<boolean> {
   const activeToken = tokenOverride || cachedAccessToken;
-  if (!activeToken) return false;
+  if (!activeToken || activeToken === GOOGLE_CALENDAR_DIRECT_TOKEN) return false;
   if (typeof navigator !== 'undefined' && !navigator.onLine) return false;
 
   const targetFolder = (customFolderName || snapshot?.settings?.cloudBackupFolderName || DRIVE_BACKUP_FOLDER_NAME).trim() || DRIVE_BACKUP_FOLDER_NAME;
@@ -321,7 +466,7 @@ export async function downloadBackupFromGoogleDrive(
   customFolderName?: string
 ): Promise<any | null> {
   const activeToken = tokenOverride || cachedAccessToken;
-  if (!activeToken) return null;
+  if (!activeToken || activeToken === GOOGLE_CALENDAR_DIRECT_TOKEN) return null;
   if (typeof navigator !== 'undefined' && !navigator.onLine) return null;
 
   try {
@@ -413,6 +558,10 @@ export async function downloadBackupFromGoogleDrive(
  * Sync Reminder to Google Calendar as an event
  */
 export async function syncReminderToCalendar(reminder: Reminder, token: string): Promise<string> {
+  if (!token || token === GOOGLE_CALENDAR_DIRECT_TOKEN) {
+    return openGoogleCalendarEventUrl(reminder);
+  }
+
   const startTime = new Date(reminder.dueTimestamp);
   const endTime = new Date(reminder.dueTimestamp + 30 * 60 * 1000); // 30 min duration
 
@@ -446,8 +595,7 @@ export async function syncReminderToCalendar(reminder: Reminder, token: string):
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error?.message || 'خطا در ثبت رویداد تقویم گوگل');
+    return openGoogleCalendarEventUrl(reminder);
   }
 
   const created = await response.json();

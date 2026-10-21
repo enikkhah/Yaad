@@ -377,9 +377,11 @@ export const playRingTune = (category: Category | string, volumeOverride?: numbe
   }
 };
 
+let alarmAutoStopTimeoutId: number | null = null;
+
 /**
- * Starts continuous, persistent phone alarm ringing & vibration loop
- * that never stops until stopAlarmRinging() is explicitly called by user action (Done / Snooze / Dismiss).
+ * Starts continuous, persistent phone alarm ringing & vibration loop for 1 minute (60 seconds)
+ * or until stopAlarmRinging() is explicitly called by user action (Done / Snooze / Edit / Dismiss).
  */
 export const startAlarmRinging = (
   category: Category,
@@ -421,7 +423,7 @@ export const startAlarmRinging = (
     }
   }
 
-  // 2. Continuous vibration + audio watchdog loop every 1.6s until user explicitly stops/completes
+  // 2. Continuous vibration + audio watchdog loop every 1.6s for up to 1 minute
   const triggerVibrationAndWatchdog = () => {
     if (!isAlarmLooping) return;
 
@@ -449,10 +451,19 @@ export const startAlarmRinging = (
 
   triggerVibrationAndWatchdog();
   alarmIntervalId = window.setInterval(triggerVibrationAndWatchdog, 1600);
+
+  // Stop ringing automatically after 1 minute (60,000 ms) while keeping the notification/modal open
+  alarmAutoStopTimeoutId = window.setTimeout(() => {
+    stopAlarmRinging();
+  }, 60000);
 };
 
 export const stopAlarmRinging = () => {
   isAlarmLooping = false;
+  if (alarmAutoStopTimeoutId !== null) {
+    clearTimeout(alarmAutoStopTimeoutId);
+    alarmAutoStopTimeoutId = null;
+  }
   if (alarmIntervalId !== null) {
     clearInterval(alarmIntervalId);
     alarmIntervalId = null;

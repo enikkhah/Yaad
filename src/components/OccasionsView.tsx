@@ -100,21 +100,24 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
       {/* Search & Category Filter */}
       <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
         {/* Search */}
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 text-stone-400 absolute start-3 top-1/2 -translate-y-1/2" />
+        <div
+          dir={isEn ? 'ltr' : 'rtl'}
+          className="flex-1 flex items-center gap-2.5 px-3.5 py-2 rounded-xl bg-stone-900 border border-stone-800 focus-within:border-indigo-500 transition-colors"
+        >
+          <Search className="w-4 h-4 text-indigo-400 shrink-0 stroke-[2.5]" />
           <input
             type="text"
-            dir="auto"
+            dir={isEn ? 'ltr' : 'rtl'}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder={isEn ? 'Search occasions by title, name, date or notes (FA/EN)...' : 'جست‌وجوی مناسبت بر اساس عنوان، نام شخص، تاریخ یا یادداشت (فارسی/انگلیسی)...'}
-            className="w-full ps-9 pe-3 py-2 rounded-xl bg-stone-900 border border-stone-800 text-white placeholder-stone-500 text-xs focus:outline-none focus:border-indigo-500"
+            placeholder={isEn ? 'Search occasions by title, name, date or notes...' : 'جست‌وجوی مناسبت بر اساس عنوان، نام شخص، تاریخ یا یادداشت...'}
+            className="w-full bg-transparent border-0 text-white placeholder-stone-400 text-xs focus:outline-none min-w-0"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={() => setSearchQuery('')}
-              className="absolute end-2.5 top-1/2 -translate-y-1/2 p-1 text-stone-400 hover:text-white"
+              className="p-1 text-stone-400 hover:text-white shrink-0 cursor-pointer"
             >
               <X className="w-3.5 h-3.5" />
             </button>

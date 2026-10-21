@@ -532,18 +532,33 @@ export async function requestLocalFolderPermission(
     // ignore
   }
 
-  try {
-    localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
-  } catch {
-    // ignore
-  }
-
   if (!restoredFromPickedFolder) {
     restoredFromPickedFolder = await retrieveFromLocalYaadFolder(effectiveFolderName);
   }
 
+  let isStorageActuallyGranted = true;
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const { LocalNotifications } = await import('@capacitor/local-notifications');
+      const perms = (await LocalNotifications.checkPermissions()) as any;
+      if (perms && typeof perms.storage === 'string') {
+        isStorageActuallyGranted = perms.storage === 'granted';
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  if (isStorageActuallyGranted) {
+    try {
+      localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
+    } catch {
+      // ignore
+    }
+  }
+
   return {
-    granted: true,
+    granted: isStorageActuallyGranted,
     nativePickerOpened,
     folderName: effectiveFolderName,
     restoredSnapshot: restoredFromPickedFolder,
@@ -553,10 +568,16 @@ export async function requestLocalFolderPermission(
 export async function checkLocalFolderPermissionStatus(): Promise<boolean> {
   try {
     if (Capacitor.isNativePlatform()) {
-      const perm = await Filesystem.checkPermissions().catch(() => null);
-      if (perm && perm.publicStorage === 'granted') {
-        return true;
+      try {
+        const { LocalNotifications } = await import('@capacitor/local-notifications');
+        const perms = (await LocalNotifications.checkPermissions()) as any;
+        if (perms && typeof perms.storage === 'string') {
+          return perms.storage === 'granted';
+        }
+      } catch {
+        // ignore
       }
+      return localStorage.getItem(FOLDER_PERMISSION_GRANTED_KEY) === 'true';
     }
     if (localStorage.getItem(FOLDER_PERMISSION_GRANTED_KEY) === 'true') {
       return true;
@@ -758,7 +779,6 @@ export async function performAutoBackup(
     try {
       localStorage.setItem(AUTO_BACKUP_STORAGE_KEY, JSON.stringify(payload));
       localStorage.setItem(LAST_LOCAL_BACKUP_KEY, String(now));
-      localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
     } catch (err) {
       console.warn('LocalStorage backup quota warning:', err);
     }

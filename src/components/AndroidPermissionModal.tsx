@@ -38,12 +38,12 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
         return {
           icon: FolderOpen,
           color: 'text-teal-400 bg-teal-500/10 border-teal-500/30',
-          titleFa: 'دسترسی به پوشه Yaad reminder در حافظه دستگاه',
-          titleEn: 'Yaad reminder Folder Storage Access',
-          descFa: 'در اندروید ۱۱ تا ۱۵، گزینه «دسترسی به پوشه‌ها» در لیست عادی مجوزهای برنامه (App Permissions) قرار ندارد و در بخش «دسترسی ویژه برنامه‌ها ← دسترسی به همه فایل‌ها (All files access)» است. همچنین پوشه Yaad reminder بدون نیاز به مجوز سیستم نیز مستقیماً از داخل خود برنامه ساخته می‌شود.',
-          descEn: 'On Android 11–15, folder access is located under "Special app access -> All files access" rather than standard App Permissions. You can also create the Yaad reminder folder directly inside the app.',
-          sectionNameFa: 'دسترسی به همه فایل‌ها (All files access) در اندروید',
-          sectionNameEn: 'Android Special App Access -> All Files Access',
+          titleFa: 'دسترسی به حافظه',
+          titleEn: 'Storage Access',
+          descFa: 'setting, apps, 3 point menu, special access, all files access, Yaad slide key',
+          descEn: 'setting, apps, 3 point menu, special access, all files access, Yaad slide key',
+          sectionNameFa: 'setting, apps, 3 point menu, special access, all files access, Yaad slide key',
+          sectionNameEn: 'setting, apps, 3 point menu, special access, all files access, Yaad slide key',
         };
       case 'notifications':
         return {

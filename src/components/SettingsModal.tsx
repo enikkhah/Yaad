@@ -85,8 +85,10 @@ import {
 import {
   uploadBackupToGoogleDrive,
   downloadBackupFromGoogleDrive,
+  openGoogleCalendarAccount,
   DRIVE_BACKUP_FOLDER_NAME
 } from '../utils/googleSync';
+import { App as CapacitorApp } from '@capacitor/app';
 import { CloudBackupProvider } from '../types';
 import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume } from '../utils/audio';
 import { syncNotificationSoundAndVolume, syncAllRemindersWithLocalNotifications } from '../utils/nativeLocalNotifications';
@@ -250,9 +252,42 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     ...deletedOccasions.map((o) => ({ id: o.id, type: 'occasion' as const, title: o.title, deletedAt: o.deletedAt! })),
   ].sort((a, b) => b.deletedAt - a.deletedAt);
 
+  const [showStoragePermNotice, setShowStoragePermNotice] = useState(false);
+
   useEffect(() => {
     if (isOpen) {
-      checkAllPermissionsStatus().then(setNativePerms);
+      let isMounted = true;
+      const refreshPerms = () => {
+        checkAllPermissionsStatus().then((updated) => {
+          if (!isMounted) return;
+          setNativePerms(updated);
+          if (updated.storage) {
+            setShowStoragePermNotice(false);
+          }
+        });
+      };
+      refreshPerms();
+      const pollTimer = window.setInterval(refreshPerms, 1500);
+      window.addEventListener('focus', refreshPerms);
+      document.addEventListener('visibilitychange', refreshPerms);
+      let appStateListener: { remove: () => Promise<void> } | null = null;
+      try {
+        CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+          if (isActive) refreshPerms();
+        }).then((listener) => {
+          appStateListener = listener;
+        }).catch(() => {});
+      } catch {}
+
+      return () => {
+        isMounted = false;
+        window.clearInterval(pollTimer);
+        window.removeEventListener('focus', refreshPerms);
+        document.removeEventListener('visibilitychange', refreshPerms);
+        if (appStateListener) {
+          appStateListener.remove().catch(() => {});
+        }
+      };
     } else {
       stopAlarmRinging();
       setPlayingSoundId(null);
@@ -261,33 +296,52 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   }, [isOpen]);
 
   const handleRequestPerm = async (type: 'notifications' | 'microphone' | 'camera' | 'location' | 'storage') => {
+    let granted = false;
     if (type === 'notifications') {
-      await requestNotificationPermission();
+      granted = await requestNotificationPermission();
     } else if (type === 'microphone') {
-      await requestMicrophonePermission();
+      granted = await requestMicrophonePermission();
     } else if (type === 'camera') {
-      await requestCameraPermission();
+      granted = await requestCameraPermission();
     } else if (type === 'location') {
-      await requestLocationPermission();
+      granted = await requestLocationPermission();
     } else if (type === 'storage') {
       const target = normalizeFolderName(localFolderInput);
-      setPickerCustomPath(target);
-      setModalPermissionMessage(null);
-      setFolderPickerModalMode('local');
       const res = await requestLocalFolderPermission(false, target);
+      granted = res.granted;
       if (res.folderName) {
         setLocalFolderInput(res.folderName);
         onUpdateSettings({ localBackupFolderName: res.folderName });
       }
+      if (!res.granted) {
+        setShowStoragePermNotice(true);
+      }
     }
     const updated = await checkAllPermissionsStatus();
-    setNativePerms(updated);
+    const merged: NativePermissionsStatus = {
+      ...updated,
+      [type]: updated[type] || granted,
+    };
+    setNativePerms(merged);
+    if (type === 'storage' && !merged.storage) {
+      setShowStoragePermNotice(true);
+    } else if (merged.storage) {
+      setShowStoragePermNotice(false);
+    }
+    if (!merged[type] && type !== 'storage' && isNativeAndroidApp()) {
+      openAndroidSettings(type);
+    }
   };
 
   const handleRequestAllPerms = async () => {
     setIsRequestingAllPerms(true);
     const updated = await requestAllNativePermissions();
     setNativePerms(updated);
+    if (!updated.storage) {
+      setShowStoragePermNotice(true);
+    } else {
+      setShowStoragePermNotice(false);
+    }
     setIsRequestingAllPerms(false);
   };
 
@@ -333,9 +387,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const themes: { id: AppTheme; name: string; subtitle?: string; preview: string }[] = [
-    { id: 'system', name: isFa ? 'خودکار (پیروی از گوشی)' : 'System (Auto)', preview: 'bg-gradient-to-r from-stone-900 to-stone-200 border-indigo-400' },
-    { id: 'dark-gold', name: isFa ? 'مشکی نیلی' : 'Dark Indigo', preview: 'bg-stone-950 border-indigo-500' },
-    { id: 'dark-slate', name: isFa ? 'آبی تیره' : 'Dark Slate', preview: 'bg-slate-950 border-sky-500' },
+    { id: 'system', name: isFa ? 'خودکار (پیروی از گوشی)' : 'System (Auto)', preview: 'bg-gradient-to-tr from-[#181C20] via-[#14B8A6] to-[#F3F5F7] border-[#14B8A6]' },
+    { id: 'dark-gold', name: isFa ? 'مشکی نیلی' : 'Obsidian Indigo', preview: 'bg-[#07070D] border-[#6366F1]' },
+    { id: 'dark-slate', name: isFa ? 'آبی تیره' : 'Deep Ocean Blue', preview: 'bg-[#0B192E] border-[#0EA5E9]' },
     { id: 'light-clean', name: isFa ? 'روشن مدرن' : 'Light Clean', preview: 'bg-stone-100 border-stone-400' },
     { id: 'sketch-contrast', name: isFa ? 'اسکچ خط‌چین' : 'Sketch High Contrast', preview: 'bg-black border-dashed border-white' },
     { id: 'jade_warm_light', name: isFa ? 'سبز یشمی و سفید گرم' : 'Jade Green & Warm White', preview: 'bg-[#168779] border-[#DDE1DA]' },
@@ -546,12 +600,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             : `Backup loaded from local folder "${targetName}" (${itemsCount} items). Confirm below.`
         );
       } else {
-        // Fallback for Android 11+ scoped storage when app is reinstalled:
-        // Automatically open the system file picker so user can pick the file with 100% permission!
         setBackupErrorMessage(
-          isFa
-            ? `دسترسی مستقیم اندروید محدود شد (نصب مجدد یا محدودیت امنیتی). لطفاً در پنجره‌ای که باز می‌شود فایل پشتیبان (yaad_backup.json) را انتخاب کنید.`
-            : `Direct folder access restricted. Opening file picker to select backup file.`
+          'setting, apps, 3 point menu, special access, all files access, Yaad slide key'
         );
         setTimeout(() => {
           fileInputRef.current?.click();
@@ -559,9 +609,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
     } catch {
       setBackupErrorMessage(
-        isFa
-          ? 'خطا در فراخوانی مستقیم از پوشه. لطفاً فایل پشتیبان را به صورت دستی انتخاب نمایید...'
-          : 'Direct folder read error. Please pick file manually...'
+        'setting, apps, 3 point menu, special access, all files access, Yaad slide key'
       );
       setTimeout(() => {
         fileInputRef.current?.click();
@@ -1014,38 +1062,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span className="text-base font-black text-white">{isFa ? 'الف' : 'A'}</span>
                   </div>
                 </div>
-
-                {/* 1.5 Timeline Style */}
-                <div className="space-y-2 pt-2 border-t border-stone-800/80">
-                  <div className="flex items-center gap-2 text-xs font-bold text-stone-300">
-                    <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-                    <span>{isFa ? 'سبک نمایش تایم‌لاین' : 'Timeline Style'}</span>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => onUpdateSettings({ timelineMode: 'modern' })}
-                      className={`min-h-[48px] p-2.5 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
-                        (settings.timelineMode || 'modern') === 'modern'
-                          ? 'border-indigo-500 bg-indigo-500/15 text-white ring-1 ring-indigo-500/30'
-                          : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
-                      }`}
-                    >
-                      <div className="font-black text-xs text-indigo-300">{isFa ? 'مدرن نیلی' : 'Modern Indigo'}</div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onUpdateSettings({ timelineMode: 'sketch' })}
-                      className={`min-h-[48px] p-2.5 rounded-xl border text-center cursor-pointer active:scale-95 transition-all ${
-                        settings.timelineMode === 'sketch'
-                          ? 'border-white bg-white/15 text-white ring-1 ring-white/40'
-                          : 'border-stone-800 bg-stone-950/60 text-stone-400 hover:border-stone-700'
-                      }`}
-                    >
-                      <div className="font-black text-xs text-white font-mono">{isFa ? 'اسکچ خط‌چین' : 'Sketch Border'}</div>
-                    </button>
-                  </div>
-                </div>
               </div>
             )}
           </div>
@@ -1280,165 +1296,185 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 {/* 3.1 وضعیت دسترسی‌ها توی یه ردیف فشرده (COMPACT PERMISSIONS ROW) */}
                 <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
                   {/* 1. Notifications */}
-                  <div
-                    onClick={() => !nativePerms.notifications && handleRequestPerm('notifications')}
-                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
+                  <button
+                    type="button"
+                    onClick={() => handleRequestPerm('notifications')}
+                    style={
                       nativePerms.notifications
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50 cursor-pointer active:scale-95'
+                        ? {
+                            background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                            borderColor: '#6ee7b7',
+                            color: '#ffffff',
+                          }
+                        : undefined
+                    }
+                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                      nativePerms.notifications
+                        ? 'perm-card-granted shadow-md shadow-emerald-900/40'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
                     title={isFa ? 'دسترسی اعلان‌ها' : 'Notifications'}
                   >
                     <div className="relative mb-1">
-                      <Bell className={`w-4 h-4 ${nativePerms.notifications ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.notifications ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
+                      <Bell className={`w-4 h-4 ${nativePerms.notifications ? 'text-white' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.notifications ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
-                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                    <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.notifications ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'اعلان' : 'Alert'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.notifications ? 'text-emerald-400' : 'text-indigo-400'}`}>
-                      {nativePerms.notifications ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
+                    <span className={`text-[9px] font-black ${nativePerms.notifications ? 'text-white' : 'text-indigo-400'}`}>
+                      {nativePerms.notifications ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
                     </span>
-                  </div>
+                  </button>
 
                   {/* 2. Microphone */}
-                  <div
-                    onClick={() => !nativePerms.microphone && handleRequestPerm('microphone')}
-                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
+                  <button
+                    type="button"
+                    onClick={() => handleRequestPerm('microphone')}
+                    style={
                       nativePerms.microphone
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50 cursor-pointer active:scale-95'
+                        ? {
+                            background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                            borderColor: '#6ee7b7',
+                            color: '#ffffff',
+                          }
+                        : undefined
+                    }
+                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                      nativePerms.microphone
+                        ? 'perm-card-granted shadow-md shadow-emerald-900/40'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
                     title={isFa ? 'دسترسی میکروفون و صوت' : 'Microphone'}
                   >
                     <div className="relative mb-1">
-                      <Mic className={`w-4 h-4 ${nativePerms.microphone ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.microphone ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
+                      <Mic className={`w-4 h-4 ${nativePerms.microphone ? 'text-white' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.microphone ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
-                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                    <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.microphone ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'میکروفون' : 'Mic'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.microphone ? 'text-emerald-400' : 'text-indigo-400'}`}>
-                      {nativePerms.microphone ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
+                    <span className={`text-[9px] font-black ${nativePerms.microphone ? 'text-white' : 'text-indigo-400'}`}>
+                      {nativePerms.microphone ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
                     </span>
-                  </div>
+                  </button>
 
                   {/* 3. Camera */}
-                  <div
-                    onClick={() => !nativePerms.camera && handleRequestPerm('camera')}
-                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
+                  <button
+                    type="button"
+                    onClick={() => handleRequestPerm('camera')}
+                    style={
                       nativePerms.camera
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50 cursor-pointer active:scale-95'
+                        ? {
+                            background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                            borderColor: '#6ee7b7',
+                            color: '#ffffff',
+                          }
+                        : undefined
+                    }
+                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                      nativePerms.camera
+                        ? 'perm-card-granted shadow-md shadow-emerald-900/40'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
                     title={isFa ? 'دسترسی دوربین' : 'Camera'}
                   >
                     <div className="relative mb-1">
-                      <Camera className={`w-4 h-4 ${nativePerms.camera ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.camera ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
+                      <Camera className={`w-4 h-4 ${nativePerms.camera ? 'text-white' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.camera ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
-                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                    <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.camera ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'دوربین' : 'Camera'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.camera ? 'text-emerald-400' : 'text-indigo-400'}`}>
-                      {nativePerms.camera ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
+                    <span className={`text-[9px] font-black ${nativePerms.camera ? 'text-white' : 'text-indigo-400'}`}>
+                      {nativePerms.camera ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
                     </span>
-                  </div>
+                  </button>
 
                   {/* 4. GPS / Location */}
-                  <div
-                    onClick={() => !nativePerms.location && handleRequestPerm('location')}
-                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all ${
+                  <button
+                    type="button"
+                    onClick={() => handleRequestPerm('location')}
+                    style={
                       nativePerms.location
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50 cursor-pointer active:scale-95'
+                        ? {
+                            background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                            borderColor: '#6ee7b7',
+                            color: '#ffffff',
+                          }
+                        : undefined
+                    }
+                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                      nativePerms.location
+                        ? 'perm-card-granted shadow-md shadow-emerald-900/40'
+                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
                     title={isFa ? 'دسترسی موقعیت مکانی GPS' : 'GPS Location'}
                   >
                     <div className="relative mb-1">
-                      <MapPin className={`w-4 h-4 ${nativePerms.location ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.location ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
+                      <MapPin className={`w-4 h-4 ${nativePerms.location ? 'text-white' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.location ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
-                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                    <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.location ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'موقعیت' : 'GPS'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.location ? 'text-emerald-400' : 'text-indigo-400'}`}>
-                      {nativePerms.location ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
+                    <span className={`text-[9px] font-black ${nativePerms.location ? 'text-white' : 'text-indigo-400'}`}>
+                      {nativePerms.location ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
                     </span>
-                  </div>
+                  </button>
 
                   {/* 5. Folder / Storage (Yaad reminder) */}
-                  <div
+                  <button
+                    type="button"
                     onClick={() => handleRequestPerm('storage')}
-                    className={`min-h-[56px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                    style={
                       nativePerms.storage
-                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                        ? {
+                            background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                            borderColor: '#6ee7b7',
+                            color: '#ffffff',
+                          }
+                        : undefined
+                    }
+                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                      nativePerms.storage
+                        ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                         : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
                     title={isFa ? 'دسترسی پوشه Yaad reminder' : 'Yaad reminder Folder'}
                   >
                     <div className="relative mb-1">
-                      <FolderOpen className={`w-4 h-4 ${nativePerms.storage ? 'text-emerald-400' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.storage ? 'bg-emerald-400' : 'bg-indigo-400 animate-pulse'}`} />
+                      <FolderOpen className={`w-4 h-4 ${nativePerms.storage ? 'text-white' : 'text-stone-400'}`} />
+                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.storage ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
                     </div>
-                    <span className="text-[10px] sm:text-[11px] font-bold text-stone-200 truncate w-full block">
+                    <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.storage ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'پوشه و حافظه' : 'Folders'}
                     </span>
-                    <span className={`text-[9px] font-bold ${nativePerms.storage ? 'text-emerald-400' : 'text-indigo-400'}`}>
-                      {nativePerms.storage ? 'تایید ✓' : (isFa ? 'تایید' : 'Allow')}
+                    <span className={`text-[9px] font-black ${nativePerms.storage ? 'text-white' : 'text-indigo-400'}`}>
+                      {nativePerms.storage ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
                     </span>
-                  </div>
+                  </button>
                 </div>
 
-                {/* 3.1B Dedicated Folder & Storage Permission Card inside App Permissions */}
-                <div className="p-3 rounded-2xl bg-stone-900/80 border border-emerald-500/30 space-y-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-xs font-bold text-white">
-                      <FolderOpen className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>
-                        {isFa
-                          ? 'دسترسی به پوشه‌ها و حافظه (پوشه Yaad reminder)'
-                          : 'Folders & Storage Access (Yaad reminder)'}
-                      </span>
-                    </div>
-                    <span
-                      className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
-                        nativePerms.storage
-                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40'
-                          : 'bg-amber-500/20 text-amber-300 border-amber-400/40'
-                      }`}
-                    >
-                      {nativePerms.storage
-                        ? isFa
-                          ? 'فعال ✓'
-                          : 'Active ✓'
-                        : isFa
-                          ? 'آماده فعال‌سازی'
-                          : 'Ready'}
-                    </span>
-                  </div>
-
-                  <p className="text-[11px] text-stone-300 leading-relaxed">
-                    {isFa
-                      ? 'نکته اندروید ۱۱ تا ۱۵: در نسخه‌های جدید اندروید، گزینه «دسترسی به پوشه‌ها» از داخل لیست عادی App Permissions حذف شده و به بخش «دسترسی ویژه برنامه‌ها ← دسترسی به همه فایل‌ها (All files access)» منتقل شده است. با دکمه زیر می‌توانید صفحه دسترسی به همه فایل‌ها را باز نمایید:'
-                      : 'Android 11–15 Note: Folder access is no longer inside standard App Permissions; Android moved it to "Special app access -> All files access". Use the button below to open All Files Access:'}
-                  </p>
-
-                  <div>
+                {showStoragePermNotice && !nativePerms.storage && (
+                  <div
+                    onClick={() => openAndroidSettings('all_files')}
+                    dir="ltr"
+                    className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs font-mono font-bold flex items-center justify-between gap-2 cursor-pointer"
+                  >
+                    <span>setting, apps, 3 point menu, special access, all files access, Yaad slide key</span>
                     <button
                       type="button"
-                      onClick={() => openAndroidSettings('all_files')}
-                      className="w-full min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-700 text-stone-200 hover:text-white text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowStoragePermNotice(false);
+                      }}
+                      className="p-1 rounded-lg hover:bg-amber-500/20 text-amber-300 shrink-0 cursor-pointer"
                     >
-                      <ExternalLink className="w-3.5 h-3.5 text-teal-400 shrink-0" />
-                      <span>
-                        {isFa
-                          ? 'باز کردن «دسترسی به همه فایل‌ها» در اندروید'
-                          : 'Open Android "All Files Access"'}
-                      </span>
+                      <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                </div>
+                )}
 
                 {/* 3.2 Request All Permissions at Once Button */}
                 <button
@@ -1477,7 +1513,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </h4>
                   <p className="text-[11px] text-stone-400 truncate">
                     {googleUser
-                      ? (isFa ? `گوگل: ${googleUser.email}` : `Google: ${googleUser.email}`)
+                      ? (isFa ? `گوگل کلندر: ${googleUser.email}` : `Google Calendar: ${googleUser.email}`)
                       : (isFa ? 'اتصال به تقویم گوگل، نقشه و حصار مکانی' : 'Google Calendar, Maps & Geofence')}
                   </p>
                 </div>
@@ -1491,51 +1527,72 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 <div className="p-3.5 rounded-2xl bg-stone-900/70 border border-stone-800 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs font-bold text-stone-200">
-                      <Cloud className="w-4 h-4 text-sky-400" />
+                      <Calendar className="w-4 h-4 text-sky-400" />
                       <span>{isFa ? 'همگام‌سازی تقویم گوگل (Google Calendar)' : 'Google Calendar Sync'}</span>
                     </div>
                     {googleUser && (
-                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 font-bold">
-                        {isFa ? 'متصل' : 'Connected'}
+                      <span
+                        style={{ backgroundColor: 'rgba(16, 185, 129, 0.2)', borderColor: '#10b981', color: '#6ee7b7' }}
+                        className="text-[10px] px-2.5 py-0.5 rounded-full border font-black"
+                      >
+                        {isFa ? 'متصل ✓' : 'Connected ✓'}
                       </span>
                     )}
                   </div>
 
-                  <div className="p-3 rounded-xl bg-stone-950 border border-stone-800 flex items-center justify-between gap-3">
+                  <div className="p-3 rounded-xl bg-stone-950 border border-stone-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div className="truncate">
                       {googleUser ? (
-                        <p className="text-xs font-semibold text-white truncate">{googleUser.email}</p>
+                        <p className="text-xs font-bold text-white truncate">{googleUser.email}</p>
                       ) : (
-                        <p className="text-xs text-stone-400">{isFa ? 'اتصال به تقویم و تسک‌های گوگل' : 'Connect to Google Calendar & Tasks'}</p>
+                        <p className="text-xs text-stone-400">{isFa ? 'اتصال مستقیم به حساب Google Calendar' : 'Connect to Google Calendar account'}</p>
                       )}
                     </div>
 
-                    {googleUser ? (
-                      <button
-                        type="button"
-                        onClick={onGoogleSignOut}
-                        className="min-h-[40px] flex items-center gap-1 px-3 py-1.5 rounded-lg bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold cursor-pointer active:scale-95 shadow-sm"
-                      >
-                        <LogOut className="w-3.5 h-3.5 text-white" />
-                        <span className="text-white">{isFa ? 'خروج' : 'Sign Out'}</span>
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setIsSigningIn(true);
-                          try {
-                            await onGoogleSignIn();
-                          } finally {
-                            setIsSigningIn(false);
-                          }
-                        }}
-                        disabled={isSigningIn}
-                        className="min-h-[44px] flex items-center gap-2 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/30 disabled:opacity-50"
-                      >
-                        <span>{isSigningIn ? (settings.language === 'en' ? 'Connecting...' : 'اتصال...') : (settings.language === 'en' ? 'Sign in with Google' : 'ورود با گوگل')}</span>
-                      </button>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0">
+                      {googleUser ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openGoogleCalendarAccount()}
+                            className="min-h-[40px] flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold cursor-pointer active:scale-95 shadow-sm"
+                          >
+                            <Calendar className="w-3.5 h-3.5 text-white" />
+                            <span className="text-white">{isFa ? 'ورود به گوگل کلندر' : 'Open Calendar'}</span>
+                            <ExternalLink className="w-3 h-3 text-white/80" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={onGoogleSignOut}
+                            className="min-h-[40px] flex items-center gap-1 px-3 py-1.5 rounded-xl bg-rose-700 hover:bg-rose-600 text-white text-xs font-bold cursor-pointer active:scale-95 shadow-sm"
+                          >
+                            <LogOut className="w-3.5 h-3.5 text-white" />
+                            <span className="text-white">{isFa ? 'خروج' : 'Sign Out'}</span>
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            setIsSigningIn(true);
+                            try {
+                              await onGoogleSignIn();
+                            } finally {
+                              setIsSigningIn(false);
+                            }
+                          }}
+                          disabled={isSigningIn}
+                          className="min-h-[44px] flex items-center gap-2 px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md shadow-blue-600/30 disabled:opacity-50 cursor-pointer active:scale-95"
+                        >
+                          <Calendar className="w-4 h-4 text-white" />
+                          <span className="text-white">
+                            {isSigningIn
+                              ? (settings.language === 'en' ? 'Connecting...' : 'در حال اتصال...')
+                              : (settings.language === 'en' ? 'Sign in with Google' : 'ورود با گوگل')}
+                          </span>
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -1546,65 +1603,118 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <Radio className={`w-4 h-4 ${isGeofenceActive ? 'text-emerald-400 animate-pulse' : 'text-stone-400'}`} />
                       <span>{isFa ? 'رادار پایش حصار مکانی (Geofence)' : 'Geofence Radar'}</span>
                     </div>
-                    <span className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
-                      isGeofenceActive 
-                        ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' 
-                        : 'bg-stone-800 text-stone-400 border-stone-700'
-                    }`}>
-                      {isGeofenceActive ? (isFa ? 'فعال' : 'Active') : (isFa ? 'متوقف' : 'Paused')}
+                    <span
+                      style={
+                        isGeofenceActive
+                          ? { backgroundColor: '#059669', borderColor: '#6ee7b7', color: '#ffffff' }
+                          : undefined
+                      }
+                      className={`text-[10px] px-2.5 py-0.5 rounded-full font-black border flex items-center gap-1.5 ${
+                        isGeofenceActive
+                          ? 'shadow-sm shadow-emerald-950/50'
+                          : 'bg-stone-800 text-stone-400 border-stone-700'
+                      }`}
+                    >
+                      {isGeofenceActive && (
+                        <span className="w-1.5 h-1.5 rounded-full bg-white animate-ping" />
+                      )}
+                      <span>{isGeofenceActive ? (isFa ? 'پایش زنده فعال' : 'LIVE ACTIVE') : (isFa ? 'متوقف' : 'Paused')}</span>
                     </span>
                   </div>
 
-                  <div className="flex items-center justify-between gap-3 p-2.5 rounded-xl bg-stone-950 border border-stone-800/80">
-                    <div>
-                      <span className="text-xs font-bold text-white block">
-                        {isFa ? 'پایش ورود/خروج حصارها' : 'Background Geofencing'}
-                      </span>
-                      <span className="text-[11px] text-stone-400">
-                        {isFa ? 'پایش هوشمند GPS با مصرف بهینه باتری' : 'Low-battery GPS tracking'}
-                      </span>
+                  {/* Interactive Geofence Monitoring Card with Rich Active Radar Graphics */}
+                  <div
+                    onClick={() => {
+                      const next = !isGeofenceActive;
+                      setGeofenceTrackingEnabled(next);
+                      if (onToggleGeofenceActive) onToggleGeofenceActive(next);
+                    }}
+                    style={
+                      isGeofenceActive
+                        ? {
+                            background: 'linear-gradient(135deg, rgba(6, 78, 59, 0.92) 0%, rgba(16, 185, 129, 0.35) 100%)',
+                            borderColor: '#34d399',
+                          }
+                        : undefined
+                    }
+                    className={`flex items-center justify-between gap-3 p-3 rounded-2xl border transition-all duration-300 cursor-pointer select-none ${
+                      isGeofenceActive
+                        ? 'geofence-radar-active shadow-lg shadow-emerald-950/50'
+                        : 'bg-stone-950 border-stone-800/80 hover:border-stone-700'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      {/* Animated Radar Orb Graphic */}
+                      <div
+                        style={
+                          isGeofenceActive
+                            ? { backgroundColor: '#10b981', borderColor: '#a7f3d0', color: '#ffffff' }
+                            : undefined
+                        }
+                        className={`relative w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border transition-all duration-300 ${
+                          isGeofenceActive
+                            ? 'shadow-md shadow-emerald-500/40'
+                            : 'bg-stone-900 border-stone-800 text-stone-500'
+                        }`}
+                      >
+                        {isGeofenceActive && (
+                          <span
+                            style={{ borderColor: 'rgba(110, 231, 183, 0.75)' }}
+                            className="absolute inset-0 rounded-xl border-2 animate-ping pointer-events-none"
+                          />
+                        )}
+                        <Radio className={`w-5 h-5 ${isGeofenceActive ? 'text-white animate-pulse' : 'text-stone-400'}`} />
+                      </div>
+
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span
+                            style={isGeofenceActive ? { color: '#ffffff' } : undefined}
+                            className="text-xs sm:text-sm font-black text-white block truncate"
+                          >
+                            {isFa ? 'پایش ورود/خروج حصارها' : 'Background Geofencing'}
+                          </span>
+                        </div>
+                        <span
+                          style={isGeofenceActive ? { color: '#d1fae5' } : undefined}
+                          className="text-[11px] text-stone-400 block truncate"
+                        >
+                          {isGeofenceActive
+                            ? (isFa ? 'رادار هوشمند موقعیت مکانی در حال پایش فعال است' : 'Smart GPS radar actively monitoring zones')
+                            : (isFa ? 'پایش هوشمند GPS با مصرف بهینه باتری (غیرفعال)' : 'Low-battery GPS tracking (Paused)')}
+                        </span>
+                      </div>
                     </div>
 
-                    <label className="relative inline-flex items-center cursor-pointer shrink-0">
-                      <input
-                        type="checkbox"
-                        checked={isGeofenceActive}
-                        onChange={(e) => {
-                          const next = e.target.checked;
-                          setGeofenceTrackingEnabled(next);
-                          if (onToggleGeofenceActive) onToggleGeofenceActive(next);
+                    {/* High-Visibility Switch */}
+                    <div
+                      role="switch"
+                      aria-checked={isGeofenceActive}
+                      style={{
+                        backgroundColor: isGeofenceActive ? '#10b981' : '#292524',
+                        borderColor: isGeofenceActive ? '#a7f3d0' : '#44403c',
+                      }}
+                      className="relative w-12 h-7 rounded-full border transition-all duration-200 shrink-0 flex items-center p-0.5 shadow-inner"
+                    >
+                      <span
+                        style={{
+                          backgroundColor: '#ffffff',
+                          transform: isGeofenceActive
+                            ? (isFa ? 'translateX(-20px)' : 'translateX(20px)')
+                            : 'translateX(0px)',
                         }}
-                        className="sr-only peer"
+                        className="w-5 h-5 rounded-full shadow-md transition-transform duration-200 ease-out block"
                       />
-                      <div className="w-11 h-6 bg-stone-800 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:start-[2px] after:bg-white after:border-stone-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-                    </label>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    <div className="flex items-center justify-between p-2 rounded-xl bg-stone-950 border border-stone-800">
-                      <span className="text-stone-400 text-[11px]">{isFa ? 'حصارهای فعال:' : 'Active:'}</span>
-                      <span className="font-bold text-emerald-400">
-                        {isFa 
-                          ? `${toPersianDigits(reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length)} مکان` 
-                          : `${reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length} Places`}
-                      </span>
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        const status = await requestLocationPermission();
-                        if (status) {
-                          alert(isFa ? 'مجوز موقعیت مکانی GPS فعال است.' : 'Location GPS permission is active.');
-                        } else {
-                          alert(isFa ? 'دسترسی GPS در مرورگر یا دستگاه شما مسدود است.' : 'Location permission is denied.');
-                        }
-                      }}
-                      className="min-h-[40px] flex items-center justify-center gap-1.5 p-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-white transition-colors cursor-pointer text-[11px] font-bold"
-                    >
-                      <Crosshair className="w-3.5 h-3.5 text-teal-400" />
-                      <span>{isFa ? 'بررسی GPS' : 'Check GPS'}</span>
-                    </button>
+                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-xs">
+                    <span className="text-stone-400 text-[11px]">{isFa ? 'حصارهای فعال ثبت‌شده:' : 'Active Geofences:'}</span>
+                    <span className="font-black text-emerald-400">
+                      {isFa 
+                        ? `${toPersianDigits(reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length)} مکان` 
+                        : `${reminders.filter((r) => r.geofence && r.geofence.enabled && r.status !== 'completed').length} Places`}
+                    </span>
                   </div>
                 </div>
 
