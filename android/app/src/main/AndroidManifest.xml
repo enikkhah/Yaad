@@ -58,6 +58,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- OAuth2 & Deep-Link Callback Intent Filter for com.yaad.reminder (prevents broken localhost/IP redirects on Android) -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.yaad.reminder" android:host="oauth2redirect" />
+                <data android:scheme="com.yaad.reminder" android:host="auth" />
+            </intent-filter>
+
         </activity>
 
         <provider

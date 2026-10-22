@@ -1362,7 +1362,7 @@ const legacyPluginLoadV3 = `        purgeStaleOneShotNotifications()
         }
     }`;
 
-const patchedPluginLoad = `        purgeStaleOneShotNotifications()
+const legacyPluginLoadV4 = `        purgeStaleOneShotNotifications()
         LegacyNotificationMigrator.run(context, notificationStorage, manager)
         flushQueuedBackgroundActions()
         activity?.intent?.let { handleOnNewIntent(it) }
@@ -1403,14 +1403,72 @@ const patchedPluginLoad = `        purgeStaleOneShotNotifications()
         }
     }`;
 
+const patchedPluginLoad = `        configureWebViewForGoogleOAuth()
+        purgeStaleOneShotNotifications()
+        LegacyNotificationMigrator.run(context, notificationStorage, manager)
+        flushQueuedBackgroundActions()
+        activity?.intent?.let { handleOnNewIntent(it) }
+    }
+
+    private fun configureWebViewForGoogleOAuth() {
+        try {
+            val wv = bridge?.webView
+            if (wv != null) {
+                val ua = wv.settings.userAgentString ?: ""
+                if (ua.contains("; wv") || ua.contains("Version/")) {
+                    wv.settings.userAgentString = ua
+                        .replace("; wv", "")
+                        .replace(Regex("Version/\\\\d+\\\\.\\\\d+\\\\s*"), "")
+                }
+                wv.settings.javaScriptCanOpenWindowsAutomatically = true
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun purgeStaleOneShotNotifications() {
+        try {
+            val now = System.currentTimeMillis()
+            for (n in notificationStorage.getSavedNotifications()) {
+                val id = n.id ?: continue
+                val sched = n.schedule ?: continue
+                val atDate = sched.at ?: continue
+                if (!sched.isPerpetual() && atDate.time < now - 60000L) {
+                    notificationStorage.deleteNotification(id.toString())
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun handleOnResume() {
+        super.handleOnResume()
+        flushQueuedBackgroundActions()
+    }
+
+    private fun flushQueuedBackgroundActions() {
+        try {
+            val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(BG_ACTION_KEY, null) ?: return
+            prefs.edit().remove(BG_ACTION_KEY).apply()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val itemStr = arr.optString(i, null) ?: continue
+                val itemJson = JSObject(itemStr)
+                notifyListeners("localNotificationActionPerformed", itemJson, true)
+            }
+        } catch (e: Exception) {
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'load purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
+  'load configureWebViewForGoogleOAuth, purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
   origPluginLoad,
   patchedPluginLoad,
-  'activity?.intent?.let { handleOnNewIntent(it) }',
-  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3]
+  'configureWebViewForGoogleOAuth()',
+  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4]
 );
 
 const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
@@ -1471,6 +1529,81 @@ const origPermissionsBlock = `    @PluginMethod
     }`;
 
 const patchedPermissionsBlock = `    private fun buildAllPermissionsJSON(): JSObject {
+        val permissionsResultJSON = JSObject()
+        val notifEnabled = manager.areNotificationsEnabled() && (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+        permissionsResultJSON.put("display", if (notifEnabled) "granted" else "denied")
+        val micGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        permissionsResultJSON.put("microphone", if (micGranted) "granted" else "denied")
+
+        val camGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        permissionsResultJSON.put("camera", if (camGranted) "granted" else "denied")
+
+        val locGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        permissionsResultJSON.put("location", if (locGranted) "granted" else "denied")
+
+        // Strict storage check: on Android 11+ (API 30+), creating backup folder in shared storage requires All Files Access
+        val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.READ_EXTERNAL_STORAGE
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        permissionsResultJSON.put("storage", if (storageGranted) "granted" else "denied")
+        return permissionsResultJSON
+    }
+
+    @PluginMethod
+    override fun checkPermissions(call: PluginCall) {
+        call.resolve(buildAllPermissionsJSON())
+    }
+
+    @PluginMethod
+    override fun requestPermissions(call: PluginCall) {
+        val requested = call.getArray("permissions")
+        if (requested != null && requested.length() > 0) {
+            val firstAlias = requested.optString(0, LOCAL_NOTIFICATIONS)
+            if (firstAlias == "microphone" || firstAlias == "camera" || firstAlias == "location") {
+                if (getPermissionState(firstAlias) == PermissionState.GRANTED) {
+                    call.resolve(buildAllPermissionsJSON())
+                } else {
+                    requestPermissionForAlias(firstAlias, call, "permissionsCallback")
+                }
+                return
+            }
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || getPermissionState(LOCAL_NOTIFICATIONS) == PermissionState.GRANTED) {
+            call.resolve(buildAllPermissionsJSON())
+        } else {
+            requestPermissionForAlias(LOCAL_NOTIFICATIONS, call, "permissionsCallback")
+        }
+    }`;
+
+const legacyPermissionsBlockV2 = `    private fun buildAllPermissionsJSON(): JSObject {
         val permissionsResultJSON = JSObject()
         permissionsResultJSON.put("display", getNotificationPermissionText())
         val micGranted = androidx.core.content.ContextCompat.checkSelfPermission(
@@ -1607,8 +1740,8 @@ pluginContent = applyPatchOrVerify(
   'checkPermissions and requestPermissions for all app permissions',
   origPermissionsBlock,
   patchedPermissionsBlock,
-  'Manifest.permission.READ_MEDIA_IMAGES',
-  [legacyPermissionsBlockV1]
+  '// Strict storage check: on Android 11+ (API 30+), creating backup folder in shared storage requires All Files Access',
+  [legacyPermissionsBlockV1, legacyPermissionsBlockV2]
 );
 
 const origPermCallback = `    @PermissionCallback
@@ -2029,8 +2162,8 @@ class YaadAlarmPopupActivity : Activity() {
         val lang = extraObj?.optString("language", "fa")?.takeIf { it.isNotEmpty() } ?: "fa"
         isPersian = lang != "en"
 
-        val rawTitle = requestJson?.getString("title") ?: (if (isPersian) "🔔 یادآور" else "🔔 Reminder")
-        val cleanTitle = rawTitle.replaceFirst("🔔 یادآور: ", "").replaceFirst("🔔 ", "").trim()
+        val rawTitle = requestJson?.getString("title") ?: (if (isPersian) "یادآور" else "Reminder")
+        val cleanTitle = rawTitle.replaceFirst("🔔 یادآور: ", "").replaceFirst("یادآور: ", "").replaceFirst("🔔 ", "").trim()
         val bodyText = requestJson?.getString("body") ?: ""
 
         val palette = resolvePalette(themeName)
@@ -2086,13 +2219,30 @@ class YaadAlarmPopupActivity : Activity() {
         content.orientation = LinearLayout.VERTICAL
         content.setPadding(dp(18f), dp(14f), dp(18f), dp(18f))
 
-        // Header row: Brand label + 60s countdown + close button
+        // Header row: Official App Icon + Brand label + 60s countdown + close button
         val headerRow = LinearLayout(this)
         headerRow.orientation = LinearLayout.HORIZONTAL
         headerRow.gravity = Gravity.CENTER_VERTICAL
 
+        try {
+            val appIconView = android.widget.ImageView(this)
+            val appDrawable = packageManager.getApplicationIcon(applicationInfo)
+            appIconView.setImageDrawable(appDrawable)
+            appIconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            val iconSize = dp(24f)
+            val iconParams = LinearLayout.LayoutParams(iconSize, iconSize)
+            if (isPersian) {
+                iconParams.leftMargin = dp(8f)
+            } else {
+                iconParams.rightMargin = dp(8f)
+            }
+            appIconView.layoutParams = iconParams
+            headerRow.addView(appIconView)
+        } catch (e: Exception) {
+        }
+
         val brandTv = TextView(this)
-        brandTv.text = if (isPersian) "🔔 یادآور هوشمند یاد" else "🔔 YAAD Reminder"
+        brandTv.text = if (isPersian) "یادآور هوشمند یاد" else "YAAD Reminder"
         brandTv.setTextColor(palette.accentColor)
         brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
         brandTv.setTypeface(Typeface.DEFAULT_BOLD)

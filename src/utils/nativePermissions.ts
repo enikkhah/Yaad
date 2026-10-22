@@ -214,24 +214,44 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
   if (typeof window === 'undefined') return result;
 
   // 1. Check Native Android OS permissions via Capacitor plugins
+  let nativeExplicitNotifDenied = false;
   let nativeExplicitMicDenied = false;
   let nativeExplicitCamDenied = false;
   let nativeExplicitLocDenied = false;
+  let nativeExplicitStorageChecked = false;
 
   if (isNativeAndroidApp()) {
     try {
-      const nativePerms = (await LocalNotifications.checkPermissions()) as any;
+      const [permsSettled, enabledSettled] = await Promise.allSettled([
+        LocalNotifications.checkPermissions(),
+        LocalNotifications.areEnabled(),
+      ]);
+
+      const nativePerms: any =
+        permsSettled.status === 'fulfilled' ? permsSettled.value : null;
+      const enabledRes: any =
+        enabledSettled.status === 'fulfilled' ? enabledSettled.value : null;
+
+      if (enabledRes?.value === true || nativePerms?.display === 'granted') {
+        result.notifications = true;
+        markPermissionGranted('notifications');
+      } else if (enabledRes?.value === false && nativePerms?.display === 'denied') {
+        nativeExplicitNotifDenied = true;
+        try {
+          localStorage.removeItem(PERM_NOTIF_GRANTED_KEY);
+        } catch {}
+      }
+
       if (nativePerms) {
-        if (nativePerms.display === 'granted') {
-          result.notifications = true;
-          markPermissionGranted('notifications');
-        }
         if (typeof nativePerms.microphone === 'string') {
           if (nativePerms.microphone === 'granted') {
             result.microphone = true;
             markPermissionGranted('microphone');
           } else if (nativePerms.microphone === 'denied') {
             nativeExplicitMicDenied = true;
+            try {
+              localStorage.removeItem(PERM_MIC_GRANTED_KEY);
+            } catch {}
           }
         }
         if (typeof nativePerms.camera === 'string') {
@@ -240,6 +260,9 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
             markPermissionGranted('camera');
           } else if (nativePerms.camera === 'denied') {
             nativeExplicitCamDenied = true;
+            try {
+              localStorage.removeItem(PERM_CAM_GRANTED_KEY);
+            } catch {}
           }
         }
         if (typeof nativePerms.location === 'string') {
@@ -248,64 +271,67 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
             markPermissionGranted('location');
           } else if (nativePerms.location === 'denied') {
             nativeExplicitLocDenied = true;
+            try {
+              localStorage.removeItem(PERM_LOC_GRANTED_KEY);
+            } catch {}
           }
         }
-        if (nativePerms.storage === 'granted') {
-          result.storage = true;
-          markPermissionGranted('storage');
+        if (typeof nativePerms.storage === 'string') {
+          nativeExplicitStorageChecked = true;
+          if (nativePerms.storage === 'granted') {
+            result.storage = true;
+            markPermissionGranted('storage');
+          } else {
+            result.storage = false;
+            try {
+              localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
+            } catch {}
+          }
         }
       }
     } catch {
       // Fallback below
     }
-
-    if (!result.notifications) {
-      try {
-        const enabledRes = await LocalNotifications.areEnabled();
-        if (enabledRes?.value === true) {
-          result.notifications = true;
-          markPermissionGranted('notifications');
-        }
-      } catch {
-        // Ignore
-      }
-    }
-
-    if (!result.storage) {
-      try {
-        const fsPerms = await Filesystem.checkPermissions();
-        if (fsPerms?.publicStorage === 'granted') {
-          result.storage = true;
-          markPermissionGranted('storage');
-        }
-      } catch {
-        // Ignore
-      }
-    }
   }
 
-  // 2. Check Notification & Local Folder Backup storage status
-  if (!result.notifications) {
+  // 2. Check Notification & Local Folder Backup storage status accurately
+  if (!result.notifications && !nativeExplicitNotifDenied) {
     const notifOk = await checkNotificationPermission();
     if (notifOk) {
       result.notifications = true;
       markPermissionGranted('notifications');
-    }
-  }
-  if (!result.storage) {
-    const storageOk = await checkLocalFolderPermissionStatus();
-    if (storageOk) {
-      result.storage = true;
+    } else if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'denied') {
+      nativeExplicitNotifDenied = true;
+      try {
+        localStorage.removeItem(PERM_NOTIF_GRANTED_KEY);
+      } catch {}
     }
   }
 
+  if (!nativeExplicitStorageChecked) {
+    const storageOk = await checkLocalFolderPermissionStatus();
+    result.storage = storageOk;
+  }
+
   // 3. Always check Browser / WebView Permissions API, enumerateDevices, and localStorage flags
+  if (typeof window !== 'undefined' && 'Notification' in window) {
+    if (Notification.permission === 'granted') {
+      result.notifications = true;
+      markPermissionGranted('notifications');
+    }
+  }
+
   if (navigator.permissions && navigator.permissions.query) {
     try {
       const notifStatus = await navigator.permissions.query({ name: 'notifications' as any });
       if (notifStatus.state === 'granted') {
         result.notifications = true;
         markPermissionGranted('notifications');
+      } else if (notifStatus.state === 'denied' && !result.notifications) {
+        nativeExplicitNotifDenied = true;
+        try {
+          localStorage.removeItem(PERM_NOTIF_GRANTED_KEY);
+        } catch {}
       }
     } catch {
       // Ignore
@@ -351,11 +377,11 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
   if (typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
-      if (devices.some((d) => d.kind === 'audioinput' && d.label && d.label.trim().length > 0)) {
+      if (!nativeExplicitMicDenied && devices.some((d) => d.kind === 'audioinput' && d.label && d.label.trim().length > 0)) {
         result.microphone = true;
         markPermissionGranted('microphone');
       }
-      if (devices.some((d) => d.kind === 'videoinput' && d.label && d.label.trim().length > 0)) {
+      if (!nativeExplicitCamDenied && devices.some((d) => d.kind === 'videoinput' && d.label && d.label.trim().length > 0)) {
         result.camera = true;
         markPermissionGranted('camera');
       }
@@ -374,9 +400,9 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     // Ignore
   }
 
-  // 4. Persisted grant state fallback (when permission was granted in-app or WebView doesn't expose query state)
+  // 4. Persisted grant state fallback (only when not explicitly denied by OS)
   try {
-    if (!result.notifications && localStorage.getItem(PERM_NOTIF_GRANTED_KEY) === 'true') {
+    if (!result.notifications && !nativeExplicitNotifDenied && localStorage.getItem(PERM_NOTIF_GRANTED_KEY) === 'true') {
       result.notifications = true;
     }
     if (!result.microphone && !nativeExplicitMicDenied && localStorage.getItem(PERM_MIC_GRANTED_KEY) === 'true') {
@@ -387,9 +413,6 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     }
     if (!result.location && !nativeExplicitLocDenied && localStorage.getItem(PERM_LOC_GRANTED_KEY) === 'true') {
       result.location = true;
-    }
-    if (!result.storage && localStorage.getItem(FOLDER_PERMISSION_GRANTED_KEY) === 'true') {
-      result.storage = true;
     }
   } catch {
     // Ignore

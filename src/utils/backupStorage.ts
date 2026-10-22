@@ -648,25 +648,59 @@ export async function requestLocalFolderPermission(
     restoredFromPickedFolder = await retrieveFromLocalYaadFolder(effectiveFolderName);
   }
 
-  let isStorageActuallyGranted = true;
+  let isStorageActuallyGranted = false;
   if (Capacitor.isNativePlatform()) {
     try {
       const { LocalNotifications } = await import('@capacitor/local-notifications');
       const perms = (await LocalNotifications.checkPermissions()) as any;
       if (perms && typeof perms.storage === 'string') {
         isStorageActuallyGranted = perms.storage === 'granted';
+      } else {
+        // Probe actual write access to root shared external storage (/storage/emulated/0/Yaad reminder)
+        const cleanSubName =
+          effectiveFolderName
+            .replace(/^(Documents|Download|InternalStorage)\//i, '')
+            .trim() || LOCAL_BACKUP_FOLDER_NAME;
+        await Filesystem.writeFile({
+          path: `${cleanSubName}/.yaad_perm_probe`,
+          data: 'ok',
+          directory: Directory.ExternalStorage,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        });
+        await Filesystem.deleteFile({
+          path: `${cleanSubName}/.yaad_perm_probe`,
+          directory: Directory.ExternalStorage,
+        }).catch(() => {});
+        isStorageActuallyGranted = true;
       }
     } catch {
-      // ignore
+      isStorageActuallyGranted = false;
+    }
+  } else {
+    try {
+      const handle = await getDirectoryHandleFromDB();
+      if (handle) {
+        if (typeof handle.queryPermission === 'function') {
+          const permState = await handle.queryPermission({ mode: 'readwrite' });
+          isStorageActuallyGranted = permState === 'granted';
+        } else {
+          isStorageActuallyGranted = true;
+        }
+      }
+    } catch {
+      isStorageActuallyGranted = false;
     }
   }
 
-  if (isStorageActuallyGranted) {
-    try {
+  try {
+    if (isStorageActuallyGranted) {
       localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
-    } catch {
-      // ignore
+    } else {
+      localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
     }
+  } catch {
+    // ignore
   }
 
   return {
@@ -684,18 +718,62 @@ export async function checkLocalFolderPermissionStatus(): Promise<boolean> {
         const { LocalNotifications } = await import('@capacitor/local-notifications');
         const perms = (await LocalNotifications.checkPermissions()) as any;
         if (perms && typeof perms.storage === 'string') {
-          return perms.storage === 'granted';
+          const isGranted = perms.storage === 'granted';
+          try {
+            if (isGranted) {
+              localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
+            } else {
+              localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
+            }
+          } catch {}
+          return isGranted;
         }
       } catch {
-        // ignore
+        // Fallback to probe below
       }
-      return localStorage.getItem(FOLDER_PERMISSION_GRANTED_KEY) === 'true';
+      try {
+        await Filesystem.writeFile({
+          path: `${LOCAL_BACKUP_FOLDER_NAME}/.yaad_perm_probe`,
+          data: 'ok',
+          directory: Directory.ExternalStorage,
+          encoding: Encoding.UTF8,
+          recursive: true,
+        });
+        await Filesystem.deleteFile({
+          path: `${LOCAL_BACKUP_FOLDER_NAME}/.yaad_perm_probe`,
+          directory: Directory.ExternalStorage,
+        }).catch(() => {});
+        try {
+          localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
+        } catch {}
+        return true;
+      } catch {
+        try {
+          localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
+        } catch {}
+        return false;
+      }
     }
-    if (localStorage.getItem(FOLDER_PERMISSION_GRANTED_KEY) === 'true') {
+
+    const handle = await getDirectoryHandleFromDB();
+    if (handle) {
+      if (typeof handle.queryPermission === 'function') {
+        const permState = await handle.queryPermission({ mode: 'readwrite' });
+        const granted = permState === 'granted';
+        try {
+          if (granted) {
+            localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
+          } else {
+            localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
+          }
+        } catch {}
+        return granted;
+      }
       return true;
     }
-    const handle = await getDirectoryHandleFromDB();
-    if (handle) return true;
+    try {
+      localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
+    } catch {}
   } catch {
     // ignore
   }

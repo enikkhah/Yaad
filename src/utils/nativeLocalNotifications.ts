@@ -58,13 +58,17 @@ export function getSoundFileName(soundType?: string): string {
   return SOUND_FILE_MAP[soundType] || SOUND_FILE_MAP[normalized] || 'digital_beep.wav';
 }
 
-export function getChannelIdForConfig(soundType?: string, volume: number = 0.85): string {
+export function getChannelIdForConfig(
+  soundType?: string,
+  volume: number = 0.85,
+  vibrationEnabled: boolean = true
+): string {
   if (volume <= 0.01) {
-    return 'yaad_channel_v2_silent';
+    return vibrationEnabled ? 'yaad_channel_v2_vibrate_only' : 'yaad_channel_v2_silent';
   }
   const soundFile = getSoundFileName(soundType);
   const key = soundFile.replace('.wav', '');
-  return `yaad_channel_v2_${key}`;
+  return vibrationEnabled ? `yaad_channel_v2_${key}` : `yaad_channel_v2_${key}_novib`;
 }
 
 export function getSavedAppSettings(): any {
@@ -80,7 +84,7 @@ export function getSavedAppSettings(): any {
 
 /**
  * Initializes Android Notification Channels (Android 8.0+ / Oreo to Android 15+)
- * with Heads-Up Banner, user-selected sound, volume sensitivity, vibration, and lock screen visibility.
+ * with Heads-Up Banner, user-selected sound, volume sensitivity, vibration toggle, and lock screen visibility.
  */
 export async function initNotificationChannel(): Promise<void> {
   if (!isNativeApp()) return;
@@ -98,7 +102,7 @@ export async function initNotificationChannel(): Promise<void> {
       vibration: true,
     });
 
-    // 2. Silent channel (for volume = 0% / mute)
+    // 2. Silent channel (for volume = 0% / mute & vibration off)
     await LocalNotifications.createChannel({
       id: 'yaad_channel_v2_silent',
       name: 'یادآورهای YAAD (بی‌صدا)',
@@ -108,7 +112,17 @@ export async function initNotificationChannel(): Promise<void> {
       vibration: false,
     });
 
-    // 3. Channels for all 12 sound types so Android notification manager plays the exact selected melody
+    // 2b. Vibrate-only channel (for volume = 0% / mute & vibration on)
+    await LocalNotifications.createChannel({
+      id: 'yaad_channel_v2_vibrate_only',
+      name: 'یادآورهای YAAD (فقط ویبره)',
+      description: 'اعلان‌های بدون صدا همراه با لرزش (ویبره)',
+      importance: 5,
+      visibility: 1,
+      vibration: true,
+    });
+
+    // 3. Channels for all 12 sound types (with and without vibration) so Android notification manager plays the exact selected melody & vibration state
     const soundChannels = [
       { id: 'yaad_channel_v2_digital_beep', name: 'یادآورهای YAAD (دیجیتال)', sound: 'digital_beep.wav' },
       { id: 'yaad_channel_v2_radar', name: 'یادآورهای YAAD (رادار)', sound: 'radar.wav' },
@@ -128,11 +142,21 @@ export async function initNotificationChannel(): Promise<void> {
       await LocalNotifications.createChannel({
         id: sc.id,
         name: sc.name,
-        description: 'اعلان‌های صوتی یادآور با صدای تنظیم‌شده در برنامه',
+        description: 'اعلان‌های صوتی یادآور با صدای تنظیم‌شده و ویبره',
         importance: 5, // IMPORTANCE_HIGH (heads-up banner with sound & vibration)
         visibility: 1,
         sound: sc.sound,
         vibration: true,
+      });
+
+      await LocalNotifications.createChannel({
+        id: `${sc.id}_novib`,
+        name: `${sc.name} - بدون ویبره`,
+        description: 'اعلان‌های صوتی یادآور بدون لرزش (ویبره خاموش)',
+        importance: 5,
+        visibility: 1,
+        sound: sc.sound,
+        vibration: false,
       });
     }
 
@@ -171,12 +195,15 @@ export async function initNotificationChannel(): Promise<void> {
 }
 
 /**
- * Syncs Android notification channels and settings when sound or volume is changed.
+ * Syncs Android notification channels and settings when sound, volume, or vibration is changed.
  */
-export async function syncNotificationSoundAndVolume(soundType?: string, volume?: number): Promise<void> {
+export async function syncNotificationSoundAndVolume(
+  soundType?: string,
+  volume?: number,
+  vibrationEnabled?: boolean
+): Promise<void> {
   if (!isNativeApp()) return;
   try {
-    isChannelInitialized = false;
     await initNotificationChannel();
   } catch (err) {
     console.warn('Error syncing notification sound/volume:', err);
@@ -371,11 +398,25 @@ export async function checkNotificationPermission(): Promise<boolean> {
     if (typeof window !== 'undefined' && 'Notification' in window) {
       return Notification.permission === 'granted';
     }
-    return true;
+    return false;
   }
   try {
-    const status = await LocalNotifications.checkPermissions();
-    return status.display === 'granted';
+    const [statusRes, enabledRes] = await Promise.allSettled([
+      LocalNotifications.checkPermissions(),
+      LocalNotifications.areEnabled(),
+    ]);
+    const displayState =
+      statusRes.status === 'fulfilled' ? statusRes.value?.display : undefined;
+    const areEnabledVal =
+      enabledRes.status === 'fulfilled' ? enabledRes.value?.value : undefined;
+
+    if (displayState === 'granted' || areEnabledVal === true) {
+      return true;
+    }
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      return true;
+    }
+    return false;
   } catch (err) {
     console.warn('Could not check notification permissions:', err);
     return false;
@@ -396,16 +437,20 @@ export async function requestNotificationPermission(): Promise<boolean> {
         return false;
       }
     }
-    return true;
+    return false;
   }
   try {
-    await initNotificationChannel();
-    const current = await LocalNotifications.checkPermissions();
-    if (current.display === 'granted') {
+    initNotificationChannel().catch(() => {});
+    const current = await checkNotificationPermission();
+    if (current) {
       return true;
     }
     const requested = await LocalNotifications.requestPermissions();
-    return requested.display === 'granted';
+    if (requested?.display === 'granted') {
+      return true;
+    }
+    const enabledAfter = await LocalNotifications.areEnabled().catch(() => ({ value: false }));
+    return enabledAfter?.value === true;
   } catch (err) {
     console.warn('Could not request notification permissions:', err);
     return false;
@@ -441,7 +486,7 @@ export async function scheduleReminderNotification(
   const scheduledDate = new Date(reminder.dueTimestamp);
   const timeFormatted = formatJalaliTime(reminder.dueTimestamp);
 
-  const title = `🔔 یادآور: ${reminder.title}`;
+  const title = `یادآور: ${reminder.title}`;
   const body = reminder.description
     ? `${reminder.description} • ساعت ${timeFormatted}`
     : `زمان انجام یادآور: ${timeFormatted}`;
@@ -452,6 +497,7 @@ export async function scheduleReminderNotification(
   const appSettings = currentSettings || getSavedAppSettings();
   const soundType: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, appSettings?.alarmSound);
   const volume = appSettings?.alarmVolume !== undefined ? appSettings.alarmVolume : 0.85;
+  const vibrationEnabled = appSettings?.vibrationEnabled !== false;
 
   // Web Browser Handling: simulate queue in debug panel without triggering unsupported browser error
   if (!isNativeApp()) {
@@ -470,7 +516,7 @@ export async function scheduleReminderNotification(
       title,
       body,
       schedule: { at: scheduledDate.toString(), allowWhileIdle: true },
-      extra: { reminderId: reminder.id, dueTimestamp: reminder.dueTimestamp, sound: soundType, volume },
+      extra: { reminderId: reminder.id, dueTimestamp: reminder.dueTimestamp, sound: soundType, volume, vibrationEnabled },
     };
 
     const existingList = (currentDebugState.pendingList || []).filter((n) => n.id !== notifId);
@@ -522,7 +568,7 @@ export async function scheduleReminderNotification(
     }
 
     const isSilent = volume <= 0.01;
-    const targetChannelId = getChannelIdForConfig(soundType, volume);
+    const targetChannelId = getChannelIdForConfig(soundType, volume, vibrationEnabled);
     const soundFile = isSilent ? undefined : getSoundFileName(soundType);
 
     const appTheme = appSettings?.theme || 'dark-gold';
@@ -551,6 +597,7 @@ export async function scheduleReminderNotification(
           dueTimestamp: reminder.dueTimestamp,
           sound: soundType,
           volume,
+          vibrationEnabled,
           theme: appTheme,
           language: appLang,
           isRepeat: false,
@@ -1257,12 +1304,13 @@ export async function triggerOutOfAppPersistentNotification(
 ): Promise<void> {
   const isEn = settings?.language === 'en';
   const timeFormatted = formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa');
-  const title = `🔔 ${reminder.title}`;
+  const title = reminder.title;
   const body = reminder.description
     ? `${reminder.description} • ${timeFormatted}`
     : isEn
     ? `Reminder due at ${timeFormatted} (Awaiting your action)`
     : `زمان انجام یادآور: ${timeFormatted} (در انتظار عکس‌العمل شما)`;
+  const vibrationEnabled = settings?.vibrationEnabled !== false;
 
   // 1. If running in Native Android Capacitor, fire ongoing high-priority notification
   if (isNativeApp()) {
@@ -1271,7 +1319,7 @@ export async function triggerOutOfAppPersistentNotification(
       const soundType = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
       const volume = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
       const isSilent = volume <= 0.01;
-      const targetChannelId = getChannelIdForConfig(soundType, volume);
+      const targetChannelId = getChannelIdForConfig(soundType, volume, vibrationEnabled);
       const soundFile = isSilent ? undefined : getSoundFileName(soundType);
 
       await LocalNotifications.schedule({
@@ -1290,6 +1338,7 @@ export async function triggerOutOfAppPersistentNotification(
               dueTimestamp: reminder.dueTimestamp,
               sound: soundType,
               volume,
+              vibrationEnabled,
               theme: settings?.theme || 'dark-gold',
               language: settings?.language || 'fa',
               persistentUntilReaction: true,
@@ -1323,11 +1372,11 @@ export async function triggerOutOfAppPersistentNotification(
           await reg.showNotification(title, {
             body,
             icon: '/pwa-192x192.png',
-            badge: '/favicon.ico',
+            badge: '/pwa-192x192.png',
             tag: `yaad-rem-${reminder.id}`,
             renotify: true,
             requireInteraction: true,
-            vibrate: [500, 250, 500, 250, 500],
+            vibrate: vibrationEnabled ? [500, 250, 500, 250, 500] : [],
             data: {
               reminderId: reminder.id,
               persistentUntilReaction: true,
@@ -1346,7 +1395,7 @@ export async function triggerOutOfAppPersistentNotification(
       const notif = new Notification(title, {
         body,
         icon: '/pwa-192x192.png',
-        badge: '/favicon.ico',
+        badge: '/pwa-192x192.png',
         tag: `yaad-rem-${reminder.id}`,
         renotify: true,
         requireInteraction: true,

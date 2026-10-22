@@ -8,7 +8,6 @@ import {
   clearOutOfAppPersistentNotification,
 } from '../utils/nativeLocalNotifications';
 import {
-  Bell,
   CheckCircle2,
   Clock,
   Briefcase,
@@ -18,6 +17,7 @@ import {
   Edit2,
   X,
 } from 'lucide-react';
+import appIcon from '../assets/images/icon.png';
 
 interface AlarmModalProps {
   reminder: Reminder | null;
@@ -196,7 +196,8 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     // Ring alarm for 1 minute (60 seconds)
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
-    startAlarmRinging(reminder.category, sound, vol);
+    const vib = settings?.vibrationEnabled !== false;
+    startAlarmRinging(reminder.category, sound, vol, vib);
 
     let ttsTimer: any = null;
     if (reminder.voiceReadAloud) {
@@ -233,6 +234,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     reminder?.ringTune,
     settings?.alarmSound,
     settings?.alarmVolume,
+    settings?.vibrationEnabled,
     settings?.language,
     settings?.ttsVoiceRate,
   ]);
@@ -304,10 +306,15 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <div
-                className={`relative w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 ${palette.accentBg} ${palette.accentText}`}
+                className={`relative w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden p-0.5 ${palette.accentBg} ${palette.accentText}`}
               >
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-xl opacity-20 bg-current" />
-                <Bell className="w-4 h-4" />
+                <img
+                  src={appIcon}
+                  alt="YAAD"
+                  className="relative z-10 w-full h-full object-cover rounded-[9px]"
+                  draggable={false}
+                />
               </div>
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 text-xs font-bold">

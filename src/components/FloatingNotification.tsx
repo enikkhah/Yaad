@@ -7,13 +7,13 @@ import { getThemeStyles } from '../utils/themeStyles';
 import { AppLanguage } from '../utils/i18n';
 import { NeonClock } from './NeonClock';
 import { 
-  Bell, 
   CheckCircle2, 
   Clock, 
   Volume2, 
   X,
   Repeat
 } from 'lucide-react';
+import appIcon from '../assets/images/icon.png';
 
 interface FloatingNotificationProps {
   upcomingReminder: Reminder | null;
@@ -73,7 +73,12 @@ export const FloatingNotification: React.FC<FloatingNotificationProps> = ({
         {/* Leading: "بعدی" / "Next:" Label + Title + Countdown Clock */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
           <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl bg-teal-600 text-white font-black text-xs sm:text-sm flex-shrink-0 shadow-md shadow-teal-600/30">
-            <Bell className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white fill-white" />
+            <img
+              src={appIcon}
+              alt="YAAD"
+              className="w-4 h-4 rounded-md object-cover shrink-0"
+              draggable={false}
+            />
             <span>{isEn ? 'Next:' : 'بعدی:'}</span>
           </div>
 

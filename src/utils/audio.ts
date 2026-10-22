@@ -7,6 +7,7 @@ let activeAlarmAudio: HTMLAudioElement | null = null;
 let previewAudio: HTMLAudioElement | null = null;
 let isAlarmLooping: boolean = false;
 let globalAlarmVolume: number = 0.85; // 0.0 to 1.0
+let globalVibrationEnabled: boolean = true;
 
 export const setGlobalVolume = (vol: number) => {
   globalAlarmVolume = Math.max(0, Math.min(1, vol));
@@ -21,6 +22,34 @@ export const setGlobalVolume = (vol: number) => {
 
 export const getGlobalVolume = (): number => {
   return globalAlarmVolume;
+};
+
+export const setGlobalVibration = (enabled: boolean) => {
+  globalVibrationEnabled = enabled;
+  if (!enabled && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+    try {
+      navigator.vibrate(0);
+    } catch {
+      // ignore
+    }
+  }
+};
+
+export const getGlobalVibration = (): boolean => {
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem('fa_settings_app_data_v1');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (typeof parsed?.vibrationEnabled === 'boolean') {
+          return parsed.vibrationEnabled;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return globalVibrationEnabled;
 };
 
 const getAudioContext = (): AudioContext => {

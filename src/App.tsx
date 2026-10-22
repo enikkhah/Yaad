@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
 import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
-import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, stopAlarmRinging, unlockAudio } from './utils/audio';
+import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { TimelineWidget } from './components/TimelineWidget';
 import { ReminderForm } from './components/ReminderForm';
@@ -156,6 +156,7 @@ export default function App() {
       defaultRingTune: 'work',
       alarmSound: 'digital_beep',
       alarmVolume: 0.85,
+      vibrationEnabled: true,
       autoVoiceInput: false,
       googleMapsApiKey: '',
     };
@@ -226,12 +227,14 @@ export default function App() {
     if (settings.alarmVolume !== undefined) {
       setGlobalVolume(settings.alarmVolume);
     }
-    syncNotificationSoundAndVolume(settings.alarmSound, settings.alarmVolume)
+    const vibEnabled = settings.vibrationEnabled !== false;
+    setGlobalVibration(vibEnabled);
+    syncNotificationSoundAndVolume(settings.alarmSound, settings.alarmVolume, vibEnabled)
       .then(() => {
         syncAllRemindersWithLocalNotifications(reminders, settings).catch(() => {});
       })
       .catch(() => {});
-  }, [settings.alarmSound, settings.alarmVolume, reminders]);
+  }, [settings.alarmSound, settings.alarmVolume, settings.vibrationEnabled, reminders]);
 
   // Ideas & Thoughts state: Initialized to empty array, all mock data removed
   const [ideas, setIdeas] = useState<IdeaNote[]>(() => {
@@ -1539,14 +1542,65 @@ export default function App() {
   };
 
   // Google sign in / out handlers
-  const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = async (options?: {
+    openCalendar?: boolean;
+    forDrive?: boolean;
+    openDriveWindow?: boolean;
+  }) => {
     try {
-      const result = await signInWithGoogle();
+      const result = await signInWithGoogle(options);
       setGoogleUser(result.user);
       setGoogleToken(result.accessToken);
-      showSyncNotification('حساب تقویم گوگل (Google Calendar) متصل و باز شد.');
+      if (options?.forDrive) {
+        const targetFolderName = settings.cloudBackupFolderName || 'Yaad reminder';
+        const nextSettings: AppSettings = {
+          ...settings,
+          cloudBackupEnabled: true,
+          cloudBackupProvider: 'google_drive',
+          cloudBackupFolderName: targetFolderName,
+        };
+        setSettings(nextSettings);
+        try {
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
+        } catch {}
+
+        // If local reminders are empty, first try recalling existing backup from Google Drive
+        if (reminders.length === 0 && ideas.length === 0 && savedLocations.length === 0) {
+          const { snapshot, source } = await retrieveLatestBackupWithPriority(
+            result.accessToken,
+            nextSettings
+          ).catch(() => ({ snapshot: null, source: 'none' as const }));
+          if (snapshot) {
+            applyRestoredBackupIfNeeded(snapshot, source);
+          }
+        }
+
+        await performAutoBackup(
+          {
+            reminders: remindersRef.current,
+            ideas: ideasRef.current,
+            savedLocations: savedLocationsRef.current,
+            occasions: occasionsRef.current,
+            settings: nextSettings,
+          },
+          { immediateCloud: true, forceCloud: true, googleToken: result.accessToken }
+        ).catch(() => {});
+        showSyncNotification(
+          isEn
+            ? `Connected to Google Drive and created/synced backup folder "${targetFolderName}".`
+            : `اتصال به گوگل درایو برقرار شد و پوشه پشتیبان «${targetFolderName}» به صورت خودکار ایجاد و همگام‌سازی گردید.`
+        );
+      } else {
+        showSyncNotification(
+          isEn
+            ? 'Google Calendar connected.'
+            : 'حساب تقویم گوگل (Google Calendar) متصل و باز شد.'
+        );
+      }
     } catch (err: any) {
-      showSyncNotification('خطا در اتصال به تقویم گوگل: ' + (err?.message || ''));
+      showSyncNotification(
+        (isEn ? 'Google connection error: ' : 'خطا در اتصال به حساب گوگل: ') + (err?.message || '')
+      );
     }
   };
 

@@ -49,8 +49,10 @@ export interface AppSettings {
   defaultRingTune: Category;
   alarmSound: PhoneAlarmSound;
   alarmVolume: number; // 0.0 - 1.0
+  vibrationEnabled?: boolean;
   autoVoiceInput: boolean;
   googleMapsApiKey?: string;
+  googleOAuthClientId?: string;
   cloudBackupEnabled?: boolean;
   cloudBackupProvider?: CloudBackupProvider;
   cloudBackupFolderName?: string;

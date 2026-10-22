@@ -1,5 +1,5 @@
 // Service Worker for YAAD PWA Offline Caching & Installability
-const CACHE_NAME = 'yaad-pwa-cache-v10';
+const CACHE_NAME = 'yaad-pwa-cache-v11';
 
 const PRECACHE_ASSETS = [
   '/',
@@ -43,6 +43,18 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(event.request.url);
 
+  // Never cache Vite dev server modules, pre-bundled deps, HMR endpoints, or API calls
+  if (
+    url.pathname.startsWith('/node_modules/') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/api/') ||
+    url.searchParams.has('v') ||
+    url.searchParams.has('t')
+  ) {
+    return;
+  }
+
   // HTML page navigation
   if (event.request.mode === 'navigate') {
     event.respondWith(
@@ -75,6 +87,10 @@ self.addEventListener('fetch', (event) => {
 const acknowledgedAlarmIds = new Set();
 
 self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+    return;
+  }
   if (event.data?.type === 'YAAD_DISMISS_ALARM_NOTIFICATION') {
     const reminderId = event.data.reminderId;
     if (reminderId) {

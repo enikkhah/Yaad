@@ -88,12 +88,21 @@ import {
   downloadBackupFromGoogleDrive,
   findOrCreateDriveFolder,
   openGoogleCalendarAccount,
+  openGoogleDriveAccount,
+  isGoogleDriveConnected,
+  setCustomGoogleOAuthConfig,
+  getEffectiveGoogleClientId,
+  ANDROID_PACKAGE_NAME,
+  GOOGLE_DRIVE_FILE_SCOPE,
+  GOOGLE_CUSTOM_CLIENT_ID_KEY,
+  GOOGLE_REAL_ACCESS_TOKEN_KEY,
   GOOGLE_CALENDAR_DIRECT_TOKEN,
+  GOOGLE_DRIVE_DIRECT_TOKEN,
   DRIVE_BACKUP_FOLDER_NAME
 } from '../utils/googleSync';
 import { App as CapacitorApp } from '@capacitor/app';
 import { CloudBackupProvider } from '../types';
-import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume } from '../utils/audio';
+import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume, setGlobalVibration } from '../utils/audio';
 import { syncNotificationSoundAndVolume, syncAllRemindersWithLocalNotifications } from '../utils/nativeLocalNotifications';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 import { User } from 'firebase/auth';
@@ -106,7 +115,7 @@ interface SettingsModalProps {
   onUpdateSettings: (newSettings: Partial<AppSettings>) => void;
   googleUser: User | null;
   googleToken: string | null;
-  onGoogleSignIn: () => Promise<void>;
+  onGoogleSignIn: (options?: { openCalendar?: boolean; forDrive?: boolean; openDriveWindow?: boolean }) => Promise<void>;
   onGoogleSignOut: () => Promise<void>;
   onOpenStats?: () => void;
   reminders?: Reminder[];
@@ -150,6 +159,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [mapsKeyInput, setMapsKeyInput] = useState(settings?.googleMapsApiKey || '');
   const [keySavedMessage, setKeySavedMessage] = useState(false);
+  const [showOAuthConfig, setShowOAuthConfig] = useState(false);
+  const [oauthClientIdInput, setOauthClientIdInput] = useState<string>(() => {
+    try {
+      return (
+        settings?.googleOAuthClientId ||
+        localStorage.getItem(GOOGLE_CUSTOM_CLIENT_ID_KEY) ||
+        getEffectiveGoogleClientId() ||
+        ''
+      );
+    } catch {
+      return '';
+    }
+  });
+  const [oauthTokenInput, setOauthTokenInput] = useState<string>(() => {
+    try {
+      return localStorage.getItem(GOOGLE_REAL_ACCESS_TOKEN_KEY) || '';
+    } catch {
+      return '';
+    }
+  });
 
   // Backup & Restore state
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -566,13 +595,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         settings: { ...settings, localBackupFolderName: effectiveFolder },
       });
       const updatedPerms = await checkAllPermissionsStatus();
-      setNativePerms({ ...updatedPerms, storage: true });
-      const msg = isFa
-        ? `دسترسی حافظه فعال شد و پوشه «${effectiveFolder}» ایجاد و نسخه پشتیبان در آن ذخیره گردید ✓`
-        : `Storage access granted, folder "${effectiveFolder}" created and backup saved ✓`;
-      setModalPermissionMessage(msg);
-      setBackupSuccessMessage(msg);
-      setTimeout(() => setBackupSuccessMessage(null), 5000);
+      const isStorageGranted = Boolean(res.granted && updatedPerms.storage);
+      setNativePerms({ ...updatedPerms, storage: isStorageGranted });
+      if (isStorageGranted) {
+        const msg = isFa
+          ? `دسترسی حافظه فعال شد و پوشه «${effectiveFolder}» ایجاد و نسخه پشتیبان در آن ذخیره گردید ✓`
+          : `Storage access granted, folder "${effectiveFolder}" created and backup saved ✓`;
+        setModalPermissionMessage(msg);
+        setBackupSuccessMessage(msg);
+        setTimeout(() => setBackupSuccessMessage(null), 5000);
+      } else {
+        setBackupErrorMessage(
+          isFa
+            ? 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
+            : 'To create the backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key'
+        );
+      }
     } catch {
       setBackupErrorMessage(isFa ? 'خطا در تنظیم پوشه محلی.' : 'Failed to configure local folder.');
     } finally {
@@ -747,10 +785,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       // 1. Always create the folder on device / OPFS / local cloud sync path
       await ensureCloudFolderOnDevice(cleanedFolder, snapshotPayload);
 
-      // 2. If Google Drive is selected and a real OAuth token is available, create folder on Google Drive API immediately
-      if (cloudProvider === 'google_drive' && googleToken && googleToken !== GOOGLE_CALENDAR_DIRECT_TOKEN) {
-        await findOrCreateDriveFolder(googleToken, true, cleanedFolder);
-        await uploadBackupToGoogleDrive(snapshotPayload, googleToken, cleanedFolder);
+      // 2. If Google Drive is selected, ensure Drive connection and create folder + backup immediately
+      if (cloudProvider === 'google_drive') {
+        const effectiveDriveToken = isGoogleDriveConnected(googleToken)
+          ? (googleToken || GOOGLE_DRIVE_DIRECT_TOKEN)
+          : GOOGLE_DRIVE_DIRECT_TOKEN;
+        if (!isGoogleDriveConnected(googleToken)) {
+          await onGoogleSignIn({ forDrive: true, openCalendar: false });
+        }
+        await findOrCreateDriveFolder(effectiveDriveToken, true, cleanedFolder);
+        await uploadBackupToGoogleDrive(snapshotPayload, effectiveDriveToken, cleanedFolder);
       }
 
       setBackupSuccessMessage(
@@ -768,29 +812,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  // Execute confirmed upload to the user's selected Cloud Space (Custom Cloud Folder, WebDAV/URL, or Google Drive)
+  // Execute confirmed upload to Google Drive (automatic Yaad reminder folder)
   const handleConfirmedCloudBackup = async () => {
     setConfirmCloudUpload(false);
     setIsCloudSyncing(true);
     setBackupErrorMessage(null);
     try {
-      const targetCloudFolder = cloudFolderInput.trim() || DRIVE_BACKUP_FOLDER_NAME;
+      const targetCloudFolder = DRIVE_BACKUP_FOLDER_NAME;
       const updatedSettings: AppSettings = {
         ...settings,
         cloudBackupEnabled: true,
-        cloudBackupProvider: cloudProvider,
+        cloudBackupProvider: 'google_drive',
         cloudBackupFolderName: targetCloudFolder,
-        cloudSpaceLabel: cloudSpaceLabelInput.trim() || undefined,
-        cloudCustomUrl: cloudUrlInput.trim() || undefined,
-        cloudCustomAuth: cloudAuthInput.trim() || undefined,
       };
       onUpdateSettings({
         cloudBackupEnabled: true,
-        cloudBackupProvider: cloudProvider,
+        cloudBackupProvider: 'google_drive',
         cloudBackupFolderName: targetCloudFolder,
-        cloudSpaceLabel: cloudSpaceLabelInput.trim() || undefined,
-        cloudCustomUrl: cloudUrlInput.trim() || undefined,
-        cloudCustomAuth: cloudAuthInput.trim() || undefined,
       });
 
       const snapshotPayload = {
@@ -806,92 +844,60 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
       await ensureCloudFolderOnDevice(targetCloudFolder, snapshotPayload);
 
-      if (cloudProvider === 'google_drive') {
-        const hasRealDriveToken = Boolean(googleToken && googleToken !== GOOGLE_CALENDAR_DIRECT_TOKEN);
-        let ok = false;
-        if (hasRealDriveToken) {
-          ok = await uploadBackupToGoogleDrive(snapshotPayload, googleToken, targetCloudFolder);
-        }
-        if (!ok) {
-          // On Android or when direct OAuth token is not active, also invoke native Share/Save to Google Drive app
-          const sharedToDriveApp = await shareBackupToAnyCloudApp(snapshotPayload, targetCloudFolder);
-          if (!sharedToDriveApp) {
-            await performAutoBackup(
-              {
-                reminders,
-                ideas,
-                savedLocations,
-                occasions,
-                settings: updatedSettings,
-              },
-              { immediateCloud: true, forceCloud: true, googleToken }
-            );
-          }
-        }
-      } else if (cloudProvider === 'webdav_url') {
-        if (!cloudUrlInput.trim()) {
-          setBackupErrorMessage(
-            isFa
-              ? 'لطفاً آدرس اینترنتی (URL / WebDAV) فضای ابری مورد نظر خود را وارد کنید.'
-              : 'Please enter the target Cloud / WebDAV URL.'
-          );
-          return;
-        }
-        const ok = await uploadToCustomCloudUrl(
-          snapshotPayload,
-          cloudUrlInput.trim(),
-          targetCloudFolder,
-          cloudAuthInput.trim()
-        );
-        if (!ok) {
-          setBackupErrorMessage(
-            isFa
-              ? 'ارسال به آدرس ابری واردشده با خطا مواجه شد. آدرس یا دسترسی را بررسی کنید.'
-              : 'Failed to upload to custom cloud URL.'
-          );
-          return;
-        }
-      } else {
-        // 'custom_cloud_folder' (OneDrive, Dropbox, iCloud, Mega, or any user-selected folder)
-        await performAutoBackup(
-          {
-            reminders,
-            ideas,
-            savedLocations,
-            occasions,
-            settings: { ...updatedSettings, cloudBackupEnabled: true },
-          },
-          { immediateCloud: true, forceCloud: true, googleToken }
-        );
+      if (!isGoogleDriveConnected(googleToken)) {
+        await onGoogleSignIn({ forDrive: true, openCalendar: false });
       }
+      const effectiveDriveToken =
+        googleToken && googleToken !== GOOGLE_CALENDAR_DIRECT_TOKEN
+          ? googleToken
+          : GOOGLE_DRIVE_DIRECT_TOKEN;
+      await findOrCreateDriveFolder(effectiveDriveToken, true, targetCloudFolder);
+      await uploadBackupToGoogleDrive(snapshotPayload, effectiveDriveToken, targetCloudFolder);
+      await performAutoBackup(
+        {
+          reminders,
+          ideas,
+          savedLocations,
+          occasions,
+          settings: updatedSettings,
+        },
+        { immediateCloud: true, forceCloud: true, googleToken: effectiveDriveToken }
+      );
 
       setBackupSuccessMessage(
         isFa
-          ? `پشتیبان‌گیری در فضای ابری انتخابی (پوشه «${targetCloudFolder}») با موفقیت انجام شد.`
-          : `Backup saved to selected cloud space (folder "${targetCloudFolder}").`
+          ? `پشتیبان‌گیری در گوگل درایو (پوشه «${targetCloudFolder}») با موفقیت انجام شد ✓`
+          : `Backup saved to Google Drive (folder "${targetCloudFolder}") ✓`
       );
       setTimeout(() => setBackupSuccessMessage(null), 4000);
     } catch {
-      setBackupErrorMessage(isFa ? 'خطا در ذخیره در فضای ابری.' : 'Cloud backup failed.');
+      setBackupErrorMessage(isFa ? 'خطا در ذخیره در گوگل درایو.' : 'Google Drive backup failed.');
     } finally {
       setIsCloudSyncing(false);
     }
   };
 
-  // Recall from whichever Cloud Space the user configured
+  // Recall from Google Drive backup folder (same behavior as internal storage recall)
   const handleRecallFromCloudDrive = async () => {
     setIsCloudSyncing(true);
     setBackupErrorMessage(null);
+    setBackupSuccessMessage(null);
     try {
-      const targetCloudFolder = cloudFolderInput.trim() || DRIVE_BACKUP_FOLDER_NAME;
-      const snap = await retrieveFromUserCloudSpace(googleToken, {
+      const targetCloudFolder = DRIVE_BACKUP_FOLDER_NAME;
+      if (!isGoogleDriveConnected(googleToken)) {
+        await onGoogleSignIn({ forDrive: true, openCalendar: false });
+      }
+      const effectiveToken =
+        googleToken && googleToken !== GOOGLE_CALENDAR_DIRECT_TOKEN
+          ? googleToken
+          : GOOGLE_DRIVE_DIRECT_TOKEN;
+      const snap = await retrieveFromUserCloudSpace(effectiveToken, {
         ...settings,
-        cloudBackupProvider: cloudProvider,
+        cloudBackupProvider: 'google_drive',
         cloudBackupFolderName: targetCloudFolder,
-        cloudCustomUrl: cloudUrlInput.trim() || undefined,
-        cloudCustomAuth: cloudAuthInput.trim() || undefined,
       });
-      if (snap) {
+      const itemsCount = snap ? getSnapshotItemCount(snap) : 0;
+      if (snap && itemsCount > 0) {
         setPendingRestoreData({
           reminders: snap.reminders || [],
           ideas: snap.ideas || [],
@@ -901,18 +907,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         });
         setBackupSuccessMessage(
           isFa
-            ? `فایل پشتیبان از فضای ابری انتخابی (پوشه «${targetCloudFolder}») دریافت شد. جهت اعمال در کادر زیر تایید نمایید.`
-            : `Backup fetched from cloud space (folder "${targetCloudFolder}"). Confirm below.`
+            ? `نسخه پشتیبان از پوشه «${targetCloudFolder}» در گوگل درایو با موفقیت فراخوانی شد (${toPersianDigits(itemsCount)} مورد). نحوه اعمال را در کادر زیر انتخاب کنید.`
+            : `Backup fetched from Google Drive folder "${targetCloudFolder}" (${itemsCount} items). Confirm below.`
         );
       } else {
         setBackupErrorMessage(
           isFa
-            ? `در فضای ابری معرفی‌شده (پوشه «${targetCloudFolder}») فایل پشتیبانی یافت نشد.`
-            : `No backup found in the configured cloud space ("${targetCloudFolder}").`
+            ? `در پوشه «${targetCloudFolder}» گوگل درایو هنوز فایل پشتیبانی یافت نشد. ابتدا روی «ذخیره در گوگل درایو» بزنید.`
+            : `No backup found in Google Drive folder "${targetCloudFolder}".`
         );
       }
     } catch {
-      setBackupErrorMessage(isFa ? 'خطا در فراخوانی از فضای ابری.' : 'Failed to fetch from cloud space.');
+      setBackupErrorMessage(isFa ? 'خطا در فراخوانی از گوگل درایو.' : 'Failed to fetch from Google Drive.');
     } finally {
       setIsCloudSyncing(false);
     }
@@ -1268,6 +1274,80 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       );
                     })}
                   </div>
+                </div>
+
+                {/* 2.1.5 Vibration On/Off Sliding Toggle (کلید کشویی ویبره در بخش صدا و هشدارها) */}
+                <div className="p-3.5 rounded-2xl bg-stone-950/60 border border-stone-800/80 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <div
+                      className={`p-2 rounded-xl border shrink-0 ${
+                        settings.vibrationEnabled !== false
+                          ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-400'
+                          : 'bg-stone-900 border-stone-800 text-stone-500'
+                      }`}
+                    >
+                      <Smartphone className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <span className="text-xs font-bold text-stone-200 block">
+                        {isFa ? 'لرزش و ویبره هنگام هشدار (ویبره آلارم)' : 'Alarm Vibration'}
+                      </span>
+                      <span className="text-[11px] text-stone-400 block mt-0.5">
+                        {settings.vibrationEnabled !== false
+                          ? isFa
+                            ? 'ویبره همزمان با زنگ هشدار و اعلان اختصاصی فعال است'
+                            : 'Vibration is active during alarms and notifications'
+                          : isFa
+                          ? 'ویبره غیرفعال است (فقط پخش صدا)'
+                          : 'Vibration is off (sound only)'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={settings.vibrationEnabled !== false}
+                    onClick={() => {
+                      const nextVal = settings.vibrationEnabled === false;
+                      setGlobalVibration(nextVal);
+                      onUpdateSettings({ vibrationEnabled: nextVal });
+                      syncNotificationSoundAndVolume(
+                        settings.alarmSound,
+                        settings.alarmVolume,
+                        nextVal
+                      ).catch(() => {});
+                      if (nextVal && typeof navigator !== 'undefined' && navigator.vibrate) {
+                        try {
+                          navigator.vibrate([120, 60, 120]);
+                        } catch {}
+                      }
+                    }}
+                    className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xl border transition-all cursor-pointer shrink-0 ${
+                      settings.vibrationEnabled !== false
+                        ? 'bg-emerald-500/20 border-emerald-400/80 text-white'
+                        : 'bg-stone-950 border-stone-700 text-stone-300'
+                    }`}
+                  >
+                    <span className="text-[11px] font-bold text-white">
+                      {settings.vibrationEnabled !== false
+                        ? isFa ? 'روشن' : 'ON'
+                        : isFa ? 'خاموش' : 'OFF'}
+                    </span>
+                    <div
+                      className={`relative w-11 h-6 rounded-full transition-colors border ${
+                        settings.vibrationEnabled !== false
+                          ? 'bg-emerald-500 border-emerald-300'
+                          : 'bg-stone-700 border-stone-500'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[2px] w-4.5 h-4.5 rounded-full bg-white shadow-md transition-all ${
+                          settings.vibrationEnabled !== false ? 'start-[22px]' : 'start-[2px]'
+                        }`}
+                      />
+                    </div>
+                  </button>
                 </div>
 
                 {/* 2.2 Alarm Sound Selection */}
@@ -1995,14 +2075,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <Cloud className="w-4 h-4 text-sky-400 shrink-0" />
                         <span>
                           {isFa
-                            ? 'پشتیبان‌گیری در فضای ابری دلخواه کاربر (اختیاری)'
-                            : 'Cloud Backup in Any User Space (Optional)'}
+                            ? `پشتیبان‌گیری ابری در گوگل درایو (پوشه خودکار ${DRIVE_BACKUP_FOLDER_NAME})`
+                            : `Google Drive Cloud Backup (Automatic ${DRIVE_BACKUP_FOLDER_NAME} Folder)`}
                         </span>
                       </div>
                       <p className="text-[11px] text-stone-400 mt-0.5 leading-relaxed">
                         {isFa
-                          ? 'استفاده از فضای ابری کاملاً اختیاری است. می‌توانید هر فضای ابری مورد نظر خود (OneDrive، Dropbox، iCloud، Mega، WebDAV، گوگل درایو یا هر پوشه دلخواه) را معرفی کنید.'
-                          : 'Optional cloud storage. Use any cloud space you prefer (OneDrive, Dropbox, iCloud, Mega, WebDAV, Google Drive, or any custom folder).'}
+                          ? `به محض اتصال به گوگل درایو، پوشه پشتیبان «${DRIVE_BACKUP_FOLDER_NAME}» به صورت خودکار (با اسکوپ drive.file) ایجاد می‌شود و یادآورها دقیقاً مشابه حافظه داخلی قابل ذخیره و فراخوانی هستند.`
+                          : `As soon as you connect to Google Drive, the "${DRIVE_BACKUP_FOLDER_NAME}" backup folder is automatically created (with drive.file scope) and your reminders can be saved and recalled just like internal storage.`}
                       </p>
                     </div>
 
@@ -2012,7 +2092,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       role="switch"
                       aria-checked={Boolean(settings.cloudBackupEnabled)}
                       onClick={() =>
-                        onUpdateSettings({ cloudBackupEnabled: !settings.cloudBackupEnabled })
+                        onUpdateSettings({
+                          cloudBackupEnabled: !settings.cloudBackupEnabled,
+                          cloudBackupProvider: 'google_drive',
+                          cloudBackupFolderName: DRIVE_BACKUP_FOLDER_NAME,
+                        })
                       }
                       className={`inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xl border transition-all cursor-pointer shrink-0 ${
                         settings.cloudBackupEnabled
@@ -2041,206 +2125,109 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                   </div>
 
-                  {/* Cloud Provider / Method Selector (Any Cloud Space, not just Google) */}
-                  <div className="space-y-2 pt-2 border-t border-stone-800/80">
-                    <label className="text-[11px] text-stone-300 font-bold block">
-                      {isFa
-                        ? 'نوع فضای ابری مورد نظر خود را انتخاب کنید:'
-                        : 'Select Your Preferred Cloud Space Type:'}
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCloudProvider('custom_cloud_folder');
-                          onUpdateSettings({ cloudBackupProvider: 'custom_cloud_folder' });
-                        }}
-                        className={`p-2 rounded-xl border text-[11px] font-bold text-center transition-all cursor-pointer ${
-                          cloudProvider === 'custom_cloud_folder'
-                            ? 'bg-sky-500/20 border-sky-400 text-white shadow-sm'
-                            : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-stone-200'
-                        }`}
-                      >
-                        {isFa
-                          ? 'پوشه هر فضای ابری (OneDrive / Dropbox / iCloud / ...)'
-                          : 'Any Cloud Folder (OneDrive / Dropbox / iCloud)'}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCloudProvider('webdav_url');
-                          onUpdateSettings({ cloudBackupProvider: 'webdav_url' });
-                        }}
-                        className={`p-2 rounded-xl border text-[11px] font-bold text-center transition-all cursor-pointer ${
-                          cloudProvider === 'webdav_url'
-                            ? 'bg-sky-500/20 border-sky-400 text-white shadow-sm'
-                            : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-stone-200'
-                        }`}
-                      >
-                        {isFa
-                          ? 'سرور / لینک ابری دلخواه (WebDAV / Nextcloud)'
-                          : 'Custom Cloud URL / WebDAV Server'}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCloudProvider('google_drive');
-                          onUpdateSettings({ cloudBackupProvider: 'google_drive' });
-                        }}
-                        className={`p-2 rounded-xl border text-[11px] font-bold text-center transition-all cursor-pointer ${
-                          cloudProvider === 'google_drive'
-                            ? 'bg-sky-500/20 border-sky-400 text-white shadow-sm'
-                            : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-stone-200'
-                        }`}
-                      >
-                        {isFa ? 'گوگل درایو (Google Drive)' : 'Google Drive'}
-                      </button>
+                  {/* Google Drive Connection & Automatic Yaad reminder Folder Status */}
+                  <div className="p-3 rounded-xl bg-stone-950 border border-stone-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Cloud className={`w-4 h-4 shrink-0 ${isGoogleDriveConnected(googleToken) ? 'text-emerald-400' : 'text-sky-400'}`} />
+                      <div className="min-w-0">
+                        <span className="text-xs font-bold text-stone-200 block truncate">
+                          {isGoogleDriveConnected(googleToken)
+                            ? (isFa ? 'متصل به گوگل درایو (Google Drive) ✓' : 'Connected to Google Drive ✓')
+                            : (isFa ? 'اتصال به حساب گوگل درایو (Google Drive)' : 'Connect to Google Drive')}
+                        </span>
+                        <span className="text-[10px] text-stone-400 block truncate">
+                          {isGoogleDriveConnected(googleToken)
+                            ? (isFa
+                                ? `پوشه پشتیبان خودکار در گوگل درایو: ${DRIVE_BACKUP_FOLDER_NAME}`
+                                : `Automatic backup folder in Google Drive: ${DRIVE_BACKUP_FOLDER_NAME}`)
+                            : (isFa
+                                ? `با اتصال به گوگل درایو، پوشه «${DRIVE_BACKUP_FOLDER_NAME}» اتوماتیک ساخته می‌شود`
+                                : `Connecting automatically creates the "${DRIVE_BACKUP_FOLDER_NAME}" folder`)}
+                        </span>
+                      </div>
                     </div>
-                  </div>
 
-                  {/* Cloud Folder / Path Specification */}
-                  <div className="space-y-2 pt-1">
-                    <label className="text-[11px] text-stone-300 font-bold block">
-                      {isFa
-                        ? 'معرفی محل و نام پوشه در فضای ابری مورد نظر:'
-                        : 'Target Cloud Space & Folder Name:'}
-                    </label>
-
-                    {cloudProvider === 'custom_cloud_folder' && (
-                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                        <input
-                          type="text"
-                          value={cloudSpaceLabelInput}
-                          onChange={(e) => setCloudSpaceLabelInput(e.target.value)}
-                          placeholder={
-                            isFa
-                              ? 'نام سرویس دلخواه (مثلاً OneDrive، Dropbox، iCloud، Mega...)'
-                              : 'Cloud service name (e.g. OneDrive, Dropbox, iCloud, Mega...)'
-                          }
-                          className="flex-1 px-3 py-2 rounded-xl bg-stone-950 border border-stone-800 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-sky-500/60"
-                        />
+                    <div className="flex items-center gap-2 shrink-0">
+                      {isGoogleDriveConnected(googleToken) ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openGoogleDriveAccount()}
+                            className="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 font-bold text-xs cursor-pointer flex items-center gap-1.5"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>{isFa ? 'مشاهده پوشه در درایو' : 'Open Google Drive'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={onGoogleSignOut}
+                            className="min-h-[38px] px-2.5 py-1.5 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-rose-300 font-bold text-xs cursor-pointer"
+                          >
+                            {isFa ? 'قطع اتصال' : 'Disconnect'}
+                          </button>
+                        </>
+                      ) : (
                         <button
                           type="button"
-                          disabled={isCloudSyncing}
-                          onClick={handleSelectAnyCloudFolder}
-                          className="min-h-[40px] px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shrink-0"
+                          onClick={async () => {
+                            setIsSigningIn(true);
+                            setBackupErrorMessage(null);
+                            try {
+                              await onGoogleSignIn({ forDrive: true, openCalendar: false });
+                              onUpdateSettings({
+                                cloudBackupEnabled: true,
+                                cloudBackupProvider: 'google_drive',
+                                cloudBackupFolderName: DRIVE_BACKUP_FOLDER_NAME,
+                              });
+                              setBackupSuccessMessage(
+                                isFa
+                                  ? `اتصال به گوگل درایو برقرار شد و پوشه پشتیبان «${DRIVE_BACKUP_FOLDER_NAME}» به صورت خودکار ایجاد و همگام‌سازی گردید ✓`
+                                  : `Connected to Google Drive and folder "${DRIVE_BACKUP_FOLDER_NAME}" was automatically created ✓`
+                              );
+                              setTimeout(() => setBackupSuccessMessage(null), 5000);
+                            } finally {
+                              setIsSigningIn(false);
+                            }
+                          }}
+                          disabled={isSigningIn}
+                          className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs cursor-pointer shrink-0 shadow-sm active:scale-95 transition-all"
                         >
-                          <FolderOpen className="w-3.5 h-3.5" />
-                          <span>
-                            {isFa ? 'انتخاب پوشه فضای ابری از دستگاه' : 'Browse Cloud Folder'}
-                          </span>
+                          {isSigningIn
+                            ? isFa ? 'در حال اتصال و ساخت پوشه...' : 'Connecting...'
+                            : isFa ? 'اتصال به گوگل درایو' : 'Connect Google Drive'}
                         </button>
-                      </div>
-                    )}
-
-                    {cloudProvider === 'webdav_url' && (
-                      <div className="space-y-2">
-                        <input
-                          type="url"
-                          dir="ltr"
-                          value={cloudUrlInput}
-                          onChange={(e) => setCloudUrlInput(e.target.value)}
-                          placeholder="https://your-cloud-server.com/remote.php/dav/files/user"
-                          className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-stone-800 text-xs font-mono text-white placeholder-stone-500 focus:outline-none focus:border-sky-500/60"
-                        />
-                        <input
-                          type="password"
-                          dir="ltr"
-                          value={cloudAuthInput}
-                          onChange={(e) => setCloudAuthInput(e.target.value)}
-                          placeholder={
-                            isFa
-                              ? 'توکن یا نام‌کاربری:رمزعبور (اختیاری - مثلاً user:pass)'
-                              : 'Auth Token or username:password (Optional)'
-                          }
-                          className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-stone-800 text-xs font-mono text-white placeholder-stone-500 focus:outline-none focus:border-sky-500/60"
-                        />
-                      </div>
-                    )}
-
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 flex items-center gap-2 px-3 py-2 rounded-xl bg-stone-950 border border-stone-800">
-                        <Cloud className="w-4 h-4 text-sky-400 shrink-0" />
-                        <input
-                          type="text"
-                          value={cloudFolderInput}
-                          onChange={(e) => setCloudFolderInput(e.target.value)}
-                          placeholder="Yaad reminder"
-                          className="w-full bg-transparent text-xs font-mono text-white focus:outline-none"
-                        />
-                      </div>
-                      <button
-                        type="button"
-                        onClick={handleSaveCloudFolder}
-                        className="min-h-[40px] px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all cursor-pointer active:scale-95 shrink-0"
-                      >
-                        {isFa ? 'ثبت محل' : 'Save Location'}
-                      </button>
+                      )}
                     </div>
                   </div>
 
-                  {/* Provider-specific & Universal Cloud Sync Controls */}
-                  {cloudProvider === 'google_drive' && (!googleUser || googleToken === GOOGLE_CALENDAR_DIRECT_TOKEN) && (
-                    <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 flex items-center justify-between gap-2">
-                      <span className="text-[11px] text-stone-400">
-                        {isFa
-                          ? 'برای همگام‌سازی مستقیم با گوگل درایو یا ارسال به برنامه Google Drive گوشی:'
-                          : 'Connect to Google Drive or send to your phone Google Drive app:'}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          setIsSigningIn(true);
-                          try {
-                            await onGoogleSignIn();
-                          } finally {
-                            setIsSigningIn(false);
-                          }
-                        }}
-                        disabled={isSigningIn}
-                        className="min-h-[38px] px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs cursor-pointer shrink-0"
-                      >
-                        {isSigningIn
-                          ? isFa ? 'اتصال...' : 'Connecting...'
-                          : isFa ? 'اتصال به گوگل درایو' : 'Connect Google Drive'}
-                      </button>
-                    </div>
-                  )}
-
+                  {/* Direct Save & Recall Buttons (Just like Internal Storage, no Save Location button needed) */}
                   <div className="space-y-2 pt-1">
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <button
                         type="button"
                         disabled={isCloudSyncing}
-                        onClick={() => setConfirmCloudUpload(true)}
-                        className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                        onClick={handleConfirmedCloudBackup}
+                        className="min-h-[42px] px-3 py-2 rounded-xl bg-sky-600/20 hover:bg-sky-600/30 border border-sky-500/40 text-sky-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95"
                       >
-                        <Cloud className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>{isFa ? 'ذخیره در فضای ابری' : 'Save to Cloud Space'}</span>
+                        <Cloud className="w-4 h-4 text-emerald-400" />
+                        <span>
+                          {isFa
+                            ? `ذخیره پشتیبان در پوشه ${DRIVE_BACKUP_FOLDER_NAME} درایو`
+                            : `Save Backup to Drive (${DRIVE_BACKUP_FOLDER_NAME})`}
+                        </span>
                       </button>
 
                       <button
                         type="button"
                         disabled={isCloudSyncing}
                         onClick={handleRecallFromCloudDrive}
-                        className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="min-h-[42px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all active:scale-95"
                       >
-                        <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isCloudSyncing ? 'animate-spin' : ''}`} />
-                        <span>{isFa ? 'فراخوانی از فضای ابری' : 'Restore from Cloud'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={handleShareToAnyCloudApp}
-                        className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <ExternalLink className="w-3.5 h-3.5 text-amber-400" />
+                        <RefreshCw className={`w-4 h-4 text-sky-400 ${isCloudSyncing ? 'animate-spin' : ''}`} />
                         <span>
                           {isFa
-                            ? 'ارسال به هر برنامه ابری گوشی'
-                            : 'Send to Any Cloud App'}
+                            ? 'فراخوانی یادآورها از گوگل درایو'
+                            : 'Recall Reminders from Google Drive'}
                         </span>
                       </button>
                     </div>
@@ -2250,8 +2237,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 space-y-2 animate-in fade-in">
                         <p className="text-xs text-stone-200">
                           {isFa
-                            ? `آیا مایلید فایل پشتیبان فعلی در پوشه «${cloudFolderInput.trim() || DRIVE_BACKUP_FOLDER_NAME}» فضای ابری انتخابی ذخیره و به‌روزرسانی شود؟`
-                            : `Update backup file in cloud folder "${cloudFolderInput.trim() || DRIVE_BACKUP_FOLDER_NAME}"?`}
+                            ? `آیا مایلید فایل پشتیبان فعلی در پوشه «${DRIVE_BACKUP_FOLDER_NAME}» گوگل درایو ذخیره و به‌روزرسانی شود؟`
+                            : `Update backup file in Google Drive folder "${DRIVE_BACKUP_FOLDER_NAME}"?`}
                         </p>
                         <div className="flex items-center gap-2">
                           <button
@@ -2271,6 +2258,96 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </div>
                       </div>
                     )}
+
+                    {/* Optional OAuth / Package Name Configuration for Android / Capacitor */}
+                    <div className="pt-1">
+                      <button
+                        type="button"
+                        onClick={() => setShowOAuthConfig((prev) => !prev)}
+                        className="text-[11px] text-stone-400 hover:text-sky-300 flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Sliders className="w-3 h-3" />
+                        <span>
+                          {isFa
+                            ? 'تنظیمات پیشرفته OAuth و کلید کلاینت گوگل (مخصوص بیلد اندروید / لوکال)'
+                            : 'Advanced OAuth Client ID & Token Settings (Android / Local)'}
+                        </span>
+                      </button>
+
+                      {showOAuthConfig && (
+                        <div className="mt-2 p-3 rounded-xl bg-stone-950 border border-stone-800 space-y-2.5 text-[11px]">
+                          <div className="flex flex-wrap items-center justify-between gap-1 text-stone-400">
+                            <span>
+                              Package Name:{' '}
+                              <code className="text-emerald-300 font-mono">{ANDROID_PACKAGE_NAME}</code>
+                            </span>
+                            <span>
+                              Scope:{' '}
+                              <code className="text-sky-300 font-mono">.../auth/drive.file</code>
+                            </span>
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="block text-stone-300 font-bold">
+                              {isFa
+                                ? 'شناسه کلاینت گوگل (Google OAuth Client ID - اختیاری):'
+                                : 'Google OAuth Client ID (Optional):'}
+                            </label>
+                            <input
+                              type="text"
+                              dir="ltr"
+                              value={oauthClientIdInput}
+                              onChange={(e) => setOauthClientIdInput(e.target.value)}
+                              placeholder="1234567890-abcdefg.apps.googleusercontent.com"
+                              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-900 border border-stone-800 text-white font-mono text-[11px] focus:outline-none focus:border-sky-500"
+                            />
+                          </div>
+
+                          <div className="space-y-1">
+                            <label className="block text-stone-300 font-bold">
+                              {isFa
+                                ? 'توکن دسترسی مستقیم (Access Token با اسکوپ drive.file - اختیاری):'
+                                : 'Direct OAuth Access Token (Optional):'}
+                            </label>
+                            <input
+                              type="password"
+                              dir="ltr"
+                              value={oauthTokenInput}
+                              onChange={(e) => setOauthTokenInput(e.target.value)}
+                              placeholder="ya29.a0..."
+                              className="w-full px-2.5 py-1.5 rounded-lg bg-stone-900 border border-stone-800 text-white font-mono text-[11px] focus:outline-none focus:border-sky-500"
+                            />
+                          </div>
+
+                          <div className="flex justify-end">
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                setCustomGoogleOAuthConfig({
+                                  clientId: oauthClientIdInput,
+                                  accessToken: oauthTokenInput,
+                                });
+                                onUpdateSettings({
+                                  googleOAuthClientId: oauthClientIdInput.trim() || undefined,
+                                });
+                                if (oauthTokenInput.trim().length > 15) {
+                                  await onGoogleSignIn({ forDrive: true, openCalendar: false });
+                                }
+                                setBackupSuccessMessage(
+                                  isFa
+                                    ? `تنظیمات OAuth ذخیره شد و پوشه «${DRIVE_BACKUP_FOLDER_NAME}» بررسی گردید ✓`
+                                    : `OAuth settings saved and folder "${DRIVE_BACKUP_FOLDER_NAME}" verified ✓`
+                                );
+                                setTimeout(() => setBackupSuccessMessage(null), 4000);
+                              }}
+                              className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs cursor-pointer"
+                            >
+                              {isFa ? 'ذخیره تنظیمات OAuth' : 'Save OAuth Config'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
 

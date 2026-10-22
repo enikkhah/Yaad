@@ -4,7 +4,6 @@ import { formatJalaliTime } from '../utils/jalali';
 import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound } from '../utils/audio';
 import { dismissDeliveredNotifications } from '../utils/nativeLocalNotifications';
 import { 
-  Bell, 
   CheckCircle2, 
   Clock, 
   ChevronDown, 
@@ -14,6 +13,7 @@ import {
   Maximize2 
 } from 'lucide-react';
 import { AppLanguage } from '../utils/i18n';
+import appIcon from '../assets/images/icon.png';
 
 interface HeadsUpNotificationBannerProps {
   reminder: Reminder | null;
@@ -48,12 +48,13 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
     // Play alarm audio sound & vibration using resolved sound in a continuous loop (for 1 minute)
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
     const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
-    startAlarmRinging(reminder.category, sound, vol);
+    const vib = settings?.vibrationEnabled !== false;
+    startAlarmRinging(reminder.category, sound, vol, vib);
 
     return () => {
       stopAlarmRinging();
     };
-  }, [reminder?.id]);
+  }, [reminder?.id, settings?.vibrationEnabled]);
 
   if (!reminder) return null;
 
@@ -108,11 +109,16 @@ export const HeadsUpNotificationBanner: React.FC<HeadsUpNotificationBannerProps>
         onClick={handleCardClick}
         className="w-full bg-[#18181b]/95 hover:bg-[#1f1f23] text-white border-2 border-indigo-500/80 rounded-3xl sm:rounded-full shadow-[0_10px_35px_rgba(0,0,0,0.85)] shadow-indigo-950/50 backdrop-blur-2xl transition-all duration-200 cursor-pointer overflow-hidden p-2 sm:px-3 sm:py-2"
       >
-        {/* Main Sleek Pill Row (مطابق تصویر ارسالی کاربر) */}
+        {/* Main Sleek Pill Row */}
         <div className="flex items-center justify-between gap-2.5">
-          {/* Left: Purple Circular Badge with White Bell (آیکون بنفش با زنگوله سفید) */}
-          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 text-white flex items-center justify-center shrink-0 shadow-lg shadow-indigo-600/40 ring-2 ring-indigo-400/50 animate-pulse">
-            <Bell className="w-5 h-5 fill-white stroke-[2.2]" />
+          {/* Left: Official App Icon Badge */}
+          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-stone-950 text-white flex items-center justify-center shrink-0 shadow-lg shadow-indigo-600/40 ring-2 ring-indigo-400/50 overflow-hidden p-0.5">
+            <img
+              src={appIcon}
+              alt="YAAD"
+              className="w-full h-full object-cover rounded-full"
+              draggable={false}
+            />
           </div>
 
           {/* Center: App Name & Title */}

@@ -34,14 +34,25 @@ if (Capacitor.isNativePlatform()) {
     }
   }
 } else if ('serviceWorker' in navigator) {
+  // Clean up any legacy caches (< v11) that may have cached Vite dev modules (/node_modules/.vite/deps)
+  if ('caches' in window) {
+    caches.keys().then((keys) => {
+      return Promise.all(
+        keys
+          .filter((k) => k !== 'yaad-pwa-cache-v11')
+          .map((k) => caches.delete(k))
+      );
+    }).catch(() => {});
+  }
+
   // Web / PWA browser environment: register service worker for offline caching and installability
   const registerSW = () => {
     navigator.serviceWorker
-      .register('/sw.js', { scope: '/' })
+      .register('/sw.js', { scope: '/', updateViaCache: 'none' })
       .then((reg) => {
         console.log('PWA ServiceWorker registered successfully with scope:', reg.scope);
-        // Automatically check for updates on each launch and interval
-        reg.update();
+        // Automatically check for updates on each launch
+        reg.update().catch(() => {});
 
         reg.addEventListener('updatefound', () => {
           const newWorker = reg.installing;
@@ -58,15 +69,6 @@ if (Capacitor.isNativePlatform()) {
       .catch((err) => {
         console.warn('PWA ServiceWorker registration failed:', err);
       });
-
-    // When the updated service worker takes control, refresh page once to reflect latest code
-    let refreshing = false;
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (!refreshing) {
-        refreshing = true;
-        window.location.reload();
-      }
-    });
   };
 
   if (document.readyState === 'complete') {

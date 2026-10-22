@@ -219,8 +219,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     initializedSessionRef.current = sessionKey;
 
     if (initialData) {
-      // Editing existing reminder: preserve the previously saved date and time exactly
-      const reminderTime = initialData.dueTimestamp;
+      // Editing existing reminder: set date to today (now) and default roller clock time to 2 minutes from now
+      const reminderTime = Date.now() + 2 * 60 * 1000;
       if (isEn) {
         const d = new Date(reminderTime);
         setSelectedYear(d.getFullYear());
