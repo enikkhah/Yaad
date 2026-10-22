@@ -415,13 +415,15 @@ let alarmAutoStopTimeoutId: number | null = null;
 export const startAlarmRinging = (
   category: Category,
   alarmSound: PhoneAlarmSound = 'digital_beep',
-  volumeOverride?: number
+  volumeOverride?: number,
+  vibrationOverride?: boolean
 ) => {
   stopAlarmRinging();
   isAlarmLooping = true;
 
   const effectiveSound = resolveAlarmSound(alarmSound, 'digital_beep');
   const vol = volumeOverride !== undefined ? volumeOverride : globalAlarmVolume;
+  const vibEnabled = vibrationOverride !== undefined ? vibrationOverride : getGlobalVibration();
   const clampedVol = Math.max(0, Math.min(1, vol));
   const soundFile = SOUND_FILE_MAP[effectiveSound] || SOUND_FILE_MAP[effectiveSound.replace(/-/g, '_')] || 'digital_beep.wav';
 
@@ -456,7 +458,7 @@ export const startAlarmRinging = (
   const triggerVibrationAndWatchdog = () => {
     if (!isAlarmLooping) return;
 
-    if ('vibrate' in navigator) {
+    if (vibEnabled && 'vibrate' in navigator) {
       try {
         navigator.vibrate([500, 200, 500, 200, 500]);
       } catch {

@@ -373,10 +373,13 @@ export function getNotificationId(reminderId: string | number): number {
 }
 
 /**
- * Single persistent notification per reminder (no repeated notification spam).
- * The notification stays open in the status bar while the alarm rings for 1 minute.
+ * Repeats the 1-minute alarm notification every 15 minutes (15, 30, 45, 60, ... minutes)
+ * if the user does not react (Done, Snooze, Edit, or Dismiss).
  */
-export const NOTIFICATION_REPEAT_OFFSETS_MINUTES: number[] = [];
+export const NOTIFICATION_REPEAT_OFFSETS_MINUTES: number[] = Array.from(
+  { length: 25 },
+  (_, index) => (index + 1) * 15
+);
 
 /**
  * Resolves all notification IDs for a reminder (primary ID + all 25 repeat alarm slots)

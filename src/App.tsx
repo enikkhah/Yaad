@@ -206,11 +206,11 @@ export default function App() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
           const bootNow = Date.now();
-          // Filter out any default seed reminders and mark already-past reminders as acknowledged so they don't re-fire on boot
+          // Filter out any default seed reminders and only auto-acknowledge reminders older than the 15-min repeat window (25 * 15 mins)
           return parsed
             .filter((r: any) => r && !r.id?.startsWith('seed-'))
             .map((r: Reminder) =>
-              r.dueTimestamp <= bootNow - 60000 ? { ...r, acknowledged: true } : r
+              r.dueTimestamp <= bootNow - 25 * 15 * 60000 ? { ...r, acknowledged: true } : r
             );
         }
       }
@@ -1224,21 +1224,33 @@ export default function App() {
           return;
         }
 
-        // Trigger if pending or postponed, due now (within live 2-minute window), and not already triggered
+        // Trigger 1-minute alarm at dueTimestamp and repeat every 15 minutes if user has not reacted
+        const REPEAT_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+        const elapsedMs = now - r.dueTimestamp;
         if (
           (r.status === 'pending' || r.status === 'postponed') &&
-          r.dueTimestamp <= now &&
-          now - r.dueTimestamp < 2 * 60 * 1000 &&
-          !triggeredAlarmsRef.current.has(r.id)
+          elapsedMs >= 0
         ) {
-          triggeredAlarmsRef.current.add(r.id);
-          setActiveAlarmReminder(r);
+          const repeatCycle = Math.floor(elapsedMs / REPEAT_INTERVAL_MS);
+          const cycleOffsetMs = elapsedMs - repeatCycle * REPEAT_INTERVAL_MS;
+          const cycleKey = `${r.id}_${r.dueTimestamp}_${repeatCycle}`;
 
-          // Trigger continuous out-of-app notification (via Service Worker / Native / Notification API) alongside in-app modal until user reacts
-          triggerOutOfAppPersistentNotification(
-            r,
-            settings
-          ).catch(() => {});
+          if (
+            repeatCycle <= 25 &&
+            cycleOffsetMs >= 0 &&
+            cycleOffsetMs < 2 * 60 * 1000 &&
+            !triggeredAlarmsRef.current.has(cycleKey) &&
+            !triggeredAlarmsRef.current.has(r.id)
+          ) {
+            triggeredAlarmsRef.current.add(cycleKey);
+            setActiveAlarmReminder({ ...r });
+
+            // Trigger out-of-app notification alongside in-app modal
+            triggerOutOfAppPersistentNotification(
+              r,
+              settings
+            ).catch(() => {});
+          }
         }
       });
     };
@@ -2218,6 +2230,13 @@ export default function App() {
   };
 
   handleStopOrDismissReminderRef.current = handleStopOrDismissReminder;
+
+  // Handler: When 1-minute alarm finishes without user reaction, silence current 1-minute ring & close card,
+  // while keeping the reminder unacknowledged so it automatically repeats every 15 minutes until user reacts.
+  const handleNoReactionTimeout = (id: string) => {
+    stopAlarmRinging();
+    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+  };
 
   // Handler: Delete reminder (soft delete into Recycle Bin)
   const handleDelete = (id: string) => {
@@ -3703,6 +3722,9 @@ export default function App() {
           reminder={activeAlarmReminder}
           settings={settings}
           onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
+          onNoReactionTimeout={(id) => {
+            handleNoReactionTimeout(id);
+          }}
           onDismiss={() => {
             if (activeAlarmReminder) {
               handleStopOrDismissReminder(activeAlarmReminder.id);

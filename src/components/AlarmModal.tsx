@@ -24,6 +24,7 @@ interface AlarmModalProps {
   settings?: AppSettings;
   onUpdateSettings?: (newSettings: Partial<AppSettings>) => void;
   onDismiss: () => void;
+  onNoReactionTimeout?: (id: string) => void;
   onComplete: (id: string) => void;
   onPostpone: (id: string, minutes: number) => void;
   onEdit?: (reminder: Reminder) => void;
@@ -169,6 +170,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
   reminder,
   settings,
   onDismiss,
+  onNoReactionTimeout,
   onComplete,
   onPostpone,
   onEdit,
@@ -211,13 +213,17 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       }, 600);
     }
 
-    // 60-second countdown timer: stops alarm and closes the popup card after 1 minute
+    // 60-second countdown timer: stops 1-minute alarm and closes the popup card; repeats in 15 minutes if no user reaction
     const intervalId = window.setInterval(() => {
       setSecondsLeft((prev) => {
         if (prev <= 1) {
           window.clearInterval(intervalId);
           stopAlarmRinging();
-          onDismiss();
+          if (onNoReactionTimeout && reminder?.id) {
+            onNoReactionTimeout(reminder.id);
+          } else {
+            onDismiss();
+          }
           return 0;
         }
         return prev - 1;

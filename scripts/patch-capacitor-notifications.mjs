@@ -1005,7 +1005,8 @@ class NotificationDismissReceiver : BroadcastReceiver() {
         }
         val reminderId = requestJson?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
 
-        // After 1 minute of continuous alarm ringing, silence the alarm audio and close the standalone popup card while keeping the notification open in the shade
+        // After 1 minute of continuous alarm ringing without user reaction, silence the alarm audio, close the 1-minute popup card,
+        // keep the silent notification in the shade, and ensure the 1-minute alarm repeats every 15 minutes until the user reacts.
         if (actionId == "mute_after_1m") {
             YaadAlarmPopupActivity.dismissIfMatching(intExtra)
             try {
@@ -1023,6 +1024,8 @@ class NotificationDismissReceiver : BroadcastReceiver() {
 
                 val savedJson = storage.getSavedNotificationAsJSObject(intExtra.toString()) ?: requestJson
                 if (savedJson != null) {
+                    val originalChannelId = savedJson.optString("channelId", "yaad_reminders_channel_v2")
+                    val originalSound = savedJson.optString("sound", "digital_beep.wav")
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sysNotifManager != null) {
                         if (sysNotifManager.getNotificationChannel("yaad_channel_v2_silent") == null) {
                             val silentChannel = NotificationChannel(
@@ -1043,6 +1046,57 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                     val manager = LocalNotificationManager(storage, null, context, CapConfig.loadDefault(context))
                     manager.schedule(null, listOf(localNotif))
                     storage.appendNotifications(listOf(localNotif))
+
+                    // Ensure a 15-minute repeat alarm is scheduled if no future repeat for this reminder is already pending
+                    val nowMs = System.currentTimeMillis()
+                    var hasFutureRepeat = false
+                    if (reminderId.isNotEmpty()) {
+                        val sdfParse = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                        sdfParse.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                        for (savedIdStr in storage.getSavedNotificationIds()) {
+                            val sId = savedIdStr.toIntOrNull() ?: continue
+                            if (sId == intExtra) continue
+                            val sJson = storage.getSavedNotificationAsJSObject(savedIdStr) ?: continue
+                            val sRemId = sJson.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (sRemId == reminderId) {
+                                val atStr = sJson.optJSONObject("schedule")?.optString("at", "") ?: ""
+                                if (atStr.isNotEmpty()) {
+                                    val atDate = try { sdfParse.parse(atStr) } catch (e: Exception) { null }
+                                    if (atDate != null && atDate.time > nowMs) {
+                                        hasFutureRepeat = true
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (!hasFutureRepeat) {
+                        val nextRepeatAtMs = nowMs + 15L * 60L * 1000L
+                        val repeatJson = JSObject(savedJson.toString())
+                        val repeatId = if (reminderId.isNotEmpty()) {
+                            ((computeBaseId(reminderId).toLong() + 1001L) % 2147483647L).toInt()
+                        } else {
+                            ((intExtra.toLong() + 1001L) % 2147483647L).toInt()
+                        }
+                        repeatJson.put("id", repeatId)
+                        if (originalChannelId.isNotEmpty() && originalChannelId != "yaad_channel_v2_silent") {
+                            repeatJson.put("channelId", originalChannelId)
+                        } else {
+                            repeatJson.put("channelId", "yaad_reminders_channel_v2")
+                        }
+                        if (originalSound.isNotEmpty()) {
+                            repeatJson.put("sound", originalSound)
+                        }
+                        val sdfOut = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                        sdfOut.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                        val schedObj = JSObject()
+                        schedObj.put("at", sdfOut.format(Date(nextRepeatAtMs)))
+                        schedObj.put("allowWhileIdle", true)
+                        repeatJson.put("schedule", schedObj)
+                        val repeatNotif = LocalNotification.buildNotificationFromJSObject(repeatJson)
+                        manager.schedule(null, listOf(repeatNotif))
+                        storage.appendNotifications(listOf(repeatNotif))
+                    }
                 }
             } catch (e: Exception) {
                 Logger.error(Logger.tags("LN"), "Failed to mute notification after 1 minute", e)

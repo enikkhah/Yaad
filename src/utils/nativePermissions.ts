@@ -83,9 +83,9 @@ export async function requestMicrophonePermission(): Promise<boolean> {
   unlockAudio();
   if (isNativeAndroidApp()) {
     try {
-      const res = (await LocalNotifications.requestPermissions({
+      const res = await (LocalNotifications.requestPermissions as any)({
         permissions: ['microphone'],
-      } as any)) as any;
+      });
       if (res?.microphone === 'granted') {
         markPermissionGranted('microphone');
         return true;
@@ -119,9 +119,9 @@ export async function requestMicrophonePermission(): Promise<boolean> {
 export async function requestCameraPermission(): Promise<boolean> {
   if (isNativeAndroidApp()) {
     try {
-      const res = (await LocalNotifications.requestPermissions({
+      const res = await (LocalNotifications.requestPermissions as any)({
         permissions: ['camera'],
-      } as any)) as any;
+      });
       if (res?.camera === 'granted') {
         markPermissionGranted('camera');
         return true;
@@ -156,9 +156,9 @@ export async function requestCameraPermission(): Promise<boolean> {
 export async function requestLocationPermission(): Promise<boolean> {
   if (isNativeAndroidApp()) {
     try {
-      const res = (await LocalNotifications.requestPermissions({
+      const res = await (LocalNotifications.requestPermissions as any)({
         permissions: ['location'],
-      } as any)) as any;
+      });
       if (res?.location === 'granted') {
         markPermissionGranted('location');
         return true;
