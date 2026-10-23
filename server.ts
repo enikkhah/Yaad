@@ -7,19 +7,11 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const isProd = process.env.NODE_ENV === 'production';
 
-const DEFAULT_BACKUP_FOLDER_NAME = 'Yaad reminder';
+const DEFAULT_BACKUP_FOLDER_NAME = 'YAAD';
 const SERVER_BACKUP_ROOT = path.join(os.tmpdir(), 'yaad_server_backups');
 
-function getSafeFolderDir(folderName?: string) {
-  const raw = (folderName || DEFAULT_BACKUP_FOLDER_NAME).trim();
-  const normalized =
-    raw.toUpperCase() === 'YAAD REMIDER' ? DEFAULT_BACKUP_FOLDER_NAME : raw;
-  const cleaned =
-    normalized
-      .replace(/\.\./g, '')
-      .replace(/[<>:"\\|?*\x00-\x1F]/g, '_')
-      .replace(/^\/+|\/+$/g, '')
-      .trim() || DEFAULT_BACKUP_FOLDER_NAME;
+function getSafeFolderDir(_folderName?: string) {
+  const cleaned = DEFAULT_BACKUP_FOLDER_NAME;
   const dirPath = path.resolve(SERVER_BACKUP_ROOT, cleaned);
   return {
     folderName: cleaned,
@@ -158,82 +150,6 @@ app.post('/api/local-folder-backup', (req: Request, res: Response) => {
     });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err?.message || 'Failed to write local folder backup' });
-  }
-});
-
-// Proxy for any user-specified Cloud / WebDAV / Nextcloud / Custom Server URL
-app.post('/api/custom-cloud-backup', async (req: Request, res: Response) => {
-  try {
-    const { action, endpointUrl, folderName, authHeader, payload } = req.body || {};
-    if (!endpointUrl || typeof endpointUrl !== 'string') {
-      res.status(400).json({ ok: false, error: 'Missing cloud endpointUrl' });
-      return;
-    }
-
-    const cleanBase = endpointUrl.trim().replace(/\/+$/, '');
-    const cleanFolder = encodeURIComponent((folderName || DEFAULT_BACKUP_FOLDER_NAME).trim());
-    const targetFileUrl = cleanBase.endsWith('.json')
-      ? cleanBase
-      : `${cleanBase}/${cleanFolder}/yaad_backup.json`;
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (authHeader && typeof authHeader === 'string' && authHeader.trim()) {
-      const trimmedAuth = authHeader.trim();
-      headers['Authorization'] =
-        trimmedAuth.startsWith('Bearer ') || trimmedAuth.startsWith('Basic ')
-          ? trimmedAuth
-          : trimmedAuth.includes(':')
-          ? `Basic ${Buffer.from(trimmedAuth).toString('base64')}`
-          : `Bearer ${trimmedAuth}`;
-    }
-
-    if (action === 'download') {
-      const response = await fetch(targetFileUrl, { method: 'GET', headers });
-      if (!response.ok) {
-        res.status(response.status).json({ ok: false, error: `Cloud server returned ${response.status}` });
-        return;
-      }
-      const data = await response.json();
-      res.json({ ok: true, backup: data });
-      return;
-    }
-
-    // Default action: upload (try PUT first for WebDAV/S3/Nextcloud, fallback to POST)
-    if (!cleanBase.endsWith('.json')) {
-      try {
-        await fetch(`${cleanBase}/${cleanFolder}`, {
-          method: 'MKCOL',
-          headers,
-        }).catch(() => {});
-      } catch {
-        // ignore if MKCOL not needed
-      }
-    }
-
-    let putRes = await fetch(targetFileUrl, {
-      method: 'PUT',
-      headers,
-      body: JSON.stringify(payload, null, 2),
-    });
-
-    if (!putRes.ok && putRes.status === 405) {
-      putRes = await fetch(targetFileUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload, null, 2),
-      });
-    }
-
-    if (!putRes.ok) {
-      res.status(putRes.status).json({ ok: false, error: `Cloud server returned ${putRes.status}` });
-      return;
-    }
-
-    res.json({ ok: true, targetFileUrl });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: err?.message || 'Custom cloud request failed' });
   }
 });
 

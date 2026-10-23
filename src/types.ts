@@ -36,8 +36,6 @@ export interface IdeaNote {
   deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 
-export type CloudBackupProvider = 'custom_cloud_folder' | 'webdav_url' | 'google_drive';
-
 export interface AppSettings {
   language?: 'fa' | 'en';
   theme: AppTheme;
@@ -52,13 +50,6 @@ export interface AppSettings {
   vibrationEnabled?: boolean;
   autoVoiceInput: boolean;
   googleMapsApiKey?: string;
-  googleOAuthClientId?: string;
-  cloudBackupEnabled?: boolean;
-  cloudBackupProvider?: CloudBackupProvider;
-  cloudBackupFolderName?: string;
-  cloudSpaceLabel?: string;
-  cloudCustomUrl?: string;
-  cloudCustomAuth?: string;
   localBackupFolderName?: string;
 }
 

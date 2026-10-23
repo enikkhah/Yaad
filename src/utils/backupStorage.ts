@@ -1,18 +1,15 @@
 /**
- * Auto Backup & Local/Cloud Vault Utility for YAAD
- * - Local Backup Folder: "YAAD REMIDER" (Device Storage / FileSystem Handle / OPFS / Server Folder / IndexedDB)
- * - Cloud Backup Folder: "YAAD REMIDER" on Google Drive
+ * Auto Backup & Local Device Storage Vault Utility for YAAD
+ * - Local Backup Folder: "/YAAD" in Root Storage (Device Storage / FileSystem Handle / OPFS / Server Folder / IndexedDB / LocalStorage)
  * - Automatic Backup & Restore on every app open, close, and re-installation
- * - Restore Priority: 1. Google Drive ("YAAD REMIDER") -> 2. Local Folder ("YAAD REMIDER")
  */
 
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Reminder, IdeaNote, SavedLocation, Occasion, AppSettings } from '../types';
-import { uploadBackupToGoogleDrive, downloadBackupFromGoogleDrive, getCachedToken } from './googleSync';
 
 export const AUTO_BACKUP_STORAGE_KEY = 'yaad_auto_backup_vault_v1';
-export const LOCAL_BACKUP_FOLDER_NAME = 'Yaad reminder';
+export const LOCAL_BACKUP_FOLDER_NAME = 'YAAD';
 export const LOCAL_BACKUP_FILE_NAME = 'yaad_backup.json';
 export const FOLDER_PERMISSION_GRANTED_KEY = 'yaad_folder_permission_granted_v2';
 export const LAST_LOCAL_BACKUP_KEY = 'yaad_last_local_backup_timestamp';
@@ -22,21 +19,19 @@ const DB_VERSION = 2;
 const STORE_NAME = 'app_backups';
 const HANDLE_STORE_NAME = 'folder_handles';
 const CACHE_BACKUP_NAME = 'yaad-remider-folder-vault-v1';
-const CACHE_BACKUP_URL = '/YAAD_REMIDER/yaad_backup.json';
+const CACHE_BACKUP_URL = '/YAAD/yaad_backup.json';
 
 export interface AutoBackupSnapshot {
   version: number;
   updatedAt: number;
   folder?: string;
-  source?: 'google_drive' | 'local_folder';
+  source?: 'local_folder';
   reminders: Reminder[];
   ideas: IdeaNote[];
   savedLocations: SavedLocation[];
   occasions: Occasion[];
   settings?: AppSettings;
 }
-
-let cloudBackupDebounceTimer: any = null;
 
 function isValidSnapshot(data: any): data is AutoBackupSnapshot {
   return Boolean(
@@ -191,7 +186,6 @@ function openVaultDB(): Promise<IDBDatabase | null> {
 
 /**
  * Save or retrieve FileSystemDirectoryHandle in IndexedDB
- * keyId can be 'yaad_remider_dir' (local folder) or 'yaad_custom_cloud_dir' (any user-selected cloud folder: OneDrive, Dropbox, iCloud, Mega, etc.)
  */
 async function saveDirectoryHandleToDB(handle: any, keyId: string = 'yaad_remider_dir'): Promise<void> {
   const db = await openVaultDB();
@@ -226,302 +220,9 @@ async function getDirectoryHandleFromDB(keyId: string = 'yaad_remider_dir'): Pro
 }
 
 /**
- * Allows the user to select ANY cloud-synced folder on their device (OneDrive, Dropbox, iCloud Drive, Mega, Nextcloud, Google Drive folder, etc.)
- */
-export async function selectUserCloudSpaceFolder(
-  customFolderName?: string
-): Promise<{
-  granted: boolean;
-  nativePickerOpened: boolean;
-  folderName: string;
-  restoredSnapshot?: AutoBackupSnapshot | null;
-}> {
-  let effectiveFolderName = (customFolderName || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
-  let restoredFromCloudFolder: AutoBackupSnapshot | null = null;
-  let nativePickerOpened = false;
-
-  const isInIframe = (() => {
-    try {
-      return typeof window !== 'undefined' && window.self !== window.top;
-    } catch {
-      return true;
-    }
-  })();
-
-  const isMobileOrAndroid =
-    typeof navigator !== 'undefined' &&
-    (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || Capacitor.isNativePlatform());
-
-  if (typeof window !== 'undefined' && 'showDirectoryPicker' in window && !isInIframe && !isMobileOrAndroid) {
-    try {
-      const pickedHandle = await (window as any).showDirectoryPicker({
-        id: 'yaad_custom_cloud_space',
-        mode: 'readwrite',
-      });
-      nativePickerOpened = true;
-      if (pickedHandle) {
-        let targetFolderHandle = pickedHandle;
-        const pickedName = (pickedHandle.name || '').trim();
-        if (
-          pickedName.toUpperCase() !== effectiveFolderName.toUpperCase() &&
-          pickedName.toUpperCase() !== 'YAAD REMIDER' &&
-          pickedName.toUpperCase() !== 'YAAD REMINDER'
-        ) {
-          targetFolderHandle = await pickedHandle.getDirectoryHandle(effectiveFolderName, {
-            create: true,
-          });
-          effectiveFolderName = `${pickedName}/${effectiveFolderName}`;
-        } else if (pickedName) {
-          effectiveFolderName = pickedName;
-        }
-        await saveDirectoryHandleToDB(targetFolderHandle, 'yaad_custom_cloud_dir');
-        restoredFromCloudFolder = await readFromDirectoryHandle(targetFolderHandle);
-        return {
-          granted: true,
-          nativePickerOpened: true,
-          folderName: effectiveFolderName,
-          restoredSnapshot: restoredFromCloudFolder,
-        };
-      }
-    } catch (err: any) {
-      if (err?.name === 'AbortError') {
-        nativePickerOpened = true;
-      }
-      console.warn('[YAAD Cloud Folder] Picker notice:', err?.message || err);
-    }
-  }
-
-  return {
-    granted: false,
-    nativePickerOpened,
-    folderName: effectiveFolderName,
-    restoredSnapshot: null,
-  };
-}
-
-/**
- * Upload backup JSON to any user-specified Cloud / WebDAV / Nextcloud / Custom Server URL
- */
-export async function uploadToCustomCloudUrl(
-  payload: AutoBackupSnapshot,
-  endpointUrl?: string,
-  folderName?: string,
-  authHeader?: string
-): Promise<boolean> {
-  if (!endpointUrl || !endpointUrl.trim()) return false;
-  try {
-    const res = await fetch('/api/custom-cloud-backup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'upload',
-        endpointUrl: endpointUrl.trim(),
-        folderName: (folderName || LOCAL_BACKUP_FOLDER_NAME).trim(),
-        authHeader: authHeader || '',
-        payload,
-      }),
-    });
-    return res.ok;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Download backup JSON from any user-specified Cloud / WebDAV / Nextcloud / Custom Server URL
- */
-export async function downloadFromCustomCloudUrl(
-  endpointUrl?: string,
-  folderName?: string,
-  authHeader?: string
-): Promise<AutoBackupSnapshot | null> {
-  if (!endpointUrl || !endpointUrl.trim()) return null;
-  try {
-    const res = await fetch('/api/custom-cloud-backup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        action: 'download',
-        endpointUrl: endpointUrl.trim(),
-        folderName: (folderName || LOCAL_BACKUP_FOLDER_NAME).trim(),
-        authHeader: authHeader || '',
-      }),
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data?.ok && isValidSnapshot(data.backup)) {
-      return data.backup;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-/**
- * Share backup file directly to ANY cloud app installed on the user's phone/device
- * (e.g., OneDrive, Dropbox, Telegram Saved Messages, iCloud Drive, Mega, Google Drive, Email, etc.)
- */
-export async function shareBackupToAnyCloudApp(
-  payload: AutoBackupSnapshot,
-  customFolderName?: string
-): Promise<boolean> {
-  try {
-    const folderTag = (customFolderName || LOCAL_BACKUP_FOLDER_NAME).trim();
-    const jsonStr = JSON.stringify({ ...payload, folder: folderTag }, null, 2);
-    const file = new File([jsonStr], LOCAL_BACKUP_FILE_NAME, { type: 'application/json' });
-
-    if (
-      typeof navigator !== 'undefined' &&
-      navigator.share &&
-      (!navigator.canShare || navigator.canShare({ files: [file] }))
-    ) {
-      await navigator.share({
-        title: `${folderTag} - YAAD Backup`,
-        text: `فایل پشتیبان یاد (${folderTag}/${LOCAL_BACKUP_FILE_NAME})`,
-        files: [file],
-      });
-      return true;
-    }
-
-    // Fallback: trigger file save dialog so user can pick any cloud drive in their OS save dialog
-    if (typeof window !== 'undefined' && 'showSaveFilePicker' in window) {
-      const handle = await (window as any).showSaveFilePicker({
-        suggestedName: LOCAL_BACKUP_FILE_NAME,
-        types: [
-          {
-            description: 'YAAD Backup JSON',
-            accept: { 'application/json': ['.json'] },
-          },
-        ],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(jsonStr);
-      await writable.close();
-      return true;
-    }
-  } catch {
-    // user cancelled or unsupported
-  }
-  return false;
-}
-
-/**
- * Ensures the specified cloud backup folder (e.g., "Yaad reminder" or "GoogleDrive/Yaad reminder")
- * is physically created on device storage, OPFS, and server backup directory, and writes the backup file if provided.
- */
-export async function ensureCloudFolderOnDevice(
-  customCloudFolder?: string,
-  payload?: AutoBackupSnapshot
-): Promise<boolean> {
-  const rawFolder = (customCloudFolder || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
-  const baseFolder =
-    rawFolder
-      .replace(/^(GoogleDrive|Google Drive|OneDrive|Dropbox|iCloudDrive|MEGA|Documents|Download|InternalStorage)\//i, '')
-      .trim() || LOCAL_BACKUP_FOLDER_NAME;
-
-  let createdAny = false;
-
-  // 1. Create on OPFS
-  try {
-    if (typeof navigator !== 'undefined' && navigator.storage && (navigator.storage as any).getDirectory) {
-      const rootDir = await (navigator.storage as any).getDirectory();
-      const dirHandle = await rootDir.getDirectoryHandle(baseFolder, { create: true });
-      if (payload && dirHandle) {
-        const fileHandle = await dirHandle.getFileHandle(LOCAL_BACKUP_FILE_NAME, { create: true });
-        if (fileHandle.createWritable) {
-          const writable = await fileHandle.createWritable();
-          await writable.write(JSON.stringify({ ...payload, folder: rawFolder }, null, 2));
-          await writable.close();
-        }
-      }
-      createdAny = true;
-    }
-  } catch {
-    // ignore
-  }
-
-  // 2. Create on Android Capacitor Filesystem (both full path like GoogleDrive/Yaad reminder and base folder Yaad reminder)
-  try {
-    if (Capacitor.isNativePlatform() || (window as any).Capacitor?.Plugins?.Filesystem) {
-      await Promise.race([
-        Filesystem.requestPermissions(),
-        new Promise((resolve) => setTimeout(resolve, 2500)),
-      ]).catch(() => {});
-
-      const targetDirs = [
-        Directory.External,
-        Directory.Documents,
-        Directory.ExternalStorage,
-        Directory.Data,
-      ];
-
-      const pathsToCreate = Array.from(new Set([rawFolder, baseFolder, `GoogleDrive/${baseFolder}`]));
-      const jsonStr = payload ? JSON.stringify({ ...payload, folder: rawFolder }, null, 2) : null;
-
-      for (const dir of targetDirs) {
-        for (const p of pathsToCreate) {
-          await Filesystem.mkdir({
-            path: p,
-            directory: dir,
-            recursive: true,
-          })
-            .then(() => {
-              createdAny = true;
-            })
-            .catch(() => {});
-
-          if (jsonStr) {
-            await Filesystem.writeFile({
-              path: `${p}/${LOCAL_BACKUP_FILE_NAME}`,
-              data: jsonStr,
-              directory: dir,
-              encoding: Encoding.UTF8,
-              recursive: true,
-            })
-              .then(() => {
-                createdAny = true;
-              })
-              .catch(() => {});
-          }
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  // 3. Mirror folder on server backup vault
-  try {
-    const bodyPayload = payload
-      ? { ...payload, folder: rawFolder }
-      : {
-          version: 3,
-          updatedAt: Date.now(),
-          folder: rawFolder,
-          source: 'google_drive',
-          reminders: [],
-          ideas: [],
-          savedLocations: [],
-          occasions: [],
-        };
-    const res = await fetch('/api/local-folder-backup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(bodyPayload),
-    });
-    if (res.ok) createdAny = true;
-  } catch {
-    // ignore
-  }
-
-  return createdAny;
-}
-
-/**
- * Initializes & verifies access to the local "YAAD REMIDER" folder.
+ * Initializes & verifies access to the local "Yaad reminder" folder.
  * When interactivePicker = true and supported by browser, opens directory picker
- * to create/select the "YAAD REMIDER" folder on device storage.
+ * to create/select the "Yaad reminder" folder on device storage.
  */
 export async function requestLocalFolderPermission(
   interactivePicker: boolean = false,
@@ -604,7 +305,6 @@ export async function requestLocalFolderPermission(
   }
 
   // 3. Request Android storage permission & create physical "Yaad reminder" folder via @capacitor/filesystem
-  // Writes to Directory.External (no permission needed on Android 11-15), Directory.Documents, Directory.ExternalStorage, and Directory.Data
   try {
     if (Capacitor.isNativePlatform() || (window as any).Capacitor?.Plugins?.Filesystem) {
       await Promise.race([
@@ -656,7 +356,6 @@ export async function requestLocalFolderPermission(
       if (perms && typeof perms.storage === 'string') {
         isStorageActuallyGranted = perms.storage === 'granted';
       } else {
-        // Probe actual write access to root shared external storage (/storage/emulated/0/Yaad reminder)
         const cleanSubName =
           effectiveFolderName
             .replace(/^(Documents|Download|InternalStorage)\//i, '')
@@ -781,7 +480,7 @@ export async function checkLocalFolderPermissionStatus(): Promise<boolean> {
 }
 
 /**
- * Helper to write backup JSON into a FileSystemDirectoryHandle ('YAAD REMIDER')
+ * Helper to write backup JSON into a FileSystemDirectoryHandle ('Yaad reminder')
  */
 async function writeToDirectoryHandle(dirHandle: any, payload: AutoBackupSnapshot): Promise<boolean> {
   if (!dirHandle) return false;
@@ -801,7 +500,7 @@ async function writeToDirectoryHandle(dirHandle: any, payload: AutoBackupSnapsho
 }
 
 /**
- * Helper to read backup JSON from a FileSystemDirectoryHandle ('YAAD REMIDER')
+ * Helper to read backup JSON from a FileSystemDirectoryHandle ('Yaad reminder')
  */
 async function readFromDirectoryHandle(dirHandle: any): Promise<AutoBackupSnapshot | null> {
   if (!dirHandle) return null;
@@ -821,7 +520,7 @@ async function readFromDirectoryHandle(dirHandle: any): Promise<AutoBackupSnapsh
 }
 
 /**
- * Writes backup to OPFS 'YAAD REMIDER/yaad_backup.json'
+ * Writes backup to OPFS 'Yaad reminder/yaad_backup.json'
  */
 async function writeToOpfsYaadFolder(payload: AutoBackupSnapshot): Promise<boolean> {
   try {
@@ -844,7 +543,7 @@ async function writeToOpfsYaadFolder(payload: AutoBackupSnapshot): Promise<boole
 }
 
 /**
- * Reads backup from OPFS 'YAAD REMIDER/yaad_backup.json'
+ * Reads backup from OPFS 'Yaad reminder/yaad_backup.json'
  */
 async function readFromOpfsYaadFolder(): Promise<AutoBackupSnapshot | null> {
   try {
@@ -864,7 +563,7 @@ async function readFromOpfsYaadFolder(): Promise<AutoBackupSnapshot | null> {
 }
 
 /**
- * Writes backup to physical 'YAAD REMIDER/yaad_backup.json' via backend endpoint & Cache Storage
+ * Writes backup to physical 'Yaad reminder/yaad_backup.json' via backend endpoint & Cache Storage
  */
 async function writeToServerAndCacheYaadFolder(payload: AutoBackupSnapshot): Promise<void> {
   const jsonStr = JSON.stringify(payload);
@@ -884,7 +583,7 @@ async function writeToServerAndCacheYaadFolder(payload: AutoBackupSnapshot): Pro
     // ignore
   }
 
-  // 2. Physical 'YAAD REMIDER/yaad_backup.json' folder on host
+  // 2. Physical 'Yaad reminder/yaad_backup.json' folder on host
   try {
     await fetch('/api/local-folder-backup', {
       method: 'POST',
@@ -898,10 +597,10 @@ async function writeToServerAndCacheYaadFolder(payload: AutoBackupSnapshot): Pro
 }
 
 /**
- * Reads backup from physical 'YAAD REMIDER/yaad_backup.json' via backend endpoint or Cache Storage
+ * Reads backup from physical 'Yaad reminder/yaad_backup.json' via backend endpoint or Cache Storage
  */
 async function readFromServerOrCacheYaadFolder(): Promise<AutoBackupSnapshot | null> {
-  // 1. Check physical 'YAAD REMIDER/yaad_backup.json'
+  // 1. Check physical 'Yaad reminder/yaad_backup.json'
   try {
     const res = await fetch('/api/local-folder-backup');
     if (res.ok) {
@@ -934,9 +633,8 @@ async function readFromServerOrCacheYaadFolder(): Promise<AutoBackupSnapshot | n
 }
 
 /**
- * Saves an automatic snapshot of all user data into:
- * 1. Local 'YAAD REMIDER' folder (Device Directory Handle, Capacitor Filesystem, OPFS, Server Folder, Cache, IndexedDB, LocalStorage)
- * 2. Cloud 'YAAD REMIDER' folder on Google Drive (if Google Drive token is available)
+ * Saves an automatic snapshot of all user data into the Local 'Yaad reminder' folder
+ * (Device Directory Handle, Capacitor Filesystem, OPFS, Server Folder, Cache, IndexedDB, LocalStorage)
  */
 export async function performAutoBackup(
   snapshot: {
@@ -945,13 +643,11 @@ export async function performAutoBackup(
     savedLocations: SavedLocation[];
     occasions: Occasion[];
     settings?: AppSettings;
-  },
-  options?: { immediateCloud?: boolean; forceCloud?: boolean; googleToken?: string | null }
+  }
 ): Promise<boolean> {
   try {
     const now = Date.now();
-    const localFolder = (snapshot.settings?.localBackupFolderName || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
-    const cloudFolder = (snapshot.settings?.cloudBackupFolderName || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
+    const localFolder = LOCAL_BACKUP_FOLDER_NAME;
 
     const payload: AutoBackupSnapshot = {
       version: 3,
@@ -989,24 +685,22 @@ export async function performAutoBackup(
       });
     }
 
-    // 3. Save to Device Folder 'YAAD REMIDER/yaad_backup.json' (FileSystemDirectoryHandle if granted)
+    // 3. Save to Device Folder 'YAAD/yaad_backup.json' (FileSystemDirectoryHandle if granted)
     const dirHandle = await getDirectoryHandleFromDB();
     if (dirHandle) {
       await writeToDirectoryHandle(dirHandle, payload);
     }
 
-    // 4. Save to Native Capacitor Filesystem '<localFolder>/yaad_backup.json' if available
+    // 4. Save to Native Capacitor Filesystem 'YAAD/yaad_backup.json' in root storage if available
     try {
-      const cleanSubName =
-        localFolder.replace(/^(Documents|Download|InternalStorage)\//i, '').trim() ||
-        LOCAL_BACKUP_FOLDER_NAME;
+      const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
       const newItemsCount = getSnapshotItemCount(payload);
 
       // SAFETY GUARD: If payload has 0 items (e.g. app freshly mounted or reinstalled with empty initial arrays),
       // NEVER overwrite an existing backup on disk that contains items!
       if (newItemsCount === 0) {
         let existingBackupHasItems = false;
-        for (const dir of [Directory.External, Directory.Documents, Directory.ExternalStorage]) {
+        for (const dir of [Directory.ExternalStorage, Directory.External, Directory.Documents]) {
           const existing = await Filesystem.readFile({
             path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
             directory: dir,
@@ -1029,9 +723,9 @@ export async function performAutoBackup(
       const jsonData = JSON.stringify(payload, null, 2);
 
       const writeDirs = [
+        Directory.ExternalStorage,
         Directory.External,
         Directory.Documents,
-        Directory.ExternalStorage,
         Directory.Data,
       ];
       for (const dir of writeDirs) {
@@ -1043,84 +737,13 @@ export async function performAutoBackup(
           recursive: true,
         }).catch(() => {});
       }
-
-      if (/^Download\//i.test(localFolder)) {
-        await Filesystem.writeFile({
-          path: `Download/${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
-          data: jsonData,
-          directory: Directory.ExternalStorage,
-          encoding: Encoding.UTF8,
-          recursive: true,
-        }).catch(() => {});
-      }
     } catch {
       // ignore
     }
 
-    // 5. Save to OPFS 'YAAD REMIDER/yaad_backup.json' & physical 'YAAD REMIDER' folder
+    // 5. Save to OPFS 'YAAD/yaad_backup.json' & physical 'YAAD' folder
     await writeToOpfsYaadFolder(payload);
     await writeToServerAndCacheYaadFolder(payload);
-
-    // 6. Optional Cloud Backup to ANY user-selected cloud space (when enabled by user or explicitly forced)
-    const isCloudEnabled = Boolean(snapshot.settings?.cloudBackupEnabled || options?.forceCloud);
-    if (isCloudEnabled) {
-      const provider = snapshot.settings?.cloudBackupProvider || 'custom_cloud_folder';
-      const token = options?.googleToken || getCachedToken();
-
-      const executeCloudSync = async () => {
-        // Ensure cloud folder exists on device / OPFS / server
-        await ensureCloudFolderOnDevice(cloudFolder, {
-          ...payload,
-          folder: cloudFolder,
-        });
-
-        // A. User-selected Cloud Folder on device (OneDrive, Dropbox, iCloud, Mega, etc.)
-        const customCloudHandle = await getDirectoryHandleFromDB('yaad_custom_cloud_dir');
-        if (customCloudHandle) {
-          await writeToDirectoryHandle(customCloudHandle, {
-            ...payload,
-            folder: cloudFolder,
-          });
-        }
-
-        // B. Custom Cloud Server / WebDAV / Nextcloud URL if provided
-        if (
-          (provider === 'webdav_url' || snapshot.settings?.cloudCustomUrl) &&
-          snapshot.settings?.cloudCustomUrl
-        ) {
-          await uploadToCustomCloudUrl(
-            { ...payload, folder: cloudFolder },
-            snapshot.settings.cloudCustomUrl,
-            cloudFolder,
-            snapshot.settings.cloudCustomAuth
-          );
-        }
-
-        // C. Google Drive if selected or connected
-        if ((provider === 'google_drive' || token) && token) {
-          await uploadBackupToGoogleDrive(payload, token, cloudFolder);
-        }
-
-        // D. Also mirror to server named cloud folder if custom name differs
-        if (cloudFolder) {
-          await fetch('/api/local-folder-backup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...payload, folder: cloudFolder }),
-          }).catch(() => {});
-        }
-      };
-
-      if (options?.immediateCloud || options?.forceCloud) {
-        if (cloudBackupDebounceTimer) clearTimeout(cloudBackupDebounceTimer);
-        await executeCloudSync();
-      } else {
-        if (cloudBackupDebounceTimer) clearTimeout(cloudBackupDebounceTimer);
-        cloudBackupDebounceTimer = setTimeout(() => {
-          executeCloudSync().catch(() => {});
-        }, 1200);
-      }
-    }
 
     return true;
   } catch (error) {
@@ -1130,85 +753,12 @@ export async function performAutoBackup(
 }
 
 /**
- * Retrieves the best/latest backup from the user's selected Cloud Space (Custom Cloud Folder, WebDAV/URL, or Google Drive)
+ * Retrieves the best/latest backup from the Local 'YAAD' folder in root storage across all local storage layers.
  */
-export async function retrieveFromUserCloudSpace(
-  googleToken?: string | null,
-  settings?: Partial<AppSettings>
-): Promise<AutoBackupSnapshot | null> {
-  const cloudFolder = (settings?.cloudBackupFolderName || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
-  const provider = settings?.cloudBackupProvider || 'custom_cloud_folder';
-  const activeToken = googleToken || getCachedToken();
-
-  // 1. Check user-selected Cloud Folder Handle (OneDrive / Dropbox / iCloud / Mega / Custom Folder)
-  try {
-    const customCloudHandle = await getDirectoryHandleFromDB('yaad_custom_cloud_dir');
-    if (customCloudHandle) {
-      const fromCloudHandle = await readFromDirectoryHandle(customCloudHandle);
-      if (isValidSnapshot(fromCloudHandle)) {
-        return fromCloudHandle;
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  // 2. Check Custom Cloud / WebDAV / Nextcloud URL if configured
-  if (settings?.cloudCustomUrl && (typeof navigator === 'undefined' || navigator.onLine)) {
-    try {
-      const fromUrl = await downloadFromCustomCloudUrl(
-        settings.cloudCustomUrl,
-        cloudFolder,
-        settings.cloudCustomAuth
-      );
-      if (isValidSnapshot(fromUrl)) {
-        return fromUrl;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // 3. Check Google Drive if selected or token is active
-  if (
-    (provider === 'google_drive' || activeToken) &&
-    activeToken &&
-    (typeof navigator === 'undefined' || navigator.onLine)
-  ) {
-    try {
-      const fromDrive = await downloadBackupFromGoogleDrive(activeToken, cloudFolder);
-      if (isValidSnapshot(fromDrive)) {
-        return fromDrive;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  // 4. Check server-side named cloud folder if custom folder was saved
-  try {
-    const res = await fetch(`/api/local-folder-backup?folder=${encodeURIComponent(cloudFolder)}`);
-    if (res.ok) {
-      const data = await res.json();
-      if (data?.ok && isValidSnapshot(data.backup)) {
-        return data.backup;
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  return null;
-}
-
-/**
- * Retrieves the best/latest backup from the Local 'YAAD REMIDER' folder across all local storage layers.
- */
-export async function retrieveFromLocalYaadFolder(customLocalFolder?: string): Promise<AutoBackupSnapshot | null> {
+export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): Promise<AutoBackupSnapshot | null> {
   const candidates: AutoBackupSnapshot[] = [];
-  const targetFolder = (customLocalFolder || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
 
-  // 1. User-granted Device Folder Handle ('YAAD REMIDER/yaad_backup.json')
+  // 1. User-granted Device Folder Handle ('YAAD/yaad_backup.json')
   try {
     const dirHandle = await getDirectoryHandleFromDB('yaad_remider_dir');
     if (dirHandle) {
@@ -1221,19 +771,18 @@ export async function retrieveFromLocalYaadFolder(customLocalFolder?: string): P
 
   // 2. Native Android Capacitor Filesystem (smart readdir + readFile with Encoding.UTF8)
   try {
-    const cleanSubName =
-      targetFolder.replace(/^(Documents|Download|InternalStorage)\//i, '').trim() ||
-      LOCAL_BACKUP_FOLDER_NAME;
+    const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
 
     const searchDirs = [
+      Directory.ExternalStorage,
       Directory.External,
       Directory.Documents,
-      Directory.ExternalStorage,
       Directory.Data,
     ];
 
     const folderPathsToTry = [
       cleanSubName,
+      'Yaad reminder',
       `Download/${cleanSubName}`,
       `Documents/${cleanSubName}`,
       'Download',
@@ -1319,7 +868,7 @@ export async function retrieveFromLocalYaadFolder(customLocalFolder?: string): P
     console.warn('[retrieveFromLocalYaadFolder] Filesystem scan error:', err);
   }
 
-  // 3. OPFS 'YAAD REMIDER/yaad_backup.json'
+  // 3. OPFS 'Yaad reminder/yaad_backup.json'
   try {
     const fromOpfs = await readFromOpfsYaadFolder();
     if (fromOpfs) candidates.push(fromOpfs);
@@ -1327,7 +876,7 @@ export async function retrieveFromLocalYaadFolder(customLocalFolder?: string): P
     // ignore
   }
 
-  // 4. Physical 'YAAD REMIDER/yaad_backup.json' & Cache Storage
+  // 4. Physical 'Yaad reminder/yaad_backup.json' & Cache Storage
   try {
     const fromServerOrCache = await readFromServerOrCacheYaadFolder();
     if (fromServerOrCache) candidates.push(fromServerOrCache);
@@ -1386,40 +935,16 @@ export async function retrieveFromLocalYaadFolder(customLocalFolder?: string): P
 }
 
 /**
- * Automatic Recall / Restore with Strict Priority:
- * Priority 1: User's Selected Cloud Space (OneDrive / Dropbox / iCloud / WebDAV / Google Drive / Custom Folder) when enabled & available
- * Priority 2: Local 'YAAD REMIDER' (or user-specified local folder) on device storage (if Cloud is unavailable or not enabled)
+ * Automatic Recall / Restore from Local 'Yaad reminder' Folder on Device Storage
  */
 export async function retrieveLatestBackupWithPriority(
-  googleToken?: string | null,
+  _unusedToken?: string | null,
   settings?: Partial<AppSettings>
-): Promise<{ snapshot: AutoBackupSnapshot | null; source: 'google_drive' | 'local_folder' | null }> {
-  const isCloudAllowed = settings?.cloudBackupEnabled !== false;
-
-  // PRIORITY 1: Any User-Selected Cloud Space (Custom Cloud Folder, WebDAV/Server URL, or Google Drive)
-  if (isCloudAllowed) {
-    try {
-      const cloudBackup = await retrieveFromUserCloudSpace(googleToken, settings);
-      if (isValidSnapshot(cloudBackup)) {
-        const localBackup = await retrieveFromLocalYaadFolder(settings?.localBackupFolderName);
-        const cloudCount = getSnapshotItemCount(cloudBackup);
-        const localCount = getSnapshotItemCount(localBackup);
-
-        if (cloudCount > 0 || localCount === 0) {
-          return { snapshot: cloudBackup, source: 'google_drive' };
-        }
-      }
-    } catch (err) {
-      console.warn('[YAAD Restore] Cloud space unavailable, falling back to local YAAD REMIDER folder:', err);
-    }
-  }
-
-  // PRIORITY 2: Local 'YAAD REMIDER' Folder on Device Storage
+): Promise<{ snapshot: AutoBackupSnapshot | null; source: 'local_folder' | null }> {
   const localSnapshot = await retrieveFromLocalYaadFolder(settings?.localBackupFolderName);
   if (localSnapshot) {
     return { snapshot: localSnapshot, source: 'local_folder' };
   }
-
   return { snapshot: null, source: null };
 }
 

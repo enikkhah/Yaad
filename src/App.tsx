@@ -158,7 +158,6 @@ export default function App() {
       alarmVolume: 0.85,
       vibrationEnabled: true,
       autoVoiceInput: false,
-      googleMapsApiKey: '',
     };
   });
 
@@ -319,7 +318,7 @@ export default function App() {
   const [isVaultInitialized, setIsVaultInitialized] = useState(false);
 
   const applyRestoredBackupIfNeeded = useCallback(
-    (backup: any, source: 'google_drive' | 'local_folder' | 'none' | null) => {
+    (backup: any, _source?: 'local_folder' | 'none' | null) => {
       if (!backup) return false;
 
       const curReminders = remindersRef.current;
@@ -466,15 +465,10 @@ export default function App() {
           // ignore
         }
 
-        const cloudLabel = settingsRef.current?.cloudSpaceLabel || (settingsRef.current?.cloudBackupFolderName || 'Yaad reminder');
         const srcText =
-          source === 'google_drive'
-            ? settingsRef.current?.language === 'en'
-              ? `Restored automatically from cloud space (${cloudLabel}).`
-              : `اطلاعات از فضای ابری انتخابی (${cloudLabel}) فراخوانی شد.`
-            : settingsRef.current?.language === 'en'
-            ? 'Restored automatically from local folder (Yaad reminder).'
-            : 'اطلاعات از پوشه محلی (Yaad reminder) فراخوانی شد.';
+          settingsRef.current?.language === 'en'
+            ? 'Restored automatically from local folder (YAAD).'
+            : 'اطلاعات از پوشه محلی (YAAD) فراخوانی شد.';
         showSyncNotification(srcText);
       }
 
@@ -861,16 +855,13 @@ export default function App() {
     requestPersistentStorage();
 
     const saveFullSnapshotOnClose = () => {
-      performAutoBackup(
-        {
-          reminders: remindersRef.current,
-          ideas: ideasRef.current,
-          savedLocations: savedLocationsRef.current,
-          occasions: occasionsRef.current,
-          settings: settingsRef.current,
-        },
-        { immediateCloud: true }
-      );
+      performAutoBackup({
+        reminders: remindersRef.current,
+        ideas: ideasRef.current,
+        savedLocations: savedLocationsRef.current,
+        occasions: occasionsRef.current,
+        settings: settingsRef.current,
+      });
     };
 
     const recallOnAppOpen = async () => {
@@ -972,16 +963,6 @@ export default function App() {
       (user, token) => {
         setGoogleUser(user);
         setGoogleToken(token);
-        if (token) {
-          // Priority 1 recall from Google Drive when token becomes available
-          retrieveLatestBackupWithPriority(token, settingsRef.current)
-            .then(({ snapshot, source }) => {
-              if (snapshot) {
-                applyRestoredBackupIfNeeded(snapshot, source);
-              }
-            })
-            .catch(() => {});
-        }
       },
       () => {
         setGoogleUser(null);
@@ -1556,59 +1537,16 @@ export default function App() {
   // Google sign in / out handlers
   const handleGoogleSignIn = async (options?: {
     openCalendar?: boolean;
-    forDrive?: boolean;
-    openDriveWindow?: boolean;
   }) => {
     try {
       const result = await signInWithGoogle(options);
       setGoogleUser(result.user);
       setGoogleToken(result.accessToken);
-      if (options?.forDrive) {
-        const targetFolderName = settings.cloudBackupFolderName || 'Yaad reminder';
-        const nextSettings: AppSettings = {
-          ...settings,
-          cloudBackupEnabled: true,
-          cloudBackupProvider: 'google_drive',
-          cloudBackupFolderName: targetFolderName,
-        };
-        setSettings(nextSettings);
-        try {
-          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(nextSettings));
-        } catch {}
-
-        // If local reminders are empty, first try recalling existing backup from Google Drive
-        if (reminders.length === 0 && ideas.length === 0 && savedLocations.length === 0) {
-          const { snapshot, source } = await retrieveLatestBackupWithPriority(
-            result.accessToken,
-            nextSettings
-          ).catch(() => ({ snapshot: null, source: 'none' as const }));
-          if (snapshot) {
-            applyRestoredBackupIfNeeded(snapshot, source);
-          }
-        }
-
-        await performAutoBackup(
-          {
-            reminders: remindersRef.current,
-            ideas: ideasRef.current,
-            savedLocations: savedLocationsRef.current,
-            occasions: occasionsRef.current,
-            settings: nextSettings,
-          },
-          { immediateCloud: true, forceCloud: true, googleToken: result.accessToken }
-        ).catch(() => {});
-        showSyncNotification(
-          isEn
-            ? `Connected to Google Drive and created/synced backup folder "${targetFolderName}".`
-            : `اتصال به گوگل درایو برقرار شد و پوشه پشتیبان «${targetFolderName}» به صورت خودکار ایجاد و همگام‌سازی گردید.`
-        );
-      } else {
-        showSyncNotification(
-          isEn
-            ? 'Google Calendar connected.'
-            : 'حساب تقویم گوگل (Google Calendar) متصل و باز شد.'
-        );
-      }
+      showSyncNotification(
+        isEn
+          ? 'Google Calendar connected.'
+          : 'حساب تقویم گوگل (Google Calendar) متصل و باز شد.'
+      );
     } catch (err: any) {
       showSyncNotification(
         (isEn ? 'Google connection error: ' : 'خطا در اتصال به حساب گوگل: ') + (err?.message || '')
@@ -3636,7 +3574,6 @@ export default function App() {
           setEditingLocation(null);
         }}
         onSave={handleSaveLocation}
-        googleMapsApiKey={settings.googleMapsApiKey}
         editingLocation={editingLocation}
         language={settings.language}
       />

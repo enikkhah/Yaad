@@ -4,7 +4,7 @@ function resolveAppVersion(): string {
   const raw =
     typeof __APP_VERSION__ !== 'undefined' && __APP_VERSION__
       ? String(__APP_VERSION__).trim()
-      : '1.68';
+      : '1.68.2';
   return raw.replace(/\.0$/, '');
 }
 
