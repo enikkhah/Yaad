@@ -39,7 +39,6 @@ import {
   Plus,
   Trash2,
   Check,
-  Cloud,
   Repeat,
   ShieldCheck,
   FileText,
@@ -78,6 +77,14 @@ interface IWindow extends Window {
 
 const JALALI_YEARS_GRID = Array.from({ length: 1425 - 1404 + 1 }, (_, i) => 1404 + i);
 const GREGORIAN_YEARS_GRID = Array.from({ length: 2046 - 2025 + 1 }, (_, i) => 2025 + i);
+const HOUR_WHEEL_ITEMS = Array.from({ length: 24 }, (_, i) => ({
+  value: i,
+  label: i.toString().padStart(2, '0'),
+}));
+const MINUTE_WHEEL_ITEMS = Array.from({ length: 60 }, (_, i) => ({
+  value: i,
+  label: i.toString().padStart(2, '0'),
+}));
 
 export const ReminderForm: React.FC<ReminderFormProps> = ({
   isOpen,
@@ -203,6 +210,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   // Session tracking to ensure default time is only calculated once upon form opening,
   // and never reset while user is editing
   const initializedSessionRef = useRef<string | null>(null);
+  const [pickerSessionKey, setPickerSessionKey] = useState<number>(0);
 
   // Sync state with initial data or defaults
   useEffect(() => {
@@ -217,6 +225,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       return; // Already initialized for this open session, do not reset user manual edits!
     }
     initializedSessionRef.current = sessionKey;
+    setPickerSessionKey((prev) => prev + 1);
 
     if (initialData) {
       // Editing existing reminder: set date to today (now) and default roller clock time to 2 minutes from now
@@ -1033,30 +1042,26 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 >
                   {/* Left: Hour Picker */}
                   <WheelPicker
+                    key={`hour-${pickerSessionKey}`}
                     selectedValue={selectedHour}
                     onChange={(val) => setSelectedHour(val)}
                     min={0}
                     max={23}
                     itemHeight={58}
                     visibleCount={3}
-                    items={Array.from({ length: 24 }, (_, i) => ({
-                      value: i,
-                      label: i.toString().padStart(2, '0'),
-                    }))}
+                    items={HOUR_WHEEL_ITEMS}
                   />
 
                   {/* Right: Minute Picker */}
                   <WheelPicker
+                    key={`minute-${pickerSessionKey}`}
                     selectedValue={selectedMinute}
                     onChange={(val) => setSelectedMinute(val)}
                     min={0}
                     max={59}
                     itemHeight={58}
                     visibleCount={3}
-                    items={Array.from({ length: 60 }, (_, i) => ({
-                      value: i,
-                      label: i.toString().padStart(2, '0'),
-                    }))}
+                    items={MINUTE_WHEEL_ITEMS}
                   />
                 </div>
               </div>
@@ -1753,7 +1758,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 <label className="flex items-center justify-between p-3 rounded-xl bg-stone-950/60 border border-stone-800/80 cursor-pointer hover:border-sky-500/50">
                   <div className="flex items-center gap-2.5">
                     <div className="p-1.5 rounded-lg bg-sky-500/10 text-sky-400">
-                      <Cloud className="w-4 h-4" />
+                      <Calendar className="w-4 h-4" />
                     </div>
                     <span className="text-xs font-bold text-white">
                       {isEn ? 'Sync with Google Calendar' : 'همگام‌سازی با Google Calendar'}

@@ -4,7 +4,7 @@ import { Reminder, AppSettings, PhoneAlarmSound } from '../types';
 import { formatJalaliTime } from './jalali';
 import { resolveAlarmSound, stopAlarmRinging } from './audio';
 
-export const NOTIFICATION_CHANNEL_ID = 'yaad_reminders_channel_v2';
+export const NOTIFICATION_CHANNEL_ID = 'yaad_reminders_channel_v3';
 export const NOTIFICATION_ACTION_TYPE_ID = 'YAAD_REMINDER_ACTIONS';
 
 let isChannelInitialized = false;
@@ -64,11 +64,11 @@ export function getChannelIdForConfig(
   vibrationEnabled: boolean = true
 ): string {
   if (volume <= 0.01) {
-    return vibrationEnabled ? 'yaad_channel_v2_vibrate_only' : 'yaad_channel_v2_silent';
+    return vibrationEnabled ? 'yaad_channel_v3_vibrate_only' : 'yaad_channel_v3_silent';
   }
   const soundFile = getSoundFileName(soundType);
   const key = soundFile.replace('.wav', '');
-  return vibrationEnabled ? `yaad_channel_v2_${key}` : `yaad_channel_v2_${key}_novib`;
+  return vibrationEnabled ? `yaad_channel_v3_${key}` : `yaad_channel_v3_${key}_novib`;
 }
 
 export function getSavedAppSettings(): any {
@@ -84,7 +84,7 @@ export function getSavedAppSettings(): any {
 
 /**
  * Initializes Android Notification Channels (Android 8.0+ / Oreo to Android 15+)
- * with Heads-Up Banner, user-selected sound, volume sensitivity, vibration toggle, and lock screen visibility.
+ * with Heads-Up Banner, user-selected sound, phone notification volume control, vibration toggle, and lock screen visibility.
  */
 export async function initNotificationChannel(): Promise<void> {
   if (!isNativeApp()) return;
@@ -102,19 +102,19 @@ export async function initNotificationChannel(): Promise<void> {
       vibration: true,
     });
 
-    // 2. Silent channel (for volume = 0% / mute & vibration off)
+    // 2. Top-pinned silent channel (used after 1 minute of unanswered alarm so notification stays at top of dropdown shade)
     await LocalNotifications.createChannel({
-      id: 'yaad_channel_v2_silent',
-      name: 'یادآورهای YAAD (بی‌صدا)',
-      description: 'اعلان‌های بدون صدا و بدون لرزش در حالت سکوت',
-      importance: 2, // 2 = IMPORTANCE_LOW (no sound, no vibration, silent in notification shade)
+      id: 'yaad_channel_v3_silent',
+      name: 'یادآورهای YAAD (بی‌صدا در صدر اعلان‌ها)',
+      description: 'اعلان‌های بدون صدا و در صدر منوی کرکره‌ای پس از ۱ دقیقه بی‌پاسخ ماندن',
+      importance: 5, // 5 = IMPORTANCE_HIGH so Android keeps it in the top Alerting section of the shade
       visibility: 1,
       vibration: false,
     });
 
-    // 2b. Vibrate-only channel (for volume = 0% / mute & vibration on)
+    // 2b. Vibrate-only channel
     await LocalNotifications.createChannel({
-      id: 'yaad_channel_v2_vibrate_only',
+      id: 'yaad_channel_v3_vibrate_only',
       name: 'یادآورهای YAAD (فقط ویبره)',
       description: 'اعلان‌های بدون صدا همراه با لرزش (ویبره)',
       importance: 5,
@@ -124,18 +124,18 @@ export async function initNotificationChannel(): Promise<void> {
 
     // 3. Channels for all 12 sound types (with and without vibration) so Android notification manager plays the exact selected melody & vibration state
     const soundChannels = [
-      { id: 'yaad_channel_v2_digital_beep', name: 'یادآورهای YAAD (دیجیتال)', sound: 'digital_beep.wav' },
-      { id: 'yaad_channel_v2_radar', name: 'یادآورهای YAAD (رادار)', sound: 'radar.wav' },
-      { id: 'yaad_channel_v2_marimba', name: 'یادآورهای YAAD (ماریمبا)', sound: 'marimba.wav' },
-      { id: 'yaad_channel_v2_morning_chime', name: 'یادآورهای YAAD (صبحگاهی)', sound: 'morning_chime.wav' },
-      { id: 'yaad_channel_v2_urgent_bell', name: 'یادآورهای YAAD (زنگ فوری)', sound: 'urgent_bell.wav' },
-      { id: 'yaad_channel_v2_beep', name: 'یادآورهای YAAD (بوق ساده)', sound: 'beep.wav' },
-      { id: 'yaad_channel_v2_zen_bowl', name: 'یادآورهای YAAD (کاسه تبتی)', sound: 'zen_bowl.wav' },
-      { id: 'yaad_channel_v2_soft_harp', name: 'یادآورهای YAAD (آرپژ چنگ)', sound: 'soft_harp.wav' },
-      { id: 'yaad_channel_v2_ocean_drop', name: 'یادآورهای YAAD (قطرات آب)', sound: 'ocean_drop.wav' },
-      { id: 'yaad_channel_v2_wind_chimes', name: 'یادآورهای YAAD (زنگوله بادی)', sound: 'wind_chimes.wav' },
-      { id: 'yaad_channel_v2_warm_pad', name: 'یادآورهای YAAD (موج گرم)', sound: 'warm_pad.wav' },
-      { id: 'yaad_channel_v2_calm_piano', name: 'یادآورهای YAAD (پیانوی آرام)', sound: 'calm_piano.wav' },
+      { id: 'yaad_channel_v3_digital_beep', name: 'یادآورهای YAAD (دیجیتال)', sound: 'digital_beep.wav' },
+      { id: 'yaad_channel_v3_radar', name: 'یادآورهای YAAD (رادار)', sound: 'radar.wav' },
+      { id: 'yaad_channel_v3_marimba', name: 'یادآورهای YAAD (ماریمبا)', sound: 'marimba.wav' },
+      { id: 'yaad_channel_v3_morning_chime', name: 'یادآورهای YAAD (صبحگاهی)', sound: 'morning_chime.wav' },
+      { id: 'yaad_channel_v3_urgent_bell', name: 'یادآورهای YAAD (زنگ فوری)', sound: 'urgent_bell.wav' },
+      { id: 'yaad_channel_v3_beep', name: 'یادآورهای YAAD (بوق ساده)', sound: 'beep.wav' },
+      { id: 'yaad_channel_v3_zen_bowl', name: 'یادآورهای YAAD (کاسه تبتی)', sound: 'zen_bowl.wav' },
+      { id: 'yaad_channel_v3_soft_harp', name: 'یادآورهای YAAD (آرپژ چنگ)', sound: 'soft_harp.wav' },
+      { id: 'yaad_channel_v3_ocean_drop', name: 'یادآورهای YAAD (قطرات آب)', sound: 'ocean_drop.wav' },
+      { id: 'yaad_channel_v3_wind_chimes', name: 'یادآورهای YAAD (زنگوله بادی)', sound: 'wind_chimes.wav' },
+      { id: 'yaad_channel_v3_warm_pad', name: 'یادآورهای YAAD (موج گرم)', sound: 'warm_pad.wav' },
+      { id: 'yaad_channel_v3_calm_piano', name: 'یادآورهای YAAD (پیانوی آرام)', sound: 'calm_piano.wav' },
     ];
 
     for (const sc of soundChannels) {
@@ -160,7 +160,7 @@ export async function initNotificationChannel(): Promise<void> {
       });
     }
 
-    // Register quick notification actions: «انجام شد» (Done), «تعویق» (Snooze), «ویرایش» (Edit)
+    // Register quick notification actions: «انجام شد» (Done), «تعویق ۱۵ دقیقه» (Snooze 15m), «ویرایش» (Edit)
     // Only 'edit' has foreground: true so tapping Edit opens the app and navigates to the Edit Reminder modal,
     // while Done and Snooze execute strictly in the background without opening the app.
     await LocalNotifications.registerActionTypes({
@@ -175,7 +175,7 @@ export async function initNotificationChannel(): Promise<void> {
             },
             {
               id: 'snooze',
-              title: '⏱ تعویق',
+              title: '⏱ تعویق ۱۵ دقیقه',
               foreground: false,
             },
             {
@@ -1223,7 +1223,8 @@ export function setupNotificationListeners(
   onSnooze?: (reminderId: string, minutes: number, snoozedUntil?: number) => void,
   onStop?: (reminderId: string) => void,
   onOpen?: (reminderId: string) => void,
-  onEdit?: (reminderId: string) => void
+  onEdit?: (reminderId: string) => void,
+  onNoReaction1m?: (reminderId: string, snoozedUntil?: number) => void
 ): void {
   if (!isNativeApp()) return;
 
@@ -1254,7 +1255,22 @@ export function setupNotificationListeners(
               notifications: [{ id: notifId, title: '', body: '' }],
             }).catch(() => {});
           }
+        } else if (actionId === 'tap' || !actionId) {
+          try {
+            stopAlarmRinging();
+          } catch {}
+          if (onOpen) onOpen('');
         }
+        return;
+      }
+
+      if (actionId === 'mute_after_1m') {
+        try {
+          stopAlarmRinging();
+        } catch {}
+        // Do NOT cancel or dismiss the delivered notification! It stays pinned at the top of the dropdown shade
+        // while the reminder itself is moved to +15m in the future in the app timeline.
+        if (onNoReaction1m) onNoReaction1m(reminderId, snoozedUntil);
         return;
       }
 
@@ -1286,8 +1302,11 @@ export function setupNotificationListeners(
         cancelReminderNotification(reminderId).catch(() => {});
         dismissDeliveredNotifications(reminderId).catch(() => {});
         if (onStop) onStop(reminderId);
-      } else if (actionId === 'tap') {
-        // Notification body tap is configured as a no-op on Android so only 'edit' opens the app
+      } else if (actionId === 'tap' || !actionId) {
+        try {
+          stopAlarmRinging();
+        } catch {}
+        // Tapping notification body opens the app directly to the Reminders Timeline
         if (onOpen) onOpen(reminderId);
       }
     });
@@ -1358,7 +1377,7 @@ export async function triggerOutOfAppPersistentNotification(
   if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
     const actions = [
       { action: 'done', title: isEn ? '✓ Done' : '✓ انجام شد' },
-      { action: 'snooze', title: isEn ? '⏱ Snooze' : '⏱ تعویق' },
+      { action: 'snooze', title: isEn ? '⏱ Snooze 15m' : '⏱ تعویق ۱۵ دقیقه' },
       { action: 'edit', title: isEn ? '✎ Edit' : '✎ ویرایش' },
     ];
 

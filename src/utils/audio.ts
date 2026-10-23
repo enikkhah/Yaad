@@ -1,4 +1,6 @@
 // Web Audio API synthesizer for category ring tunes, phone alarm sounds, and TTS voice announcements
+import { Capacitor } from '@capacitor/core';
+import { LocalNotifications } from '@capacitor/local-notifications';
 import { Category, PhoneAlarmSound } from '../types';
 
 let audioCtx: AudioContext | null = null;
@@ -341,6 +343,15 @@ export const playPhoneAlarmSound = (sound: PhoneAlarmSound, volumeOverride?: num
     if (vol <= 0.001) return;
 
     const soundFile = SOUND_FILE_MAP[sound] || SOUND_FILE_MAP[sound.replace(/-/g, '_')];
+    if (Capacitor.isNativePlatform() && soundFile) {
+      try {
+        (LocalNotifications as any).playNotificationSound({ sound: soundFile, loop: false }).catch(() => {});
+        return;
+      } catch {
+        // Fallback if plugin method unavailable
+      }
+    }
+
     if (typeof window !== 'undefined' && soundFile) {
       try {
         if (previewAudio) {
@@ -427,8 +438,18 @@ export const startAlarmRinging = (
   const clampedVol = Math.max(0, Math.min(1, vol));
   const soundFile = SOUND_FILE_MAP[effectiveSound] || SOUND_FILE_MAP[effectiveSound.replace(/-/g, '_')] || 'digital_beep.wav';
 
-  // 1. Setup persistent looping HTMLAudioElement so the single MediaPlayer instance loops continuously
-  if (typeof window !== 'undefined' && clampedVol > 0.001) {
+  const isNative = Capacitor.isNativePlatform();
+
+  // 1. On Native Android, play via Notification stream (USAGE_NOTIFICATION) instead of WebView Media stream (STREAM_MUSIC)
+  if (isNative) {
+    if (clampedVol > 0.001) {
+      try {
+        (LocalNotifications as any).playNotificationSound({ sound: soundFile, loop: true }).catch(() => {});
+      } catch {
+        // Ignore
+      }
+    }
+  } else if (typeof window !== 'undefined' && clampedVol > 0.001) {
     try {
       const audio = new Audio(`/${soundFile}`);
       audio.loop = true;
@@ -466,7 +487,7 @@ export const startAlarmRinging = (
       }
     }
 
-    if (clampedVol > 0.001) {
+    if (!isNative && clampedVol > 0.001) {
       if (activeAlarmAudio) {
         if (activeAlarmAudio.paused || activeAlarmAudio.ended) {
           activeAlarmAudio.currentTime = 0;
@@ -491,6 +512,13 @@ export const startAlarmRinging = (
 
 export const stopAlarmRinging = () => {
   isAlarmLooping = false;
+  if (Capacitor.isNativePlatform()) {
+    try {
+      (LocalNotifications as any).stopNotificationSound().catch(() => {});
+    } catch {
+      // Ignore
+    }
+  }
   if (alarmAutoStopTimeoutId !== null) {
     clearTimeout(alarmAutoStopTimeoutId);
     alarmAutoStopTimeoutId = null;

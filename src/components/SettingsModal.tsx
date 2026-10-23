@@ -4,7 +4,6 @@ import {
   X, 
   Palette, 
   Clock, 
-  Cloud, 
   LogOut,
   Sliders,
   Bell,
@@ -26,8 +25,6 @@ import {
   Download,
   Info,
   Volume2,
-  Volume1,
-  VolumeX,
   Play,
   Square,
   Music,
@@ -680,8 +677,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </h4>
                   <p className="text-[11px] text-stone-400 truncate">
                     {isFa
-                      ? `بلندی: ${toPersianDigits(Math.round((settings.alarmVolume ?? 0.85) * 100))}٪ • ملودی آلارم`
-                      : `Volume: ${Math.round((settings.alarmVolume ?? 0.85) * 100)}% • Alarm Melody`}
+                      ? 'ملودی آلارم • لرزش و ویبره (تنظیم بلندی صدا با ولوم اعلان گوشی)'
+                      : 'Alarm Melody • Vibration (Controlled by phone notification volume)'}
                   </p>
                 </div>
               </div>
@@ -690,89 +687,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {openSections.sound && (
               <div className="p-3 sm:p-4 space-y-4 animate-in fade-in">
-                {/* 2.1 Volume Slider and Presets */}
-                <div className="p-3.5 rounded-2xl bg-stone-900/70 border border-stone-800 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 text-xs font-bold text-stone-200">
-                      {((settings.alarmVolume ?? 0.85) <= 0.01) ? (
-                        <VolumeX className="w-4 h-4 text-stone-500" />
-                      ) : ((settings.alarmVolume ?? 0.85) < 0.5) ? (
-                        <Volume1 className="w-4 h-4 text-indigo-400" />
-                      ) : (
-                        <Volume2 className="w-4 h-4 text-indigo-400" />
-                      )}
-                      <span>{isFa ? 'میزان بلندی صدا (ولوم)' : 'Alarm Volume'}</span>
-                    </div>
-                    <span className="font-mono text-xs font-black text-indigo-300 bg-stone-900 px-2.5 py-0.5 rounded-lg border border-indigo-500/30">
-                      {isFa ? `${toPersianDigits(Math.round((settings.alarmVolume ?? 0.85) * 100))}٪` : `${Math.round((settings.alarmVolume ?? 0.85) * 100)}%`}
-                    </span>
-                  </div>
-
-                  {/* Slider */}
-                  <div className="flex items-center gap-3">
-                    <button
-                      type="button"
-                      onClick={() => handleVolumeChange(0)}
-                      title={isFa ? 'بی‌صدا' : 'Mute'}
-                      className="p-1 rounded hover:bg-stone-800 transition-colors"
-                    >
-                      <VolumeX 
-                        className={`w-4 h-4 transition-colors ${
-                          (settings.alarmVolume ?? 0.85) <= 0.01 ? 'text-indigo-400' : 'text-stone-500 hover:text-stone-300'
-                        }`} 
-                      />
-                    </button>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      step="5"
-                      value={Math.round((settings.alarmVolume ?? 0.85) * 100)}
-                      onChange={(e) => handleVolumeChange(parseInt(e.target.value, 10) / 100)}
-                      className="w-full accent-indigo-500 h-2.5 bg-stone-800 rounded-lg cursor-pointer"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => handleVolumeChange(1.0)}
-                      title={isFa ? 'حداکثر صدا' : 'Max Volume'}
-                      className="p-1 rounded hover:bg-stone-800 transition-colors"
-                    >
-                      <Volume2 
-                        className={`w-4 h-4 transition-colors ${
-                          (settings.alarmVolume ?? 0.85) >= 0.95 ? 'text-indigo-400' : 'text-stone-500 hover:text-stone-300'
-                        }`} 
-                      />
-                    </button>
-                  </div>
-
-                  {/* Quick Volume Preset Chips */}
-                  <div className="flex items-center gap-1.5 flex-wrap pt-1">
-                    {[
-                      { label: isFa ? 'بی‌صدا (۰٪)' : 'Mute (0%)', val: 0 },
-                      { label: isFa ? 'آرام (۳۰٪)' : 'Low (30%)', val: 0.3 },
-                      { label: isFa ? 'متوسط (۶۰٪)' : 'Med (60%)', val: 0.6 },
-                      { label: isFa ? 'بلند (۸۵٪)' : 'High (85%)', val: 0.85 },
-                      { label: isFa ? 'حداکثر (۱۰۰٪)' : 'Max (100%)', val: 1.0 },
-                    ].map((chip) => {
-                      const isActive = Math.abs((settings.alarmVolume ?? 0.85) - chip.val) < 0.05;
-                      return (
-                        <button
-                          key={chip.val}
-                          type="button"
-                          onClick={() => handleVolumeChange(chip.val)}
-                          className={`min-h-[36px] text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all cursor-pointer active:scale-95 ${
-                            isActive
-                              ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-sm'
-                              : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
-                          }`}
-                        >
-                          {chip.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
                 {/* 2.1.5 Vibration On/Off Sliding Toggle (کلید کشویی ویبره در بخش صدا و هشدارها) */}
                 <div className="p-3.5 rounded-2xl bg-stone-950/60 border border-stone-800/80 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5 min-w-0">
@@ -1185,7 +1099,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             >
               <div className="flex items-center gap-3 min-w-0">
                 <div className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center text-sky-400 shrink-0">
-                  <Cloud className="w-4.5 h-4.5" />
+                  <Calendar className="w-4.5 h-4.5" />
                 </div>
                 <div className="min-w-0">
                   <h4 className="text-xs sm:text-sm font-black text-white truncate">
@@ -1817,30 +1731,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
               {/* Expandable Minimal Info Content for Privacy or About */}
               {activeInfoDialog === 'privacy' && (
-                <div className="p-3 rounded-xl bg-stone-900/90 border border-emerald-500/30 text-[11px] text-stone-300 leading-relaxed space-y-2.5 animate-in fade-in">
+                <div className="p-3 rounded-xl bg-stone-900/90 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1.5">
-                      <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span className="font-bold text-emerald-300">{isFa ? 'حریم خصوصی و امنیت داده‌ها' : 'Privacy Policy'}</span>
-                    </div>
+                    <span className="font-bold text-emerald-300">{isFa ? 'حریم خصوصی و امنیت داده‌ها' : 'Privacy Policy'}</span>
                     <button type="button" onClick={() => setActiveInfoDialog(null)} className="text-stone-400 hover:text-white">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
                   <p>
                     {isFa
-                      ? 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه شما ذخیره می‌شوند و بدون اجازه شما به هیچ سرور خارجی ارسال نمی‌گردند.'
-                      : 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and are never shared without your explicit consent.'}
+                      ? 'تمامی یادآورها، مناسبت‌ها، ایده‌ها و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه خودتان و در پوشه پشتیبان YAAD در ریشه حافظه ذخیره می‌شوند. پشتیبان‌گیری ابری حذف شده و هیچ اطلاعاتی به سرورهای خارجی ارسال نمی‌شود.'
+                      : 'All your reminders, occasions, ideas, and places are stored 100% locally on your device and in the root YAAD backup folder. Cloud backup has been removed and no data is sent to external servers.'}
                   </p>
                   <a
-                    href="https://enikkhah.github.io/Yaad/privacy.html"
+                    href="/privacy.html"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm shadow-emerald-950/50 cursor-pointer active:scale-95"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-bold text-[11px] transition-all"
                   >
-                    <ShieldCheck className="w-3.5 h-3.5 text-white shrink-0" />
-                    <span>{isFa ? 'مشاهده' : 'View Privacy Policy'}</span>
-                    <ExternalLink className="w-3 h-3 text-emerald-100 shrink-0" />
+                    <span>{isFa ? 'مطالعه کامل سیاست حریم خصوصی' : 'Read Full Privacy Policy'}</span>
+                    <ExternalLink className="w-3 h-3 shrink-0" />
                   </a>
                 </div>
               )}

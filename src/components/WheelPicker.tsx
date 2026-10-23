@@ -29,9 +29,17 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
   const isScrollingRef = useRef(false);
   const scrollDebounceTimerRef = useRef<any>(null);
   const isProgrammaticScrollRef = useRef(false);
+  const programmaticTimerRef = useRef<any>(null);
+  const hasInitializedScrollRef = useRef(false);
+  const lastEmittedValueRef = useRef<number>(selectedValue);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+
   const [isTypingMode, setIsTypingMode] = useState(false);
   const [typedInput, setTypedInput] = useState(selectedValue.toString().padStart(2, '0'));
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const itemsSignature = items && items.length > 0 ? `${items.length}:${items[0].value}:${items[items.length - 1].value}` : '';
 
   const effectiveItems = useMemo(() => {
     if (items && items.length > 0) return items;
@@ -43,7 +51,8 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
         label: val.toString().padStart(2, '0'),
       };
     });
-  }, [items, min, max]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemsSignature, min, max]);
 
   const itemCount = effectiveItems.length;
 
@@ -83,6 +92,9 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
       const el = containerRef.current;
       if (!el) return;
       isProgrammaticScrollRef.current = true;
+      if (programmaticTimerRef.current) {
+        clearTimeout(programmaticTimerRef.current);
+      }
       const targetScrollTop = globalIdx * itemHeight;
 
       if (smooth) {
@@ -91,20 +103,45 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
         el.scrollTop = targetScrollTop;
       }
 
-      setTimeout(() => {
+      programmaticTimerRef.current = setTimeout(() => {
         isProgrammaticScrollRef.current = false;
-      }, smooth ? 260 : 20);
+      }, smooth ? 280 : 50);
     },
     [itemHeight]
   );
 
-  // Center scroll on selectedValue upon mount or when changed externally
+  // Center scroll on selectedValue upon mount or when changed externally (e.g. +2m / +5m preset or editing reminder)
   useEffect(() => {
-    if (!isScrollingRef.current && !isTypingMode) {
+    if (isTypingMode) return;
+    const isInitial = !hasInitializedScrollRef.current;
+    const isExternalChange = selectedValue !== lastEmittedValueRef.current;
+
+    if (isInitial || (!isScrollingRef.current && isExternalChange)) {
+      hasInitializedScrollRef.current = true;
+      lastEmittedValueRef.current = selectedValue;
       const targetGlobalIndex = MID_CYCLE * itemCount + selectedOriginalIndex;
       scrollToGlobalIndex(targetGlobalIndex, false);
+      // Double-check after layout paint to guarantee exact centering inside modals
+      const rafId = requestAnimationFrame(() => {
+        if (!isScrollingRef.current && containerRef.current) {
+          isProgrammaticScrollRef.current = true;
+          containerRef.current.scrollTop = targetGlobalIndex * itemHeight;
+          setTimeout(() => {
+            isProgrammaticScrollRef.current = false;
+          }, 40);
+        }
+      });
+      return () => cancelAnimationFrame(rafId);
     }
-  }, [selectedOriginalIndex, itemCount, isTypingMode, scrollToGlobalIndex]);
+  }, [selectedValue, selectedOriginalIndex, itemCount, itemHeight, isTypingMode, scrollToGlobalIndex]);
+
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (scrollDebounceTimerRef.current) clearTimeout(scrollDebounceTimerRef.current);
+      if (programmaticTimerRef.current) clearTimeout(programmaticTimerRef.current);
+    };
+  }, []);
 
   // Handle typing mode autofocus
   useEffect(() => {
@@ -135,8 +172,9 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
       const wrappedIndex = ((nearestGlobalIndex % itemCount) + itemCount) % itemCount;
       const targetItem = effectiveItems[wrappedIndex];
 
-      if (targetItem && targetItem.value !== selectedValue) {
-        onChange(targetItem.value);
+      if (targetItem && targetItem.value !== lastEmittedValueRef.current) {
+        lastEmittedValueRef.current = targetItem.value;
+        onChangeRef.current(targetItem.value);
       }
     }
 
@@ -151,40 +189,22 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
       const wrappedIndex = ((nearestGlobalIndex % itemCount) + itemCount) % itemCount;
       const targetItem = effectiveItems[wrappedIndex];
 
-      if (targetItem && targetItem.value !== selectedValue) {
-        onChange(targetItem.value);
+      if (targetItem && targetItem.value !== lastEmittedValueRef.current) {
+        lastEmittedValueRef.current = targetItem.value;
+        onChangeRef.current(targetItem.value);
       }
 
-      // If user has scrolled far up into cycle 0 or far down into cycle 6, silently re-center
+      // If user has scrolled far up into cycle 0/1 or far down into cycle 5/6, silently re-center
       if (nearestGlobalIndex < 2 * itemCount || nearestGlobalIndex >= 5 * itemCount) {
         const normalizedIndex = MID_CYCLE * itemCount + wrappedIndex;
-        isProgrammaticScrollRef.current = true;
-        currentEl.scrollTop = normalizedIndex * itemHeight;
-        setTimeout(() => {
-          isProgrammaticScrollRef.current = false;
-        }, 30);
+        scrollToGlobalIndex(normalizedIndex, false);
       } else {
-        // Snap smoothly to nearest index
-        scrollToGlobalIndex(nearestGlobalIndex, true);
+        const exactTop = nearestGlobalIndex * itemHeight;
+        if (Math.abs(currentEl.scrollTop - exactTop) > 1) {
+          scrollToGlobalIndex(nearestGlobalIndex, true);
+        }
       }
-    }, 120);
-  };
-
-  // Step up (previous number) or down (next number) with seamless circular wrap
-  const handleStep = (direction: 'up' | 'down') => {
-    const el = containerRef.current;
-    const currentScrollTop = el ? el.scrollTop : (MID_CYCLE * itemCount + selectedOriginalIndex) * itemHeight;
-    const currentGlobalIndex = Math.round(currentScrollTop / itemHeight);
-    
-    const delta = direction === 'up' ? -1 : 1;
-    const nextGlobalIndex = currentGlobalIndex + delta;
-    const nextWrappedIndex = ((nextGlobalIndex % itemCount) + itemCount) % itemCount;
-    const nextItem = effectiveItems[nextWrappedIndex];
-
-    if (nextItem) {
-      onChange(nextItem.value);
-      scrollToGlobalIndex(nextGlobalIndex, true);
-    }
+    }, 110);
   };
 
   // Submit direct typed number
@@ -192,11 +212,12 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
     const parsed = parseInt(typedInput, 10);
     if (!isNaN(parsed)) {
       const clamped = Math.max(min, Math.min(max, parsed));
-      onChange(clamped);
+      lastEmittedValueRef.current = clamped;
+      onChangeRef.current(clamped);
       const newOrigIdx = effectiveItems.findIndex((it) => it.value === clamped);
       if (newOrigIdx >= 0) {
         const targetGlobalIdx = MID_CYCLE * itemCount + newOrigIdx;
-        setTimeout(() => scrollToGlobalIndex(targetGlobalIdx, false), 40);
+        setTimeout(() => scrollToGlobalIndex(targetGlobalIdx, false), 30);
       }
     }
     setIsTypingMode(false);
@@ -320,7 +341,6 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
             paddingTop: paddingY,
             paddingBottom: paddingY,
             scrollSnapType: 'y mandatory',
-            scrollBehavior: 'smooth',
           }}
           className="overflow-y-auto no-scrollbar relative w-full touch-pan-y"
         >
@@ -331,7 +351,8 @@ export const WheelPicker: React.FC<WheelPickerProps> = ({
               <div
                 key={item.key}
                 onClick={() => {
-                  onChange(item.value);
+                  lastEmittedValueRef.current = item.value;
+                  onChangeRef.current(item.value);
                   scrollToGlobalIndex(item.globalIndex, true);
                 }}
                 style={{

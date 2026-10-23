@@ -83,7 +83,6 @@ import {
   Sparkles,
   Settings as SettingsIcon,
   Lightbulb,
-  Cloud,
   Check,
   MapPin,
   Download,
@@ -723,15 +722,34 @@ export default function App() {
     }
     prevModalOpenRef.current = isAnyModalCurrentlyOpen;
   }, [isAnyModalCurrentlyOpen]);
-  const openedFromNotificationEditRef = useRef(false);
+  const isInitialNotificationLaunch = (() => {
+    if (typeof window === 'undefined') return false;
+    if ((window as any).__yaadOpenedFromNotification === true) return true;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return Boolean(
+        params.get('editReminderId') ||
+          params.get('openTimelineReminderId') ||
+          params.get('openTimeline') ||
+          params.get('alarmId')
+      );
+    } catch {
+      return false;
+    }
+  })();
 
-  // App startup splash screen (fade in & fade out in <= 1.5s, then immediately open + menu unless an alarm or edit modal is active)
-  const [showSplash, setShowSplash] = useState<boolean>(true);
-  const [appVisible, setAppVisible] = useState<boolean>(false);
+  const openedFromNotificationEditRef = useRef<boolean>(isInitialNotificationLaunch);
+
+  // App startup splash screen (fade in & fade out in <= 1.5s, then immediately open + menu unless opened from a notification or an alarm/edit modal is active)
+  const [showSplash, setShowSplash] = useState<boolean>(() => !isInitialNotificationLaunch);
+  const [appVisible, setAppVisible] = useState<boolean>(() => isInitialNotificationLaunch);
   const handleStartExitSplash = useCallback(() => {
     setAppVisible(true);
     setActiveAlarmReminder((currAlarm) => {
-      if (!currAlarm && !openedFromNotificationEditRef.current) {
+      const openedFromNotif =
+        openedFromNotificationEditRef.current ||
+        (typeof window !== 'undefined' && (window as any).__yaadOpenedFromNotification === true);
+      if (!currAlarm && !openedFromNotif) {
         setIsCreateChoiceOpen(true);
       }
       return currAlarm;
@@ -741,7 +759,10 @@ export default function App() {
     setAppVisible(true);
     setShowSplash(false);
     setActiveAlarmReminder((currAlarm) => {
-      if (!currAlarm && !openedFromNotificationEditRef.current) {
+      const openedFromNotif =
+        openedFromNotificationEditRef.current ||
+        (typeof window !== 'undefined' && (window as any).__yaadOpenedFromNotification === true);
+      if (!currAlarm && !openedFromNotif) {
         setIsCreateChoiceOpen(true);
       }
       return currAlarm;
@@ -918,6 +939,7 @@ export default function App() {
   const handleCompleteReminderRef = useRef<(id: string) => void>(() => {});
   const handlePostponeRef = useRef<(id: string, mins: number, explicitDueTimestamp?: number) => void>(() => {});
   const handleStopOrDismissReminderRef = useRef<(id: string) => void>(() => {});
+  const handleNoReactionTimeoutRef = useRef<(id: string, nextDueTimestamp?: number) => void>(() => {});
   const ACTIONED_REMINDERS_KEY = 'yaad_actioned_reminders_map';
   const recentNotificationActionsRef = useRef<Map<string, number>>(new Map());
 
@@ -994,6 +1016,9 @@ export default function App() {
     const openEditModalForReminderId = (targetId: string) => {
       if (!targetId) return;
       openedFromNotificationEditRef.current = true;
+      if (typeof window !== 'undefined') {
+        (window as any).__yaadOpenedFromNotification = true;
+      }
       stopAlarmRinging();
       clearOutOfAppPersistentNotification(targetId);
       cancelReminderNotification(targetId).catch(() => {});
@@ -1027,13 +1052,69 @@ export default function App() {
       }
     };
 
+    const openTimelineFromNotificationTap = (targetId?: string) => {
+      openedFromNotificationEditRef.current = true;
+      if (typeof window !== 'undefined') {
+        (window as any).__yaadOpenedFromNotification = true;
+      }
+      stopAlarmRinging();
+
+      if (targetId) {
+        triggeredAlarmsRef.current.add(targetId);
+        let found = remindersRef.current?.find((r) => r.id === targetId);
+        if (!found) {
+          try {
+            const raw = localStorage.getItem(REMINDERS_STORAGE_KEY);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                found = parsed.find((r: Reminder) => r.id === targetId);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+        if (
+          found &&
+          found.dueTimestamp <= Date.now() &&
+          !found.acknowledged &&
+          found.status !== 'completed'
+        ) {
+          handleNoReactionTimeoutRef.current(targetId);
+        }
+      }
+
+      setShowSplash(false);
+      setAppVisible(true);
+      setIsCreateChoiceOpen(false);
+      setActiveAlarmReminder(null);
+      setIsFormOpen(false);
+      setEditingReminder(null);
+      setIsSettingsOpen(false);
+      setIsStatsOpen(false);
+      setIsIdeaModalOpen(false);
+      setIsLocationModalOpen(false);
+      setIsLocationReminderModalOpen(false);
+      setIsOccasionModalOpen(false);
+      setCategoryFilter('all');
+      setActiveMainTab('reminders');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+
     // Listen for Service Worker notification actions (done, complete, snooze, edit, stop, dismiss, open)
     const handleSwMessage = (event: MessageEvent) => {
       if (event.data?.type === 'YAAD_NOTIFICATION_ACTION') {
         const { action, reminderId } = event.data;
+
+        if (action === 'open') {
+          openTimelineFromNotificationTap(reminderId);
+          return;
+        }
+
         if (!reminderId) return;
 
-        // 1. Immediately stop audio ringing and dismiss delivered notification banner
+        // Immediately stop audio ringing and dismiss delivered notification banner for explicit action buttons
         stopAlarmRinging();
         clearOutOfAppPersistentNotification(reminderId);
 
@@ -1045,11 +1126,6 @@ export default function App() {
           openEditModalForReminderId(reminderId);
         } else if (action === 'stop' || action === 'dismiss') {
           handleStopOrDismissReminderRef.current(reminderId);
-        } else if (action === 'open') {
-          const found = remindersRef.current?.find((r) => r.id === reminderId);
-          if (found && found.status === 'pending' && !found.acknowledged) {
-            setActiveAlarmReminder(found);
-          }
         }
       }
     };
@@ -1070,13 +1146,13 @@ export default function App() {
         handleStopOrDismissReminderRef.current(id);
       },
       (id) => {
-        const found = remindersRef.current?.find((r) => r.id === id);
-        if (found && (found.status === 'pending' || found.status === 'postponed') && !found.acknowledged) {
-          setActiveAlarmReminder(found);
-        }
+        openTimelineFromNotificationTap(id);
       },
       (id) => {
         openEditModalForReminderId(id);
+      },
+      (id, snoozedUntil) => {
+        handleNoReactionTimeoutRef.current(id, snoozedUntil);
       }
     );
 
@@ -1165,17 +1241,36 @@ export default function App() {
         }
       }
 
-      const queryAlarmId = params.get('alarmId');
-      if (queryAlarmId) {
-        // Clear alarmId query from URL immediately so subsequent re-renders don't re-trigger it
+      const queryTimelineRemId = params.get('openTimelineReminderId') || params.get('alarmId');
+      const queryOpenTimeline = params.get('openTimeline');
+      if (queryTimelineRemId || queryOpenTimeline) {
         const cleanUrl = new URL(window.location.href);
+        cleanUrl.searchParams.delete('openTimelineReminderId');
+        cleanUrl.searchParams.delete('openTimeline');
         cleanUrl.searchParams.delete('alarmId');
         window.history.replaceState({}, '', cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : ''));
 
-        const found = reminders.find((r) => r.id === queryAlarmId);
-        if (found && found.status === 'pending' && !found.acknowledged) {
-          setActiveAlarmReminder(found);
+        openedFromNotificationEditRef.current = true;
+        (window as any).__yaadOpenedFromNotification = true;
+        stopAlarmRinging();
+        if (queryTimelineRemId) {
+          triggeredAlarmsRef.current.add(queryTimelineRemId);
+          const found = reminders.find((r) => r.id === queryTimelineRemId);
+          if (
+            found &&
+            found.dueTimestamp <= Date.now() &&
+            !found.acknowledged &&
+            found.status !== 'completed'
+          ) {
+            handleNoReactionTimeoutRef.current(queryTimelineRemId);
+          }
         }
+        setShowSplash(false);
+        setAppVisible(true);
+        setIsCreateChoiceOpen(false);
+        setActiveAlarmReminder(null);
+        setCategoryFilter('all');
+        setActiveMainTab('reminders');
       }
     } catch {
       // Ignore
@@ -1205,21 +1300,60 @@ export default function App() {
           return;
         }
 
-        // Trigger 1-minute alarm at dueTimestamp and repeat every 15 minutes if user has not reacted
+        // Trigger 1-minute alarm at dueTimestamp.
+        // Once 1 minute (60,000 ms) passes without user reaction, immediately move the reminder's dueTimestamp
+        // to +15 minutes in the future (> NOW) so it appears after NOW in the timeline and NEVER triggers AlarmModal when opening the app!
         const REPEAT_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+        const ONE_MINUTE_MS = 60 * 1000; // 1 minute active alarm window
         const elapsedMs = now - r.dueTimestamp;
         if (
           (r.status === 'pending' || r.status === 'postponed') &&
           elapsedMs >= 0
         ) {
-          const repeatCycle = Math.floor(elapsedMs / REPEAT_INTERVAL_MS);
-          const cycleOffsetMs = elapsedMs - repeatCycle * REPEAT_INTERVAL_MS;
-          const cycleKey = `${r.id}_${r.dueTimestamp}_${repeatCycle}`;
+          if (elapsedMs >= ONE_MINUTE_MS) {
+            // 1 minute has elapsed without reaction: advance dueTimestamp forward in 15m increments to the future (> now)
+            const completedCycles = Math.floor(elapsedMs / REPEAT_INTERVAL_MS);
+            const cycleOffsetMs = elapsedMs - completedCycles * REPEAT_INTERVAL_MS;
+            if (cycleOffsetMs < ONE_MINUTE_MS && completedCycles <= 25) {
+              // Currently inside the 1-minute ringing window of a 15-minute repeat cycle
+              const currentCycleStart = r.dueTimestamp + completedCycles * REPEAT_INTERVAL_MS;
+              const cycleKey = `${r.id}_${currentCycleStart}_0`;
+              if (
+                !triggeredAlarmsRef.current.has(cycleKey) &&
+                !triggeredAlarmsRef.current.has(r.id)
+              ) {
+                triggeredAlarmsRef.current.add(cycleKey);
+                const updatedForCycle: Reminder = { ...r, dueTimestamp: currentCycleStart, status: 'postponed' };
+                setActiveAlarmReminder(updatedForCycle);
+                triggerOutOfAppPersistentNotification(updatedForCycle, settings).catch(() => {});
+              }
+            } else {
+              // Outside the 1-minute window: move dueTimestamp to the next 15-minute mark after NOW in the timeline
+              const nextFutureDue = r.dueTimestamp + (completedCycles + 1) * REPEAT_INTERVAL_MS;
+              setActiveAlarmReminder((curr) => (curr?.id === r.id ? null : curr));
+              setReminders((prev) => {
+                const nextList = prev.map((item) =>
+                  item.id === r.id
+                    ? {
+                        ...item,
+                        dueTimestamp: nextFutureDue,
+                        status: 'postponed' as ReminderStatus,
+                        postponedAt: now,
+                        acknowledged: false,
+                      }
+                    : item
+                );
+                try {
+                  localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(nextList));
+                } catch {}
+                return nextList;
+              });
+            }
+            return;
+          }
 
+          const cycleKey = `${r.id}_${r.dueTimestamp}_0`;
           if (
-            repeatCycle <= 25 &&
-            cycleOffsetMs >= 0 &&
-            cycleOffsetMs < 2 * 60 * 1000 &&
             !triggeredAlarmsRef.current.has(cycleKey) &&
             !triggeredAlarmsRef.current.has(r.id)
           ) {
@@ -2169,12 +2303,45 @@ export default function App() {
 
   handleStopOrDismissReminderRef.current = handleStopOrDismissReminder;
 
-  // Handler: When 1-minute alarm finishes without user reaction, silence current 1-minute ring & close card,
-  // while keeping the reminder unacknowledged so it automatically repeats every 15 minutes until user reacts.
-  const handleNoReactionTimeout = (id: string) => {
+  // Handler: When 1-minute alarm finishes without user reaction:
+  // 1. Silence current 1-minute ring & close in-app alarm modal
+  // 2. Keep the dropdown shade notification pinned at the top (do NOT dismiss delivered notification)
+  // 3. Move the reminder's dueTimestamp to +15 minutes in the future so it is positioned after NOW in the timeline
+  //    and opening the app never triggers the in-app alarm modal until the next 15-minute due time arrives.
+  const handleNoReactionTimeout = (id: string, explicitNextDueTimestamp?: number) => {
     stopAlarmRinging();
     setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+
+    setReminders((prev) => {
+      const now = Date.now();
+      const updated = prev.map((r) => {
+        if (r.id === id) {
+          const nextDue =
+            typeof explicitNextDueTimestamp === 'number' && explicitNextDueTimestamp > now
+              ? explicitNextDueTimestamp
+              : Math.max(now, r.dueTimestamp) + 15 * 60000;
+          triggeredAlarmsRef.current.delete(id);
+          return {
+            ...r,
+            dueTimestamp: nextDue,
+            status: 'postponed' as ReminderStatus,
+            postponedAt: now,
+            acknowledged: false,
+          };
+        }
+        return r;
+      });
+
+      try {
+        localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(updated));
+      } catch (err) {
+        console.error('Failed to sync 1m unanswered reminder to localStorage:', err);
+      }
+      return updated;
+    });
   };
+
+  handleNoReactionTimeoutRef.current = handleNoReactionTimeout;
 
   // Handler: Delete reminder (soft delete into Recycle Bin)
   const handleDelete = (id: string) => {
@@ -2561,21 +2728,20 @@ export default function App() {
                 </button>
 
                 {logoMenuInfoSection === 'privacy' && (
-                  <div className="p-2.5 rounded-xl bg-stone-950 border border-emerald-500/30 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
+                  <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
                     <p>
                       {isEn
-                        ? 'All your reminders, ideas, occasions, and saved locations are stored locally on your device and are never shared without your explicit consent.'
-                        : 'تمامی یادآورها، ایده‌ها، مناسبت‌ها و موقعیت‌های مکانی شما به صورت خصوصی در حافظه دستگاه شما ذخیره می‌شوند و بدون اجازه شما به هیچ سرور خارجی ارسال نمی‌گردند.'}
+                        ? 'All reminders, occasions, ideas, and places are stored 100% locally on your device and in the root YAAD backup folder. Cloud backup is removed and no data leaves your device.'
+                        : 'تمامی یادآورها، مناسبت‌ها، ایده‌ها و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و پوشه پشتیبان YAAD در ریشه حافظه ذخیره می‌شوند و به هیچ سرور یا فضای ابری ارسال نمی‌گردند.'}
                     </p>
                     <a
-                      href="https://enikkhah.github.io/Yaad/privacy.html"
+                      href="/privacy.html"
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-all shadow-sm shadow-emerald-950/50 cursor-pointer active:scale-95"
+                      className="w-full px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-bold text-[11px] flex items-center justify-center gap-1.5 transition-all"
                     >
-                      <ShieldCheck className="w-3.5 h-3.5 text-white shrink-0" />
-                      <span>{isEn ? 'View Privacy Policy' : 'مشاهده'}</span>
-                      <ExternalLink className="w-3 h-3 text-emerald-100 shrink-0" />
+                      <span>{isEn ? 'Read Full Privacy Policy' : 'مطالعه کامل سیاست حریم خصوصی'}</span>
+                      <ExternalLink className="w-3 h-3 shrink-0" />
                     </a>
                   </div>
                 )}
@@ -2629,12 +2795,6 @@ export default function App() {
                 <span className="font-black text-sm sm:text-base tracking-tight text-indigo-400">
                   {isEn ? 'YAAD' : 'یاد'}
                 </span>
-                {googleUser && (
-                  <span className="flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-400 border border-sky-500/20 font-bold">
-                    <Cloud className="w-2.5 h-2.5" />
-                    <span className="hidden sm:inline">{settings.language === 'en' ? 'Synced' : 'همگام'}</span>
-                  </span>
-                )}
               </div>
               <span className="text-[10px] sm:text-xs text-stone-400 font-medium">
                 {isEn
@@ -3664,8 +3824,12 @@ export default function App() {
           }}
           onDismiss={() => {
             if (activeAlarmReminder) {
-              handleStopOrDismissReminder(activeAlarmReminder.id);
+              handleNoReactionTimeout(activeAlarmReminder.id);
             }
+            openedFromNotificationEditRef.current = true;
+            setIsCreateChoiceOpen(false);
+            setActiveAlarmReminder(null);
+            setCategoryFilter('all');
             setActiveMainTab('reminders');
             window.scrollTo({ top: 0, behavior: 'smooth' });
           }}

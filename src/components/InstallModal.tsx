@@ -114,7 +114,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
                 {isEn ? 'Install & Run YAAD' : 'نصب و اجرای یاد'}
               </h3>
               <p className="text-[11px] text-teal-400 font-medium">
-                {isEn ? 'Progressive Web App (PWA) with Offline & Auto-Backup' : 'نسخه پیشرو وب (PWA) با پشتیبان‌گیری خودکار در پوشه Yaad reminder'}
+                {isEn ? 'Progressive Web App (PWA) with Offline & Auto-Backup' : 'نسخه پیشرو وب (PWA) با پشتیبان‌گیری خودکار در پوشه YAAD'}
               </p>
             </div>
           </div>
@@ -130,15 +130,15 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
         {/* Body */}
         <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-          {/* Folder Access Permission on Install (پوشه Yaad reminder) */}
+          {/* Folder Access Permission on Install (پوشه YAAD) */}
           <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-black text-emerald-300">
                 <FolderOpen className="w-4 h-4 text-emerald-400 shrink-0" />
                 <span>
                   {isEn
-                    ? 'Automatic Local Backup Folder (Yaad reminder)'
-                    : 'مجوز پوشه پشتیبان محلی (Yaad reminder) هنگام نصب'}
+                    ? 'Automatic Local Backup Folder (YAAD)'
+                    : 'مجوز پوشه پشتیبان محلی (YAAD) هنگام نصب'}
                 </span>
               </div>
               <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
@@ -152,8 +152,8 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
             <p className="text-[11px] text-stone-300 leading-relaxed">
               {isEn
-                ? 'Grant access to the "Yaad reminder" folder on your device so all reminders, locations, ideas, and occasions are automatically backed up and restored on every app open, close, and re-installation.'
-                : 'جهت ذخیره و فراخوانی خودکار اطلاعات در پوشه «Yaad reminder» روی حافظه گوشی در هر بار بستن، باز شدن و نصب مجدد برنامه، دسترسی به پوشه را تایید نمایید.'}
+                ? 'Grant access to the "YAAD" folder on your device so all reminders, locations, ideas, and occasions are automatically backed up and restored on every app open, close, and re-installation.'
+                : 'جهت ذخیره و فراخوانی خودکار اطلاعات در پوشه «YAAD» در ریشه حافظه گوشی در هر بار بستن، باز شدن و نصب مجدد برنامه، دسترسی به حافظه را تایید نمایید.'}
             </p>
 
             {folderStatusMsg && (
@@ -173,7 +173,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
               <span>
                 {isGrantingFolder
                   ? (isEn ? 'Checking folder...' : 'در حال بررسی پوشه...')
-                  : (isEn ? 'Grant Access to Yaad reminder Folder & Restore' : 'تایید دسترسی پوشه Yaad reminder و فراخوانی خودکار')}
+                  : (isEn ? 'Grant Access to YAAD Folder & Restore' : 'تایید دسترسی پوشه YAAD و فراخوانی خودکار')}
               </span>
             </button>
           </div>

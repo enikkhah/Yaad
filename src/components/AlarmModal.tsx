@@ -297,7 +297,8 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       dir={isEn ? 'ltr' : 'rtl'}
     >
       <div
-        className={`w-full max-w-md rounded-3xl border-2 ${palette.cardBg} ${palette.cardBorder} shadow-2xl overflow-hidden transition-all`}
+        onClick={handleDismiss}
+        className={`w-full max-w-md rounded-3xl border-2 ${palette.cardBg} ${palette.cardBorder} shadow-2xl overflow-hidden transition-all cursor-pointer`}
       >
         {/* Minimal 1-Minute Progress Bar */}
         <div className="w-full h-1 bg-black/20 overflow-hidden">
@@ -354,7 +355,10 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
               </span>
               <button
                 type="button"
-                onClick={handleDismiss}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDismiss();
+                }}
                 className={`p-1.5 rounded-xl transition-colors cursor-pointer ${palette.mutedText} hover:opacity-100`}
                 title={isEn ? 'Close Card' : 'بستن کارت'}
               >
@@ -395,11 +399,17 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           </div>
 
           {/* 3 Minimal Theme-Matched Action Buttons */}
-          <div className="grid grid-cols-3 gap-2 pt-1">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="grid grid-cols-3 gap-2 pt-1"
+          >
             {/* 1. Done */}
             <button
               type="button"
-              onClick={handleComplete}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleComplete();
+              }}
               className={`min-h-[44px] py-2.5 px-3 rounded-xl font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-sm ${palette.doneBtn}`}
             >
               <CheckCircle2 className="w-4 h-4 shrink-0" />
@@ -409,17 +419,23 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             {/* 2. Snooze (+15m) */}
             <button
               type="button"
-              onClick={() => handlePostpone(15)}
+              onClick={(e) => {
+                e.stopPropagation();
+                handlePostpone(15);
+              }}
               className={`min-h-[44px] py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.secondaryBtn}`}
             >
               <Clock className="w-4 h-4 shrink-0" />
-              <span className="truncate">{isEn ? 'Snooze' : 'تعویق'}</span>
+              <span className="truncate">{isEn ? 'Snooze 15m' : 'تعویق ۱۵ دقیقه'}</span>
             </button>
 
             {/* 3. Edit Reminder (Opens Edit Form) */}
             <button
               type="button"
-              onClick={handleEdit}
+              onClick={(e) => {
+                e.stopPropagation();
+                handleEdit();
+              }}
               className={`min-h-[44px] py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.editBtn}`}
             >
               <Edit2 className="w-3.5 h-3.5 shrink-0" />

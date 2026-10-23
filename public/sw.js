@@ -1,5 +1,5 @@
 // Service Worker for YAAD PWA Offline Caching & Installability
-const CACHE_NAME = 'yaad-pwa-cache-v11';
+const CACHE_NAME = 'yaad-pwa-cache-v12';
 
 const PRECACHE_ASSETS = [
   '/',
@@ -219,8 +219,8 @@ self.addEventListener('notificationclick', (event) => {
     return;
   }
 
-  // 3. User tapped directly on notification body itself (not an action button):
-  // Keep the notification open in the status bar without opening the app (only 'edit' opens the app)
+  // 3. User tapped directly on notification body itself (not Done, Snooze, or Edit action buttons):
+  // Keep notification in status bar silently and open/focus the app directly on the Reminders Timeline page
   event.waitUntil(
     (async () => {
       if (reminderId && !acknowledgedAlarmIds.has(String(reminderId))) {
@@ -228,9 +228,10 @@ self.addEventListener('notificationclick', (event) => {
           await self.registration.showNotification(notif.title, {
             body: notif.body,
             icon: notif.icon || '/pwa-192x192.png',
-            badge: notif.badge || '/favicon.ico',
+            badge: notif.badge || '/pwa-192x192.png',
             tag: notif.tag || `yaad-rem-${reminderId}`,
             renotify: false,
+            silent: true,
             requireInteraction: true,
             data: {
               ...data,
@@ -238,13 +239,32 @@ self.addEventListener('notificationclick', (event) => {
             },
             actions: data.actions || [
               { action: 'done', title: '✓ انجام شد' },
-              { action: 'snooze', title: '⏱ تعویق' },
+              { action: 'snooze', title: '⏱ تعویق ۱۵ دقیقه' },
               { action: 'edit', title: '✎ ویرایش' },
             ],
           });
         } catch {
           // ignore
         }
+      }
+
+      const clientList = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      for (const client of clientList) {
+        if (client.url && 'focus' in client) {
+          await client.focus();
+          client.postMessage({
+            type: 'YAAD_NOTIFICATION_ACTION',
+            action: 'open',
+            reminderId: reminderId || '',
+          });
+          return;
+        }
+      }
+      if (self.clients.openWindow) {
+        const urlToOpen = reminderId
+          ? `/?openTimelineReminderId=${encodeURIComponent(reminderId)}`
+          : '/?openTimeline=1';
+        return self.clients.openWindow(urlToOpen);
       }
     })()
   );
@@ -270,7 +290,7 @@ self.addEventListener('notificationclose', (event) => {
           await self.registration.showNotification(notif.title, {
             body: notif.body,
             icon: notif.icon || '/pwa-192x192.png',
-            badge: notif.badge || '/favicon.ico',
+            badge: notif.badge || '/pwa-192x192.png',
             tag: notif.tag || `yaad-rem-${reminderId}`,
             renotify: false,
             silent: true,
@@ -281,7 +301,7 @@ self.addEventListener('notificationclose', (event) => {
             },
             actions: data.actions || [
               { action: 'done', title: '✓ انجام شد' },
-              { action: 'snooze', title: '⏱ تعویق' },
+              { action: 'snooze', title: '⏱ تعویق ۱۵ دقیقه' },
               { action: 'edit', title: '✎ ویرایش' },
             ],
           });

@@ -14,7 +14,6 @@ import {
   Square, 
   Check, 
   Sparkles, 
-  Cloud,
   FileText,
   Clock,
   RotateCcw,
@@ -1319,7 +1318,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 className="rounded accent-indigo-500 w-4 h-4 cursor-pointer"
               />
               <span className="flex items-center gap-1.5">
-                <Cloud className="w-4 h-4 text-sky-400" />
+                <Check className="w-4 h-4 text-sky-400" />
                 {isEn ? 'Sync & Save to Google Tasks' : 'همگام‌سازی و ذخیره در Google Tasks'}
               </span>
             </label>

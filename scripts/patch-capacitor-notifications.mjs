@@ -210,6 +210,21 @@ const patchedHandleAction = `        val existing = notificationStorage.getSaved
             dismissVisibleNotification(notificationId)
             cancelMuteTimerForNotification(notificationId)
             YaadAlarmPopupActivity.dismissIfMatching(notificationId)
+        } else {
+            cancelMuteTimerForNotification(notificationId)
+            YaadAlarmPopupActivity.dismissIfMatching(notificationId)
+            LocalNotificationsPlugin.stopActiveMediaPlayer()
+            try {
+                val savedJson = notificationStorage.getSavedNotificationAsJSObject(notificationId.toString())
+                if (savedJson != null && savedJson.optString("channelId", "") != "yaad_channel_v3_silent") {
+                    val muteIntent = Intent(context, NotificationDismissReceiver::class.java)
+                    muteIntent.putExtra(NOTIFICATION_INTENT_KEY, notificationId)
+                    muteIntent.putExtra(ACTION_INTENT_KEY, "mute_after_1m")
+                    muteIntent.putExtra(NOTIFICATION_OBJ_INTENT_KEY, savedJson.toString())
+                    context.sendBroadcast(muteIntent)
+                }
+            } catch (e: Exception) {
+            }
         }`;
 
 const legacyHandleActionV1 = `        val existing = notificationStorage.getSavedNotification(notificationId.toString())
@@ -233,15 +248,39 @@ const legacyHandleActionV1 = `        val existing = notificationStorage.getSave
             dismissVisibleNotification(notificationId)
         }`;
 
+const legacyHandleActionV2 = `        val existing = notificationStorage.getSavedNotification(notificationId.toString())
+        val dataJson = JSObject()
+
+        val results = RemoteInput.getResultsFromIntent(data)
+        if (results != null) {
+            val input = results.getCharSequence(REMOTE_INPUT_KEY)
+            dataJson.put("inputValue", input?.toString())
+        }
+        val menuAction = data.getStringExtra(ACTION_INTENT_KEY)
+
+        // Do NOT dismiss or delete persistent/ongoing notification when user taps the notification body ("tap"):
+        // Notification must stay in status bar until user explicitly taps Done, Snooze, Edit, or Dismiss!
+        val isBodyTapOnPersistent = (menuAction == DEFAULT_PRESS_ACTION || menuAction == null) &&
+            (existing?.ongoing == true || existing?.autoCancel == false)
+        if (!isBodyTapOnPersistent) {
+            if (isSafeToForget(existing)) {
+                notificationStorage.deleteNotification(notificationId.toString())
+            }
+            dismissVisibleNotification(notificationId)
+            cancelMuteTimerForNotification(notificationId)
+            YaadAlarmPopupActivity.dismissIfMatching(notificationId)
+        }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
   'handleNotificationActionPerformed persistent body tap',
   origHandleAction,
   patchedHandleAction,
-  'YaadAlarmPopupActivity.dismissIfMatching(notificationId)',
+  'muteIntent.putExtra(ACTION_INTENT_KEY, "mute_after_1m")',
   [
     legacyHandleActionV1,
+    legacyHandleActionV2,
     `        val existing = notificationStorage.getSavedNotification(notificationId.toString())
         val dataJson = JSObject()
 
@@ -299,16 +338,16 @@ managerContent = applyPatchOrVerify(
   'if (request == null && existing?.source != null)'
 );
 
-// Replace any USAGE_NOTIFICATION in LocalNotificationManager.kt (both createNotificationChannel and soundChannelId) with USAGE_ALARM
-if (managerContent.includes('.setUsage(AudioAttributes.USAGE_NOTIFICATION)')) {
+// Ensure LocalNotificationManager.kt uses AudioAttributes.USAGE_NOTIFICATION so alarm volume is controlled by Phone Notification Volume
+if (managerContent.includes('.setUsage(AudioAttributes.USAGE_ALARM)')) {
   managerContent = managerContent.replaceAll(
-    '.setUsage(AudioAttributes.USAGE_NOTIFICATION)',
-    '.setUsage(AudioAttributes.USAGE_ALARM)'
+    '.setUsage(AudioAttributes.USAGE_ALARM)',
+    '.setUsage(AudioAttributes.USAGE_NOTIFICATION)'
   );
 }
-if (!managerContent.includes('.setUsage(AudioAttributes.USAGE_ALARM)')) {
+if (!managerContent.includes('.setUsage(AudioAttributes.USAGE_NOTIFICATION)')) {
   console.error(
-    `[patch-capacitor-notifications] ERROR in LocalNotificationManager.kt: AudioAttributes.USAGE_ALARM could not be configured.`
+    `[patch-capacitor-notifications] ERROR in LocalNotificationManager.kt: AudioAttributes.USAGE_NOTIFICATION could not be configured.`
   );
   process.exit(1);
 }
@@ -331,7 +370,7 @@ const legacyBuildFlagsV2 = `        mBuilder.setVisibility(NotificationCompat.VI
             mBuilder.setTimeoutAfter(10 * 60 * 1000L)
         }`;
 
-const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v2_silent"
+const legacyBuildFlagsV3 = `        val isSilentChannel = channelId == "yaad_channel_v2_silent"
         mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         if (isSilentChannel) {
             mBuilder.setSilent(true)
@@ -346,14 +385,42 @@ const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_chan
             mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
         }`;
 
+const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
+        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        // Do NOT call setSilent(true) so the notification remains pinned at the TOP of the dropdown shade (Alerting section) after 1 minute
+        if (isSilentChannel) {
+            mBuilder.setOnlyAlertOnce(true)
+            mBuilder.setDefaults(0)
+            mBuilder.setSound(null)
+        } else {
+            mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
+        }
+        if (localNotification.ongoing) {
+            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
+            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
+            mBuilder.setSortKey("0000_yaad_pinned")
+        }
+        try {
+            val appDrawable = context.packageManager.getApplicationIcon(context.applicationInfo)
+            val w = if (appDrawable.intrinsicWidth > 0) appDrawable.intrinsicWidth else 192
+            val h = if (appDrawable.intrinsicHeight > 0) appDrawable.intrinsicHeight else 192
+            val appBitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(appBitmap)
+            appDrawable.setBounds(0, 0, canvas.width, canvas.height)
+            appDrawable.draw(canvas)
+            mBuilder.setSmallIcon(androidx.core.graphics.drawable.IconCompat.createWithBitmap(appBitmap))
+            mBuilder.setLargeIcon(appBitmap)
+        } catch (e: Exception) {
+        }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'buildNotification visibility, category, priority, and silent channel handling',
+  'buildNotification visibility, category, priority, official app icon, and top-pinned silent channel handling',
   origBuildFlags,
   patchedBuildFlags,
-  'val isSilentChannel = channelId == "yaad_channel_v2_silent"',
-  [legacyBuildFlags, legacyBuildFlagsV2]
+  'mBuilder.setSortKey("0000_yaad_pinned")',
+  [legacyBuildFlags, legacyBuildFlagsV2, legacyBuildFlagsV3]
 );
 
 const origBuildNotif = `        createActionIntents(localNotification, mBuilder)
@@ -489,7 +556,7 @@ const origOpenIntent = `        // Open intent
         val pendingIntent = PendingIntent.getActivity(context, id, intent, flags)
         mBuilder.setContentIntent(pendingIntent)`;
 
-const patchedOpenIntent = `        // Open intent: use a no-op Broadcast so tapping the notification body does NOT open the app
+const legacyNoopOpenIntent = `        // Open intent: use a no-op Broadcast so tapping the notification body does NOT open the app
         // (Only the explicit "edit" action button should open the app)
         var flags = PendingIntent.FLAG_CANCEL_CURRENT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
@@ -501,13 +568,23 @@ const patchedOpenIntent = `        // Open intent: use a no-op Broadcast so tapp
         val pendingIntent = PendingIntent.getBroadcast(context, id, bodyTapIntent, flags)
         mBuilder.setContentIntent(pendingIntent)`;
 
+const patchedOpenIntent = `        // Open intent: tapping the notification body opens the app directly to the Reminders Timeline (DEFAULT_PRESS_ACTION = "tap")
+        val intent = buildIntent(localNotification, DEFAULT_PRESS_ACTION)
+        var flags = PendingIntent.FLAG_CANCEL_CURRENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags = flags or PendingIntent.FLAG_MUTABLE
+        }
+        val pendingIntent = PendingIntent.getActivity(context, id, intent, flags)
+        mBuilder.setContentIntent(pendingIntent)`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'createActionIntents body_tap_noop contentIntent',
+  'createActionIntents body tap opens Reminders Timeline',
   origOpenIntent,
   patchedOpenIntent,
-  'bodyTapIntent.putExtra(ACTION_INTENT_KEY, "body_tap_noop")'
+  '// Open intent: tapping the notification body opens the app directly to the Reminders Timeline',
+  [legacyNoopOpenIntent]
 );
 
 const targetActionLoop = `        // Build action types
@@ -936,21 +1013,25 @@ class TimedNotificationPublisher : BroadcastReceiver() {
 }
 `;
 
-// 5. Patch NotificationChannelManager.kt to use AudioAttributes.USAGE_ALARM so notification sound loops continuously on Alarm stream
+// 5. Patch NotificationChannelManager.kt to use AudioAttributes.USAGE_NOTIFICATION so notification sound uses the Phone Notification volume stream
 const channelManagerPath = path.join(pluginDir, 'NotificationChannelManager.kt');
 let channelManagerContent = fs.readFileSync(channelManagerPath, 'utf8');
-channelManagerContent = applyPatchOrVerify(
-  channelManagerContent,
-  'NotificationChannelManager.kt',
-  'setUsage(AudioAttributes.USAGE_ALARM)',
-  '.setUsage(AudioAttributes.USAGE_NOTIFICATION)',
-  '.setUsage(AudioAttributes.USAGE_ALARM)',
-  '.setUsage(AudioAttributes.USAGE_ALARM)'
-);
+if (channelManagerContent.includes('.setUsage(AudioAttributes.USAGE_ALARM)')) {
+  channelManagerContent = channelManagerContent.replaceAll(
+    '.setUsage(AudioAttributes.USAGE_ALARM)',
+    '.setUsage(AudioAttributes.USAGE_NOTIFICATION)'
+  );
+}
+if (!channelManagerContent.includes('.setUsage(AudioAttributes.USAGE_NOTIFICATION)')) {
+  console.error(
+    `[patch-capacitor-notifications] ERROR in NotificationChannelManager.kt: AudioAttributes.USAGE_NOTIFICATION could not be configured.`
+  );
+  process.exit(1);
+}
 
 // 6. Patch NotificationDismissReceiver.kt:
 // - Handle "body_tap_noop" (do nothing so tapping notification body never opens app or dismisses notification)
-// - Handle "mute_after_1m" (stop insistent alarm audio after 60 seconds while keeping notification & action buttons open in shade)
+// - Handle "mute_after_1m" (stop insistent alarm audio after 60 seconds while keeping notification & action buttons pinned at top of shade and advancing reminder due time by +15m)
 // - Re-post swiped ongoing notifications up to 3 times (preventing accidental swipe dismissal while allowing 4th-swipe emergency escape if ROM hides buttons)
 // - Cancel all related notifications (active + scheduled) when an explicit action button is clicked
 // - Record exact actionTimestamp and snoozedUntil timestamp so background Snooze syncs accurately when app opens later
@@ -1006,9 +1087,11 @@ class NotificationDismissReceiver : BroadcastReceiver() {
         val reminderId = requestJson?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
 
         // After 1 minute of continuous alarm ringing without user reaction, silence the alarm audio, close the 1-minute popup card,
-        // keep the silent notification in the shade, and ensure the 1-minute alarm repeats every 15 minutes until the user reacts.
+        // keep the silent notification pinned at the TOP of the dropdown shade, advance the reminder to +15m in the future,
+        // and ensure the 1-minute alarm repeats every 15 minutes until the user reacts.
         if (actionId == "mute_after_1m") {
             YaadAlarmPopupActivity.dismissIfMatching(intExtra)
+            LocalNotificationsPlugin.stopActiveMediaPlayer()
             try {
                 val sysNotifManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
                 var isStillActive = false
@@ -1024,13 +1107,13 @@ class NotificationDismissReceiver : BroadcastReceiver() {
 
                 val savedJson = storage.getSavedNotificationAsJSObject(intExtra.toString()) ?: requestJson
                 if (savedJson != null) {
-                    val originalChannelId = savedJson.optString("channelId", "yaad_reminders_channel_v2")
+                    val originalChannelId = savedJson.optString("channelId", "yaad_reminders_channel_v3")
                     val originalSound = savedJson.optString("sound", "digital_beep.wav")
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && sysNotifManager != null) {
-                        if (sysNotifManager.getNotificationChannel("yaad_channel_v2_silent") == null) {
+                        if (sysNotifManager.getNotificationChannel("yaad_channel_v3_silent") == null) {
                             val silentChannel = NotificationChannel(
-                                "yaad_channel_v2_silent",
-                                "YAAD Silent Persistent",
+                                "yaad_channel_v3_silent",
+                                "YAAD Top Persistent",
                                 NotificationManager.IMPORTANCE_HIGH
                             )
                             silentChannel.setSound(null, null)
@@ -1041,7 +1124,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                     val silentJson = JSObject(savedJson.toString())
                     silentJson.remove("schedule")
                     silentJson.remove("sound")
-                    silentJson.put("channelId", "yaad_channel_v2_silent")
+                    silentJson.put("channelId", "yaad_channel_v3_silent")
                     val localNotif = LocalNotification.buildNotificationFromJSObject(silentJson)
                     val manager = LocalNotificationManager(storage, null, context, CapConfig.loadDefault(context))
                     manager.schedule(null, listOf(localNotif))
@@ -1049,6 +1132,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
 
                     // Ensure a 15-minute repeat alarm is scheduled if no future repeat for this reminder is already pending
                     val nowMs = System.currentTimeMillis()
+                    var futureRepeatMs = nowMs + 15L * 60L * 1000L
                     var hasFutureRepeat = false
                     if (reminderId.isNotEmpty()) {
                         val sdfParse = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
@@ -1064,6 +1148,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                                     val atDate = try { sdfParse.parse(atStr) } catch (e: Exception) { null }
                                     if (atDate != null && atDate.time > nowMs) {
                                         hasFutureRepeat = true
+                                        futureRepeatMs = atDate.time
                                         break
                                     }
                                 }
@@ -1072,6 +1157,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                     }
                     if (!hasFutureRepeat) {
                         val nextRepeatAtMs = nowMs + 15L * 60L * 1000L
+                        futureRepeatMs = nextRepeatAtMs
                         val repeatJson = JSObject(savedJson.toString())
                         val repeatId = if (reminderId.isNotEmpty()) {
                             ((computeBaseId(reminderId).toLong() + 1001L) % 2147483647L).toInt()
@@ -1079,10 +1165,10 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                             ((intExtra.toLong() + 1001L) % 2147483647L).toInt()
                         }
                         repeatJson.put("id", repeatId)
-                        if (originalChannelId.isNotEmpty() && originalChannelId != "yaad_channel_v2_silent") {
+                        if (originalChannelId.isNotEmpty() && originalChannelId != "yaad_channel_v3_silent" && originalChannelId != "yaad_channel_v2_silent") {
                             repeatJson.put("channelId", originalChannelId)
                         } else {
-                            repeatJson.put("channelId", "yaad_reminders_channel_v2")
+                            repeatJson.put("channelId", "yaad_reminders_channel_v3")
                         }
                         if (originalSound.isNotEmpty()) {
                             repeatJson.put("sound", originalSound)
@@ -1096,6 +1182,18 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                         val repeatNotif = LocalNotification.buildNotificationFromJSObject(repeatJson)
                         manager.schedule(null, listOf(repeatNotif))
                         storage.appendNotifications(listOf(repeatNotif))
+                    }
+
+                    // Notify or queue "mute_after_1m" action so the app advances this reminder to futureRepeatMs (+15m after NOW) in the timeline
+                    // and treats it like a future reminder (never triggering the in-app alarm modal when the app is opened)
+                    val muteActionJson = JSObject()
+                    muteActionJson.put("actionId", "mute_after_1m")
+                    muteActionJson.put("actionTimestamp", nowMs)
+                    muteActionJson.put("snoozedUntil", futureRepeatMs)
+                    muteActionJson.put("notification", savedJson)
+                    val dispatchedLive = LocalNotificationsPlugin.fireActionPerformed(muteActionJson)
+                    if (!dispatchedLive) {
+                        LocalNotificationsPlugin.queueBackgroundAction(context, muteActionJson)
                     }
                 }
             } catch (e: Exception) {
@@ -1457,7 +1555,7 @@ const legacyPluginLoadV4 = `        purgeStaleOneShotNotifications()
         }
     }`;
 
-const patchedPluginLoad = `        configureWebViewForGoogleOAuth()
+const legacyPluginLoadV5 = `        configureWebViewForGoogleOAuth()
         purgeStaleOneShotNotifications()
         LegacyNotificationMigrator.run(context, notificationStorage, manager)
         flushQueuedBackgroundActions()
@@ -1515,14 +1613,74 @@ const patchedPluginLoad = `        configureWebViewForGoogleOAuth()
         }
     }`;
 
+const patchedPluginLoad = `        configureWebViewForGoogleOAuth()
+        purgeStaleOneShotNotifications()
+        LegacyNotificationMigrator.run(context, notificationStorage, manager)
+        flushQueuedBackgroundActions()
+        activity?.intent?.let { handleOnNewIntent(it) }
+    }
+
+    private fun configureWebViewForGoogleOAuth() {
+        try {
+            activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+            val wv = bridge?.webView
+            if (wv != null) {
+                val ua = wv.settings.userAgentString ?: ""
+                if (ua.contains("; wv") || ua.contains("Version/")) {
+                    wv.settings.userAgentString = ua
+                        .replace("; wv", "")
+                        .replace(Regex("Version/\\\\d+\\\\.\\\\d+\\\\s*"), "")
+                }
+                wv.settings.javaScriptCanOpenWindowsAutomatically = true
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun purgeStaleOneShotNotifications() {
+        try {
+            val now = System.currentTimeMillis()
+            for (n in notificationStorage.getSavedNotifications()) {
+                val id = n.id ?: continue
+                val sched = n.schedule ?: continue
+                val atDate = sched.at ?: continue
+                if (!sched.isPerpetual() && atDate.time < now - 60000L) {
+                    notificationStorage.deleteNotification(id.toString())
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun handleOnResume() {
+        super.handleOnResume()
+        activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+        flushQueuedBackgroundActions()
+    }
+
+    private fun flushQueuedBackgroundActions() {
+        try {
+            val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(BG_ACTION_KEY, null) ?: return
+            prefs.edit().remove(BG_ACTION_KEY).apply()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val itemStr = arr.optString(i, null) ?: continue
+                val itemJson = JSObject(itemStr)
+                notifyListeners("localNotificationActionPerformed", itemJson, true)
+            }
+        } catch (e: Exception) {
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'load configureWebViewForGoogleOAuth, purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
+  'load configureWebViewForGoogleOAuth, STREAM_NOTIFICATION volume stream, purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
   origPluginLoad,
   patchedPluginLoad,
-  'configureWebViewForGoogleOAuth()',
-  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4]
+  'activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION',
+  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5]
 );
 
 const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
@@ -1536,7 +1694,7 @@ const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) 
         }
     }`;
 
-const patchedHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
+const legacyHandleOnNewIntentV1 = `    override fun handleOnNewIntent(data: Intent) {
         super.handleOnNewIntent(data)
         if (Intent.ACTION_MAIN != data.action) {
             return
@@ -1551,13 +1709,37 @@ const patchedHandleOnNewIntent = `    override fun handleOnNewIntent(data: Inten
         }
     }`;
 
+const patchedHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
+        super.handleOnNewIntent(data)
+        if (Intent.ACTION_MAIN != data.action) {
+            return
+        }
+        if (data.hasExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY)) {
+            bridge?.webView?.post {
+                try {
+                    bridge?.webView?.evaluateJavascript("window.__yaadOpenedFromNotification = true;", null)
+                } catch (e: Exception) {
+                }
+            }
+        }
+        if (data.getBooleanExtra("yaad_handled_launch_intent", false)) {
+            return
+        }
+        data.putExtra("yaad_handled_launch_intent", true)
+        val dataJson = manager.handleNotificationActionPerformed(data, notificationStorage)
+        if (dataJson != null) {
+            notifyListeners("localNotificationActionPerformed", dataJson, true)
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'handleOnNewIntent deduplication guard',
+  'handleOnNewIntent deduplication guard and __yaadOpenedFromNotification flag',
   origHandleOnNewIntent,
   patchedHandleOnNewIntent,
-  'data.getBooleanExtra("yaad_handled_launch_intent", false)'
+  'window.__yaadOpenedFromNotification = true;',
+  [legacyHandleOnNewIntentV1]
 );
 
 const origPermissionsBlock = `    @PluginMethod
@@ -1824,7 +2006,63 @@ const origDispatchReceived = `    internal fun dispatchReceived(notification: JS
         notifyListeners("localNotificationReceived", notification, true)
     }`;
 
-const patchedDispatchReceived = `    internal fun dispatchReceived(notification: JSObject?) {
+const legacyDispatchReceived = `    internal fun dispatchReceived(notification: JSObject?) {
+        notifyListeners("localNotificationReceived", notification, true)
+    }
+
+    internal fun dispatchActionPerformed(dataJson: JSObject) {
+        notifyListeners("localNotificationActionPerformed", dataJson, true)
+    }`;
+
+const patchedDispatchReceived = `    @PluginMethod
+    fun playNotificationSound(call: PluginCall) {
+        val soundName = call.getString("sound", "digital_beep.wav") ?: "digital_beep.wav"
+        val loop = call.getBoolean("loop", false) ?: false
+        try {
+            stopActiveMediaPlayer()
+            val cleanName = soundName.substringBeforeLast(".")
+            val resId = context.resources.getIdentifier(cleanName, "raw", context.packageName)
+            val mp = android.media.MediaPlayer()
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            mp.setAudioAttributes(attrs)
+            if (resId != 0) {
+                val afd = context.resources.openRawResourceFd(resId)
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            } else {
+                val afd = context.assets.openFd("public/sounds/\$soundName")
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            }
+            mp.isLooping = loop
+            mp.setOnCompletionListener { player ->
+                try {
+                    player.release()
+                } catch (e: Exception) {
+                }
+                if (activeMediaPlayer === player) {
+                    activeMediaPlayer = null
+                }
+            }
+            mp.prepare()
+            mp.start()
+            activeMediaPlayer = mp
+            call.resolve()
+        } catch (e: Exception) {
+            call.reject("Failed to play notification sound: \${e.message}")
+        }
+    }
+
+    @PluginMethod
+    fun stopNotificationSound(call: PluginCall) {
+        stopActiveMediaPlayer()
+        call.resolve()
+    }
+
+    internal fun dispatchReceived(notification: JSObject?) {
         notifyListeners("localNotificationReceived", notification, true)
     }
 
@@ -1835,10 +2073,11 @@ const patchedDispatchReceived = `    internal fun dispatchReceived(notification:
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'dispatchActionPerformed',
+  'playNotificationSound, stopNotificationSound, and dispatchActionPerformed',
   origDispatchReceived,
   patchedDispatchReceived,
-  'internal fun dispatchActionPerformed(dataJson: JSObject)'
+  'fun playNotificationSound(call: PluginCall)',
+  [legacyDispatchReceived]
 );
 
 const origCompanionFire = `        fun fireReceived(notification: JSObject?) {
@@ -1872,8 +2111,65 @@ const legacyCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_B
             }
         }`;
 
+const legacyCompanionFireV2 = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+        private const val BG_ACTION_KEY = "queued_actions"
+
+        fun fireReceived(notification: JSObject?) {
+            getLocalNotificationsInstance()?.dispatchReceived(notification)
+        }
+
+        fun fireActionPerformed(dataJson: JSObject): Boolean {
+            val instance = getLocalNotificationsInstance()
+            val act = instance?.activity
+            if (instance != null && act != null && !act.isFinishing && !act.isDestroyed) {
+                instance.dispatchActionPerformed(dataJson)
+                return true
+            }
+            return false
+        }
+
+        fun queueBackgroundAction(context: Context, dataJson: JSObject) {
+            try {
+                val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BG_ACTION_KEY, "[]")
+                val arr = JSONArray(existing)
+                val newRemId = dataJson.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                val filteredArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val itemStr = arr.optString(i, null) ?: continue
+                    if (newRemId.isNotEmpty()) {
+                        try {
+                            val prevObj = JSObject(itemStr)
+                            val prevRemId = prevObj.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (prevRemId == newRemId) continue
+                        } catch (e: Exception) {
+                        }
+                    }
+                    filteredArr.put(itemStr)
+                }
+                filteredArr.put(dataJson.toString())
+                prefs.edit().putString(BG_ACTION_KEY, filteredArr.toString()).apply()
+            } catch (e: Exception) {
+            }
+        }`;
+
 const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
         private const val BG_ACTION_KEY = "queued_actions"
+        private var activeMediaPlayer: android.media.MediaPlayer? = null
+
+        fun stopActiveMediaPlayer() {
+            try {
+                activeMediaPlayer?.let { mp ->
+                    if (mp.isPlaying) {
+                        mp.stop()
+                    }
+                    mp.release()
+                }
+            } catch (e: Exception) {
+            } finally {
+                activeMediaPlayer = null
+            }
+        }
 
         fun fireReceived(notification: JSObject?) {
             getLocalNotificationsInstance()?.dispatchReceived(notification)
@@ -1917,11 +2213,11 @@ const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'companion fireActionPerformed and deduplicated queueBackgroundAction',
+  'companion stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
   origCompanionFire,
   patchedCompanionFire,
-  'val filteredArr = JSONArray()',
-  [legacyCompanionFire]
+  'fun stopActiveMediaPlayer()',
+  [legacyCompanionFire, legacyCompanionFireV2]
 );
 
 // 8. Create standalone YaadAlarmPopupActivity.kt (Out-of-app minimal theme-matched 1-minute notification card)
@@ -2004,6 +2300,7 @@ class YaadAlarmPopupActivity : Activity() {
         )
         window.setDimAmount(0.55f)
         setFinishOnTouchOutside(false)
+        volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
 
         activeInstance = WeakReference(this)
         bindFromIntent(intent)
@@ -2338,6 +2635,9 @@ class YaadAlarmPopupActivity : Activity() {
         )
         titleParams.topMargin = dp(10f)
         titleTv.layoutParams = titleParams
+        titleTv.setOnClickListener {
+            performTapOpenTimelineAction()
+        }
         content.addView(titleTv)
 
         // Reminder Body / Time
@@ -2354,6 +2654,9 @@ class YaadAlarmPopupActivity : Activity() {
             )
             bodyParams.topMargin = dp(4f)
             bodyTv.layoutParams = bodyParams
+            bodyTv.setOnClickListener {
+                performTapOpenTimelineAction()
+            }
             content.addView(bodyTv)
         }
 
@@ -2379,9 +2682,9 @@ class YaadAlarmPopupActivity : Activity() {
             performBackgroundAction("done")
         }
 
-        // Button 2: Snooze (does NOT open app)
+        // Button 2: Snooze 15m (does NOT open app)
         val snoozeBtn = buildActionButton(
-            text = if (isPersian) "⏱ تعویق" else "⏱ Snooze",
+            text = if (isPersian) "⏱ تعویق ۱۵ دقیقه" else "⏱ Snooze 15m",
             bgColor = palette.secondaryBtnBg,
             borderColor = palette.secondaryBtnBorder,
             textColor = palette.secondaryBtnText,
@@ -2410,6 +2713,14 @@ class YaadAlarmPopupActivity : Activity() {
         actionsRow.addView(snoozeBtn)
         actionsRow.addView(editBtn)
         content.addView(actionsRow)
+
+        // Clicking anywhere on the notification card body (outside Done, Snooze, Edit, and Close buttons) opens the Reminders Timeline directly
+        brandTv.setOnClickListener {
+            performTapOpenTimelineAction()
+        }
+        cardContainer.setOnClickListener {
+            performTapOpenTimelineAction()
+        }
 
         cardContainer.addView(content)
         root.addView(cardContainer)
@@ -2473,6 +2784,51 @@ class YaadAlarmPopupActivity : Activity() {
                 broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
             }
             sendBroadcast(broadcastIntent)
+        } catch (e: Exception) {
+        }
+        finish()
+        overridePendingTransition(0, 0)
+    }
+
+    private fun performTapOpenTimelineAction() {
+        countDownTimer?.cancel()
+        try {
+            val broadcastIntent = Intent(this, NotificationDismissReceiver::class.java)
+            broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+            broadcastIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, "mute_after_1m")
+            if (sourceJson != null) {
+                broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
+            }
+            sendBroadcast(broadcastIntent)
+        } catch (e: Exception) {
+        }
+
+        val dataJson = JSObject()
+        dataJson.put("actionId", LocalNotificationManager.DEFAULT_PRESS_ACTION)
+        dataJson.put("actionTimestamp", System.currentTimeMillis())
+        if (requestJson != null) {
+            dataJson.put("notification", requestJson)
+        }
+        val dispatched = LocalNotificationsPlugin.fireActionPerformed(dataJson)
+        if (!dispatched) {
+            LocalNotificationsPlugin.queueBackgroundAction(this, dataJson)
+        }
+
+        try {
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null) {
+                launchIntent.action = Intent.ACTION_MAIN
+                launchIntent.addCategory(Intent.CATEGORY_LAUNCHER)
+                launchIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP
+                launchIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+                launchIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, LocalNotificationManager.DEFAULT_PRESS_ACTION)
+                if (sourceJson != null) {
+                    launchIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
+                }
+                startActivity(launchIntent)
+            }
         } catch (e: Exception) {
         }
         finish()
