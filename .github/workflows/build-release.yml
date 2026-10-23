@@ -102,10 +102,13 @@ jobs:
         run: |
           npm install @capacitor/assets --legacy-peer-deps
           mkdir -p resources
-          cp public/icon.png resources/icon.png
-          cp public/splash.png resources/splash.png
-          cp public/splash.png resources/splash-dark.png
-          npx capacitor-assets generate --android --iconBackgroundColor '#000000' --iconBackgroundColorDark '#000000' --splashBackgroundColor '#000000' --splashBackgroundColorDark '#000000'
+          cp public/icon.png resources/icon.png || true
+          cp public/splash.png resources/splash.png || true
+          cp public/splash.png resources/splash-dark.png || true
+          npx capacitor-assets generate --android --iconBackgroundColor '#000000' --iconBackgroundColorDark '#000000' --splashBackgroundColor '#000000' --splashBackgroundColorDark '#000000' || true
+          mkdir -p android/app/src/main/res/drawable
+          cp public/pwa-192x192.png android/app/src/main/res/drawable/ic_launcher.png || true
+          cp public/pwa-192x192.png android/app/src/main/res/drawable/ic_stat_notification.png || true
 
       - name: Patch Capacitor LocalNotifications for Background Actions
         run: node scripts/patch-capacitor-notifications.mjs

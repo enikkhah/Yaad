@@ -353,39 +353,12 @@ if (!managerContent.includes('.setUsage(AudioAttributes.USAGE_NOTIFICATION)')) {
 }
 
 const origBuildFlags = `        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-        mBuilder.setOnlyAlertOnce(true)`;
+        mBuilder.setOnlyAlertOnce(true)
 
-const legacyBuildFlags = `        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
-        if (localNotification.ongoing) {
-            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
-            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
-        }`;
+        mBuilder.setSmallIcon(localNotification.resolveSmallIcon(context, getDefaultSmallIcon(context)))
+        mBuilder.setLargeIcon(localNotification.resolveLargeIcon(context))`;
 
-const legacyBuildFlagsV2 = `        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
-        if (localNotification.ongoing) {
-            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
-            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
-            mBuilder.setTimeoutAfter(10 * 60 * 1000L)
-        }`;
-
-const legacyBuildFlagsV3 = `        val isSilentChannel = channelId == "yaad_channel_v2_silent"
-        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        if (isSilentChannel) {
-            mBuilder.setSilent(true)
-            mBuilder.setOnlyAlertOnce(true)
-            mBuilder.setDefaults(0)
-            mBuilder.setSound(null)
-        } else {
-            mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
-        }
-        if (localNotification.ongoing) {
-            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
-            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
-        }`;
-
-const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
+const legacyBuildFlagsV4 = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
         mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         // Do NOT call setSilent(true) so the notification remains pinned at the TOP of the dropdown shade (Alerting section) after 1 minute
         if (isSilentChannel) {
@@ -411,6 +384,43 @@ const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_chan
             mBuilder.setSmallIcon(androidx.core.graphics.drawable.IconCompat.createWithBitmap(appBitmap))
             mBuilder.setLargeIcon(appBitmap)
         } catch (e: Exception) {
+        }
+
+        mBuilder.setSmallIcon(localNotification.resolveSmallIcon(context, getDefaultSmallIcon(context)))
+        mBuilder.setLargeIcon(localNotification.resolveLargeIcon(context))`;
+
+const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
+        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        // Do NOT call setSilent(true) so the notification remains pinned at the TOP of the dropdown shade (Alerting section) after 1 minute
+        if (isSilentChannel) {
+            mBuilder.setOnlyAlertOnce(true)
+            mBuilder.setDefaults(0)
+            mBuilder.setSound(null)
+        } else {
+            mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
+        }
+        if (localNotification.ongoing) {
+            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
+            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
+            mBuilder.setSortKey("0000_yaad_pinned")
+        }
+
+        mBuilder.setSmallIcon(localNotification.resolveSmallIcon(context, getDefaultSmallIcon(context)))
+        mBuilder.setLargeIcon(localNotification.resolveLargeIcon(context))
+        try {
+            val appDrawable = context.packageManager.getApplicationIcon(context.applicationInfo)
+            val w = if (appDrawable.intrinsicWidth > 0) appDrawable.intrinsicWidth else 192
+            val h = if (appDrawable.intrinsicHeight > 0) appDrawable.intrinsicHeight else 192
+            val appBitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(appBitmap)
+            appDrawable.setBounds(0, 0, canvas.width, canvas.height)
+            appDrawable.draw(canvas)
+            mBuilder.setSmallIcon(androidx.core.graphics.drawable.IconCompat.createWithBitmap(appBitmap))
+            mBuilder.setLargeIcon(appBitmap)
+        } catch (e: Exception) {
+            if (context.applicationInfo.icon != 0) {
+                mBuilder.setSmallIcon(context.applicationInfo.icon)
+            }
         }`;
 
 managerContent = applyPatchOrVerify(
@@ -419,8 +429,8 @@ managerContent = applyPatchOrVerify(
   'buildNotification visibility, category, priority, official app icon, and top-pinned silent channel handling',
   origBuildFlags,
   patchedBuildFlags,
-  'mBuilder.setSortKey("0000_yaad_pinned")',
-  [legacyBuildFlags, legacyBuildFlagsV2, legacyBuildFlagsV3]
+  'if (context.applicationInfo.icon != 0)',
+  [legacyBuildFlagsV4]
 );
 
 const origBuildNotif = `        createActionIntents(localNotification, mBuilder)
@@ -816,6 +826,13 @@ managerContent = applyPatchOrVerify(
   patchedDismissVisible,
   'private fun scheduleMuteAfterOneMinute(id: Int, sourceJson: String?)'
 );
+
+if (managerContent.includes('private const val DEFAULT_PRESS_ACTION = "tap"')) {
+  managerContent = managerContent.replace(
+    'private const val DEFAULT_PRESS_ACTION = "tap"',
+    'const val DEFAULT_PRESS_ACTION = "tap"'
+  );
+}
 
 // 4. Patch TimedNotificationPublisher.kt:
 // - Respect actual ongoing / autoCancel flags without forcing non-ongoing notifications into insistent mode
@@ -2804,7 +2821,7 @@ class YaadAlarmPopupActivity : Activity() {
         }
 
         val dataJson = JSObject()
-        dataJson.put("actionId", LocalNotificationManager.DEFAULT_PRESS_ACTION)
+        dataJson.put("actionId", "tap")
         dataJson.put("actionTimestamp", System.currentTimeMillis())
         if (requestJson != null) {
             dataJson.put("notification", requestJson)
@@ -2823,7 +2840,7 @@ class YaadAlarmPopupActivity : Activity() {
                     Intent.FLAG_ACTIVITY_SINGLE_TOP or
                     Intent.FLAG_ACTIVITY_CLEAR_TOP
                 launchIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
-                launchIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, LocalNotificationManager.DEFAULT_PRESS_ACTION)
+                launchIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, "tap")
                 if (sourceJson != null) {
                     launchIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
                 }
