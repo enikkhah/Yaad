@@ -8,7 +8,7 @@ on:
         required: false
         default: '1'
       version_name:
-        description: 'نام نسخه نمایشی (مثلاً 1.68.4)'
+        description: 'نام نسخه نمایشی در اپ، اسپلش و بازار/مایکت (مثلاً 1.68.4)'
         required: false
         default: '1.68.4'
 
@@ -37,13 +37,68 @@ jobs:
         with:
           node-version: 22
 
+      - name: Sync App Version Before Web Build (Splash, About, Settings & Package)
+        id: versioning
+        env:
+          VERSION_CODE: ${{ inputs.version_code || github.event.inputs.version_code || '1' }}
+          VERSION_NAME: ${{ inputs.version_name || github.event.inputs.version_name || '1.68.4' }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import re
+
+          def to_ascii_digits(s: str) -> str:
+              persian = "۰۱۲۳۴۵۶۷۸۹"
+              arabic = "٠١٢٣٤٥٦٧٨٩"
+              for i in range(10):
+                  s = s.replace(persian[i], str(i)).replace(arabic[i], str(i))
+              return s.strip()
+
+          raw_code = to_ascii_digits(os.environ.get("VERSION_CODE", "1"))
+          raw_name = to_ascii_digits(os.environ.get("VERSION_NAME", "1.68.4")) or "1.68.4"
+          raw_name = re.sub(r'^[vV]\s*', '', raw_name).strip() or "1.68.4"
+
+          digits_only = re.sub(r"\D", "", raw_code)
+          v_code = int(digits_only) if digits_only else 1
+          if v_code < 1:
+              v_code = 1
+          if v_code > 2100000000:
+              v_code = 1
+
+          # 1. Update package.json version so Vite injects it into __APP_VERSION__
+          pkg_path = Path("package.json")
+          if pkg_path.exists():
+              pkg_data = json.loads(pkg_path.read_text(encoding="utf-8"))
+              pkg_data["version"] = raw_name
+              pkg_path.write_text(json.dumps(pkg_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+          # 2. Update fallback in src/utils/version.ts
+          ver_ts_path = Path("src/utils/version.ts")
+          if ver_ts_path.exists():
+              ver_text = ver_ts_path.read_text(encoding="utf-8")
+              ver_text = re.sub(r"'1\.68\.4'", f"'{raw_name}'", ver_text)
+              ver_ts_path.write_text(ver_text, encoding="utf-8")
+
+          print(f"Synced app version across web app: versionName={raw_name}, versionCode={v_code}")
+
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a", encoding="utf-8") as f:
+                  f.write(f"v_code={v_code}\n")
+                  f.write(f"v_name={raw_name}\n")
+          PY
+
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
       - name: Install Capacitor
         run: npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem --legacy-peer-deps
 
-      - name: Build web app
+      - name: Build web app with synced version
+        env:
+          VITE_APP_VERSION: ${{ steps.versioning.outputs.v_name }}
         run: npm run build
 
       - name: Remove old Android folder
@@ -137,11 +192,10 @@ jobs:
         run: |
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/yaad-release.jks
 
-      - name: Configure release signing and versioning
-        id: versioning
+      - name: Configure Android Gradle release signing and versioning
         env:
-          VERSION_CODE: ${{ inputs.version_code || github.event.inputs.version_code || '1' }}
-          VERSION_NAME: ${{ inputs.version_name || github.event.inputs.version_name || '1.68.4' }}
+          V_CODE: ${{ steps.versioning.outputs.v_code }}
+          V_NAME: ${{ steps.versioning.outputs.v_name }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -151,25 +205,11 @@ jobs:
           path = Path("android/app/build.gradle")
           text = path.read_text()
 
-          def to_ascii_digits(s: str) -> str:
-              persian = "۰۱۲۳۴۵۶۷۸۹"
-              arabic = "٠١٢٣٤٥٦٧٨٩"
-              for i in range(10):
-                  s = s.replace(persian[i], str(i)).replace(arabic[i], str(i))
-              return s.strip()
-
-          raw_code = to_ascii_digits(os.environ.get("VERSION_CODE", "1"))
-          raw_name = to_ascii_digits(os.environ.get("VERSION_NAME", "1.68.4")) or "1.68.4"
-
-          digits_only = re.sub(r"\D", "", raw_code)
-          v_code = int(digits_only) if digits_only else 1
-          if v_code < 1:
-              v_code = 1
-          if v_code > 2100000000:
-              v_code = 1
+          v_code = int(os.environ.get("V_CODE", "1"))
+          v_name = os.environ.get("V_NAME", "1.68.4")
 
           text = re.sub(r'versionCode\s+\d+', f'versionCode {v_code}', text, count=1)
-          text = re.sub(r'versionName\s+"[^"]*"', f'versionName "{raw_name}"', text, count=1)
+          text = re.sub(r'versionName\s+"[^"]*"', f'versionName "{v_name}"', text, count=1)
 
           signing = """
               lint {
@@ -196,13 +236,7 @@ jobs:
               raise RuntimeError("Release build type not found")
 
           path.write_text(text)
-          print(f"Configured versionCode={v_code}, versionName={raw_name}")
-
-          gh_out = os.environ.get("GITHUB_OUTPUT")
-          if gh_out:
-              with open(gh_out, "a", encoding="utf-8") as f:
-                  f.write(f"v_code={v_code}\n")
-                  f.write(f"v_name={raw_name}\n")
+          print(f"Configured Android Gradle versionCode={v_code}, versionName={v_name}")
           PY
 
       - name: Build Release AAB and APK
@@ -276,7 +310,7 @@ jobs:
           {
             echo "### ✅ ساخت نسخه‌های انتشار یاد (AAB و APK) با موفقیت انجام شد"
             echo ""
-            echo "- **نام نسخه (versionName):** \`${V_NAME}\`"
+            echo "- **نام نسخه اعمال‌شده در کل اپ (اسپلش، درباره، تنظیمات و اندروید):** \`${V_NAME}\`"
             echo "- **کد نسخه (versionCode):** \`${V_CODE}\`"
             echo ""
             echo "| نوع خروجی | نام آرتیفکت | وضعیت | لینک دانلود مستقیم |"

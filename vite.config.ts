@@ -12,7 +12,9 @@ export default defineConfig(() => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      __APP_VERSION__: JSON.stringify(pkg.version),
+      __APP_VERSION__: JSON.stringify(
+        (process.env.VITE_APP_VERSION || pkg.version || '1.68.4').trim()
+      ),
     },
     resolve: {
       alias: {

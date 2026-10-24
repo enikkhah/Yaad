@@ -6,6 +6,11 @@ on:
       - main
       - master
   workflow_dispatch:
+    inputs:
+      version_name:
+        description: 'نام نسخه نمایشی در اپ (مثلاً 1.68.4)'
+        required: false
+        default: '1.68.4'
 
 permissions:
   contents: write
@@ -23,6 +28,47 @@ jobs:
         with:
           node-version: 22
 
+      - name: Sync App Version Before Web Build
+        id: versioning
+        env:
+          VERSION_NAME: ${{ inputs.version_name || github.event.inputs.version_name || '' }}
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          import os
+          import re
+
+          def to_ascii_digits(s: str) -> str:
+              persian = "۰۱۲۳۴۵۶۷۸۹"
+              arabic = "٠١٢٣٤٥٦٧٨٩"
+              for i in range(10):
+                  s = s.replace(persian[i], str(i)).replace(arabic[i], str(i))
+              return s.strip()
+
+          pkg_path = Path("package.json")
+          pkg_data = json.loads(pkg_path.read_text(encoding="utf-8")) if pkg_path.exists() else {}
+          default_ver = pkg_data.get("version", "1.68.4")
+
+          raw_name = to_ascii_digits(os.environ.get("VERSION_NAME", "")) or default_ver
+          raw_name = re.sub(r'^[vV]\s*', '', raw_name).strip() or default_ver
+
+          if pkg_path.exists():
+              pkg_data["version"] = raw_name
+              pkg_path.write_text(json.dumps(pkg_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+          ver_ts_path = Path("src/utils/version.ts")
+          if ver_ts_path.exists():
+              ver_text = ver_ts_path.read_text(encoding="utf-8")
+              ver_text = re.sub(r"'1\.68\.4'", f"'{raw_name}'", ver_text)
+              ver_ts_path.write_text(ver_text, encoding="utf-8")
+
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a", encoding="utf-8") as f:
+                  f.write(f"v_name={raw_name}\n")
+          PY
+
       - name: Install dependencies
         run: npm install --legacy-peer-deps
 
@@ -30,6 +76,8 @@ jobs:
         run: npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem --legacy-peer-deps
 
       - name: Build web app
+        env:
+          VITE_APP_VERSION: ${{ steps.versioning.outputs.v_name }}
         run: npm run build
 
       - name: Remove old Android folder
@@ -119,13 +167,19 @@ jobs:
 
       - name: Generate Release Keystore and Configure Release Signing
         working-directory: android
+        env:
+          V_NAME: ${{ steps.versioning.outputs.v_name }}
         run: |
           keytool -genkey -v -keystore app/release.keystore -alias yaad_release -keyalg RSA -keysize 2048 -validity 10000 -storepass yaad123456 -keypass yaad123456 -dname "CN=Yaad, OU=Mobile, O=YaadApp, L=Tehran, C=IR"
           python3 - <<'PY'
           from pathlib import Path
+          import os
+          import re
           gradle_file = Path("app/build.gradle")
           if gradle_file.exists():
               content = gradle_file.read_text()
+              v_name = os.environ.get("V_NAME", "1.68.4")
+              content = re.sub(r'versionName\s+"[^"]*"', f'versionName "{v_name}"', content, count=1)
               signing_block = """
               lint {
                   checkReleaseBuilds false
