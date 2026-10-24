@@ -1,7 +1,16 @@
-name: Build Yaad Release APK
+name: Build Yaad Release (AAB & APK)
 
 on:
   workflow_dispatch:
+    inputs:
+      version_code:
+        description: 'کد نسخه (versionCode - عدد صحیح، برای هر آپدیت در بازار/مایکت یک عدد اضافه کنید)'
+        required: false
+        default: '1'
+      version_name:
+        description: 'نام نسخه نمایشی (versionName)'
+        required: false
+        default: '1.68.4'
 
 jobs:
   build:
@@ -59,8 +68,6 @@ jobs:
               "android.permission.ACCESS_FINE_LOCATION",
               "android.permission.READ_EXTERNAL_STORAGE",
               "android.permission.WRITE_EXTERNAL_STORAGE",
-              "android.permission.READ_MEDIA_IMAGES",
-              "android.permission.MANAGE_EXTERNAL_STORAGE",
               "android.permission.POST_NOTIFICATIONS",
               "android.permission.SCHEDULE_EXACT_ALARM",
               "android.permission.USE_EXACT_ALARM",
@@ -98,17 +105,15 @@ jobs:
           mkdir -p android/app/src/main/res/raw
           cp public/*.wav android/app/src/main/res/raw/
 
-      - name: Generate Android App Icon
+      - name: Generate Android App Icon (Transparent Background)
         run: |
           npm install @capacitor/assets --legacy-peer-deps
           mkdir -p resources
-          cp public/icon.png resources/icon.png || true
+          cp public/logo-transparent.png resources/icon.png || true
           cp public/splash.png resources/splash.png || true
           cp public/splash.png resources/splash-dark.png || true
-          npx capacitor-assets generate --android --iconBackgroundColor '#000000' --iconBackgroundColorDark '#000000' --splashBackgroundColor '#000000' --splashBackgroundColorDark '#000000' || true
-          mkdir -p android/app/src/main/res/drawable
-          cp public/pwa-192x192.png android/app/src/main/res/drawable/ic_launcher.png || true
-          cp public/pwa-192x192.png android/app/src/main/res/drawable/ic_stat_notification.png || true
+          npx capacitor-assets generate --android --splashBackgroundColor '#000000' --splashBackgroundColorDark '#000000' || true
+          node scripts/generate-transparent-icons.mjs
 
       - name: Patch Capacitor LocalNotifications for Background Actions
         run: node scripts/patch-capacitor-notifications.mjs
@@ -128,14 +133,24 @@ jobs:
         run: |
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/yaad-release.jks
 
-      - name: Configure release signing
+      - name: Configure release signing and versioning
+        env:
+          VERSION_CODE: ${{ github.event.inputs.version_code || '1' }}
+          VERSION_NAME: ${{ github.event.inputs.version_name || '1.68.4' }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import os
           import re
 
           path = Path("android/app/build.gradle")
           text = path.read_text()
+
+          v_code = int(os.environ.get("VERSION_CODE", "1").strip() or "1")
+          v_name = os.environ.get("VERSION_NAME", "1.68.4").strip() or "1.68.4"
+
+          text = re.sub(r'versionCode\s+\d+', f'versionCode {v_code}', text, count=1)
+          text = re.sub(r'versionName\s+"[^"]*"', f'versionName "{v_name}"', text, count=1)
 
           signing = """
               signingConfigs {
@@ -160,13 +175,20 @@ jobs:
           path.write_text(text)
           PY
 
-      - name: Build Release APK
+      - name: Build Release AAB and APK
         working-directory: android
         env:
           STORE_PASSWORD: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
-        run: ./gradlew assembleRelease
+        run: ./gradlew bundleRelease assembleRelease
+
+      - name: Upload Release AAB (For Cafe Bazaar & Myket)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Yaad-Release-AAB
+          path: android/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
@@ -174,3 +196,4 @@ jobs:
           name: Yaad-Release-APK
           path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
