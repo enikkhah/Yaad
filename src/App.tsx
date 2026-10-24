@@ -33,7 +33,6 @@ import {
   syncToGoogleTasks 
 } from './utils/googleSync';
 import { User } from 'firebase/auth';
-import confetti from 'canvas-confetti';
 import appIcon from './assets/images/icon.png';
 import { getNextRecurrenceTimestamp } from './utils/recurrence';
 import { 
@@ -2093,26 +2092,12 @@ export default function App() {
               // Schedule next recurrence in Android Local Notifications
               scheduleReminderNotification(recurringUpdated, settings).catch(() => {});
 
-              if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-                confetti({
-                  particleCount: 50,
-                  spread: 60,
-                  origin: { y: 0.8 },
-                });
-              }
               showSyncNotification(`✓ انجام شد! نوبت بعدی برای ${formatJalaliFull(nextDue)} زمان‌بندی شد.`);
               return recurringUpdated;
             }
           }
 
           // Non-recurring or completed custom dates
-          if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-            confetti({
-              particleCount: 50,
-              spread: 60,
-              origin: { y: 0.8 },
-            });
-          }
           return {
             ...r,
             status: 'completed' as ReminderStatus,
@@ -2150,12 +2135,6 @@ export default function App() {
         clearOutOfAppPersistentNotification(id);
         cancelReminderNotification(id).catch(() => {});
         dismissDeliveredNotifications(id).catch(() => {});
-
-        confetti({
-          particleCount: 50,
-          spread: 60,
-          origin: { y: 0.8 },
-        });
 
         const hasRemainingRepeats = target.recurrenceCount === undefined || target.recurrenceCount > 1;
         if (target.recurrence && target.recurrence !== 'none' && hasRemainingRepeats) {

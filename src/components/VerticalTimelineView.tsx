@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { motion, LayoutGroup } from 'motion/react';
 import { Reminder, Category } from '../types';
 import { 
   formatJalaliTime, 
@@ -58,9 +59,50 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   const [selectedReminder, setSelectedReminder] = useState<Reminder | null>(null);
   const [isFilterSheetOpen, setIsFilterSheetOpen] = useState<boolean>(false);
   const [showPostponePicker, setShowPostponePicker] = useState<boolean>(false);
+  const [completingIds, setCompletingIds] = useState<Record<string, boolean>>({});
+  const [justSettledIds, setJustSettledIds] = useState<Record<string, boolean>>({});
 
   const nowMarkerRef = useRef<HTMLDivElement>(null);
   const hasAutoScrolledRef = useRef<boolean>(false);
+  const completionTimersRef = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    return () => {
+      Object.values(completionTimersRef.current).forEach((timerId) => window.clearTimeout(timerId));
+    };
+  }, []);
+
+  const triggerAnimatedToggleComplete = (reminder: Reminder) => {
+    const id = reminder.id;
+    // If already completed, toggle back immediately so layout animates it back to active section
+    if (reminder.status === 'completed') {
+      onToggleComplete(id);
+      return;
+    }
+    if (completingIds[id]) return;
+
+    // Stage 1: In-place color morph to emerald completion state
+    setCompletingIds((prev) => ({ ...prev, [id]: true }));
+
+    // Stage 2: Commit completion so layout smoothly glides card to its destination list position
+    completionTimersRef.current[id] = window.setTimeout(() => {
+      onToggleComplete(id);
+      setCompletingIds((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+      setJustSettledIds((prev) => ({ ...prev, [id]: true }));
+
+      completionTimersRef.current[`${id}_settle`] = window.setTimeout(() => {
+        setJustSettledIds((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }, 850);
+    }, 340);
+  };
 
   // Live clock: update current time every second for live 'NOW' line and next reminder countdown
   useEffect(() => {
@@ -83,12 +125,26 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     ? searchFiltered
     : searchFiltered.filter((r) => r.category === categoryFilter);
 
-  // Sort chronologically ascending (oldest to newest)
-  const sortedReminders = [...filteredReminders].sort((a, b) => a.dueTimestamp - b.dueTimestamp);
+  // Group into 3 logical timeline sections so completed items settle into the completed zone above NOW:
+  // 0: Completed reminders (above NOW)
+  // 1: Overdue uncompleted reminders (right above NOW)
+  // 2: Upcoming uncompleted reminders (below NOW)
+  const getTimelineZone = (r: Reminder): number => {
+    if (r.status === 'completed') return 0;
+    if (r.dueTimestamp < nowMs) return 1;
+    return 2;
+  };
+
+  const sortedReminders = [...filteredReminders].sort((a, b) => {
+    const zoneA = getTimelineZone(a);
+    const zoneB = getTimelineZone(b);
+    if (zoneA !== zoneB) return zoneA - zoneB;
+    return a.dueTimestamp - b.dueTimestamp;
+  });
 
   // Find next reminder: earliest uncompleted reminder occurring at or after nowMs
   const nextReminder = sortedReminders.find(
-    (r) => r.dueTimestamp >= nowMs && r.status !== 'completed'
+    (r) => r.dueTimestamp >= nowMs && r.status !== 'completed' && !completingIds[r.id]
   );
 
   // Countdown formatter for next reminder
@@ -152,8 +208,10 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   // Live time string for 'NOW' badge
   const liveTimeString = formatJalaliTime(nowMs, isEn ? 'en' : 'fa');
 
-  // Find index where past ends and future begins
-  const nowIndex = sortedReminders.findIndex((r) => r.dueTimestamp >= nowMs);
+  // Find index where past/completed ends and upcoming uncompleted begins
+  const nowIndex = sortedReminders.findIndex(
+    (r) => r.status !== 'completed' && r.dueTimestamp >= nowMs
+  );
 
   const getCategoryLabel = (cat: Category) => {
     switch (cat) {
@@ -275,198 +333,259 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             </div>
           </div>
         ) : (
-          (() => {
-            // Group reminders with day headers and the 'NOW' line inserted at the exact transition point
-            let lastDateKey: string | null = null;
-            const elements: React.ReactNode[] = [];
-            let nowLineRendered = false;
+          <LayoutGroup id="vertical-timeline-group">
+            {(() => {
+              // Group reminders with day headers and the 'NOW' line inserted at the exact transition point
+              let lastGroupDateKey: string | null = null;
+              const elements: React.ReactNode[] = [];
+              let nowLineRendered = false;
 
-            const renderNowLine = () => (
-              <div 
-                key="now-indicator-line" 
-                ref={nowMarkerRef} 
-                className="relative py-4 my-2 flex items-center justify-center"
-              >
-                {/* Horizontal line across the container */}
-                <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/80 to-transparent" />
-                {/* Centered Small Badge with Live Clock */}
-                <div className="relative z-10 px-4 py-1.5 rounded-full bg-indigo-500 text-white font-black text-xs shadow-lg shadow-indigo-500/25 flex items-center gap-2 border border-indigo-300">
-                  <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
-                  <span>{isEn ? 'NOW' : 'اکنون'}</span>
-                  <span className="font-mono">{liveTimeString}</span>
-                </div>
-              </div>
-            );
+              const renderNowLine = () => (
+                <motion.div
+                  layout="position"
+                  transition={{ layout: { type: 'spring', stiffness: 320, damping: 28 } }}
+                  key="now-indicator-line"
+                  ref={nowMarkerRef}
+                  className="relative py-4 my-2 flex items-center justify-center"
+                >
+                  {/* Horizontal line across the container */}
+                  <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/80 to-transparent" />
+                  {/* Centered Small Badge with Live Clock */}
+                  <div className="relative z-10 px-4 py-1.5 rounded-full bg-indigo-500 text-white font-black text-xs shadow-lg shadow-indigo-500/25 flex items-center gap-2 border border-indigo-300">
+                    <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
+                    <span>{isEn ? 'NOW' : 'اکنون'}</span>
+                    <span className="font-mono">{liveTimeString}</span>
+                  </div>
+                </motion.div>
+              );
 
-            // If all reminders are in the future, render NOW line first
-            if (nowIndex === 0) {
-              elements.push(renderNowLine());
-              nowLineRendered = true;
-            }
-
-            sortedReminders.forEach((reminder, index) => {
-              // Check if we reached the NOW transition boundary
-              if (!nowLineRendered && index === nowIndex) {
+              // If all reminders are in the future, render NOW line first
+              if (nowIndex === 0) {
                 elements.push(renderNowLine());
                 nowLineRendered = true;
               }
 
-              // Day Header Check: only show small day header when day changes
-              const dateKey = getDateKey(reminder.dueTimestamp);
-              if (dateKey !== lastDateKey) {
-                lastDateKey = dateKey;
-                const dayLabel = getDayHeaderLabel(reminder.dueTimestamp, isEn ? 'en' : 'fa');
+              sortedReminders.forEach((reminder, index) => {
+                // Check if we reached the NOW transition boundary
+                if (!nowLineRendered && index === nowIndex) {
+                  elements.push(renderNowLine());
+                  nowLineRendered = true;
+                }
+
+                // Day Header Check: show small day header when zone or day changes
+                const zone = getTimelineZone(reminder);
+                const dateKey = getDateKey(reminder.dueTimestamp);
+                const groupDateKey = `${zone}-${dateKey}`;
+                if (groupDateKey !== lastGroupDateKey) {
+                  lastGroupDateKey = groupDateKey;
+                  const dayLabel = getDayHeaderLabel(reminder.dueTimestamp, isEn ? 'en' : 'fa');
+                  elements.push(
+                    <motion.div
+                      layout="position"
+                      transition={{ layout: { type: 'spring', stiffness: 320, damping: 28 } }}
+                      key={`day-header-${groupDateKey}`}
+                      className="pt-3 pb-1 flex items-center gap-2"
+                    >
+                      <span className="inline-block text-[11px] sm:text-xs font-bold text-stone-400 px-3 py-1 rounded-lg bg-stone-900/80 border border-stone-800/80">
+                        {dayLabel}
+                      </span>
+                      {zone === 0 && (
+                        <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold text-emerald-400/90 px-2.5 py-0.5 rounded-lg bg-emerald-950/40 border border-emerald-500/25">
+                          <Check className="w-3 h-3 stroke-[2.5]" />
+                          <span>{isEn ? 'Completed' : 'انجام شده'}</span>
+                        </span>
+                      )}
+                    </motion.div>
+                  );
+                }
+
+                const isPast = reminder.dueTimestamp < nowMs;
+                const isCompleted = reminder.status === 'completed';
+                const isCompleting = Boolean(completingIds[reminder.id]);
+                const isRecentlySettled =
+                  Boolean(justSettledIds[reminder.id]) ||
+                  Boolean(reminder.completedAt && nowMs - reminder.completedAt < 1400) ||
+                  Boolean(reminder.lastActionAt && nowMs - reminder.lastActionAt < 1400);
+                const isOverdueUncompleted = isPast && !isCompleted && !isCompleting;
+                const isNext = reminder.id === nextReminder?.id && !isCompleting;
+
+                // Card minimal styling with smooth 2-stage completion color transition:
+                // - در حال انجام شدن (Stage 1): سبز زمردی شاداب با درخشش ملایم
+                // - تازه جاگیری شده در لیست انجام‌شده‌ها (Stage 2): گذار نرم از سبز به خاکستری آرام
+                // - انجام شده نهایی: کمرنگ با خط خورده
+                // - گذشته و انجام نشده: رنگ هشدار ملایم
+                // - یادآوری بعدی: کادر سبز با شمارش معکوس
+                let cardStyle = '';
+                if (isCompleting) {
+                  cardStyle =
+                    'bg-emerald-950/65 border-emerald-400/90 text-emerald-50 shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400/40 scale-[1.01]';
+                } else if (isCompleted && isRecentlySettled) {
+                  cardStyle =
+                    'bg-emerald-950/25 border-emerald-500/40 text-stone-300 opacity-85 shadow-sm shadow-emerald-500/10';
+                } else if (isCompleted) {
+                  cardStyle = 'bg-stone-900/40 border-stone-800/50 text-stone-500 opacity-60';
+                } else if (isOverdueUncompleted) {
+                  cardStyle = 'bg-rose-950/20 border-rose-500/30 text-rose-100 hover:border-rose-500/50 shadow-sm';
+                } else if (isNext) {
+                  cardStyle =
+                    'relative bg-stone-900 border-emerald-500/80 text-stone-100 hover:border-emerald-400 shadow-xl shadow-emerald-500/15 ring-1 ring-emerald-500/35 pt-5 sm:pt-6 mt-3.5';
+                } else if (isPast) {
+                  cardStyle = 'bg-stone-900/60 border-stone-800/60 text-stone-300 opacity-75';
+                } else if (isRecentlySettled) {
+                  // Recurring reminder that just advanced to its next future occurrence
+                  cardStyle =
+                    'bg-emerald-950/30 border-emerald-500/50 text-stone-100 shadow-md shadow-emerald-500/10';
+                } else {
+                  cardStyle = 'bg-stone-900 border-stone-800 text-stone-100 hover:border-stone-700 shadow-sm';
+                }
+
+                // Priority / Category hollow circle color coding
+                const circleBorderColor =
+                  reminder.priority === 'high'
+                    ? 'border-red-500 text-red-400 hover:bg-red-500/15 ring-2 ring-red-500/20'
+                    : reminder.category === 'work'
+                    ? 'border-cyan-400 text-cyan-400 hover:bg-cyan-400/15'
+                    : reminder.category === 'family'
+                    ? 'border-rose-400 text-rose-400 hover:bg-rose-400/15'
+                    : 'border-indigo-400 text-indigo-400 hover:bg-indigo-400/15';
+
+                const completedCircleColor =
+                  reminder.priority === 'high'
+                    ? 'border-red-500 bg-red-500/20 text-red-400'
+                    : reminder.category === 'work'
+                    ? 'border-cyan-400 bg-cyan-400/20 text-cyan-300'
+                    : reminder.category === 'family'
+                    ? 'border-rose-400 bg-rose-400/20 text-rose-300'
+                    : 'border-indigo-400 bg-indigo-400/20 text-indigo-300';
+
                 elements.push(
-                  <div key={`day-header-${dateKey}-${index}`} className="pt-3 pb-1">
-                    <span className="inline-block text-[11px] sm:text-xs font-bold text-stone-400 px-3 py-1 rounded-lg bg-stone-900/80 border border-stone-800/80">
-                      {dayLabel}
-                    </span>
-                  </div>
-                );
-              }
-
-              const isPast = reminder.dueTimestamp < nowMs;
-              const isCompleted = reminder.status === 'completed';
-              const isOverdueUncompleted = isPast && !isCompleted;
-              const isNext = reminder.id === nextReminder?.id;
-
-              // Card minimal styling according to rules:
-              // - انجام شده: کمرنگ با خط خورده
-              // - گذشته و انجام نشده: رنگ هشدار ملایم
-              // - گذشته: بالای خط اکنون (کمرنگ‌تر)
-              // - آینده: پایین خط اکنون
-              // - یادآوری بعدی: بیرون زدگی هلالی متصل به کارت با شمارش معکوس سبز
-              let cardStyle = '';
-              if (isCompleted) {
-                cardStyle = 'bg-stone-900/40 border-stone-800/50 text-stone-500 opacity-60';
-              } else if (isOverdueUncompleted) {
-                cardStyle = 'bg-rose-950/20 border-rose-500/30 text-rose-100 hover:border-rose-500/50 shadow-sm';
-              } else if (isNext) {
-                cardStyle = 'relative bg-stone-900 border-emerald-500/80 text-stone-100 hover:border-emerald-400 shadow-xl shadow-emerald-500/15 ring-1 ring-emerald-500/35 pt-5 sm:pt-6 mt-3.5';
-              } else if (isPast) {
-                cardStyle = 'bg-stone-900/60 border-stone-800/60 text-stone-300 opacity-75';
-              } else {
-                cardStyle = 'bg-stone-900 border-stone-800 text-stone-100 hover:border-stone-700 shadow-sm';
-              }
-
-              // Priority / Category hollow circle color coding
-              const circleBorderColor =
-                reminder.priority === 'high'
-                  ? 'border-red-500 text-red-400 hover:bg-red-500/15 ring-2 ring-red-500/20'
-                  : reminder.category === 'work'
-                  ? 'border-cyan-400 text-cyan-400 hover:bg-cyan-400/15'
-                  : reminder.category === 'family'
-                  ? 'border-rose-400 text-rose-400 hover:bg-rose-400/15'
-                  : 'border-indigo-400 text-indigo-400 hover:bg-indigo-400/15';
-
-              const completedCircleColor =
-                reminder.priority === 'high'
-                  ? 'border-red-500 bg-red-500/20 text-red-400'
-                  : reminder.category === 'work'
-                  ? 'border-cyan-400 bg-cyan-400/20 text-cyan-300'
-                  : reminder.category === 'family'
-                  ? 'border-rose-400 bg-rose-400/20 text-rose-300'
-                  : 'border-indigo-400 bg-indigo-400/20 text-indigo-300';
-
-              elements.push(
-                <div
-                  key={reminder.id}
-                  onClick={() => {
-                    setShowPostponePicker(false);
-                    setSelectedReminder(reminder);
-                  }}
-                  className={`w-full p-4 sm:p-5 rounded-2xl border transition-all duration-150 cursor-pointer flex items-center justify-between gap-3 active:scale-[0.99] ${cardStyle}`}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
+                  <motion.div
+                    layout
+                    transition={{
+                      layout: { type: 'spring', stiffness: 320, damping: 28 },
+                    }}
+                    key={reminder.id}
+                    onClick={() => {
                       setShowPostponePicker(false);
                       setSelectedReminder(reminder);
-                    }
-                  }}
-                >
-                  {/* کادر شمارش معکوس برای یادآوری بعدی (Countdown Badge without crescent wings) */}
-                  {isNext && (
-                    <div className="absolute -top-3.5 inset-x-0 flex items-center justify-center z-10 pointer-events-none">
-                      <div className="px-3 sm:px-4 py-1 rounded-full bg-emerald-500 text-stone-950 font-black text-xs shadow-lg shadow-emerald-500/35 flex items-center gap-2 border border-emerald-300 pointer-events-auto">
-                        <span className="w-2 h-2 rounded-full bg-stone-950 animate-pulse shrink-0" />
-                        <span className="tracking-wide uppercase text-[10px] sm:text-[11px]">
-                          {isEn ? 'NEXT' : 'یادآوری بعدی'}
-                        </span>
-                        <span className="font-mono font-extrabold text-xs sm:text-sm">
-                          {formatNextCountdown(reminder.dueTimestamp, nowMs, isEn)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Title, Optional Description Snippet & Larger Hollow Colored Circle with Checkmark Completion */}
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onToggleComplete(reminder.id);
-                      }}
-                      className={`w-6 h-6 sm:w-6.5 sm:h-6.5 rounded-full border-[2.5px] flex items-center justify-center shrink-0 transition-all duration-200 cursor-pointer active:scale-90 group ${
-                        isCompleted ? completedCircleColor : `bg-transparent ${circleBorderColor}`
-                      }`}
-                      title={
-                        isCompleted
-                          ? (isEn ? 'Completed (Click to undo)' : 'انجام شده (برای بازگردانی ضربه بزنید)')
-                          : `${isEn ? 'Mark as completed' : 'انجام شد'} • ${getCategoryLabel(reminder.category)} (${getPriorityLabel(reminder.priority)})`
+                    }}
+                    className={`w-full p-4 sm:p-5 rounded-2xl border transition-colors duration-500 cursor-pointer flex items-center justify-between gap-3 active:scale-[0.99] ${cardStyle}`}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setShowPostponePicker(false);
+                        setSelectedReminder(reminder);
                       }
-                      aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'انجام شد')}
-                    >
-                      <Check
-                        className={`w-3.5 h-3.5 stroke-[3] transition-all duration-150 ${
-                          isCompleted
-                            ? 'opacity-100 scale-100'
-                            : 'opacity-0 scale-50 group-hover:opacity-60 group-hover:scale-90'
-                        }`}
-                      />
-                    </button>
+                    }}
+                  >
+                    {/* کادر شمارش معکوس برای یادآوری بعدی (Countdown Badge without crescent wings) */}
+                    {isNext && (
+                      <div className="absolute -top-3.5 inset-x-0 flex items-center justify-center z-10 pointer-events-none">
+                        <div className="px-3 sm:px-4 py-1 rounded-full bg-emerald-500 text-stone-950 font-black text-xs shadow-lg shadow-emerald-500/35 flex items-center gap-2 border border-emerald-300 pointer-events-auto">
+                          <span className="w-2 h-2 rounded-full bg-stone-950 animate-pulse shrink-0" />
+                          <span className="tracking-wide uppercase text-[10px] sm:text-[11px]">
+                            {isEn ? 'NEXT' : 'یادآوری بعدی'}
+                          </span>
+                          <span className="font-mono font-extrabold text-xs sm:text-sm">
+                            {formatNextCountdown(reminder.dueTimestamp, nowMs, isEn)}
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
-                    <div className="flex flex-col gap-1 min-w-0 flex-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <span className={`text-sm sm:text-base font-bold truncate ${isCompleted ? 'line-through text-stone-500' : ''}`}>
-                          {reminder.title}
+                    {/* Title, Optional Description Snippet & Larger Hollow Colored Circle with Checkmark Completion */}
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          triggerAnimatedToggleComplete(reminder);
+                        }}
+                        className={`w-6 h-6 sm:w-6.5 sm:h-6.5 rounded-full border-[2.5px] flex items-center justify-center shrink-0 transition-all duration-300 cursor-pointer active:scale-90 group ${
+                          isCompleting
+                            ? 'border-emerald-400 bg-emerald-500 text-stone-950 scale-110 shadow-sm shadow-emerald-500/40'
+                            : isCompleted && isRecentlySettled
+                            ? 'border-emerald-400 bg-emerald-500/30 text-emerald-300'
+                            : isCompleted
+                            ? completedCircleColor
+                            : `bg-transparent ${circleBorderColor}`
+                        }`}
+                        title={
+                          isCompleted
+                            ? (isEn ? 'Completed (Click to undo)' : 'انجام شده (برای بازگردانی ضربه بزنید)')
+                            : `${isEn ? 'Mark as completed' : 'انجام شد'} • ${getCategoryLabel(reminder.category)} (${getPriorityLabel(reminder.priority)})`
+                        }
+                        aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'انجام شد')}
+                      >
+                        <Check
+                          className={`w-3.5 h-3.5 stroke-[3] transition-all duration-200 ${
+                            isCompleted || isCompleting
+                              ? 'opacity-100 scale-100'
+                              : 'opacity-0 scale-50 group-hover:opacity-60 group-hover:scale-90'
+                          }`}
+                        />
+                      </button>
+
+                      <div className="flex flex-col gap-1 min-w-0 flex-1">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className={`text-sm sm:text-base font-bold truncate transition-colors duration-500 ${
+                              isCompleting
+                                ? 'line-through text-emerald-200'
+                                : isCompleted
+                                ? 'line-through text-stone-500'
+                                : ''
+                            }`}
+                          >
+                            {reminder.title}
+                          </span>
+                        </div>
+                        {reminder.description && (
+                          <p
+                            className={`text-[11px] sm:text-xs truncate transition-colors duration-500 ${
+                              isCompleting ? 'text-emerald-300/80' : 'text-stone-400'
+                            }`}
+                          >
+                            {reminder.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Time & Date (with Year) */}
+                    <div className="shrink-0 text-end flex flex-col items-end gap-0.5">
+                      <div className="text-xs sm:text-sm font-mono text-stone-300 font-bold flex items-center gap-1.5">
+                        {(isCompleted || isCompleting) && (
+                          <Check
+                            className={`w-3.5 h-3.5 shrink-0 transition-transform duration-300 ${
+                              isCompleting ? 'text-emerald-300 scale-125' : 'text-emerald-400'
+                            }`}
+                          />
+                        )}
+                        <span className={isCompleting ? 'text-emerald-200' : ''}>
+                          {formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa')}
                         </span>
                       </div>
-                      {reminder.description && (
-                        <p className="text-[11px] sm:text-xs text-stone-400 truncate">
-                          {reminder.description}
-                        </p>
-                      )}
+                      <span className={`text-[10px] sm:text-[11px] ${isCompleting ? 'text-emerald-300/80' : 'text-stone-400'}`}>
+                        {isEn
+                          ? new Date(reminder.dueTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                          : getJalaliComponents(reminder.dueTimestamp).dateString}
+                      </span>
                     </div>
-                  </div>
+                  </motion.div>
+                );
+              });
 
-                  {/* Time & Date (with Year) */}
-                  <div className="shrink-0 text-end flex flex-col items-end gap-0.5">
-                    <div className="text-xs sm:text-sm font-mono text-stone-300 font-bold flex items-center gap-1.5">
-                      {isCompleted && (
-                        <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                      )}
-                      <span>{formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa')}</span>
-                    </div>
-                    <span className="text-[10px] sm:text-[11px] text-stone-400">
-                      {isEn
-                        ? new Date(reminder.dueTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                        : getJalaliComponents(reminder.dueTimestamp).dateString}
-                    </span>
-                  </div>
-                </div>
-              );
-            });
+              // If NOW line was not inserted (all reminders are in the past/completed), render at the bottom
+              if (!nowLineRendered) {
+                elements.push(renderNowLine());
+              }
 
-            // If NOW line was not inserted (all reminders are in the past), render at the bottom
-            if (!nowLineRendered) {
-              elements.push(renderNowLine());
-            }
-
-            return elements;
-          })()
+              return elements;
+            })()}
+          </LayoutGroup>
         )}
       </div>
 
@@ -559,8 +678,9 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  onToggleComplete(selectedReminder.id);
+                  const targetReminder = selectedReminder;
                   setSelectedReminder(null);
+                  triggerAnimatedToggleComplete(targetReminder);
                 }}
                 className={`min-h-[48px] w-full px-4 py-3 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer ${
                   selectedReminder.status === 'completed'

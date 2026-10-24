@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { motion } from 'motion/react';
 import { Reminder } from '../types';
 import { formatJalaliFull, getPersianRelativeTime, toPersianDigits } from '../utils/jalali';
 import { AppLanguage } from '../utils/i18n';
@@ -50,7 +51,28 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
   const isEn = language === 'en';
   const isCompleted = reminder.status === 'completed';
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const [isCompleting, setIsCompleting] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleAnimatedToggle = () => {
+    if (isCompleted) {
+      onToggleComplete(reminder.id);
+      return;
+    }
+    if (isCompleting) return;
+    setIsCompleting(true);
+    timerRef.current = window.setTimeout(() => {
+      onToggleComplete(reminder.id);
+      setIsCompleting(false);
+    }, 340);
+  };
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -117,13 +139,17 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
   const isOverdue = reminder.dueTimestamp < Date.now() && !isCompleted;
 
   return (
-    <div
-      className={`rounded-2xl p-4 sm:p-5 border transition-all duration-200 relative bg-stone-900 ${
-        isCompleted
+    <motion.div
+      layout
+      transition={{ layout: { type: 'spring', stiffness: 320, damping: 28 } }}
+      className={`rounded-2xl p-4 sm:p-5 border transition-colors duration-500 relative ${
+        isCompleting
+          ? 'bg-emerald-950/65 border-emerald-400/90 text-emerald-50 shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400/40 scale-[1.01]'
+          : isCompleted
           ? 'border-stone-800/80 bg-stone-900/60 opacity-70'
           : isNext
-          ? 'border-stone-700 shadow-sm'
-          : 'border-stone-800 hover:border-stone-700 shadow-sm'
+          ? 'bg-stone-900 border-stone-700 shadow-sm'
+          : 'bg-stone-900 border-stone-800 hover:border-stone-700 shadow-sm'
       }`}
       dir={isEn ? 'ltr' : 'rtl'}
     >
@@ -131,16 +157,20 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
         {/* Toggle completion button (Larger Hollow Colored Circle with Checkmark) */}
         <button
           type="button"
-          onClick={() => onToggleComplete(reminder.id)}
-          className={`mt-0.5 w-6.5 h-6.5 rounded-full border-[2.5px] flex items-center justify-center transition-all cursor-pointer shrink-0 active:scale-90 group ${
-            isCompleted ? completedCircleColor : `bg-transparent ${circleBorderColor}`
+          onClick={handleAnimatedToggle}
+          className={`mt-0.5 w-6.5 h-6.5 rounded-full border-[2.5px] flex items-center justify-center transition-all duration-300 cursor-pointer shrink-0 active:scale-90 group ${
+            isCompleting
+              ? 'border-emerald-400 bg-emerald-500 text-stone-950 scale-110 shadow-sm shadow-emerald-500/40'
+              : isCompleted
+              ? completedCircleColor
+              : `bg-transparent ${circleBorderColor}`
           }`}
           title={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'علامت به عنوان انجام شده')}
           aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'علامت به عنوان انجام شده')}
         >
           <Check
-            className={`w-3.5 h-3.5 stroke-[3] transition-all duration-150 ${
-              isCompleted ? 'opacity-100 scale-100' : 'opacity-0 scale-50 group-hover:opacity-60 group-hover:scale-90'
+            className={`w-3.5 h-3.5 stroke-[3] transition-all duration-200 ${
+              isCompleted || isCompleting ? 'opacity-100 scale-100' : 'opacity-0 scale-50 group-hover:opacity-60 group-hover:scale-90'
             }`}
           />
         </button>
@@ -177,8 +207,10 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
 
           {/* Title - Prominent and bold subject */}
           <h4
-            className={`font-black text-base sm:text-lg leading-snug tracking-tight transition-colors line-clamp-2 ${
-              isCompleted
+            className={`font-black text-base sm:text-lg leading-snug tracking-tight transition-colors duration-500 line-clamp-2 ${
+              isCompleting
+                ? 'line-through text-emerald-200 font-medium'
+                : isCompleted
                 ? 'line-through text-stone-500 font-medium'
                 : 'text-stone-100 hover:text-indigo-400'
             }`}
@@ -302,6 +334,6 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
           )}
         </div>
       </div>
-    </div>
+    </motion.div>
   );
 };
