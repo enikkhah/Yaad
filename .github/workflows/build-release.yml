@@ -12,16 +12,13 @@ on:
         required: false
         default: '1.68.4'
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
-
 jobs:
   build:
     runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Check signing secrets
         env:
@@ -36,7 +33,7 @@ jobs:
           fi
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -141,6 +138,7 @@ jobs:
           printf '%s' "$KEYSTORE_BASE64" | base64 --decode > android/app/yaad-release.jks
 
       - name: Configure release signing and versioning
+        id: versioning
         env:
           VERSION_CODE: ${{ inputs.version_code || github.event.inputs.version_code || '1' }}
           VERSION_NAME: ${{ inputs.version_name || github.event.inputs.version_name || '1.68.4' }}
@@ -199,6 +197,12 @@ jobs:
 
           path.write_text(text)
           print(f"Configured versionCode={v_code}, versionName={raw_name}")
+
+          gh_out = os.environ.get("GITHUB_OUTPUT")
+          if gh_out:
+              with open(gh_out, "a", encoding="utf-8") as f:
+                  f.write(f"v_code={v_code}\n")
+                  f.write(f"v_name={raw_name}\n")
           PY
 
       - name: Build Release AAB and APK
@@ -207,19 +211,76 @@ jobs:
           STORE_PASSWORD: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
-        run: ./gradlew bundleRelease assembleRelease
+        run: |
+          ./gradlew bundleRelease assembleRelease --no-daemon
+          mkdir -p ../dist-release/aab ../dist-release/apk
+          AAB_FILE=$(find app/build/outputs/bundle/release -name "*.aab" | head -n 1)
+          APK_FILE=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+          if [ -z "$AAB_FILE" ] || [ ! -s "$AAB_FILE" ]; then
+            echo "::error::Release AAB file was not generated!"
+            exit 1
+          fi
+          if [ -z "$APK_FILE" ] || [ ! -s "$APK_FILE" ]; then
+            echo "::error::Release APK file was not generated!"
+            exit 1
+          fi
+          cp "$AAB_FILE" "../dist-release/aab/Yaad-v${{ steps.versioning.outputs.v_name }}-b${{ steps.versioning.outputs.v_code }}-release.aab"
+          cp "$APK_FILE" "../dist-release/apk/Yaad-v${{ steps.versioning.outputs.v_name }}-b${{ steps.versioning.outputs.v_code }}-release.apk"
+          ls -lh ../dist-release/aab ../dist-release/apk
 
       - name: Upload Release AAB (For Cafe Bazaar & Myket)
-        uses: actions/upload-artifact@v4
+        id: upload_aab
+        uses: actions/upload-artifact@v6
         with:
           name: Yaad-Release-AAB
-          path: android/app/build/outputs/bundle/release/*.aab
+          path: dist-release/aab/*.aab
           if-no-files-found: error
+          overwrite: true
 
       - name: Upload Release APK
-        uses: actions/upload-artifact@v4
+        id: upload_apk
+        uses: actions/upload-artifact@v6
         with:
           name: Yaad-Release-APK
-          path: android/app/build/outputs/apk/release/*.apk
+          path: dist-release/apk/*.apk
           if-no-files-found: error
+          overwrite: true
 
+      - name: Retry Upload Release APK (if needed)
+        id: retry_apk
+        if: steps.upload_apk.outputs.artifact-id == ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: Yaad-Release-APK
+          path: dist-release/apk/*.apk
+          if-no-files-found: error
+          overwrite: true
+
+      - name: Verify Both Artifacts & Publish Build Summary
+        env:
+          AAB_ID: ${{ steps.upload_aab.outputs.artifact-id }}
+          AAB_URL: ${{ steps.upload_aab.outputs.artifact-url }}
+          APK_ID: ${{ steps.upload_apk.outputs.artifact-id || steps.retry_apk.outputs.artifact-id }}
+          APK_URL: ${{ steps.upload_apk.outputs.artifact-url || steps.retry_apk.outputs.artifact-url }}
+          V_CODE: ${{ steps.versioning.outputs.v_code }}
+          V_NAME: ${{ steps.versioning.outputs.v_name }}
+        run: |
+          if [ -z "$AAB_ID" ]; then
+            echo "::error::AAB artifact upload did not return an artifact ID."
+            exit 1
+          fi
+          if [ -z "$APK_ID" ]; then
+            echo "::error::APK artifact upload did not return an artifact ID."
+            exit 1
+          fi
+          {
+            echo "### ✅ ساخت نسخه‌های انتشار یاد (AAB و APK) با موفقیت انجام شد"
+            echo ""
+            echo "- **نام نسخه (versionName):** \`${V_NAME}\`"
+            echo "- **کد نسخه (versionCode):** \`${V_CODE}\`"
+            echo ""
+            echo "| نوع خروجی | نام آرتیفکت | وضعیت | لینک دانلود مستقیم |"
+            echo "| :--- | :--- | :--- | :--- |"
+            echo "| **AAB (کافه‌بازار و مایکت)** | \`Yaad-Release-AAB\` | ✅ آماده (\`#${AAB_ID}\`) | [دانلود Yaad-Release-AAB](${AAB_URL}) |"
+            echo "| **APK (نصب مستقیم)** | \`Yaad-Release-APK\` | ✅ آماده (\`#${APK_ID}\`) | [دانلود Yaad-Release-APK](${APK_URL}) |"
+          } >> "$GITHUB_STEP_SUMMARY"
