@@ -157,14 +157,29 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           />
         </div>
 
-        {/* App Title and English Version Badge (Dimensions and font unchanged) */}
-        <div className="mt-3 sm:mt-4 flex flex-col items-center gap-1.5 text-center animate-splash-meta">
-          <span className="text-base sm:text-lg font-black text-white tracking-wider drop-shadow-sm">
-            {isEn ? 'YAAD' : 'یاد • YAAD'}
-          </span>
+        {/* App Title, Bilingual Slogan, and Version Badge */}
+        <div className="mt-4 sm:mt-5 flex flex-col items-center gap-2 text-center animate-splash-meta px-4">
+          <div className="flex flex-col items-center gap-1">
+            <p
+              dir="rtl"
+              className="font-['Vazirmatn',sans-serif] text-base sm:text-lg font-extrabold tracking-normal text-stone-100 drop-shadow-sm"
+            >
+              <span className="text-amber-400">یاد؛</span>{' '}
+              <span className="bg-gradient-to-l from-white via-stone-100 to-indigo-200 bg-clip-text text-transparent">
+                یادآور آنچه مهم است.
+              </span>
+            </p>
+            <p
+              dir="ltr"
+              className="font-['Vazirmatn',sans-serif] text-xs sm:text-sm font-semibold text-indigo-200/85 tracking-wide drop-shadow-xs"
+            >
+              <span className="text-amber-400/95 font-bold">YAAD;</span> Reminding What Matters.
+            </p>
+          </div>
+
           <span
             dir="ltr"
-            className="inline-flex items-center gap-1 px-3.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-400/35 text-indigo-200 font-mono text-xs sm:text-sm font-bold shadow-sm tracking-wide"
+            className="mt-1 inline-flex items-center gap-1 px-3.5 py-0.5 rounded-full bg-indigo-500/15 border border-indigo-400/35 text-indigo-200 font-mono text-xs sm:text-sm font-bold shadow-sm tracking-wide"
           >
             Version {APP_VERSION}
           </span>
