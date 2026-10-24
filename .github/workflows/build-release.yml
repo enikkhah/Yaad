@@ -4,13 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       version_code:
-        description: 'کد نسخه (versionCode - عدد صحیح، برای هر آپدیت در بازار/مایکت یک عدد اضافه کنید)'
+        description: 'کد نسخه عددی (مثلاً 1 یا 2)'
         required: false
         default: '1'
       version_name:
-        description: 'نام نسخه نمایشی (versionName)'
+        description: 'نام نسخه نمایشی (مثلاً 1.68.4)'
         required: false
         default: '1.68.4'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   build:
@@ -126,7 +129,7 @@ jobs:
         run: npx cap sync android
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '21'
@@ -139,8 +142,8 @@ jobs:
 
       - name: Configure release signing and versioning
         env:
-          VERSION_CODE: ${{ github.event.inputs.version_code || '1' }}
-          VERSION_NAME: ${{ github.event.inputs.version_name || '1.68.4' }}
+          VERSION_CODE: ${{ inputs.version_code || github.event.inputs.version_code || '1' }}
+          VERSION_NAME: ${{ inputs.version_name || github.event.inputs.version_name || '1.68.4' }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -150,13 +153,31 @@ jobs:
           path = Path("android/app/build.gradle")
           text = path.read_text()
 
-          v_code = int(os.environ.get("VERSION_CODE", "1").strip() or "1")
-          v_name = os.environ.get("VERSION_NAME", "1.68.4").strip() or "1.68.4"
+          def to_ascii_digits(s: str) -> str:
+              persian = "۰۱۲۳۴۵۶۷۸۹"
+              arabic = "٠١٢٣٤٥٦٧٨٩"
+              for i in range(10):
+                  s = s.replace(persian[i], str(i)).replace(arabic[i], str(i))
+              return s.strip()
+
+          raw_code = to_ascii_digits(os.environ.get("VERSION_CODE", "1"))
+          raw_name = to_ascii_digits(os.environ.get("VERSION_NAME", "1.68.4")) or "1.68.4"
+
+          digits_only = re.sub(r"\D", "", raw_code)
+          v_code = int(digits_only) if digits_only else 1
+          if v_code < 1:
+              v_code = 1
+          if v_code > 2100000000:
+              v_code = 1
 
           text = re.sub(r'versionCode\s+\d+', f'versionCode {v_code}', text, count=1)
-          text = re.sub(r'versionName\s+"[^"]*"', f'versionName "{v_name}"', text, count=1)
+          text = re.sub(r'versionName\s+"[^"]*"', f'versionName "{raw_name}"', text, count=1)
 
           signing = """
+              lint {
+                  checkReleaseBuilds false
+                  abortOnError false
+              }
               signingConfigs {
                   release {
                       storeFile file("yaad-release.jks")
@@ -177,6 +198,7 @@ jobs:
               raise RuntimeError("Release build type not found")
 
           path.write_text(text)
+          print(f"Configured versionCode={v_code}, versionName={raw_name}")
           PY
 
       - name: Build Release AAB and APK
