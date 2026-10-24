@@ -61,10 +61,12 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   const [showPostponePicker, setShowPostponePicker] = useState<boolean>(false);
   const [completingIds, setCompletingIds] = useState<Record<string, boolean>>({});
   const [justSettledIds, setJustSettledIds] = useState<Record<string, boolean>>({});
+  const [emeraldFadeIds, setEmeraldFadeIds] = useState<Record<string, boolean>>({});
 
   const nowMarkerRef = useRef<HTMLDivElement>(null);
   const hasAutoScrolledRef = useRef<boolean>(false);
   const completionTimersRef = useRef<Record<string, number>>({});
+  const seenExternalActionRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     return () => {
@@ -72,20 +74,65 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     };
   }, []);
 
+  // Detect completions triggered externally (e.g., from AlarmModal or notification) and run fast settle highlight
+  useEffect(() => {
+    const now = Date.now();
+    reminders.forEach((r) => {
+      const actionTs = r.completedAt || r.lastActionAt || 0;
+      if (
+        actionTs > 0 &&
+        now - actionTs < 1200 &&
+        seenExternalActionRef.current[r.id] !== actionTs &&
+        !completingIds[r.id] &&
+        !justSettledIds[r.id]
+      ) {
+        seenExternalActionRef.current[r.id] = actionTs;
+        setJustSettledIds((prev) => ({ ...prev, [r.id]: true }));
+        setEmeraldFadeIds((prev) => ({ ...prev, [r.id]: true }));
+
+        completionTimersRef.current[`${r.id}_ext_fade`] = window.setTimeout(() => {
+          setEmeraldFadeIds((prev) => {
+            const next = { ...prev };
+            delete next[r.id];
+            return next;
+          });
+        }, 220);
+
+        completionTimersRef.current[`${r.id}_ext_settle`] = window.setTimeout(() => {
+          setJustSettledIds((prev) => {
+            const next = { ...prev };
+            delete next[r.id];
+            return next;
+          });
+        }, 550);
+      }
+    });
+  }, [reminders, completingIds, justSettledIds]);
+
   const triggerAnimatedToggleComplete = (reminder: Reminder) => {
     const id = reminder.id;
-    // If already completed, toggle back immediately so layout animates it back to active section
+    // If already completed, toggle back immediately so layout animates it back across NOW to its active position
     if (reminder.status === 'completed') {
+      seenExternalActionRef.current[id] = Date.now();
+      setJustSettledIds((prev) => ({ ...prev, [id]: true }));
       onToggleComplete(id);
+      completionTimersRef.current[`${id}_uncomplete`] = window.setTimeout(() => {
+        setJustSettledIds((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }, 450);
       return;
     }
     if (completingIds[id]) return;
 
-    // Stage 1: In-place color morph to emerald completion state
+    // Stage 1 (0–150ms): Quick in-place color morph to emerald completion state
     setCompletingIds((prev) => ({ ...prev, [id]: true }));
 
-    // Stage 2: Commit completion so layout smoothly glides card to its destination list position
+    // Stage 2: Fast, smooth glide to destination across NOW line + color settle
     completionTimersRef.current[id] = window.setTimeout(() => {
+      seenExternalActionRef.current[id] = Date.now();
       onToggleComplete(id);
       setCompletingIds((prev) => {
         const next = { ...prev };
@@ -93,6 +140,15 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
         return next;
       });
       setJustSettledIds((prev) => ({ ...prev, [id]: true }));
+      setEmeraldFadeIds((prev) => ({ ...prev, [id]: true }));
+
+      completionTimersRef.current[`${id}_fade`] = window.setTimeout(() => {
+        setEmeraldFadeIds((prev) => {
+          const next = { ...prev };
+          delete next[id];
+          return next;
+        });
+      }, 200);
 
       completionTimersRef.current[`${id}_settle`] = window.setTimeout(() => {
         setJustSettledIds((prev) => {
@@ -100,8 +156,8 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
           delete next[id];
           return next;
         });
-      }, 850);
-    }, 340);
+      }, 550);
+    }, 150);
   };
 
   // Live clock: update current time every second for live 'NOW' line and next reminder countdown
@@ -339,14 +395,17 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
               let lastGroupDateKey: string | null = null;
               const elements: React.ReactNode[] = [];
               let nowLineRendered = false;
+              const fastLayoutSpring = {
+                layout: { type: 'spring' as const, stiffness: 520, damping: 36, mass: 0.7 },
+              };
 
               const renderNowLine = () => (
                 <motion.div
                   layout="position"
-                  transition={{ layout: { type: 'spring', stiffness: 320, damping: 28 } }}
+                  transition={fastLayoutSpring}
                   key="now-indicator-line"
                   ref={nowMarkerRef}
-                  className="relative py-4 my-2 flex items-center justify-center"
+                  className="relative py-4 my-2 flex items-center justify-center z-20"
                 >
                   {/* Horizontal line across the container */}
                   <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/80 to-transparent" />
@@ -382,7 +441,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                   elements.push(
                     <motion.div
                       layout="position"
-                      transition={{ layout: { type: 'spring', stiffness: 320, damping: 28 } }}
+                      transition={fastLayoutSpring}
                       key={`day-header-${groupDateKey}`}
                       className="pt-3 pb-1 flex items-center gap-2"
                     >
@@ -402,26 +461,19 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                 const isPast = reminder.dueTimestamp < nowMs;
                 const isCompleted = reminder.status === 'completed';
                 const isCompleting = Boolean(completingIds[reminder.id]);
-                const isRecentlySettled =
-                  Boolean(justSettledIds[reminder.id]) ||
-                  Boolean(reminder.completedAt && nowMs - reminder.completedAt < 1400) ||
-                  Boolean(reminder.lastActionAt && nowMs - reminder.lastActionAt < 1400);
+                const isSettling = Boolean(justSettledIds[reminder.id]);
+                const isEmeraldGlow = isCompleting || Boolean(emeraldFadeIds[reminder.id]);
                 const isOverdueUncompleted = isPast && !isCompleted && !isCompleting;
                 const isNext = reminder.id === nextReminder?.id && !isCompleting;
 
-                // Card minimal styling with smooth 2-stage completion color transition:
-                // - در حال انجام شدن (Stage 1): سبز زمردی شاداب با درخشش ملایم
-                // - تازه جاگیری شده در لیست انجام‌شده‌ها (Stage 2): گذار نرم از سبز به خاکستری آرام
-                // - انجام شده نهایی: کمرنگ با خط خورده
-                // - گذشته و انجام نشده: رنگ هشدار ملایم
-                // - یادآوری بعدی: کادر سبز با شمارش معکوس
+                // Card minimal styling with fast completion color transition & smooth timeline placement:
                 let cardStyle = '';
-                if (isCompleting) {
+                if (isEmeraldGlow) {
                   cardStyle =
-                    'bg-emerald-950/65 border-emerald-400/90 text-emerald-50 shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400/40 scale-[1.01]';
-                } else if (isCompleted && isRecentlySettled) {
+                    'bg-emerald-950/70 border-emerald-400/90 text-emerald-50 shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400/40';
+                } else if (isCompleted && isSettling) {
                   cardStyle =
-                    'bg-emerald-950/25 border-emerald-500/40 text-stone-300 opacity-85 shadow-sm shadow-emerald-500/10';
+                    'bg-stone-900/55 border-emerald-500/35 text-stone-400 opacity-75';
                 } else if (isCompleted) {
                   cardStyle = 'bg-stone-900/40 border-stone-800/50 text-stone-500 opacity-60';
                 } else if (isOverdueUncompleted) {
@@ -431,10 +483,9 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                     'relative bg-stone-900 border-emerald-500/80 text-stone-100 hover:border-emerald-400 shadow-xl shadow-emerald-500/15 ring-1 ring-emerald-500/35 pt-5 sm:pt-6 mt-3.5';
                 } else if (isPast) {
                   cardStyle = 'bg-stone-900/60 border-stone-800/60 text-stone-300 opacity-75';
-                } else if (isRecentlySettled) {
-                  // Recurring reminder that just advanced to its next future occurrence
+                } else if (isSettling) {
                   cardStyle =
-                    'bg-emerald-950/30 border-emerald-500/50 text-stone-100 shadow-md shadow-emerald-500/10';
+                    'bg-stone-900 border-indigo-500/50 text-stone-100 shadow-md shadow-indigo-500/10';
                 } else {
                   cardStyle = 'bg-stone-900 border-stone-800 text-stone-100 hover:border-stone-700 shadow-sm';
                 }
@@ -460,16 +511,16 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
 
                 elements.push(
                   <motion.div
-                    layout
-                    transition={{
-                      layout: { type: 'spring', stiffness: 320, damping: 28 },
-                    }}
+                    layout="position"
+                    transition={fastLayoutSpring}
                     key={reminder.id}
                     onClick={() => {
                       setShowPostponePicker(false);
                       setSelectedReminder(reminder);
                     }}
-                    className={`w-full p-4 sm:p-5 rounded-2xl border transition-colors duration-500 cursor-pointer flex items-center justify-between gap-3 active:scale-[0.99] ${cardStyle}`}
+                    className={`w-full p-4 sm:p-5 rounded-2xl border transition-colors duration-300 cursor-pointer flex items-center justify-between gap-3 ${
+                      isSettling || isCompleting ? 'relative z-30' : 'relative z-10'
+                    } ${cardStyle}`}
                     role="button"
                     tabIndex={0}
                     onKeyDown={(e) => {
@@ -503,10 +554,10 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                           e.stopPropagation();
                           triggerAnimatedToggleComplete(reminder);
                         }}
-                        className={`w-6 h-6 sm:w-6.5 sm:h-6.5 rounded-full border-[2.5px] flex items-center justify-center shrink-0 transition-all duration-300 cursor-pointer active:scale-90 group ${
-                          isCompleting
-                            ? 'border-emerald-400 bg-emerald-500 text-stone-950 scale-110 shadow-sm shadow-emerald-500/40'
-                            : isCompleted && isRecentlySettled
+                        className={`w-6 h-6 sm:w-6.5 sm:h-6.5 rounded-full border-[2.5px] flex items-center justify-center shrink-0 transition-colors duration-200 cursor-pointer active:scale-90 group ${
+                          isEmeraldGlow
+                            ? 'border-emerald-400 bg-emerald-500 text-stone-950 shadow-sm shadow-emerald-500/40'
+                            : isCompleted && isSettling
                             ? 'border-emerald-400 bg-emerald-500/30 text-emerald-300'
                             : isCompleted
                             ? completedCircleColor
@@ -520,10 +571,10 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                         aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'انجام شد')}
                       >
                         <Check
-                          className={`w-3.5 h-3.5 stroke-[3] transition-all duration-200 ${
-                            isCompleted || isCompleting
-                              ? 'opacity-100 scale-100'
-                              : 'opacity-0 scale-50 group-hover:opacity-60 group-hover:scale-90'
+                          className={`w-3.5 h-3.5 stroke-[3] transition-opacity duration-150 ${
+                            isCompleted || isCompleting || isSettling
+                              ? 'opacity-100'
+                              : 'opacity-0 group-hover:opacity-60'
                           }`}
                         />
                       </button>
@@ -531,8 +582,8 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                       <div className="flex flex-col gap-1 min-w-0 flex-1">
                         <div className="flex items-center gap-2 min-w-0">
                           <span
-                            className={`text-sm sm:text-base font-bold truncate transition-colors duration-500 ${
-                              isCompleting
+                            className={`text-sm sm:text-base font-bold truncate transition-colors duration-300 ${
+                              isEmeraldGlow
                                 ? 'line-through text-emerald-200'
                                 : isCompleted
                                 ? 'line-through text-stone-500'
@@ -544,8 +595,8 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                         </div>
                         {reminder.description && (
                           <p
-                            className={`text-[11px] sm:text-xs truncate transition-colors duration-500 ${
-                              isCompleting ? 'text-emerald-300/80' : 'text-stone-400'
+                            className={`text-[11px] sm:text-xs truncate transition-colors duration-300 ${
+                              isEmeraldGlow ? 'text-emerald-300/80' : 'text-stone-400'
                             }`}
                           >
                             {reminder.description}
@@ -559,16 +610,16 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                       <div className="text-xs sm:text-sm font-mono text-stone-300 font-bold flex items-center gap-1.5">
                         {(isCompleted || isCompleting) && (
                           <Check
-                            className={`w-3.5 h-3.5 shrink-0 transition-transform duration-300 ${
-                              isCompleting ? 'text-emerald-300 scale-125' : 'text-emerald-400'
+                            className={`w-3.5 h-3.5 shrink-0 transition-colors duration-300 ${
+                              isEmeraldGlow ? 'text-emerald-300' : 'text-emerald-400'
                             }`}
                           />
                         )}
-                        <span className={isCompleting ? 'text-emerald-200' : ''}>
+                        <span className={`transition-colors duration-300 ${isEmeraldGlow ? 'text-emerald-200' : ''}`}>
                           {formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa')}
                         </span>
                       </div>
-                      <span className={`text-[10px] sm:text-[11px] ${isCompleting ? 'text-emerald-300/80' : 'text-stone-400'}`}>
+                      <span className={`text-[10px] sm:text-[11px] transition-colors duration-300 ${isEmeraldGlow ? 'text-emerald-300/80' : 'text-stone-400'}`}>
                         {isEn
                           ? new Date(reminder.dueTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
                           : getJalaliComponents(reminder.dueTimestamp).dateString}

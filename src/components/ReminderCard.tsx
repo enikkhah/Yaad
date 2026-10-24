@@ -52,12 +52,15 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
   const isCompleted = reminder.status === 'completed';
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isCompleting, setIsCompleting] = useState(false);
+  const [isEmeraldGlow, setIsEmeraldGlow] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<number | null>(null);
+  const fadeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
       if (timerRef.current) window.clearTimeout(timerRef.current);
+      if (fadeTimerRef.current) window.clearTimeout(fadeTimerRef.current);
     };
   }, []);
 
@@ -68,10 +71,14 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
     }
     if (isCompleting) return;
     setIsCompleting(true);
+    setIsEmeraldGlow(true);
     timerRef.current = window.setTimeout(() => {
       onToggleComplete(reminder.id);
       setIsCompleting(false);
-    }, 340);
+      fadeTimerRef.current = window.setTimeout(() => {
+        setIsEmeraldGlow(false);
+      }, 220);
+    }, 150);
   };
 
   // Close menu when clicking outside
@@ -140,11 +147,13 @@ export const ReminderCard: React.FC<ReminderCardProps> = ({
 
   return (
     <motion.div
-      layout
-      transition={{ layout: { type: 'spring', stiffness: 320, damping: 28 } }}
-      className={`rounded-2xl p-4 sm:p-5 border transition-colors duration-500 relative ${
-        isCompleting
-          ? 'bg-emerald-950/65 border-emerald-400/90 text-emerald-50 shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400/40 scale-[1.01]'
+      layout="position"
+      transition={{
+        layout: { type: 'spring', stiffness: 520, damping: 36, mass: 0.7 },
+      }}
+      className={`rounded-2xl p-4 sm:p-5 border transition-colors duration-300 relative ${
+        isCompleting || isEmeraldGlow
+          ? 'bg-emerald-950/70 border-emerald-400/90 text-emerald-50 shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400/40'
           : isCompleted
           ? 'border-stone-800/80 bg-stone-900/60 opacity-70'
           : isNext
