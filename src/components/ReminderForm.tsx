@@ -7,7 +7,13 @@ import {
   jalaliToGregorian,
   GREGORIAN_MONTHS,
   getDaysInGregorianMonth,
-  getDaysInJalaliMonth
+  getDaysInJalaliMonth,
+  getJalaliWeekdayIndex,
+  getGregorianMondayWeekdayIndex,
+  JALALI_WEEKDAYS_HEADER,
+  GREGORIAN_WEEKDAYS_MONDAY_FIRST,
+  getCalendarDayHolidayInfo,
+  getMonthOfficialHolidays
 } from '../utils/jalali';
 import { 
   RECURRENCE_OPTIONS, 
@@ -939,35 +945,15 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 </div>
               )}
 
-            {/* Title Input with Integrated Microphone Button */}
-            <div>
-              <div className="flex items-center justify-between mb-1.5 flex-wrap gap-1">
-                <label className="text-xs font-bold text-stone-200 flex items-center gap-1">
+            {/* Title Input with Integrated Microphone Button — Distinct Primary Field */}
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-indigo-950/55 via-stone-900/95 to-stone-950 border-2 border-indigo-500/55 shadow-lg shadow-indigo-500/10 space-y-2">
+              <div className="flex items-center justify-between flex-wrap gap-1.5">
+                <label className="text-sm sm:text-base font-black text-white tracking-tight flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] shrink-0" />
                   <span>{isEn ? 'Reminder Title' : 'عنوان یادآور'}</span>
-                  <span className="text-indigo-400 font-black">*</span>
+                  <span className="text-amber-400 font-black text-base">*</span>
                 </label>
                 <div className="flex items-center gap-2">
-                  {/* Language switch button for voice typing */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = voiceLang === 'fa' ? 'en' : 'fa';
-                      setVoiceLang(next);
-                      if (isListening) {
-                        stopVoiceListening();
-                        setTimeout(() => startVoiceListening(next), 100);
-                      }
-                    }}
-                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
-                      voiceLang === 'fa'
-                        ? 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30 hover:bg-indigo-500/25'
-                        : 'bg-sky-500/15 text-sky-300 border-sky-500/30 hover:bg-sky-500/25'
-                    }`}
-                    title={isEn ? 'Toggle voice typing language (FA / EN)' : 'تغییر زبان گفتار بین فارسی و انگلیسی'}
-                  >
-                    {voiceLang === 'fa' ? 'زبان صوت: فارسی' : 'Voice: English'}
-                  </button>
-
                   {isListening && (
                     <div className="flex items-center gap-1.5 text-[11px] font-bold text-indigo-400">
                       <span className="w-2 h-2 rounded-full bg-indigo-400 animate-ping" />
@@ -992,10 +978,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     if (validationError) setValidationError(null);
                   }}
                   placeholder={isEn ? 'e.g. Project delivery, Doctor appointment, Buy groceries...' : 'مثال: تحویل پروژه، تماس با پزشک، خرید نان...'}
-                  className={`w-full bg-stone-950 border rounded-2xl ${isEn ? 'pl-4 pr-14' : 'pr-4 pl-14'} py-3.5 text-white placeholder-stone-500 focus:outline-none transition-all text-sm sm:text-base font-medium ${
+                  className={`w-full bg-stone-950 border-2 rounded-2xl ${isEn ? 'pl-4 pr-14' : 'pr-4 pl-14'} py-3.5 text-white placeholder-stone-400 focus:outline-none transition-all text-base sm:text-lg font-extrabold shadow-inner ${
                     isListening
-                      ? 'border-indigo-400 ring-2 ring-indigo-400/20 shadow-lg shadow-indigo-500/10'
-                      : 'border-stone-700 focus:border-indigo-500'
+                      ? 'border-amber-400 ring-2 ring-amber-400/30 shadow-lg shadow-amber-500/15'
+                      : 'border-indigo-400/70 focus:border-amber-400 ring-2 ring-indigo-500/15 focus:ring-amber-400/25'
                   }`}
                 />
 
@@ -1006,7 +992,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   className={`absolute ${isEn ? 'right-2' : 'left-2'} top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
                     isListening
                       ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/50 scale-105 animate-pulse'
-                      : 'bg-stone-800/80 hover:bg-stone-700 text-stone-300 hover:text-indigo-400 border border-stone-700'
+                      : 'bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-300 hover:text-white border border-indigo-400/40'
                   }`}
                   title={isListening ? (isEn ? 'Stop voice typing' : 'توقف تایپ صوتی') : (isEn ? 'Start voice typing' : 'شروع تایپ صوتی (تبدیل گفتار به متن)')}
                 >
@@ -1098,34 +1084,34 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 </button>
               </div>
 
-              {/* Day / Month / Year Table Grids (تا روی دکمه‌های روز ماه سال کلیک نشده جدول‌ها باز نشود) */}
-              <div className="space-y-2 pt-1">
-                {/* 3 Segmented Header Buttons to Toggle Grids */}
-                <div className="flex items-center gap-1.5 p-1 rounded-2xl bg-stone-950/80 border border-stone-800 text-xs">
+              {/* Day / Month / Year Table Grids — Separated Independent Boxes */}
+              <div className="space-y-2.5 pt-1">
+                {/* 3 Separated Independent Boxes for Day, Month, and Year */}
+                <div className="grid grid-cols-3 gap-2.5 text-xs">
                   <button
                     type="button"
                     onClick={() => setDateActiveTab(dateActiveTab === 'day' ? null : 'day')}
-                    className={`flex-1 py-1.5 px-2 rounded-xl text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center ${
+                    className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
                       dateActiveTab === 'day'
-                        ? 'bg-indigo-600 text-white shadow-md'
-                        : 'text-stone-300 hover:text-white hover:bg-stone-900'
+                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/25 ring-2 ring-indigo-400/30'
+                        : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-indigo-500/60 hover:bg-stone-900'
                     }`}
                   >
-                    <span className="text-[10px] opacity-75">{isEn ? 'Day' : 'روز'}</span>
-                    <span className="text-sm font-black">{isEn ? selectedDay : toPersianDigits(selectedDay)}</span>
+                    <span className={`text-[10px] font-bold ${dateActiveTab === 'day' ? 'text-indigo-100' : 'text-stone-400'}`}>{isEn ? 'Day' : 'روز'}</span>
+                    <span className="text-sm sm:text-base font-black">{isEn ? selectedDay : toPersianDigits(selectedDay)}</span>
                   </button>
 
                   <button
                     type="button"
                     onClick={() => setDateActiveTab(dateActiveTab === 'month' ? null : 'month')}
-                    className={`flex-1 py-1.5 px-2 rounded-xl text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center ${
+                    className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
                       dateActiveTab === 'month'
-                        ? 'bg-indigo-600 text-white shadow-md'
-                        : 'text-stone-300 hover:text-white hover:bg-stone-900'
+                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/25 ring-2 ring-indigo-400/30'
+                        : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-indigo-500/60 hover:bg-stone-900'
                     }`}
                   >
-                    <span className="text-[10px] opacity-75">{isEn ? 'Month' : 'ماه'}</span>
-                    <span className="text-sm font-black truncate max-w-full">
+                    <span className={`text-[10px] font-bold ${dateActiveTab === 'month' ? 'text-indigo-100' : 'text-stone-400'}`}>{isEn ? 'Month' : 'ماه'}</span>
+                    <span className="text-sm sm:text-base font-black truncate max-w-full">
                       {isEn ? GREGORIAN_MONTHS[selectedMonth - 1] : PERSIAN_MONTHS[selectedMonth - 1]}
                     </span>
                   </button>
@@ -1133,47 +1119,131 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <button
                     type="button"
                     onClick={() => setDateActiveTab(dateActiveTab === 'year' ? null : 'year')}
-                    className={`flex-1 py-1.5 px-2 rounded-xl text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center ${
+                    className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
                       dateActiveTab === 'year'
-                        ? 'bg-indigo-600 text-white shadow-md'
-                        : 'text-stone-300 hover:text-white hover:bg-stone-900'
+                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/25 ring-2 ring-indigo-400/30'
+                        : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-indigo-500/60 hover:bg-stone-900'
                     }`}
                   >
-                    <span className="text-[10px] opacity-75">{isEn ? 'Year' : 'سال'}</span>
-                    <span className="text-sm font-black">{isEn ? selectedYear : toPersianDigits(selectedYear)}</span>
+                    <span className={`text-[10px] font-bold ${dateActiveTab === 'year' ? 'text-indigo-100' : 'text-stone-400'}`}>{isEn ? 'Year' : 'سال'}</span>
+                    <span className="text-sm sm:text-base font-black">{isEn ? selectedYear : toPersianDigits(selectedYear)}</span>
                   </button>
                 </div>
 
                 {/* Active Table/Grid Content (Only rendered when user clicks Day, Month, or Year button) */}
-                {dateActiveTab === 'day' && (
-                  <div className="p-2 sm:p-2.5 rounded-2xl bg-stone-950/70 border border-stone-800 animate-in fade-in">
-                    <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
-                      {Array.from(
-                        { length: isEn ? getDaysInGregorianMonth(selectedYear, selectedMonth) : getDaysInJalaliMonth(selectedYear, selectedMonth) },
-                        (_, i) => i + 1
-                      ).map((d) => {
-                        const isSelected = selectedDay === d;
-                        return (
-                          <button
-                            key={d}
-                            type="button"
-                            onClick={() => {
-                              setSelectedDay(d);
-                              setDateActiveTab(null);
-                            }}
-                            className={`min-h-[34px] sm:min-h-[38px] rounded-xl text-xs sm:text-sm font-bold flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
-                              isSelected
-                                ? 'bg-indigo-600 text-white font-black shadow-md ring-2 ring-indigo-400'
-                                : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80'
+                {dateActiveTab === 'day' && (() => {
+                  const totalDays = isEn
+                    ? getDaysInGregorianMonth(selectedYear, selectedMonth)
+                    : getDaysInJalaliMonth(selectedYear, selectedMonth);
+                  const startWeekday = isEn
+                    ? getGregorianMondayWeekdayIndex(selectedYear, selectedMonth, 1)
+                    : getJalaliWeekdayIndex(selectedYear, selectedMonth, 1);
+                  const monthHolidays = getMonthOfficialHolidays(selectedYear, selectedMonth, language);
+                  const selectedDayHoliday = getCalendarDayHolidayInfo(selectedYear, selectedMonth, selectedDay, language);
+
+                  return (
+                    <div className="p-2.5 sm:p-3 rounded-2xl bg-stone-950/90 border border-stone-800 space-y-2.5 animate-in fade-in">
+                      {/* Row 1: Weekday Headers (Saturday-first in FA, Monday-first in EN) */}
+                      <div className="grid grid-cols-7 gap-1 sm:gap-1.5 text-center border-b border-stone-800 pb-2">
+                        {(isEn ? GREGORIAN_WEEKDAYS_MONDAY_FIRST : JALALI_WEEKDAYS_HEADER).map((w) => (
+                          <div
+                            key={w.index}
+                            className={`py-1 rounded-lg text-[10px] sm:text-xs font-extrabold ${
+                              w.isWeekend
+                                ? 'text-rose-400 bg-rose-500/10 border border-rose-500/25'
+                                : 'text-stone-300 bg-stone-900/70 border border-stone-800/70'
                             }`}
+                            title={w.full}
                           >
-                            {isEn ? d : toPersianDigits(d)}
-                          </button>
-                        );
-                      })}
+                            {w.label}
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Days Grid Aligned by Weekday */}
+                      <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+                        {Array.from({ length: startWeekday }).map((_, idx) => (
+                          <div key={`empty-${idx}`} className="min-h-[34px] sm:min-h-[38px] rounded-xl bg-stone-900/20 border border-stone-900/40" />
+                        ))}
+
+                        {Array.from({ length: totalDays }, (_, i) => i + 1).map((d) => {
+                          const isSelected = selectedDay === d;
+                          const holidayInfo = getCalendarDayHolidayInfo(selectedYear, selectedMonth, d, language);
+
+                          return (
+                            <button
+                              key={d}
+                              type="button"
+                              onClick={() => {
+                                setSelectedDay(d);
+                                setDateActiveTab(null);
+                              }}
+                              title={
+                                holidayInfo.occasionTitle
+                                  ? `${isEn ? 'Official Holiday:' : 'تعطیل رسمی:'} ${holidayInfo.occasionTitle}`
+                                  : holidayInfo.isWeekend
+                                  ? (isEn ? 'Weekend Holiday' : 'تعطیل آخر هفته')
+                                  : undefined
+                              }
+                              className={`min-h-[34px] sm:min-h-[38px] rounded-xl text-xs sm:text-sm font-bold flex flex-col items-center justify-center transition-all cursor-pointer active:scale-95 relative border ${
+                                isSelected
+                                  ? 'bg-indigo-600 border-indigo-400 text-white font-black shadow-md ring-2 ring-indigo-400'
+                                  : holidayInfo.isOfficialHoliday
+                                  ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 hover:bg-rose-500/30 font-black'
+                                  : holidayInfo.isWeekend
+                                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
+                                  : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border-stone-800/80'
+                              }`}
+                            >
+                              <span>{isEn ? d : toPersianDigits(d)}</span>
+                              {holidayInfo.isOfficialHoliday && !isSelected && (
+                                <span className="w-1 h-1 rounded-full bg-rose-400 mt-0.5" />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Holidays Legend & Monthly Occasion Holidays Info */}
+                      <div className="pt-1.5 border-t border-stone-800/80 space-y-1.5">
+                        <div className="flex items-center justify-between flex-wrap gap-2 text-[10px] text-stone-400">
+                          <div className="flex items-center gap-3">
+                            <span className="inline-flex items-center gap-1 text-rose-400 font-bold">
+                              <span className="w-2 h-2 rounded-sm bg-rose-500/30 border border-rose-500/60" />
+                              {isEn ? 'Weekend (Sat & Sun)' : 'تعطیل آخر هفته (پنج‌شنبه و جمعه)'}
+                            </span>
+                            <span className="inline-flex items-center gap-1 text-rose-300 font-bold">
+                              <span className="w-2 h-2 rounded-full bg-rose-400" />
+                              {isEn ? 'Official Holiday' : 'تعطیل رسمی مناسبتی'}
+                            </span>
+                          </div>
+                          {selectedDayHoliday.occasionTitle && (
+                            <span className="text-rose-300 font-black">
+                              {isEn ? `Selected: ${selectedDayHoliday.occasionTitle}` : `مناسبت روز انتخابی: ${selectedDayHoliday.occasionTitle}`}
+                            </span>
+                          )}
+                        </div>
+
+                        {monthHolidays.length > 0 && (
+                          <div className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/25 text-[11px] text-rose-200 leading-relaxed">
+                            <span className="font-black text-rose-300">
+                              {isEn ? 'Official Holidays this month: ' : 'تعطیلات مناسبتی این ماه: '}
+                            </span>
+                            <span>
+                              {monthHolidays
+                                .map((h) =>
+                                  isEn
+                                    ? `${GREGORIAN_MONTHS[selectedMonth - 1]} ${h.day} (${h.title})`
+                                    : `${toPersianDigits(h.day)} ${PERSIAN_MONTHS[selectedMonth - 1]} (${h.title})`
+                                )
+                                .join(isEn ? ' • ' : ' ، ')}
+                            </span>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {dateActiveTab === 'month' && (
                   <div className="p-2 sm:p-2.5 rounded-2xl bg-stone-950/70 border border-stone-800 animate-in fade-in">

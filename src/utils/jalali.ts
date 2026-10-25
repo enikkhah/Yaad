@@ -377,6 +377,214 @@ export const GREGORIAN_WEEKDAYS_SHORT: readonly string[] = [
 ] as const;
 
 /**
+ * Persian week header starting from Saturday (شنبه) with Thursday & Friday as weekend holidays
+ */
+export const JALALI_WEEKDAYS_HEADER = [
+  { index: 0, short: 'ش', label: 'شنبه', full: 'شنبه', isWeekend: false },
+  { index: 1, short: 'ی', label: '۱شنبه', full: 'یکشنبه', isWeekend: false },
+  { index: 2, short: 'د', label: '۲شنبه', full: 'دوشنبه', isWeekend: false },
+  { index: 3, short: 'س', label: '۳شنبه', full: 'سه‌شنبه', isWeekend: false },
+  { index: 4, short: 'چ', label: '۴شنبه', full: 'چهارشنبه', isWeekend: false },
+  { index: 5, short: 'پ', label: '۵شنبه', full: 'پنج‌شنبه', isWeekend: true },
+  { index: 6, short: 'ج', label: 'جمعه', full: 'جمعه', isWeekend: true },
+] as const;
+
+/**
+ * English week header starting from Monday (Mon) with Saturday & Sunday as weekend holidays
+ */
+export const GREGORIAN_WEEKDAYS_MONDAY_FIRST = [
+  { index: 0, short: 'Mon', label: 'Mon', full: 'Monday', isWeekend: false },
+  { index: 1, short: 'Tue', label: 'Tue', full: 'Tuesday', isWeekend: false },
+  { index: 2, short: 'Wed', label: 'Wed', full: 'Wednesday', isWeekend: false },
+  { index: 3, short: 'Thu', label: 'Thu', full: 'Thursday', isWeekend: false },
+  { index: 4, short: 'Fri', label: 'Fri', full: 'Friday', isWeekend: false },
+  { index: 5, short: 'Sat', label: 'Sat', full: 'Saturday', isWeekend: true },
+  { index: 6, short: 'Sun', label: 'Sun', full: 'Sunday', isWeekend: true },
+] as const;
+
+/**
+ * Returns weekday index in English Monday-first week:
+ * 0: Monday ... 5: Saturday, 6: Sunday
+ */
+export function getGregorianMondayWeekdayIndex(gy: number, gm: number, gd: number): number {
+  const d = new Date(gy, gm - 1, gd, 12, 0, 0);
+  return (d.getDay() + 6) % 7;
+}
+
+const SOLAR_OFFICIAL_HOLIDAYS: Record<string, { fa: string; en: string }> = {
+  '1/1': { fa: 'عید نوروز', en: 'Nowruz (Persian New Year)' },
+  '1/2': { fa: 'عید نوروز', en: 'Nowruz Holiday' },
+  '1/3': { fa: 'عید نوروز', en: 'Nowruz Holiday' },
+  '1/4': { fa: 'عید نوروز', en: 'Nowruz Holiday' },
+  '1/12': { fa: 'روز جمهوری اسلامی', en: 'Islamic Republic Day' },
+  '1/13': { fa: 'روز طبیعت (سیزده‌به‌در)', en: 'Nature Day (Sizdah Bedar)' },
+  '3/14': { fa: 'رحلت امام خمینی', en: 'Demise of Imam Khomeini' },
+  '3/15': { fa: 'قیام ۱۵ خرداد', en: '15 Khordad Uprising' },
+  '11/22': { fa: 'پیروزی انقلاب اسلامی', en: 'Islamic Revolution Victory Day' },
+  '12/29': { fa: 'روز ملی شدن صنعت نفت', en: 'Oil Nationalization Day' },
+  '12/30': { fa: 'تعطیل پایان سال', en: 'End of Year Holiday' },
+};
+
+const LUNAR_OFFICIAL_HOLIDAYS: Record<string, { fa: string; en: string }> = {
+  '1/9': { fa: 'تاسوعای حسینی', en: 'Tasua' },
+  '1/10': { fa: 'عاشورای حسینی', en: 'Ashura' },
+  '2/20': { fa: 'اربعین حسینی', en: 'Arbaeen' },
+  '2/28': { fa: 'رحلت پیامبر اکرم (ص) و شهادت امام حسن مجتبی (ع)', en: 'Demise of Prophet Muhammad & Imam Hasan' },
+  '3/8': { fa: 'شهادت امام حسن عسکری (ع)', en: 'Martyrdom of Imam Hasan al-Askari' },
+  '3/17': { fa: 'میلاد پیامبر اکرم (ص) و امام جعفر صادق (ع)', en: 'Birth of Prophet Muhammad & Imam Sadiq' },
+  '6/3': { fa: 'شهادت حضرت فاطمه زهرا (س)', en: 'Martyrdom of Hazrat Fatimah' },
+  '7/13': { fa: 'ولادت امام علی (ع) و روز پدر', en: 'Birth of Imam Ali' },
+  '7/27': { fa: 'مبعث پیامبر اکرم (ص)', en: 'Mab\'ath of Prophet Muhammad' },
+  '8/15': { fa: 'ولادت حضرت مهدی (عج)', en: 'Birth of Imam Mahdi' },
+  '9/21': { fa: 'شهادت حضرت علی (ع)', en: 'Martyrdom of Imam Ali' },
+  '10/1': { fa: 'عید سعید فطر', en: 'Eid al-Fitr' },
+  '10/2': { fa: 'تعطیل به مناسبت عید سعید فطر', en: 'Eid al-Fitr Holiday' },
+  '10/25': { fa: 'شهادت امام جعفر صادق (ع)', en: 'Martyrdom of Imam Sadiq' },
+  '12/10': { fa: 'عید سعید قربان', en: 'Eid al-Adha' },
+  '12/18': { fa: 'عید سعید غدیر خم', en: 'Eid al-Ghadir' },
+};
+
+const GREGORIAN_OFFICIAL_HOLIDAYS: Record<string, { fa: string; en: string }> = {
+  '1/1': { fa: 'آغاز سال نو میلادی', en: "New Year's Day" },
+  '5/1': { fa: 'روز جهانی کارگر', en: "International Workers' Day" },
+  '12/25': { fa: 'کریسمس', en: 'Christmas Day' },
+  '12/26': { fa: 'تعطیلات کریسمس', en: 'Boxing Day' },
+};
+
+function getIslamicMonthDay(date: Date): { month: number; day: number } {
+  const calendars = ['en-u-ca-islamic-umalqura', 'en-u-ca-islamic-civil', 'en-u-ca-islamic'];
+  for (const cal of calendars) {
+    try {
+      const fmt = new Intl.DateTimeFormat(cal, { month: 'numeric', day: 'numeric' });
+      const parts = fmt.formatToParts(date);
+      let m = 0;
+      let d = 0;
+      for (const p of parts) {
+        if (p.type === 'month') m = parseInt(fromPersianDigits(p.value), 10);
+        if (p.type === 'day') d = parseInt(fromPersianDigits(p.value), 10);
+      }
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 30) {
+        return { month: m, day: d };
+      }
+    } catch {
+      // Try next calendar
+    }
+  }
+  return { month: 0, day: 0 };
+}
+
+export interface CalendarDayHolidayInfo {
+  weekdayIndex: number; // 0..6 (Saturday=0 in FA, Monday=0 in EN)
+  isWeekend: boolean; // Thu/Fri in FA, Sat/Sun in EN
+  isOfficialHoliday: boolean; // Occasion holiday
+  isHoliday: boolean; // Weekend or Occasion holiday
+  occasionTitle: string | null;
+}
+
+/**
+ * Returns complete weekday & official holiday info (weekend + occasion holidays) for a calendar cell
+ */
+export function getCalendarDayHolidayInfo(
+  year: number,
+  month: number,
+  day: number,
+  language: 'fa' | 'en' = 'fa'
+): CalendarDayHolidayInfo {
+  const isEn = language === 'en';
+  let gy = year;
+  let gm = month;
+  let gd = day;
+  let jy = year;
+  let jm = month;
+  let jd = day;
+
+  if (isEn) {
+    const dObj = new Date(gy, gm - 1, gd, 12, 0, 0);
+    const jComp = getJalaliComponents(dObj.getTime());
+    jy = jComp.year;
+    jm = jComp.month;
+    jd = jComp.day;
+  } else {
+    const [gYear, gMonth, gDay] = jalaliToGregorian(jy, jm, jd);
+    gy = gYear;
+    gm = gMonth;
+    gd = gDay;
+  }
+
+  const weekdayIndex = isEn
+    ? getGregorianMondayWeekdayIndex(gy, gm, gd)
+    : getJalaliWeekdayIndex(jy, jm, jd);
+
+  // Thu (5) & Fri (6) in Persian; Sat (5) & Sun (6) in English Monday-first
+  const isWeekend = weekdayIndex === 5 || weekdayIndex === 6;
+
+  const titles: string[] = [];
+
+  // 1. Check Solar (Jalali) official holidays
+  const solarKey = `${jm}/${jd}`;
+  if (SOLAR_OFFICIAL_HOLIDAYS[solarKey]) {
+    titles.push(isEn ? SOLAR_OFFICIAL_HOLIDAYS[solarKey].en : SOLAR_OFFICIAL_HOLIDAYS[solarKey].fa);
+  }
+
+  // 2. Check Lunar (Islamic) official holidays
+  const dateObj = new Date(gy, gm - 1, gd, 12, 0, 0);
+  const islamic = getIslamicMonthDay(dateObj);
+  if (islamic.month > 0 && islamic.day > 0) {
+    const lunarKey = `${islamic.month}/${islamic.day}`;
+    if (LUNAR_OFFICIAL_HOLIDAYS[lunarKey]) {
+      titles.push(isEn ? LUNAR_OFFICIAL_HOLIDAYS[lunarKey].en : LUNAR_OFFICIAL_HOLIDAYS[lunarKey].fa);
+    }
+    // Check last day of Safar (29 or 30 Safar -> Martyrdom of Imam Reza)
+    if (islamic.month === 2 && (islamic.day === 29 || islamic.day === 30)) {
+      const nextDateObj = new Date(gy, gm - 1, gd + 1, 12, 0, 0);
+      const nextIslamic = getIslamicMonthDay(nextDateObj);
+      if (nextIslamic.month === 3) {
+        titles.push(isEn ? 'Martyrdom of Imam Reza' : 'شهادت امام رضا (ع)');
+      }
+    }
+  }
+
+  // 3. Check Gregorian official holidays (in English mode)
+  if (isEn) {
+    const gregKey = `${gm}/${gd}`;
+    if (GREGORIAN_OFFICIAL_HOLIDAYS[gregKey]) {
+      titles.push(GREGORIAN_OFFICIAL_HOLIDAYS[gregKey].en);
+    }
+  }
+
+  const uniqueTitles = Array.from(new Set(titles));
+  const isOfficialHoliday = uniqueTitles.length > 0;
+
+  return {
+    weekdayIndex,
+    isWeekend,
+    isOfficialHoliday,
+    isHoliday: isWeekend || isOfficialHoliday,
+    occasionTitle: isOfficialHoliday ? uniqueTitles.join(isEn ? ' • ' : ' ، ') : null,
+  };
+}
+
+/**
+ * Returns all official occasion holidays in the given month
+ */
+export function getMonthOfficialHolidays(
+  year: number,
+  month: number,
+  language: 'fa' | 'en' = 'fa'
+): Array<{ day: number; title: string }> {
+  const isEn = language === 'en';
+  const maxDays = isEn ? getDaysInGregorianMonth(year, month) : getDaysInJalaliMonth(year, month);
+  const list: Array<{ day: number; title: string }> = [];
+  for (let d = 1; d <= maxDays; d++) {
+    const info = getCalendarDayHolidayInfo(year, month, d, language);
+    if (info.isOfficialHoliday && info.occasionTitle) {
+      list.push({ day: d, title: info.occasionTitle });
+    }
+  }
+  return list;
+}
+
+/**
  * Returns number of days in a Gregorian month (month: 1-12)
  */
 export function getDaysInGregorianMonth(year: number, month: number): number {

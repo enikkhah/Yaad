@@ -373,6 +373,24 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               </div>
             )}
 
+            {/* Primary Field: Location Title & Name (عنوان و نام مکان) */}
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-emerald-500/15 via-stone-900/95 to-stone-950 border-2 border-emerald-500/60 shadow-lg shadow-emerald-500/10 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-sm sm:text-base font-black text-emerald-300 flex items-center gap-2 tracking-tight">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400" />
+                  <span>{isEn ? 'Location Title & Name' : 'عنوان و نام مکان'}</span>
+                  <span className="text-amber-400 font-black text-base">*</span>
+                </label>
+              </div>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={isEn ? 'e.g. Parking spot, Doctor office, New warehouse...' : 'مثلاً: محل پارک خودرو، انبار جدید، مطب دکتر...'}
+                className="w-full px-4 py-3.5 rounded-xl bg-stone-950 border-2 border-emerald-400/70 focus:border-emerald-400 text-white placeholder-stone-400 text-sm sm:text-base font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/20 shadow-inner transition-all"
+              />
+            </div>
+
             {/* GPS Status Box */}
             <div className="p-4 rounded-2xl bg-stone-950 border border-stone-800/90 space-y-3.5 transition-all duration-200">
               <div className="flex items-center justify-between">
@@ -527,21 +545,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               </div>
             )}
 
-            {/* Title & Description Fields */}
+            {/* Description Field */}
             <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-stone-300 mb-1.5">
-                  {isEn ? 'Location Name / Title:' : 'عنوان یا نام مکان:'}
-                </label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder={isEn ? 'e.g. Parking spot, New warehouse, Doctor office...' : 'مثلاً: محل پارک خودرو، انبار جدید، مطب دکتر، لوکیشن جلسه کاری...'}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-500 text-sm focus:outline-none focus:border-emerald-500/70 focus:ring-1 focus:ring-emerald-500/50"
-                />
-              </div>
-
               <div>
                 <label className="block text-xs font-bold text-stone-300 mb-1.5">
                   {isEn ? 'Notes & Details (Field Description):' : 'توضیحات و جزئیات تکمیلی (فیلد توضیح):'}

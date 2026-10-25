@@ -37,13 +37,13 @@ export const PERSIAN_WEEK_DAYS = [
 ];
 
 export const ENGLISH_WEEK_DAYS = [
-  { index: 0, short: 'Sat', name: 'Saturday' },
-  { index: 1, short: 'Sun', name: 'Sunday' },
   { index: 2, short: 'Mon', name: 'Monday' },
   { index: 3, short: 'Tue', name: 'Tuesday' },
   { index: 4, short: 'Wed', name: 'Wednesday' },
   { index: 5, short: 'Thu', name: 'Thursday' },
   { index: 6, short: 'Fri', name: 'Friday' },
+  { index: 0, short: 'Sat', name: 'Saturday' },
+  { index: 1, short: 'Sun', name: 'Sunday' },
 ];
 
 export const HOURLY_INTERVALS = [1, 2, 3, 4, 6, 8, 12];

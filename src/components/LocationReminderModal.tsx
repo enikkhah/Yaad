@@ -373,16 +373,20 @@ export const LocationReminderModal: React.FC<LocationReminderModalProps> = ({
 
             {/* Title & Notes */}
             <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-stone-300 mb-1.5">
-                  {isEn ? 'Reminder Title:' : 'عنوان یادآور:'}
-                </label>
+              <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-indigo-500/15 via-stone-900/95 to-stone-950 border-2 border-indigo-500/60 shadow-lg shadow-indigo-500/10 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-sm sm:text-base font-black text-indigo-300 flex items-center gap-2 tracking-tight">
+                    <span className="w-2.5 h-2.5 rounded-full bg-indigo-400 animate-pulse shadow-sm shadow-indigo-400" />
+                    <span>{isEn ? 'Reminder Title' : 'عنوان یادآور'}</span>
+                    <span className="text-amber-400 font-black text-base">*</span>
+                  </label>
+                </div>
                 <input
                   type="text"
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder={isEn ? 'e.g. Pick up documents at warehouse...' : 'مثلاً: تحویل مدارک از انبار، خرید نان، یادآوری کلید...'}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-500 text-sm focus:outline-none focus:border-indigo-500/70"
+                  className="w-full px-4 py-3.5 rounded-xl bg-stone-950 border-2 border-indigo-400/70 focus:border-indigo-400 text-white placeholder-stone-400 text-sm sm:text-base font-bold focus:outline-none focus:ring-4 focus:ring-indigo-500/20 shadow-inner transition-all"
                 />
               </div>
 

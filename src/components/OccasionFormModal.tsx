@@ -3,7 +3,6 @@ import {
   X, 
   Check, 
   Calendar, 
-  Clock, 
   User, 
   FileText, 
   Bell, 
@@ -18,17 +17,24 @@ import {
 import { Occasion, OccasionType } from '../types';
 import { 
   OCCASION_TYPES, 
-  OccasionTypeMeta, 
   getOccasionTypeMeta, 
   calculateNextOccasionOccurrence,
   getOccasionAnniversaryLabel
 } from '../utils/occasionUtils';
 import { 
   getJalaliComponents, 
+  getGregorianComponents,
   PERSIAN_MONTHS, 
   GREGORIAN_MONTHS,
   toPersianDigits, 
-  getDaysInJalaliMonth 
+  getDaysInJalaliMonth,
+  getDaysInGregorianMonth,
+  getJalaliWeekdayIndex,
+  getGregorianMondayWeekdayIndex,
+  JALALI_WEEKDAYS_HEADER,
+  GREGORIAN_WEEKDAYS_MONDAY_FIRST,
+  getCalendarDayHolidayInfo,
+  getMonthOfficialHolidays
 } from '../utils/jalali';
 import { WheelPicker } from './WheelPicker';
 import { ValidationAlertModal } from './ValidationAlertModal';
@@ -59,14 +65,18 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
 }) => {
   const isEn = language === 'en';
   const currentJalali = getJalaliComponents(Date.now());
+  const currentGregorian = getGregorianComponents(Date.now());
+  const activeCalendarYear = isEn ? currentGregorian.year : currentJalali.year;
 
   const [type, setType] = useState<OccasionType>('birthday');
   const [title, setTitle] = useState('');
   const [personName, setPersonName] = useState('');
   const [solarYear, setSolarYear] = useState<number | undefined>(undefined);
   const [hasStartingYear, setHasStartingYear] = useState(false);
-  const [solarMonth, setSolarMonth] = useState<number>(currentJalali.month);
-  const [solarDay, setSolarDay] = useState<number>(currentJalali.day);
+  const [solarMonth, setSolarMonth] = useState<number>(isEn ? currentGregorian.month : currentJalali.month);
+  const [solarDay, setSolarDay] = useState<number>(isEn ? currentGregorian.day : currentJalali.day);
+  const [dateActiveTab, setDateActiveTab] = useState<'day' | 'month' | 'year' | null>(null);
+  const [customStartYearInput, setCustomStartYearInput] = useState<string>('');
   const [notifyDaysBefore, setNotifyDaysBefore] = useState<number>(1);
   const [notifyHour, setNotifyHour] = useState<number>(9);
   const [notifyMinute, setNotifyMinute] = useState<number>(0);
@@ -106,9 +116,11 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
       if (editingOccasion.solarYear) {
         setSolarYear(editingOccasion.solarYear);
         setHasStartingYear(true);
+        setCustomStartYearInput(String(editingOccasion.solarYear));
       } else {
         setSolarYear(undefined);
         setHasStartingYear(false);
+        setCustomStartYearInput('');
       }
       setNotifyDaysBefore(editingOccasion.notifyDaysBefore);
       const [hStr, mStr] = (editingOccasion.notifyTime || '09:00').split(':');
@@ -116,19 +128,22 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
       setNotifyMinute(parseInt(mStr || '0', 10));
       setCustomNote(editingOccasion.customNote || '');
       setAlsoCreateReminder(false);
+      setDateActiveTab(null);
     } else {
       setType('birthday');
       setTitle('');
       setPersonName('');
-      setSolarMonth(currentJalali.month);
-      setSolarDay(currentJalali.day);
-      setSolarYear(currentJalali.year - 20); // Default reasonable starting year for birth
+      setSolarMonth(isEn ? currentGregorian.month : currentJalali.month);
+      setSolarDay(isEn ? currentGregorian.day : currentJalali.day);
+      setSolarYear((isEn ? currentGregorian.year : currentJalali.year) - 20);
       setHasStartingYear(false);
+      setCustomStartYearInput('');
       setNotifyDaysBefore(1);
       setNotifyHour(9);
       setNotifyMinute(0);
       setCustomNote('');
       setAlsoCreateReminder(true);
+      setDateActiveTab(null);
     }
   }, [editingOccasion, isOpen]);
 
@@ -140,17 +155,17 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
     setNotifyHour(parseInt(h, 10));
     setNotifyMinute(parseInt(m, 10));
 
-    if (!title.trim() || Object.values(OCCASION_TYPES).some((t) => t.labelFa === title)) {
+    if (!title.trim() || Object.values(OCCASION_TYPES).some((t) => t.labelFa === title || t.labelEn === title)) {
       if (selectedType === 'birthday') {
-        setTitle(personName ? `تولد ${personName}` : 'تولد');
+        setTitle(personName ? (isEn ? `${personName}'s Birthday` : `تولد ${personName}`) : (isEn ? 'Birthday' : 'تولد'));
       } else if (selectedType === 'wedding') {
-        setTitle('سالگرد ازدواج');
+        setTitle(isEn ? 'Wedding Anniversary' : 'سالگرد ازدواج');
       } else if (selectedType === 'dating') {
-        setTitle('سالگرد آشنایی');
+        setTitle(isEn ? 'Relationship Anniversary' : 'سالگرد آشنایی');
       } else if (selectedType === 'memorial') {
-        setTitle(personName ? `سالگرد درگذشت ${personName}` : 'سالگرد درگذشت');
+        setTitle(personName ? (isEn ? `Memorial of ${personName}` : `سالگرد درگذشت ${personName}`) : (isEn ? 'Memorial Day' : 'سالگرد درگذشت'));
       } else {
-        setTitle(meta.labelFa);
+        setTitle(isEn ? meta.labelEn : meta.labelFa);
       }
     }
   };
@@ -166,7 +181,11 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
     }
   };
 
-  const daysInSelectedMonth = getDaysInJalaliMonth(currentJalali.year, solarMonth);
+  const daysInSelectedMonth = isEn
+    ? getDaysInGregorianMonth(activeCalendarYear, solarMonth)
+    : getDaysInJalaliMonth(activeCalendarYear, solarMonth);
+
+  const recentStartYearsGrid = Array.from({ length: 35 }, (_, i) => activeCalendarYear - i);
 
   const handleSave = () => {
     if (!title.trim()) {
@@ -230,7 +249,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
     notifyTime: `${notifyHour.toString().padStart(2, '0')}:${notifyMinute.toString().padStart(2, '0')}`,
     createdAt: Date.now(),
   };
-  const preview = calculateNextOccasionOccurrence(tempOccasion);
+  const preview = calculateNextOccasionOccurrence(tempOccasion, Date.now(), language);
   const previewLabel = getOccasionAnniversaryLabel(tempOccasion, preview.yearsPassed, isEn ? 'en' : 'fa');
 
   return (
@@ -270,6 +289,22 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
 
           {/* Body */}
           <div className="p-4 sm:p-5 space-y-4 sm:space-y-5 overflow-y-auto flex-1 text-right rtl:text-right ltr:text-left">
+            {/* Primary Title Field — Distinct & First */}
+            <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-pink-950/55 via-stone-900/95 to-stone-950 border-2 border-pink-500/55 shadow-lg shadow-pink-500/10 space-y-2.5">
+              <label className="text-sm sm:text-base font-black text-white tracking-tight flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] shrink-0" />
+                <span>{isEn ? 'Occasion Title' : 'عنوان مناسبت'}</span>
+                <span className="text-amber-400 font-black text-base">*</span>
+              </label>
+              <input
+                type="text"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                placeholder={isEn ? 'e.g. Ali Birthday, Wedding Anniversary...' : 'مثال: تولد علی، سالگرد ازدواج، سالگرد آشنایی...'}
+                className="w-full bg-stone-950 border-2 border-pink-400/70 focus:border-amber-400 ring-2 ring-pink-500/15 focus:ring-amber-400/25 rounded-2xl px-4 py-3.5 text-base sm:text-lg font-extrabold text-white placeholder-stone-400 focus:outline-none transition-all shadow-inner"
+              />
+            </div>
+
             {/* Occasion Types - Small Horizontal List */}
             <div>
               <label className="block text-xs font-bold text-stone-200 mb-1.5">
@@ -299,96 +334,324 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
               </div>
             </div>
 
-            {/* Title & Person Name */}
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-stone-200 mb-1.5">
-                  <span>{isEn ? 'Occasion Title' : 'عنوان مناسبت'}</span>
-                  <span className="text-pink-400 font-black mr-1 ml-1">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder={isEn ? 'e.g. Ali Birthday, Wedding Anniversary...' : 'مثال: تولد علی، سالگرد ازدواج، سالگرد آشنایی...'}
-                  className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-pink-500 transition-colors"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-stone-300 mb-1.5 flex items-center gap-1.5">
-                  <User className="w-3.5 h-3.5 text-stone-400" />
-                  <span>{isEn ? 'Person Name (Optional)' : 'نام شخص یا طرف مقابل (اختیاری)'}</span>
-                </label>
-                <input
-                  type="text"
-                  value={personName}
-                  onChange={(e) => handlePersonNameChange(e.target.value)}
-                  placeholder={isEn ? 'e.g. Sarah, Ali, Mom...' : 'مثلاً: سارا، مادر، علی...'}
-                  className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-pink-500 transition-colors"
-                />
-              </div>
+            {/* Person Name (Optional) */}
+            <div>
+              <label className="block text-xs font-bold text-stone-300 mb-1.5 flex items-center gap-1.5">
+                <User className="w-3.5 h-3.5 text-stone-400" />
+                <span>{isEn ? 'Person Name (Optional)' : 'نام شخص یا طرف مقابل (اختیاری)'}</span>
+              </label>
+              <input
+                type="text"
+                value={personName}
+                onChange={(e) => handlePersonNameChange(e.target.value)}
+                placeholder={isEn ? 'e.g. Sarah, Ali, Mom...' : 'مثلاً: سارا، مادر، علی...'}
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-pink-500 transition-colors"
+              />
             </div>
 
-            {/* Month & Day Picker */}
+            {/* Unified Date Picker Model (روز / ماه / سال مبدأ) with Separated Independent Boxes */}
             <div className="p-3.5 rounded-2xl bg-stone-950/70 border border-stone-800 space-y-3">
-              <div className="flex items-center gap-2 text-xs font-bold text-pink-400">
-                <Calendar className="w-4 h-4" />
-                <span>{isEn ? 'Anniversary Date (Annual Milestone)' : 'تاریخ مناسبت (سالانه)'}</span>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold text-pink-400">
+                  <Calendar className="w-4 h-4" />
+                  <span>{isEn ? 'Occasion Date (Select Day, Month & Start Year)' : 'تاریخ مناسبت (انتخاب روز، ماه و سال مبدأ)'}</span>
+                </div>
+                <span className="text-[11px] font-bold text-stone-400">
+                  {isEn
+                    ? `${GREGORIAN_MONTHS[solarMonth - 1]} ${Math.min(solarDay, daysInSelectedMonth)}`
+                    : `${toPersianDigits(Math.min(solarDay, daysInSelectedMonth))} ${PERSIAN_MONTHS[solarMonth - 1]}`}
+                </span>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                {/* Month */}
-                <div>
-                  <label className="block text-[11px] text-stone-400 mb-1">{isEn ? 'Month' : 'ماه شمسی'}</label>
-                  <select
-                    value={solarMonth}
-                    onChange={(e) => setSolarMonth(parseInt(e.target.value, 10))}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-pink-500 font-bold"
-                  >
-                    {isEn ? (
-                      GREGORIAN_MONTHS.map((m, idx) => (
-                        <option key={m} value={idx + 1}>
-                          {m}
-                        </option>
-                      ))
-                    ) : (
-                      PERSIAN_MONTHS.map((m, idx) => (
-                        <option key={m} value={idx + 1}>
-                          {m}
-                        </option>
-                      ))
+              {/* 3 Separated Independent Boxes for Day, Month, and Start Year */}
+              <div className="grid grid-cols-3 gap-2.5 text-xs">
+                <button
+                  type="button"
+                  onClick={() => setDateActiveTab(dateActiveTab === 'day' ? null : 'day')}
+                  className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
+                    dateActiveTab === 'day'
+                      ? 'bg-pink-600 border-pink-400 text-white shadow-lg shadow-pink-600/25 ring-2 ring-pink-400/30'
+                      : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-pink-500/60 hover:bg-stone-900'
+                  }`}
+                >
+                  <span className={`text-[10px] font-bold ${dateActiveTab === 'day' ? 'text-pink-100' : 'text-stone-400'}`}>{isEn ? 'Day' : 'روز'}</span>
+                  <span className="text-sm sm:text-base font-black">
+                    {isEn ? Math.min(solarDay, daysInSelectedMonth) : toPersianDigits(Math.min(solarDay, daysInSelectedMonth))}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDateActiveTab(dateActiveTab === 'month' ? null : 'month')}
+                  className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
+                    dateActiveTab === 'month'
+                      ? 'bg-pink-600 border-pink-400 text-white shadow-lg shadow-pink-600/25 ring-2 ring-pink-400/30'
+                      : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-pink-500/60 hover:bg-stone-900'
+                  }`}
+                >
+                  <span className={`text-[10px] font-bold ${dateActiveTab === 'month' ? 'text-pink-100' : 'text-stone-400'}`}>{isEn ? 'Month' : 'ماه'}</span>
+                  <span className="text-sm sm:text-base font-black truncate max-w-full">
+                    {isEn ? GREGORIAN_MONTHS[solarMonth - 1] : PERSIAN_MONTHS[solarMonth - 1]}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setDateActiveTab(dateActiveTab === 'year' ? null : 'year')}
+                  className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
+                    dateActiveTab === 'year'
+                      ? 'bg-pink-600 border-pink-400 text-white shadow-lg shadow-pink-600/25 ring-2 ring-pink-400/30'
+                      : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-pink-500/60 hover:bg-stone-900'
+                  }`}
+                >
+                  <span className={`text-[10px] font-bold ${dateActiveTab === 'year' ? 'text-pink-100' : 'text-stone-400'}`}>{isEn ? 'Start Year' : 'سال مبدأ'}</span>
+                  <span className="text-sm sm:text-base font-black">
+                    {hasStartingYear && solarYear
+                      ? (isEn ? solarYear : toPersianDigits(solarYear))
+                      : (isEn ? 'Annual' : 'سالانه')}
+                  </span>
+                </button>
+              </div>
+
+              {/* Active Table/Grid Content */}
+              {dateActiveTab === 'day' && (() => {
+                const startWeekday = isEn
+                  ? getGregorianMondayWeekdayIndex(activeCalendarYear, solarMonth, 1)
+                  : getJalaliWeekdayIndex(activeCalendarYear, solarMonth, 1);
+                const monthHolidays = getMonthOfficialHolidays(activeCalendarYear, solarMonth, language);
+                const clampedDay = Math.min(solarDay, daysInSelectedMonth);
+                const selectedDayHoliday = getCalendarDayHolidayInfo(activeCalendarYear, solarMonth, clampedDay, language);
+
+                return (
+                  <div className="p-2.5 sm:p-3 rounded-2xl bg-stone-950/90 border border-stone-800 space-y-2.5 animate-in fade-in">
+                    {/* Row 1: Weekday Headers (Saturday-first in FA, Monday-first in EN) */}
+                    <div className="grid grid-cols-7 gap-1 sm:gap-1.5 text-center border-b border-stone-800 pb-2">
+                      {(isEn ? GREGORIAN_WEEKDAYS_MONDAY_FIRST : JALALI_WEEKDAYS_HEADER).map((w) => (
+                        <div
+                          key={w.index}
+                          className={`py-1 rounded-lg text-[10px] sm:text-xs font-extrabold ${
+                            w.isWeekend
+                              ? 'text-rose-400 bg-rose-500/10 border border-rose-500/25'
+                              : 'text-stone-300 bg-stone-900/70 border border-stone-800/70'
+                          }`}
+                          title={w.full}
+                        >
+                          {w.label}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Days Grid Aligned by Weekday */}
+                    <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
+                      {Array.from({ length: startWeekday }).map((_, idx) => (
+                        <div key={`empty-${idx}`} className="min-h-[34px] sm:min-h-[38px] rounded-xl bg-stone-900/20 border border-stone-900/40" />
+                      ))}
+
+                      {Array.from({ length: daysInSelectedMonth }, (_, i) => i + 1).map((d) => {
+                        const isSelected = clampedDay === d;
+                        const holidayInfo = getCalendarDayHolidayInfo(activeCalendarYear, solarMonth, d, language);
+
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => {
+                              setSolarDay(d);
+                              setDateActiveTab(null);
+                            }}
+                            title={
+                              holidayInfo.occasionTitle
+                                ? `${isEn ? 'Official Holiday:' : 'تعطیل رسمی:'} ${holidayInfo.occasionTitle}`
+                                : holidayInfo.isWeekend
+                                ? (isEn ? 'Weekend Holiday' : 'تعطیل آخر هفته')
+                                : undefined
+                            }
+                            className={`min-h-[34px] sm:min-h-[38px] rounded-xl text-xs sm:text-sm font-bold flex flex-col items-center justify-center transition-all cursor-pointer active:scale-95 relative border ${
+                              isSelected
+                                ? 'bg-pink-600 border-pink-400 text-white font-black shadow-md ring-2 ring-pink-400'
+                                : holidayInfo.isOfficialHoliday
+                                ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 hover:bg-rose-500/30 font-black'
+                                : holidayInfo.isWeekend
+                                ? 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
+                                : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border-stone-800/80'
+                            }`}
+                          >
+                            <span>{isEn ? d : toPersianDigits(d)}</span>
+                            {holidayInfo.isOfficialHoliday && !isSelected && (
+                              <span className="w-1 h-1 rounded-full bg-rose-400 mt-0.5" />
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Holidays Legend & Monthly Occasion Holidays Info */}
+                    <div className="pt-1.5 border-t border-stone-800/80 space-y-1.5">
+                      <div className="flex items-center justify-between flex-wrap gap-2 text-[10px] text-stone-400">
+                        <div className="flex items-center gap-3">
+                          <span className="inline-flex items-center gap-1 text-rose-400 font-bold">
+                            <span className="w-2 h-2 rounded-sm bg-rose-500/30 border border-rose-500/60" />
+                            {isEn ? 'Weekend (Sat & Sun)' : 'تعطیل آخر هفته (پنج‌شنبه و جمعه)'}
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-rose-300 font-bold">
+                            <span className="w-2 h-2 rounded-full bg-rose-400" />
+                            {isEn ? 'Official Holiday' : 'تعطیل رسمی مناسبتی'}
+                          </span>
+                        </div>
+                        {selectedDayHoliday.occasionTitle && (
+                          <span className="text-rose-300 font-black">
+                            {isEn ? `Selected: ${selectedDayHoliday.occasionTitle}` : `مناسبت روز انتخابی: ${selectedDayHoliday.occasionTitle}`}
+                          </span>
+                        )}
+                      </div>
+
+                      {monthHolidays.length > 0 && (
+                        <div className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/25 text-[11px] text-rose-200 leading-relaxed">
+                          <span className="font-black text-rose-300">
+                            {isEn ? 'Official Holidays this month: ' : 'تعطیلات مناسبتی این ماه: '}
+                          </span>
+                          <span>
+                            {monthHolidays
+                              .map((h) =>
+                                isEn
+                                  ? `${GREGORIAN_MONTHS[solarMonth - 1]} ${h.day} (${h.title})`
+                                  : `${toPersianDigits(h.day)} ${PERSIAN_MONTHS[solarMonth - 1]} (${h.title})`
+                              )
+                              .join(isEn ? ' • ' : ' ، ')}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {dateActiveTab === 'month' && (
+                <div className="p-2 sm:p-2.5 rounded-2xl bg-stone-950/90 border border-stone-800 animate-in fade-in">
+                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+                    {(isEn ? GREGORIAN_MONTHS : PERSIAN_MONTHS).map((mName, idx) => {
+                      const monthNum = idx + 1;
+                      const isSelected = solarMonth === monthNum;
+                      return (
+                        <button
+                          key={mName}
+                          type="button"
+                          onClick={() => {
+                            setSolarMonth(monthNum);
+                            const maxD = isEn
+                              ? getDaysInGregorianMonth(activeCalendarYear, monthNum)
+                              : getDaysInJalaliMonth(activeCalendarYear, monthNum);
+                            if (solarDay > maxD) {
+                              setSolarDay(maxD);
+                            }
+                            setDateActiveTab(null);
+                          }}
+                          className={`py-2 px-1 rounded-xl text-xs font-bold transition-all text-center cursor-pointer active:scale-95 ${
+                            isSelected
+                              ? 'bg-pink-600 text-white font-black shadow-md ring-2 ring-pink-400'
+                              : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80'
+                          }`}
+                        >
+                          <span>{mName}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {dateActiveTab === 'year' && (
+                <div className="p-2.5 rounded-2xl bg-stone-950/90 border border-stone-800 space-y-3 animate-in fade-in">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-stone-300">
+                      {isEn ? 'Select Birth / Start Year (for age/anniversary count):' : 'انتخاب سال تولد / شروع مناسبت (برای محاسبه سن یا سالگرد):'}
+                    </span>
+                    {hasStartingYear && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setHasStartingYear(false);
+                          setDateActiveTab(null);
+                        }}
+                        className="px-2 py-0.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 text-[10px] font-bold cursor-pointer"
+                      >
+                        {isEn ? 'Set as Annual Only' : 'بدون سال مبدأ (فقط سالانه)'}
+                      </button>
                     )}
-                  </select>
-                </div>
+                  </div>
 
-                {/* Day */}
-                <div>
-                  <label className="block text-[11px] text-stone-400 mb-1">{isEn ? 'Day' : 'روز ماه'}</label>
-                  <select
-                    value={Math.min(solarDay, daysInSelectedMonth)}
-                    onChange={(e) => setSolarDay(parseInt(e.target.value, 10))}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-pink-500 font-bold"
-                  >
-                    {Array.from({ length: daysInSelectedMonth }, (_, i) => i + 1).map((d) => (
-                      <option key={d} value={d}>
-                        {isEn ? d : toPersianDigits(d)}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+                  <div className="grid grid-cols-4 sm:grid-cols-5 gap-1.5 max-h-44 overflow-y-auto no-scrollbar p-0.5">
+                    {recentStartYearsGrid.map((yr) => {
+                      const isSelected = hasStartingYear && solarYear === yr;
+                      return (
+                        <button
+                          key={yr}
+                          type="button"
+                          onClick={() => {
+                            setHasStartingYear(true);
+                            setSolarYear(yr);
+                            setCustomStartYearInput(String(yr));
+                            setDateActiveTab(null);
+                          }}
+                          className={`py-1.5 px-1 rounded-xl text-xs font-mono font-bold transition-all text-center cursor-pointer active:scale-95 ${
+                            isSelected
+                              ? 'bg-pink-600 text-white font-black shadow-md ring-2 ring-pink-400'
+                              : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80'
+                          }`}
+                        >
+                          {isEn ? yr : toPersianDigits(yr)}
+                        </button>
+                      );
+                    })}
+                  </div>
 
-              {/* Starting Year Toggle for Age / Anniversary Turn Calculation */}
-              <div className="pt-2 border-t border-stone-800/80 space-y-2">
+                  <div className="pt-2 border-t border-stone-800/80 flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={isEn ? 1900 : 1300}
+                      max={activeCalendarYear}
+                      value={customStartYearInput}
+                      onChange={(e) => {
+                        setCustomStartYearInput(e.target.value);
+                        const val = parseInt(e.target.value, 10);
+                        if (!isNaN(val) && val >= (isEn ? 1900 : 1300) && val <= activeCalendarYear) {
+                          setHasStartingYear(true);
+                          setSolarYear(val);
+                        }
+                      }}
+                      placeholder={isEn ? 'Type year (e.g. 1990)' : 'تایپ سال مبدأ (مثلاً ۱۳۶۵)...'}
+                      className="flex-1 bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-pink-500 font-mono"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const val = parseInt(customStartYearInput, 10);
+                        if (!isNaN(val) && val >= (isEn ? 1900 : 1300) && val <= activeCalendarYear) {
+                          setHasStartingYear(true);
+                          setSolarYear(val);
+                          setDateActiveTab(null);
+                        }
+                      }}
+                      className="px-3.5 py-2 rounded-xl bg-pink-600 hover:bg-pink-500 text-white font-bold text-xs cursor-pointer active:scale-95 transition-all"
+                    >
+                      {isEn ? 'Apply' : 'ثبت'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Quick Toggle for Starting Year */}
+              <div className="pt-2 border-t border-stone-800/80 flex items-center justify-between gap-2 flex-wrap">
                 <label className="flex items-center gap-2.5 cursor-pointer text-xs">
                   <input
                     type="checkbox"
                     checked={hasStartingYear}
                     onChange={(e) => {
-                      setHasStartingYear(e.target.checked);
-                      if (e.target.checked && !solarYear) {
-                        setSolarYear(currentJalali.year - 20);
+                      const checked = e.target.checked;
+                      setHasStartingYear(checked);
+                      if (checked) {
+                        if (!solarYear) setSolarYear(activeCalendarYear - 20);
+                        setDateActiveTab('year');
                       }
                     }}
                     className="w-4 h-4 rounded accent-pink-500 cursor-pointer"
@@ -398,25 +661,12 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                   </span>
                 </label>
 
-                {hasStartingYear && (
-                  <div className="flex items-center gap-2 ps-6">
-                    <span className="text-[11px] text-stone-400">{isEn ? 'Birth/Start Year:' : 'سال شروع/تولد شمسی:'}</span>
-                    <input
-                      type="number"
-                      min="1300"
-                      max={currentJalali.year}
-                      value={solarYear || currentJalali.year - 20}
-                      onChange={(e) => setSolarYear(parseInt(e.target.value, 10) || undefined)}
-                      className="w-28 bg-stone-900 border border-stone-700 rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-pink-500 font-mono"
-                    />
-                    <span className="text-[11px] text-stone-400">
-                      {solarYear && currentJalali.year >= solarYear && (
-                        <span>
-                          (امسال: {toPersianDigits(currentJalali.year - solarYear)} ساله / مین سالگرد)
-                        </span>
-                      )}
-                    </span>
-                  </div>
+                {hasStartingYear && solarYear && activeCalendarYear >= solarYear && (
+                  <span className="text-[11px] font-bold text-pink-300 bg-pink-500/15 px-2.5 py-0.5 rounded-lg border border-pink-500/30">
+                    {isEn
+                      ? `${activeCalendarYear - solarYear} years`
+                      : `امسال: ${toPersianDigits(activeCalendarYear - solarYear)} ساله / مین سالگرد`}
+                  </span>
                 )}
               </div>
             </div>
@@ -514,11 +764,11 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                   {' • '}
                   {preview.isToday 
                     ? (isEn ? 'TODAY!' : 'امروز!') 
-                    : `${toPersianDigits(preview.daysRemaining)} روز مانده`}
+                    : (isEn ? `${preview.daysRemaining} days left` : `${toPersianDigits(preview.daysRemaining)} روز مانده`)}
                 </span>
               </div>
               <div className="px-2.5 py-1 rounded-xl bg-pink-500/20 text-pink-300 border border-pink-500/40 text-xs font-black">
-                {preview.isToday ? 'امروز' : `${toPersianDigits(preview.daysRemaining)} روز`}
+                {preview.isToday ? (isEn ? 'Today' : 'امروز') : (isEn ? `${preview.daysRemaining}d` : `${toPersianDigits(preview.daysRemaining)} روز`)}
               </div>
             </div>
 
