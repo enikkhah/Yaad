@@ -343,7 +343,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     { id: 'dark-gold', name: isFa ? 'مشکی نیلی' : 'Obsidian Indigo', preview: 'bg-[#07070D] border-[#6366F1]' },
     { id: 'dark-slate', name: isFa ? 'آبی تیره' : 'Deep Ocean Blue', preview: 'bg-[#0B192E] border-[#0EA5E9]' },
     { id: 'light-clean', name: isFa ? 'روشن مدرن' : 'Light Clean', preview: 'bg-stone-100 border-stone-400' },
-    { id: 'sketch-contrast', name: isFa ? 'اسکچ خط‌چین' : 'Sketch High Contrast', preview: 'bg-black border-dashed border-white' },
+    { id: 'sketch-contrast', name: isFa ? 'رز صورتی و یاسی' : 'Velvet Rose & Lilac', preview: 'bg-gradient-to-tr from-[#1D1322] via-[#831843] to-[#F472B6] border-[#EC4899]' },
     { id: 'jade_warm_light', name: isFa ? 'سبز یشمی و سفید گرم' : 'Jade Green & Warm White', preview: 'bg-[#168779] border-[#DDE1DA]' },
     { id: 'midnight_blue_silver', name: isFa ? 'آبی نیمه‌شب و نقره‌ای' : 'Midnight Blue & Silver', preview: 'bg-[#101722] border-[#9CBCE0]' },
   ];
@@ -865,11 +865,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                {isNativeAndroidApp() && (
-                  <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-                    Android APK
-                  </span>
-                )}
                 <ChevronDown className={`w-4 h-4 text-stone-400 transition-transform duration-200 ${openSections.permissions ? 'rotate-180 text-sky-400' : ''}`} />
               </div>
             </button>

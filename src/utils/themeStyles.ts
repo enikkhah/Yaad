@@ -66,21 +66,21 @@ export const getThemeStyles = (theme: AppTheme = 'dark-gold'): ThemeStyles => {
 
     case 'sketch-contrast':
       return {
-        bg: 'bg-black text-white font-mono',
-        text: 'text-white',
-        selection: 'selection:bg-teal-400 selection:text-white',
-        cardBg: 'bg-zinc-950/90',
-        cardBorder: 'border-teal-500/40 border-dashed',
-        cardHoverBorder: 'hover:border-teal-400',
-        cardShadow: 'shadow-2xl shadow-teal-950/50',
-        btnSecondary: 'bg-zinc-900 hover:bg-zinc-800 text-teal-300 border border-dashed border-teal-500/50 hover:border-teal-300 active:scale-95 transition-all',
-        btnPrimary: 'bg-teal-600 hover:bg-teal-500 text-white font-black border border-teal-400 active:scale-95 transition-all',
-        headerBg: 'bg-black/95',
-        headerBorder: 'border-teal-500/30 border-dashed',
-        accentText: 'text-teal-400',
-        accentBorder: 'border-teal-400/50',
-        accentBadge: 'bg-zinc-900 text-teal-300 border border-teal-400/40',
-        accentRing: 'ring-teal-400',
+        bg: 'bg-[#1D1322] text-[#FDF2F8]',
+        text: 'text-[#FDF2F8]',
+        selection: 'selection:bg-[#DB2777] selection:text-white',
+        cardBg: 'bg-[#2A1B30]',
+        cardBorder: 'border-[#523360]',
+        cardHoverBorder: 'hover:border-[#F472B6]/60',
+        cardShadow: 'shadow-lg shadow-black/40',
+        btnSecondary: 'bg-[#392442] hover:bg-[#482E54] text-[#F5D0FE] border border-[#5E3A6E] active:scale-95 transition-all',
+        btnPrimary: 'bg-[#DB2777] hover:bg-[#EC4899] text-white font-black shadow-md shadow-[#DB2777]/30 active:scale-95 transition-all',
+        headerBg: 'bg-[#231629]/95',
+        headerBorder: 'border-[#523360]',
+        accentText: 'text-[#F472B6]',
+        accentBorder: 'border-[#EC4899]/50',
+        accentBadge: 'bg-[#392442] text-[#F9A8D4] border border-[#EC4899]/40',
+        accentRing: 'ring-[#EC4899]/40',
       };
 
     case 'jade_warm_light':

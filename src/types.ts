@@ -31,6 +31,7 @@ export interface IdeaNote {
   tags?: string[];
   audioRecordUrl?: string;     // Recorded voice memo blob/data URL
   videoRecordUrl?: string;     // Recorded video memo blob/data URL
+  photoDataUrl?: string;       // Captured photo from rear camera (data URL)
   drawingDataUrl?: string;     // Hand-drawn sketch canvas data URL
   googleSynced?: boolean;
   deletedAt?: number;          // Recycle Bin deletion timestamp

@@ -140,10 +140,15 @@ h4 {
 }
 
 [data-theme="dark-gold"] .fab-add-btn {
-  background-color: #4F46E5 !important;
-  border-color: #6366F1 !important;
-  color: #FFFFFF !important;
-  box-shadow: 0 8px 20px -4px rgba(79, 70, 229, 0.45) !important;
+  background: linear-gradient(135deg, #FFDA2C 0%, #F59E0B 100%) !important;
+  background-color: #F59E0B !important;
+  border-color: #FCD34D !important;
+  color: #0C0A09 !important;
+  box-shadow: 0 8px 20px -4px rgba(245, 158, 11, 0.42) !important;
+}
+[data-theme="dark-gold"] .fab-add-btn svg {
+  color: #0C0A09 !important;
+  stroke: #0C0A09 !important;
 }
 
 /* ==========================================================================
@@ -247,10 +252,15 @@ h4 {
 }
 
 [data-theme="dark-slate"] .fab-add-btn {
-  background-color: #0284C7 !important;
-  border-color: #38BDF8 !important;
-  color: #FFFFFF !important;
-  box-shadow: 0 8px 20px -4px rgba(14, 165, 233, 0.4) !important;
+  background: linear-gradient(135deg, #FFDA2C 0%, #F59E0B 100%) !important;
+  background-color: #F59E0B !important;
+  border-color: #FCD34D !important;
+  color: #0C0A09 !important;
+  box-shadow: 0 8px 20px -4px rgba(245, 158, 11, 0.42) !important;
+}
+[data-theme="dark-slate"] .fab-add-btn svg {
+  color: #0C0A09 !important;
+  stroke: #0C0A09 !important;
 }
 
 /* ==========================================================================
@@ -344,10 +354,15 @@ html.dark[data-theme="system"] .bg-indigo-500\/20 {
 }
 
 html.dark[data-theme="system"] .fab-add-btn {
-  background-color: #0D9488 !important;
-  border-color: #2DD4BF !important;
-  color: #FFFFFF !important;
-  box-shadow: 0 8px 20px -4px rgba(13, 148, 136, 0.4) !important;
+  background: linear-gradient(135deg, #FFDA2C 0%, #F59E0B 100%) !important;
+  background-color: #F59E0B !important;
+  border-color: #FCD34D !important;
+  color: #0C0A09 !important;
+  box-shadow: 0 8px 20px -4px rgba(245, 158, 11, 0.42) !important;
+}
+html.dark[data-theme="system"] .fab-add-btn svg {
+  color: #0C0A09 !important;
+  stroke: #0C0A09 !important;
 }
 
 html:not(.dark)[data-theme="system"] {
@@ -452,9 +467,15 @@ html:not(.dark)[data-theme="system"] .bg-indigo-500\/20 {
 }
 
 html:not(.dark)[data-theme="system"] .fab-add-btn {
-  background-color: #0D9488 !important;
-  border-color: #0D9488 !important;
-  color: #FFFFFF !important;
+  background: linear-gradient(135deg, #FFDA2C 0%, #F59E0B 100%) !important;
+  background-color: #F59E0B !important;
+  border-color: #FCD34D !important;
+  color: #0C0A09 !important;
+  box-shadow: 0 8px 20px -4px rgba(245, 158, 11, 0.4) !important;
+}
+html:not(.dark)[data-theme="system"] .fab-add-btn svg {
+  color: #0C0A09 !important;
+  stroke: #0C0A09 !important;
 }
 
 [data-theme="light-clean"] {
@@ -479,9 +500,141 @@ html:not(.dark)[data-theme="system"] .fab-add-btn {
   border-color: #4F46E5 !important;
 }
 
+/* ==========================================================================
+   THEME: رز صورتی و یاسی (Velvet Rose & Lilac - sketch-contrast)
+   Mellow, dark-leaning velvet plum & rose-lilac with high contrast
+   ========================================================================== */
 [data-theme="sketch-contrast"] {
-  --brand-accent-border: rgba(99, 102, 241, 0.25);
-  --brand-accent-hover: rgba(99, 102, 241, 0.45);
+  --brand-accent-border: rgba(244, 114, 182, 0.42);
+  --brand-accent-hover: rgba(236, 72, 153, 0.7);
+  background-color: #1D1322 !important;
+  color: #FDF2F8 !important;
+}
+
+[data-theme="sketch-contrast"] input,
+[data-theme="sketch-contrast"] textarea,
+[data-theme="sketch-contrast"] select {
+  color: #FDF2F8 !important;
+  background-color: #160E1A !important;
+  border-color: #523360 !important;
+}
+
+[data-theme="sketch-contrast"] input:focus,
+[data-theme="sketch-contrast"] textarea:focus,
+[data-theme="sketch-contrast"] select:focus {
+  border-color: #F472B6 !important;
+}
+
+[data-theme="sketch-contrast"] input::placeholder,
+[data-theme="sketch-contrast"] textarea::placeholder {
+  color: #C084FC !important;
+  opacity: 0.7;
+}
+
+[data-theme="sketch-contrast"] .modal-title,
+[data-theme="sketch-contrast"] h1,
+[data-theme="sketch-contrast"] h2,
+[data-theme="sketch-contrast"] h3,
+[data-theme="sketch-contrast"] h4,
+[data-theme="sketch-contrast"] h5 {
+  color: #FDF2F8 !important;
+}
+
+[data-theme="sketch-contrast"] .bg-stone-900,
+[data-theme="sketch-contrast"] .bg-stone-900\/80,
+[data-theme="sketch-contrast"] .bg-stone-900\/85,
+[data-theme="sketch-contrast"] .bg-stone-900\/90,
+[data-theme="sketch-contrast"] .bg-stone-900\/95,
+[data-theme="sketch-contrast"] .bg-stone-900\/98,
+[data-theme="sketch-contrast"] .bg-stone-950\/95 {
+  background-color: #2A1B30 !important;
+  color: #FDF2F8 !important;
+  border-color: #523360 !important;
+}
+
+[data-theme="sketch-contrast"] .bg-stone-950,
+[data-theme="sketch-contrast"] .bg-stone-950\/60,
+[data-theme="sketch-contrast"] .bg-stone-950\/70,
+[data-theme="sketch-contrast"] .bg-stone-950\/80,
+[data-theme="sketch-contrast"] .bg-stone-950\/90,
+[data-theme="sketch-contrast"] .bg-stone-900\/60,
+[data-theme="sketch-contrast"] .bg-stone-900\/70,
+[data-theme="sketch-contrast"] .bg-stone-900\/30 {
+  background-color: #1D1322 !important;
+  color: #FDF2F8 !important;
+  border-color: #462A53 !important;
+}
+
+[data-theme="sketch-contrast"] .bg-stone-800,
+[data-theme="sketch-contrast"] .bg-stone-800\/80,
+[data-theme="sketch-contrast"] .bg-stone-800\/90,
+[data-theme="sketch-contrast"] .bg-stone-800\/95 {
+  background-color: #392442 !important;
+  color: #FDF2F8 !important;
+  border-color: #5E3A6E !important;
+}
+
+[data-theme="sketch-contrast"] .text-white,
+[data-theme="sketch-contrast"] .text-stone-100,
+[data-theme="sketch-contrast"] .text-stone-200 {
+  color: #FDF2F8 !important;
+}
+
+[data-theme="sketch-contrast"] .text-stone-300 {
+  color: #F5D0FE !important;
+}
+
+[data-theme="sketch-contrast"] .text-stone-400,
+[data-theme="sketch-contrast"] .text-stone-500 {
+  color: #D8B4E2 !important;
+}
+
+[data-theme="sketch-contrast"] .border-stone-800,
+[data-theme="sketch-contrast"] .border-stone-800\/80,
+[data-theme="sketch-contrast"] .border-stone-800\/90,
+[data-theme="sketch-contrast"] .border-stone-700,
+[data-theme="sketch-contrast"] .border-stone-700\/80,
+[data-theme="sketch-contrast"] .border-stone-700\/90 {
+  border-color: #523360 !important;
+}
+
+[data-theme="sketch-contrast"] .fab-add-btn {
+  background: linear-gradient(135deg, #FFDA2C 0%, #F59E0B 100%) !important;
+  background-color: #F59E0B !important;
+  border-color: #FCD34D !important;
+  color: #0C0A09 !important;
+  box-shadow: 0 8px 22px -4px rgba(245, 158, 11, 0.45) !important;
+}
+[data-theme="sketch-contrast"] .fab-add-btn svg {
+  color: #0C0A09 !important;
+  stroke: #0C0A09 !important;
+}
+
+[data-theme="sketch-contrast"] .bg-indigo-500,
+[data-theme="sketch-contrast"] .bg-indigo-600 {
+  background-color: #DB2777 !important;
+  color: #FFFFFF !important;
+}
+[data-theme="sketch-contrast"] .bg-indigo-500 span,
+[data-theme="sketch-contrast"] .bg-indigo-500 svg,
+[data-theme="sketch-contrast"] .bg-indigo-600 span,
+[data-theme="sketch-contrast"] .bg-indigo-600 svg {
+  color: #FFFFFF !important;
+}
+[data-theme="sketch-contrast"] .text-indigo-400,
+[data-theme="sketch-contrast"] .text-indigo-500,
+[data-theme="sketch-contrast"] .text-indigo-300 {
+  color: #F472B6 !important;
+}
+[data-theme="sketch-contrast"] .border-indigo-500,
+[data-theme="sketch-contrast"] .border-indigo-400 {
+  border-color: #EC4899 !important;
+}
+[data-theme="sketch-contrast"] .bg-indigo-500\/10,
+[data-theme="sketch-contrast"] .bg-indigo-500\/15,
+[data-theme="sketch-contrast"] .bg-indigo-500\/20 {
+  background-color: rgba(236, 72, 153, 0.22) !important;
+  color: #F9A8D4 !important;
 }
 
 /* ==========================================================================
@@ -570,14 +723,15 @@ html:not(.dark)[data-theme="system"] .fab-add-btn {
 }
 
 [data-theme="jade_warm_light"] .fab-add-btn {
-  background-color: #168779 !important;
-  border-color: #168779 !important;
-  color: #FFFFFF !important;
-  box-shadow: 0 8px 20px -4px rgba(22, 135, 121, 0.35) !important;
+  background: linear-gradient(135deg, #FFDA2C 0%, #F59E0B 100%) !important;
+  background-color: #F59E0B !important;
+  border-color: #FCD34D !important;
+  color: #0C0A09 !important;
+  box-shadow: 0 8px 20px -4px rgba(245, 158, 11, 0.4) !important;
 }
 [data-theme="jade_warm_light"] .fab-add-btn svg {
-  color: #FFFFFF !important;
-  stroke: #FFFFFF !important;
+  color: #0C0A09 !important;
+  stroke: #0C0A09 !important;
 }
 
 [data-theme="jade_warm_light"] .bg-indigo-500,
@@ -921,4 +1075,87 @@ html:not(.dark)[data-theme="system"] .fab-add-btn {
   box-shadow: 0 4px 18px -3px rgba(16, 185, 129, 0.35), inset 0 1px 0 0 rgba(110, 231, 183, 0.25) !important;
 }
 
+/* ==========================================================================
+   UNIVERSAL GOLDEN-AMBER (+) FAB & ACTIVE MAIN NAVIGATION TABS ACROSS ALL THEMES
+   ========================================================================== */
+.fab-add-btn {
+  background: linear-gradient(135deg, #FFDA2C 0%, #F59E0B 100%) !important;
+  background-color: #F59E0B !important;
+  border-color: #FCD34D !important;
+  color: #0C0A09 !important;
+  box-shadow: 0 8px 22px -4px rgba(245, 158, 11, 0.45) !important;
+}
+.fab-add-btn:hover {
+  background: linear-gradient(135deg, #FFE359 0%, #FBBF24 100%) !important;
+  background-color: #FBBF24 !important;
+}
+.fab-add-btn svg {
+  color: #0C0A09 !important;
+  stroke: #0C0A09 !important;
+}
 
+/* Active Main Navigation Tab (Reminders, Occasions, Locations, Ideas) in Dark Themes */
+.main-nav-tab-active,
+[data-theme="dark-gold"] .main-nav-tab-active,
+[data-theme="dark-slate"] .main-nav-tab-active,
+[data-theme="midnight_blue_silver"] .main-nav-tab-active,
+[data-theme="sketch-contrast"] .main-nav-tab-active,
+html.dark[data-theme="system"] .main-nav-tab-active {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.24) 0%, rgba(217, 119, 6, 0.14) 100%) !important;
+  border-color: #F59E0B !important;
+  color: #FDE68A !important;
+  box-shadow: 0 4px 14px -3px rgba(245, 158, 11, 0.32), inset 0 1px 0 0 rgba(254, 243, 199, 0.2) !important;
+}
+
+.main-nav-tab-active > span,
+.main-nav-tab-active svg,
+[data-theme="dark-gold"] .main-nav-tab-active > span,
+[data-theme="dark-gold"] .main-nav-tab-active svg,
+[data-theme="dark-slate"] .main-nav-tab-active > span,
+[data-theme="dark-slate"] .main-nav-tab-active svg,
+[data-theme="midnight_blue_silver"] .main-nav-tab-active > span,
+[data-theme="midnight_blue_silver"] .main-nav-tab-active svg,
+[data-theme="sketch-contrast"] .main-nav-tab-active > span,
+[data-theme="sketch-contrast"] .main-nav-tab-active svg,
+html.dark[data-theme="system"] .main-nav-tab-active > span,
+html.dark[data-theme="system"] .main-nav-tab-active svg {
+  color: #FBBF24 !important;
+}
+
+.main-nav-badge-active,
+[data-theme="dark-gold"] .main-nav-badge-active,
+[data-theme="dark-slate"] .main-nav-badge-active,
+[data-theme="midnight_blue_silver"] .main-nav-badge-active,
+[data-theme="sketch-contrast"] .main-nav-badge-active,
+html.dark[data-theme="system"] .main-nav-badge-active {
+  background-color: #F59E0B !important;
+  border-color: #FDE68A !important;
+  color: #0C0A09 !important;
+}
+
+/* Active Main Navigation Tab in Light Themes */
+[data-theme="light-clean"] .main-nav-tab-active,
+[data-theme="jade_warm_light"] .main-nav-tab-active,
+html:not(.dark)[data-theme="system"] .main-nav-tab-active {
+  background: linear-gradient(135deg, #FEF3C7 0%, #FDE68A 100%) !important;
+  border-color: #D97706 !important;
+  color: #78350F !important;
+  box-shadow: 0 4px 12px -2px rgba(217, 119, 6, 0.25) !important;
+}
+
+[data-theme="light-clean"] .main-nav-tab-active > span,
+[data-theme="light-clean"] .main-nav-tab-active svg,
+[data-theme="jade_warm_light"] .main-nav-tab-active > span,
+[data-theme="jade_warm_light"] .main-nav-tab-active svg,
+html:not(.dark)[data-theme="system"] .main-nav-tab-active > span,
+html:not(.dark)[data-theme="system"] .main-nav-tab-active svg {
+  color: #92400E !important;
+}
+
+[data-theme="light-clean"] .main-nav-badge-active,
+[data-theme="jade_warm_light"] .main-nav-badge-active,
+html:not(.dark)[data-theme="system"] .main-nav-badge-active {
+  background-color: #D97706 !important;
+  border-color: #FDE68A !important;
+  color: #FFFFFF !important;
+}

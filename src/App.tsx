@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion } from './types';
+import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
 import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
 import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
@@ -540,6 +540,8 @@ export default function App() {
   const [targetLocationForReminder, setTargetLocationForReminder] = useState<SavedLocation | null>(null);
   const [isOccasionModalOpen, setIsOccasionModalOpen] = useState(false);
   const [editingOccasion, setEditingOccasion] = useState<Occasion | null>(null);
+  const [selectedOccasionTypeFilter, setSelectedOccasionTypeFilter] = useState<OccasionType | 'all'>('all');
+  const [defaultOccasionType, setDefaultOccasionType] = useState<OccasionType>('birthday');
   const [locationSearchQuery, setLocationSearchQuery] = useState('');
   const [currentUserPosition, setCurrentUserPosition] = useState<UserPosition | null>(() => getLastKnownPosition());
   const [isGeofenceActive, setIsGeofenceActive] = useState<boolean>(() => isGeofenceTrackingEnabled());
@@ -599,11 +601,16 @@ export default function App() {
 
   // Compute effective dark mode state
   const isDarkMode = React.useMemo(() => {
-    if (settings.theme === 'light-clean' || settings.theme === 'jade_warm_light') return false;
+    if (
+      settings.theme === 'light-clean' ||
+      settings.theme === 'jade_warm_light' ||
+      settings.theme === 'sketch-contrast'
+    ) {
+      return false;
+    }
     if (
       settings.theme === 'dark-gold' ||
       settings.theme === 'dark-slate' ||
-      settings.theme === 'sketch-contrast' ||
       settings.theme === 'midnight_blue_silver'
     ) {
       return true;
@@ -1706,7 +1713,8 @@ export default function App() {
   // Handler: Save Reminder
   const handleSaveReminder = async (
     data: Omit<Reminder, 'id' | 'createdAt' | 'status' | 'postponeCount'>,
-    syncGoogle?: boolean
+    syncGoogle?: boolean,
+    stayOnCurrentTab?: boolean
   ) => {
     let calendarEventId: string | undefined = undefined;
 
@@ -1795,8 +1803,10 @@ export default function App() {
 
       setReminders((prev) => [newReminder, ...prev]);
     }
-    setActiveMainTab('reminders');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!stayOnCurrentTab) {
+      setActiveMainTab('reminders');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
   };
 
   // Handler: Save / Edit Idea Note
@@ -1887,6 +1897,9 @@ export default function App() {
     newOccData: Omit<Occasion, 'id' | 'createdAt'>,
     alsoCreateReminder?: boolean
   ) => {
+    setDefaultOccasionType(newOccData.type);
+    setSelectedOccasionTypeFilter((prev) => (prev === 'all' ? prev : newOccData.type));
+
     if (editingOccasion) {
       setOccasions((prev) =>
         prev.map((o) => (o.id === editingOccasion.id ? { ...o, ...newOccData } : o))
@@ -1902,14 +1915,13 @@ export default function App() {
       setOccasions((prev) => [newOccasion, ...prev]);
       showSyncNotification('مناسبت جدید با موفقیت ثبت شد.');
 
-      // Automatically create a Reminder with alarm if requested
+      // Automatically create a Reminder with alarm if requested (staying on Occasions tab!)
       if (alsoCreateReminder) {
         const reminderPayload = createReminderFromOccasion(newOccasion);
-        handleSaveReminder(reminderPayload);
+        handleSaveReminder(reminderPayload, false, true);
       }
     }
     setActiveMainTab('occasions');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const handleDeleteOccasion = (id: string) => {
@@ -2561,7 +2573,7 @@ export default function App() {
       case 'light-clean':
         return 'bg-stone-50 text-stone-900 selection:bg-indigo-600 selection:text-white';
       case 'sketch-contrast':
-        return 'bg-black text-white selection:bg-white selection:text-black font-mono';
+        return 'bg-[#1D1322] text-[#FDF2F8] selection:bg-[#DB2777] selection:text-white';
       case 'jade_warm_light':
         return 'bg-[#F7F6F0] text-[#202A29] selection:bg-[#168779] selection:text-white';
       case 'midnight_blue_silver':
@@ -2627,6 +2639,8 @@ export default function App() {
       <header className={`sticky top-0 z-30 backdrop-blur-md border-b transition-colors duration-200 ${
         settings.theme === 'jade_warm_light'
           ? 'bg-[#F7F6F0]/95 border-[#DDE1DA] text-[#202A29] shadow-xs'
+          : settings.theme === 'sketch-contrast'
+          ? 'bg-[#231629]/95 border-[#523360] text-[#FDF2F8] shadow-md'
           : settings.theme === 'midnight_blue_silver'
           ? 'bg-[#101722]/95 border-[#39475A] text-[#F0F3F7]'
           : settings.theme === 'dark-slate'
@@ -2784,18 +2798,18 @@ export default function App() {
           </div>
 
           {/* Desktop/Tablet Navigation Pills (Hidden on mobile where bottom nav is active) */}
-          <div className="hidden md:flex items-center bg-stone-800/80 p-1 rounded-2xl border border-stone-700/60 text-xs">
+          <div className="hidden md:flex items-center bg-stone-800/80 p-1 rounded-2xl border border-stone-700/60 text-xs gap-1">
             <button
               type="button"
               onClick={() => setActiveMainTab('reminders')}
-              className={`px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer ${
+              className={`main-nav-tab px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer border ${
                 activeMainTab === 'reminders'
-                  ? 'bg-stone-900 border border-indigo-400/80 text-indigo-300 font-black shadow-sm'
-                  : 'text-stone-300 hover:text-white'
+                  ? 'main-nav-tab-active font-black shadow-sm'
+                  : 'main-nav-tab-inactive border-transparent text-stone-300 hover:text-white'
               }`}
             >
               <span>{t.tabReminders}</span>
-              <span className="opacity-80 text-xs font-mono mr-1 ml-1">
+              <span className="opacity-90 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeReminders.length : toPersianDigits(activeReminders.length)})
               </span>
             </button>
@@ -2803,15 +2817,15 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveMainTab('occasions')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer ${
+              className={`main-nav-tab flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer border ${
                 activeMainTab === 'occasions'
-                  ? 'bg-stone-900 border border-indigo-400/80 text-indigo-300 font-black shadow-sm'
-                  : 'text-stone-300 hover:text-white'
+                  ? 'main-nav-tab-active font-black shadow-sm'
+                  : 'main-nav-tab-inactive border-transparent text-stone-300 hover:text-white'
               }`}
             >
-              <Cake className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'occasions' ? 'text-indigo-400' : 'text-stone-400'}`} />
+              <Cake className="w-3.5 h-3.5 shrink-0" />
               <span>{t.tabOccasions}</span>
-              <span className="opacity-80 text-xs font-mono mr-1 ml-1">
+              <span className="opacity-90 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeOccasions.length : toPersianDigits(activeOccasions.length)})
               </span>
             </button>
@@ -2819,15 +2833,15 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveMainTab('locations')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer ${
+              className={`main-nav-tab flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer border ${
                 activeMainTab === 'locations'
-                  ? 'bg-stone-900 border border-indigo-400/80 text-indigo-300 font-black shadow-sm'
-                  : 'text-stone-300 hover:text-white'
+                  ? 'main-nav-tab-active font-black shadow-sm'
+                  : 'main-nav-tab-inactive border-transparent text-stone-300 hover:text-white'
               }`}
             >
-              <MapPin className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'locations' ? 'text-indigo-400' : 'text-stone-400'}`} />
+              <MapPin className="w-3.5 h-3.5 shrink-0" />
               <span>{t.tabLocations}</span>
-              <span className="opacity-80 text-xs font-mono mr-1 ml-1">
+              <span className="opacity-90 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeSavedLocations.length : toPersianDigits(activeSavedLocations.length)})
               </span>
             </button>
@@ -2835,15 +2849,15 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveMainTab('ideas')}
-              className={`flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer ${
+              className={`main-nav-tab flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer border ${
                 activeMainTab === 'ideas'
-                  ? 'bg-stone-900 border border-indigo-400/80 text-indigo-300 font-black shadow-sm'
-                  : 'text-stone-300 hover:text-white'
+                  ? 'main-nav-tab-active font-black shadow-sm'
+                  : 'main-nav-tab-inactive border-transparent text-stone-300 hover:text-white'
               }`}
             >
-              <Lightbulb className={`w-3.5 h-3.5 shrink-0 ${activeMainTab === 'ideas' ? 'text-indigo-400' : 'text-stone-400'}`} />
+              <Lightbulb className="w-3.5 h-3.5 shrink-0" />
               <span>{t.tabIdeas}</span>
-              <span className="opacity-80 text-xs font-mono mr-1 ml-1">
+              <span className="opacity-90 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeIdeas.length : toPersianDigits(activeIdeas.length)})
               </span>
             </button>
@@ -3439,11 +3453,22 @@ export default function App() {
         {activeMainTab === 'occasions' && (
           <OccasionsView
             occasions={activeOccasions}
-            onAddNew={() => {
+            selectedTypeFilter={selectedOccasionTypeFilter}
+            onSelectTypeFilter={(nextFilter) => {
+              setSelectedOccasionTypeFilter(nextFilter);
+              if (nextFilter !== 'all') {
+                setDefaultOccasionType(nextFilter);
+              }
+            }}
+            onAddNew={(typeFromTab) => {
+              if (typeFromTab) {
+                setDefaultOccasionType(typeFromTab);
+              }
               setEditingOccasion(null);
               setIsOccasionModalOpen(true);
             }}
             onEdit={(occ) => {
+              setDefaultOccasionType(occ.type);
               setEditingOccasion(occ);
               setIsOccasionModalOpen(true);
             }}
@@ -3551,7 +3576,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Circular FAB */}
+          {/* Circular FAB (+) — Always Golden Amber across ALL themes */}
           <button
             ref={fabBtnRef}
             id="fab-create-btn"
@@ -3563,13 +3588,9 @@ export default function App() {
               setIsCreateChoiceOpen(!isCreateChoiceOpen);
             }}
             className={`fab-add-btn rounded-full flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] border flex-shrink-0 cursor-pointer ${
-              settings.theme === 'jade_warm_light'
-                ? isCreateChoiceOpen
-                  ? 'rotate-45 bg-[#168779] text-white border-[#168779] shadow-[#168779]/30'
-                  : 'rotate-0 bg-[#168779] hover:bg-[#116e63] text-white border-[#168779]/40 shadow-[#168779]/25'
-                : isCreateChoiceOpen 
-                ? 'rotate-45 bg-amber-400 text-stone-950 border-amber-200 shadow-amber-500/30' 
-                : 'rotate-0 bg-amber-500 hover:bg-amber-400 text-stone-950 border-amber-300/80 shadow-black/40'
+              isCreateChoiceOpen 
+                ? 'rotate-45 bg-amber-400 text-stone-950 border-amber-200 shadow-amber-500/40' 
+                : 'rotate-0 bg-amber-500 hover:bg-amber-400 text-stone-950 border-amber-300/90 shadow-amber-500/30'
             }`}
             title={isEn ? 'Add New' : 'ثبت جدید'}
             aria-label={isEn ? 'Add New' : 'ثبت جدید'}
@@ -3579,11 +3600,13 @@ export default function App() {
         </div>
       </div>
 
-      {/* FIXED BOTTOM NAVIGATION BAR (منوی پایین ثابت: آیکون‌ها خاکستری، تب فعال رنگ کهربایی، نشان تعداد خنثی) */}
+      {/* FIXED BOTTOM NAVIGATION BAR (منوی پایین ثابت زیر دکمه +: تغییر رنگ واضح تب فعال در تمامی تم‌ها) */}
       <nav 
         className={`fixed bottom-0 left-0 right-0 z-40 border-t backdrop-blur-xl transition-colors duration-200 pb-safe ${
           settings.theme === 'jade_warm_light'
             ? 'bg-[#FFFFFF]/95 border-[#DDE1DA] text-[#202A29] shadow-sm'
+            : settings.theme === 'sketch-contrast'
+            ? 'bg-[#231629]/95 border-[#523360] text-[#FDF2F8] shadow-xl'
             : settings.theme === 'midnight_blue_silver'
             ? 'bg-[#101722]/95 border-[#39475A] text-[#F0F3F7] shadow-xl'
             : isDarkMode 
@@ -3591,21 +3614,25 @@ export default function App() {
             : 'bg-white/95 border-stone-200 text-stone-800 shadow-md'
         }`}
       >
-        <div className="max-w-md sm:max-w-xl mx-auto px-2 sm:px-4 h-16 sm:h-18 flex items-center justify-around gap-1">
+        <div className="max-w-md sm:max-w-xl mx-auto px-2 sm:px-4 h-16 sm:h-18 flex items-center justify-around gap-1.5">
           {/* Tab 1: Reminders (یادآورها) */}
           <button
             type="button"
             onClick={() => setActiveMainTab('reminders')}
-            className={`min-h-[48px] flex-1 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
+            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 rounded-2xl border transition-all duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'reminders'
-                ? 'text-indigo-400 font-black'
-                : 'text-stone-400 hover:text-stone-200'
+                ? 'main-nav-tab-active font-black'
+                : 'main-nav-tab-inactive border-transparent text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
-              <Bell className={`w-5 h-5 ${activeMainTab === 'reminders' ? 'stroke-[2.4] text-indigo-400' : 'stroke-[1.8] text-stone-400'}`} />
+              <Bell className={`w-5 h-5 ${activeMainTab === 'reminders' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
               {activeReminders.length > 0 && (
-                <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
+                <span className={`main-nav-badge absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center font-mono ${
+                  activeMainTab === 'reminders'
+                    ? 'main-nav-badge-active'
+                    : 'bg-stone-800 border-stone-700 text-stone-300'
+                }`}>
                   {formatNumber(activeReminders.length)}
                 </span>
               )}
@@ -3617,16 +3644,20 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveMainTab('occasions')}
-            className={`min-h-[48px] flex-1 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
+            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 rounded-2xl border transition-all duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'occasions'
-                ? 'text-indigo-400 font-black'
-                : 'text-stone-400 hover:text-stone-200'
+                ? 'main-nav-tab-active font-black'
+                : 'main-nav-tab-inactive border-transparent text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
-              <Cake className={`w-5 h-5 ${activeMainTab === 'occasions' ? 'stroke-[2.4] text-indigo-400' : 'stroke-[1.8] text-stone-400'}`} />
+              <Cake className={`w-5 h-5 ${activeMainTab === 'occasions' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
               {activeOccasions.length > 0 && (
-                <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
+                <span className={`main-nav-badge absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center font-mono ${
+                  activeMainTab === 'occasions'
+                    ? 'main-nav-badge-active'
+                    : 'bg-stone-800 border-stone-700 text-stone-300'
+                }`}>
                   {formatNumber(activeOccasions.length)}
                 </span>
               )}
@@ -3638,16 +3669,20 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveMainTab('locations')}
-            className={`min-h-[48px] flex-1 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
+            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 rounded-2xl border transition-all duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'locations'
-                ? 'text-indigo-400 font-black'
-                : 'text-stone-400 hover:text-stone-200'
+                ? 'main-nav-tab-active font-black'
+                : 'main-nav-tab-inactive border-transparent text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
-              <MapPin className={`w-5 h-5 ${activeMainTab === 'locations' ? 'stroke-[2.4] text-indigo-400' : 'stroke-[1.8] text-stone-400'}`} />
+              <MapPin className={`w-5 h-5 ${activeMainTab === 'locations' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
               {activeSavedLocations.length > 0 && (
-                <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
+                <span className={`main-nav-badge absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center font-mono ${
+                  activeMainTab === 'locations'
+                    ? 'main-nav-badge-active'
+                    : 'bg-stone-800 border-stone-700 text-stone-300'
+                }`}>
                   {formatNumber(activeSavedLocations.length)}
                 </span>
               )}
@@ -3659,16 +3694,20 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveMainTab('ideas')}
-            className={`min-h-[48px] flex-1 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all duration-200 active:scale-95 cursor-pointer ${
+            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 rounded-2xl border transition-all duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'ideas'
-                ? 'text-indigo-400 font-black'
-                : 'text-stone-400 hover:text-stone-200'
+                ? 'main-nav-tab-active font-black'
+                : 'main-nav-tab-inactive border-transparent text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
-              <Lightbulb className={`w-5 h-5 ${activeMainTab === 'ideas' ? 'stroke-[2.4] text-indigo-400' : 'stroke-[1.8] text-stone-400'}`} />
+              <Lightbulb className={`w-5 h-5 ${activeMainTab === 'ideas' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
               {activeIdeas.length > 0 && (
-                <span className="absolute -top-1 -end-2 min-w-4 h-4 px-1 rounded-full bg-stone-800 border border-stone-700 text-stone-300 text-[10px] font-bold flex items-center justify-center font-mono">
+                <span className={`main-nav-badge absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center font-mono ${
+                  activeMainTab === 'ideas'
+                    ? 'main-nav-badge-active'
+                    : 'bg-stone-800 border-stone-700 text-stone-300'
+                }`}>
                   {formatNumber(activeIdeas.length)}
                 </span>
               )}
@@ -3742,6 +3781,7 @@ export default function App() {
         }}
         onSave={handleSaveOccasion}
         editingOccasion={editingOccasion}
+        defaultType={selectedOccasionTypeFilter !== 'all' ? selectedOccasionTypeFilter : defaultOccasionType}
         language={settings.language}
       />
 

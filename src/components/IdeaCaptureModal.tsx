@@ -18,13 +18,23 @@ import {
   Clock,
   RotateCcw,
   Smartphone,
-  AlertCircle
+  AlertCircle,
+  Camera,
+  SwitchCamera,
+  Briefcase,
+  Heart,
+  Tag
 } from 'lucide-react';
 import { formatJalaliFull } from '../utils/jalali';
 import { syncToGoogleTasks } from '../utils/googleSync';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { AppLanguage } from '../utils/i18n';
-import { requestMicrophonePermission, openAndroidSettings } from '../utils/nativePermissions';
+import {
+  requestMicrophonePermission,
+  openAndroidSettings,
+  ensureNativeAndroidCameraPermission,
+  markPermissionGranted,
+} from '../utils/nativePermissions';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 
 interface IdeaCaptureModalProps {
@@ -50,7 +60,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [category, setCategory] = useState<Category>('work');
-  const [activeTab, setActiveTab] = useState<'text' | 'voice' | 'video' | 'sketch'>('text');
+  const [activeTab, setActiveTab] = useState<'text' | 'voice' | 'photo' | 'video' | 'sketch'>('text');
   const [validationError, setValidationError] = useState<string | null>(null);
   const [showValidationModal, setShowValidationModal] = useState(false);
 
@@ -119,13 +129,23 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
-  // Video recording state
+  // Video recording state (supports both rear 'environment' and front 'user' camera)
   const [isRecordingVideo, setIsRecordingVideo] = useState(false);
+  const [isVideoPreviewActive, setIsVideoPreviewActive] = useState(false);
+  const [videoFacingMode, setVideoFacingMode] = useState<'environment' | 'user'>('environment');
   const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);
   const videoMediaRecorderRef = useRef<MediaRecorder | null>(null);
   const videoChunksRef = useRef<Blob[]>([]);
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const videoStreamRef = useRef<MediaStream | null>(null);
+  const videoAudioStreamRef = useRef<MediaStream | null>(null);
+
+  // Rear-camera-only photo capture state
+  const [isPhotoCameraActive, setIsPhotoCameraActive] = useState(false);
+  const [photoDataUrl, setPhotoDataUrl] = useState<string | null>(null);
+  const photoPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const photoStreamRef = useRef<MediaStream | null>(null);
+  const [cameraErrorMsg, setCameraErrorMsg] = useState<string | null>(null);
 
   // Drawing Canvas state with Samsung S Pen & Stylus Support
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -150,6 +170,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         setCategory(editingIdea.category || 'work');
         setAudioBlobUrl(editingIdea.audioRecordUrl || null);
         setVideoBlobUrl(editingIdea.videoRecordUrl || null);
+        setPhotoDataUrl(editingIdea.photoDataUrl || null);
         setDrawingDataUrl(editingIdea.drawingDataUrl || null);
       } else {
         setTitle('');
@@ -157,11 +178,15 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         setCategory('work');
         setAudioBlobUrl(null);
         setVideoBlobUrl(null);
+        setPhotoDataUrl(null);
         setDrawingDataUrl(null);
       }
       setIsVoiceTyping(false);
       setIsRecordingAudio(false);
       setIsRecordingVideo(false);
+      setIsVideoPreviewActive(false);
+      setIsPhotoCameraActive(false);
+      setCameraErrorMsg(null);
       setValidationError(null);
     }
   }, [isOpen, editingIdea]);
@@ -169,10 +194,32 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   // Clean up streams & speech on close or when alarm fires
   useEffect(() => {
     const cleanupAllMedia = () => {
+      if (videoMediaRecorderRef.current) {
+        videoMediaRecorderRef.current.onstop = null;
+        try {
+          if (videoMediaRecorderRef.current.state !== 'inactive') {
+            videoMediaRecorderRef.current.stop();
+          }
+        } catch {
+          // ignore
+        }
+        videoMediaRecorderRef.current = null;
+      }
+      if (videoAudioStreamRef.current) {
+        videoAudioStreamRef.current.getTracks().forEach((t) => t.stop());
+        videoAudioStreamRef.current = null;
+      }
       if (videoStreamRef.current) {
         videoStreamRef.current.getTracks().forEach((t) => t.stop());
         videoStreamRef.current = null;
       }
+      if (photoStreamRef.current) {
+        photoStreamRef.current.getTracks().forEach((t) => t.stop());
+        photoStreamRef.current = null;
+      }
+      setIsRecordingVideo(false);
+      setIsVideoPreviewActive(false);
+      setIsPhotoCameraActive(false);
       shouldKeepContentListeningRef.current = false;
       shouldKeepTitleListeningRef.current = false;
       if (contentSilenceTimerRef.current) clearTimeout(contentSilenceTimerRef.current);
@@ -612,45 +659,387 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     }
   };
 
-  // 3. VIDEO MEMO RECORDING
-  const startVideoRecording = async () => {
+  // 3. CAMERA STREAM HELPERS, VIDEO RECORDING & REAR-CAMERA PHOTO CAPTURE
+  const attachStreamToVideo = (el: HTMLVideoElement | null, stream: MediaStream | null) => {
+    if (!el || !stream) return;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      el.muted = true;
+      el.defaultMuted = true;
+      el.playsInline = true;
+      el.setAttribute('playsinline', 'true');
+      el.setAttribute('webkit-playsinline', 'true');
+      if (el.srcObject !== stream) {
+        el.srcObject = stream;
+      }
+      const playPromise = el.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {});
+      }
+      requestAnimationFrame(() => {
+        if (el.srcObject === stream && el.paused) {
+          el.play().catch(() => {});
+        }
+      });
+    } catch {
+      // ignore play race condition
+    }
+  };
+
+  const setVideoPreviewElement = (node: HTMLVideoElement | null) => {
+    videoPreviewRef.current = node;
+    if (node && videoStreamRef.current) {
+      attachStreamToVideo(node, videoStreamRef.current);
+    }
+  };
+
+  const setPhotoPreviewElement = (node: HTMLVideoElement | null) => {
+    photoPreviewRef.current = node;
+    if (node && photoStreamRef.current) {
+      attachStreamToVideo(node, photoStreamRef.current);
+    }
+  };
+
+  const openCameraVideoStream = async (facing: 'environment' | 'user'): Promise<MediaStream> => {
+    await ensureNativeAndroidCameraPermission(false);
+
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('Camera not supported');
+    }
+
+    const candidates: MediaStreamConstraints[] = [
+      {
+        video: {
+          facingMode: { exact: facing },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      },
+      {
+        video: {
+          facingMode: { ideal: facing },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      },
+      {
+        video: { facingMode: facing },
+        audio: false,
+      },
+      {
+        video: true,
+        audio: false,
+      },
+    ];
+
+    for (const constraints of candidates) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        if (stream) {
+          markPermissionGranted('camera');
+          return stream;
+        }
+      } catch {
+        // try next fallback constraint
+      }
+    }
+
+    throw new Error('Unable to access camera stream');
+  };
+
+  const stopVideoPreviewStream = () => {
+    if (videoAudioStreamRef.current) {
+      videoAudioStreamRef.current.getTracks().forEach((t) => t.stop());
+      videoAudioStreamRef.current = null;
+    }
+    if (videoStreamRef.current) {
+      videoStreamRef.current.getTracks().forEach((t) => t.stop());
+      videoStreamRef.current = null;
+    }
+    if (videoPreviewRef.current) {
+      videoPreviewRef.current.srcObject = null;
+    }
+    setIsVideoPreviewActive(false);
+  };
+
+  const startVideoLivePreview = async (
+    overrideFacing?: 'environment' | 'user',
+    silent = false
+  ): Promise<MediaStream | null> => {
+    const targetFacing = overrideFacing || videoFacingMode;
+    setCameraErrorMsg(null);
+    try {
+      if (videoStreamRef.current) {
+        videoStreamRef.current.getTracks().forEach((t) => t.stop());
+        videoStreamRef.current = null;
+      }
+      const stream = await openCameraVideoStream(targetFacing);
       videoStreamRef.current = stream;
+      setIsVideoPreviewActive(true);
       if (videoPreviewRef.current) {
-        videoPreviewRef.current.srcObject = stream;
-        videoPreviewRef.current.play();
+        attachStreamToVideo(videoPreviewRef.current, stream);
+      }
+      return stream;
+    } catch (err) {
+      console.warn('Video live preview error:', err);
+      setIsVideoPreviewActive(false);
+      setCameraErrorMsg(
+        isEn
+          ? 'Camera access could not be started. Please check camera permission.'
+          : 'دسترسی به پیش‌نمایش زنده دوربین ممکن نشد. لطفاً مجوز دوربین را بررسی کنید.'
+      );
+      if (!silent) {
+        openAndroidSettings('camera');
+      }
+      return null;
+    }
+  };
+
+  // Ensure live video preview element always attaches to the active stream after render
+  useEffect(() => {
+    if ((isRecordingVideo || isVideoPreviewActive) && videoPreviewRef.current && videoStreamRef.current) {
+      attachStreamToVideo(videoPreviewRef.current, videoStreamRef.current);
+    }
+  }, [isRecordingVideo, isVideoPreviewActive, activeTab, videoFacingMode]);
+
+  // Ensure rear-camera photo preview element attaches to the active photo stream after render
+  useEffect(() => {
+    if (isPhotoCameraActive && photoPreviewRef.current && photoStreamRef.current) {
+      attachStreamToVideo(photoPreviewRef.current, photoStreamRef.current);
+    }
+  }, [isPhotoCameraActive, activeTab]);
+
+  // Auto-start live camera preview when switching into Photo or Video tabs, and stop unused streams when leaving
+  useEffect(() => {
+    if (!isOpen) return;
+
+    if (activeTab !== 'video' && !isRecordingVideo && videoStreamRef.current) {
+      stopVideoPreviewStream();
+    }
+    if (activeTab !== 'photo' && photoStreamRef.current) {
+      photoStreamRef.current.getTracks().forEach((t) => t.stop());
+      photoStreamRef.current = null;
+      if (photoPreviewRef.current) {
+        photoPreviewRef.current.srcObject = null;
+      }
+      setIsPhotoCameraActive(false);
+    }
+
+    if (activeTab === 'photo' && !photoDataUrl && !photoStreamRef.current) {
+      startRearPhotoCamera(true);
+    } else if (activeTab === 'video' && !videoBlobUrl && !videoStreamRef.current && !isRecordingVideo) {
+      startVideoLivePreview(videoFacingMode, true);
+    }
+  }, [isOpen, activeTab]);
+
+  const startVideoRecording = async (overrideFacing?: 'environment' | 'user') => {
+    const targetFacing = overrideFacing || videoFacingMode;
+    setCameraErrorMsg(null);
+    try {
+      setVideoBlobUrl(null);
+
+      // Reuse active live preview stream if already running for the same camera, otherwise open it now
+      let videoStream = videoStreamRef.current;
+      const hasLiveVideoTrack =
+        videoStream &&
+        videoStream.getVideoTracks().some((t) => t.readyState === 'live') &&
+        (!overrideFacing || overrideFacing === videoFacingMode);
+
+      if (!hasLiveVideoTrack || !videoStream) {
+        if (videoStream) {
+          videoStream.getTracks().forEach((t) => t.stop());
+          videoStreamRef.current = null;
+        }
+        videoStream = await openCameraVideoStream(targetFacing);
+        videoStreamRef.current = videoStream;
+      }
+
+      setIsVideoPreviewActive(true);
+      setIsRecordingVideo(true);
+
+      if (videoPreviewRef.current) {
+        attachStreamToVideo(videoPreviewRef.current, videoStream);
+      }
+
+      // Optionally acquire microphone audio stream separately so camera live preview never fails or flickers
+      if (videoAudioStreamRef.current) {
+        videoAudioStreamRef.current.getTracks().forEach((t) => t.stop());
+        videoAudioStreamRef.current = null;
+      }
+      let audioStream: MediaStream | null = null;
+      try {
+        await ensureNativeAndroidCameraPermission(true);
+        audioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        videoAudioStreamRef.current = audioStream;
+      } catch (audioErr) {
+        console.warn('Video recording proceeding without audio track:', audioErr);
+      }
+
+      const combinedTracks: MediaStreamTrack[] = [
+        ...videoStream.getVideoTracks(),
+        ...(audioStream ? audioStream.getAudioTracks() : []),
+      ];
+      const recordingStream = new MediaStream(combinedTracks);
+
+      const mimeCandidates = [
+        'video/webm;codecs=vp8,opus',
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8',
+        'video/webm',
+        'video/mp4',
+      ];
+      let selectedMime = '';
+      if (typeof MediaRecorder !== 'undefined' && typeof MediaRecorder.isTypeSupported === 'function') {
+        for (const candidate of mimeCandidates) {
+          if (MediaRecorder.isTypeSupported(candidate)) {
+            selectedMime = candidate;
+            break;
+          }
+        }
       }
 
       videoChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
+      let recorder: MediaRecorder;
+      try {
+        recorder = selectedMime
+          ? new MediaRecorder(recordingStream, { mimeType: selectedMime })
+          : new MediaRecorder(recordingStream);
+      } catch {
+        // Fallback to video-only stream if combining audio track was rejected by MediaRecorder
+        recorder = new MediaRecorder(videoStream);
+      }
+
       videoMediaRecorderRef.current = recorder;
 
       recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) videoChunksRef.current.push(e.data);
+        if (e.data && e.data.size > 0) videoChunksRef.current.push(e.data);
       };
 
       recorder.onstop = () => {
-        const videoBlob = new Blob(videoChunksRef.current, { type: 'video/webm' });
+        const finalMime = recorder.mimeType || selectedMime || 'video/webm';
+        const videoBlob = new Blob(videoChunksRef.current, { type: finalMime });
         const url = URL.createObjectURL(videoBlob);
         setVideoBlobUrl(url);
-        stream.getTracks().forEach((t) => t.stop());
-        videoStreamRef.current = null;
+
+        if (videoAudioStreamRef.current) {
+          videoAudioStreamRef.current.getTracks().forEach((t) => t.stop());
+          videoAudioStreamRef.current = null;
+        }
+        if (videoStreamRef.current) {
+          videoStreamRef.current.getTracks().forEach((t) => t.stop());
+          videoStreamRef.current = null;
+        }
+        if (videoPreviewRef.current) {
+          videoPreviewRef.current.srcObject = null;
+        }
+        setIsVideoPreviewActive(false);
+        setIsRecordingVideo(false);
       };
 
-      recorder.start();
-      setIsRecordingVideo(true);
+      recorder.start(250);
     } catch (err) {
       console.warn('Video recording access denied:', err);
+      setIsRecordingVideo(false);
+      setCameraErrorMsg(
+        isEn
+          ? 'Could not start video recording. Please check camera permission.'
+          : 'شروع فیلم‌برداری ممکن نشد. لطفاً دسترسی دوربین را بررسی کنید.'
+      );
       openAndroidSettings('camera');
     }
   };
 
   const stopVideoRecording = () => {
     if (videoMediaRecorderRef.current && isRecordingVideo) {
-      videoMediaRecorderRef.current.stop();
+      try {
+        if (videoMediaRecorderRef.current.state !== 'inactive') {
+          videoMediaRecorderRef.current.stop();
+        }
+      } catch {
+        // ignore
+      }
       setIsRecordingVideo(false);
+      setIsVideoPreviewActive(false);
     }
+  };
+
+  const toggleVideoCameraFacing = async () => {
+    const nextFacing: 'environment' | 'user' = videoFacingMode === 'environment' ? 'user' : 'environment';
+    setVideoFacingMode(nextFacing);
+    if (isRecordingVideo) {
+      // Restart video recording smoothly with the newly selected camera
+      if (videoMediaRecorderRef.current) {
+        videoMediaRecorderRef.current.onstop = null;
+        try {
+          if (videoMediaRecorderRef.current.state !== 'inactive') {
+            videoMediaRecorderRef.current.stop();
+          }
+        } catch {
+          // ignore
+        }
+      }
+      await startVideoRecording(nextFacing);
+    } else {
+      setVideoBlobUrl(null);
+      await startVideoLivePreview(nextFacing, true);
+    }
+  };
+
+  // 3B. PHOTO CAPTURE (Strictly Rear Camera Only - 'environment')
+  const startRearPhotoCamera = async (silent = false) => {
+    setCameraErrorMsg(null);
+    try {
+      if (photoStreamRef.current) {
+        photoStreamRef.current.getTracks().forEach((t) => t.stop());
+        photoStreamRef.current = null;
+      }
+      const stream = await openCameraVideoStream('environment');
+      photoStreamRef.current = stream;
+      setPhotoDataUrl(null);
+      setIsPhotoCameraActive(true);
+      if (photoPreviewRef.current) {
+        attachStreamToVideo(photoPreviewRef.current, stream);
+      }
+    } catch (err) {
+      console.warn('Rear camera photo access denied:', err);
+      setIsPhotoCameraActive(false);
+      setCameraErrorMsg(
+        isEn
+          ? 'Rear camera preview could not be started. Please check camera permission.'
+          : 'دسترسی به پیش‌نمایش دوربین پشتی ممکن نشد. لطفاً مجوز دوربین را بررسی کنید.'
+      );
+      if (!silent) {
+        openAndroidSettings('camera');
+      }
+    }
+  };
+
+  const stopRearPhotoCamera = () => {
+    if (photoStreamRef.current) {
+      photoStreamRef.current.getTracks().forEach((t) => t.stop());
+      photoStreamRef.current = null;
+    }
+    if (photoPreviewRef.current) {
+      photoPreviewRef.current.srcObject = null;
+    }
+    setIsPhotoCameraActive(false);
+  };
+
+  const capturePhotoFromRearCamera = () => {
+    const videoEl = photoPreviewRef.current;
+    if (!videoEl) return;
+    const width = videoEl.videoWidth || videoEl.clientWidth || 1280;
+    const height = videoEl.videoHeight || videoEl.clientHeight || 720;
+    const tempCanvas = document.createElement('canvas');
+    tempCanvas.width = width;
+    tempCanvas.height = height;
+    const ctx = tempCanvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(videoEl, 0, 0, tempCanvas.width, tempCanvas.height);
+    const dataUrl = tempCanvas.toDataURL('image/jpeg', 0.88);
+    setPhotoDataUrl(dataUrl);
+    stopRearPhotoCamera();
   };
 
   // 4. DRAWING CANVAS LOGIC WITH SAMSUNG S PEN / STYLUS SUPPORT
@@ -814,6 +1203,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         category,
         audioRecordUrl: audioBlobUrl || undefined,
         videoRecordUrl: videoBlobUrl || undefined,
+        photoDataUrl: photoDataUrl || undefined,
         drawingDataUrl: drawingDataUrl || undefined,
       });
     } else {
@@ -823,6 +1213,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         category,
         audioRecordUrl: audioBlobUrl || undefined,
         videoRecordUrl: videoBlobUrl || undefined,
+        photoDataUrl: photoDataUrl || undefined,
         drawingDataUrl: drawingDataUrl || undefined,
         googleSynced: syncWithGoogle && !!googleToken,
       });
@@ -924,20 +1315,54 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             )}
           </div>
 
-          {/* Category */}
-          <div className="space-y-1">
-            <label className="text-xs font-bold text-stone-300">
-              {isEn ? 'Category' : 'دسته‌بندی'}
+          {/* Category Tabs (similar to Occasion Types) */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold text-stone-300 block">
+              {isEn ? 'Idea Category' : 'دسته‌بندی ایده'}
             </label>
-            <select
-              value={category}
-              onChange={(e) => setCategory(e.target.value as Category)}
-              className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-stone-100 text-sm focus:border-indigo-500 outline-none"
-            >
-              <option value="work">{isEn ? 'Work' : 'کاری (Work)'}</option>
-              <option value="family">{isEn ? 'Family' : 'خانواده (Family)'}</option>
-              <option value="other">{isEn ? 'Personal / Other' : 'شخصی / سایر'}</option>
-            </select>
+            <div className="grid grid-cols-3 gap-2">
+              {([
+                {
+                  id: 'work' as Category,
+                  labelFa: 'کاری',
+                  labelEn: 'Work',
+                  icon: Briefcase,
+                  activeClass: 'bg-sky-500/20 border-sky-500 text-sky-300 shadow-sm shadow-sky-500/20',
+                },
+                {
+                  id: 'family' as Category,
+                  labelFa: 'خانواده',
+                  labelEn: 'Family',
+                  icon: Heart,
+                  activeClass: 'bg-rose-500/20 border-rose-500 text-rose-300 shadow-sm shadow-rose-500/20',
+                },
+                {
+                  id: 'other' as Category,
+                  labelFa: 'شخصی / سایر',
+                  labelEn: 'Personal / Other',
+                  icon: Tag,
+                  activeClass: 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-sm shadow-indigo-500/20',
+                },
+              ]).map((cat) => {
+                const IconComp = cat.icon;
+                const isSelected = category === cat.id;
+                return (
+                  <button
+                    key={cat.id}
+                    type="button"
+                    onClick={() => setCategory(cat.id)}
+                    className={`flex items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
+                      isSelected
+                        ? cat.activeClass
+                        : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-stone-200 hover:border-stone-700'
+                    }`}
+                  >
+                    <IconComp className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{isEn ? cat.labelEn : cat.labelFa}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Mode Switch Tabs - Only icons with header "امکانات ورود" */}
@@ -967,6 +1392,17 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 aria-label={isEn ? 'Voice Memo' : 'ضبط صدا'}
               >
                 <Mic className="w-5 h-5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('photo')}
+                className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
+                  activeTab === 'photo' ? 'bg-indigo-500 text-white' : 'text-stone-400 hover:text-white hover:bg-stone-900'
+                }`}
+                title={isEn ? 'Take Photo (Rear Camera)' : 'عکس‌برداری (دوربین پشتی)'}
+                aria-label={isEn ? 'Take Photo (Rear Camera)' : 'عکس‌برداری (دوربین پشتی)'}
+              >
+                <Camera className="w-5 h-5" />
               </button>
               <button
                 type="button"
@@ -1073,48 +1509,229 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             </div>
           )}
 
-          {/* TAB 3: VIDEO RECORDING */}
-          {activeTab === 'video' && (
+          {/* TAB 2B: REAR-CAMERA-ONLY PHOTO CAPTURE */}
+          {activeTab === 'photo' && (
             <div className="p-4 rounded-xl bg-stone-950 border border-stone-800 flex flex-col items-center justify-center space-y-3">
-              <div className="w-full max-w-sm aspect-video bg-stone-900 rounded-xl overflow-hidden border border-stone-800 relative flex items-center justify-center">
-                {isRecordingVideo ? (
-                  <video ref={videoPreviewRef} autoPlay muted playsInline className="w-full h-full object-cover" />
-                ) : videoBlobUrl ? (
-                  <video src={videoBlobUrl} controls className="w-full h-full object-cover" />
-                ) : (
-                  <div className="flex flex-col items-center text-stone-500 text-xs">
-                    <Video className="w-8 h-8 mb-1" />
-                    <span>پیش‌نمایش ویدیو</span>
+              <div className="w-full flex items-center justify-between text-xs text-stone-400 px-1">
+                <span className="flex items-center gap-1.5 font-bold text-indigo-300">
+                  <Camera className="w-4 h-4" />
+                  <span>{isEn ? 'Photo Capture (Rear Camera Only)' : 'عکس‌برداری ایده (فقط با دوربین پشتی)'}</span>
+                </span>
+                {photoDataUrl && !isPhotoCameraActive && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPhotoDataUrl(null);
+                      startRearPhotoCamera(true);
+                    }}
+                    className="flex items-center gap-1 text-rose-400 hover:text-rose-300 text-[11px] font-bold cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>{isEn ? 'Delete Photo' : 'حذف عکس'}</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="w-full max-w-sm aspect-video bg-black rounded-xl overflow-hidden border border-stone-800 relative flex items-center justify-center">
+                <video
+                  ref={setPhotoPreviewElement}
+                  autoPlay
+                  muted
+                  playsInline
+                  onLoadedMetadata={(e) => {
+                    e.currentTarget.play().catch(() => {});
+                  }}
+                  onCanPlay={(e) => {
+                    e.currentTarget.play().catch(() => {});
+                  }}
+                  className={`w-full h-full object-cover transition-opacity duration-150 ${
+                    isPhotoCameraActive
+                      ? 'opacity-100 relative z-10'
+                      : 'opacity-0 pointer-events-none absolute inset-0'
+                  }`}
+                />
+
+                {!isPhotoCameraActive && photoDataUrl && (
+                  <img
+                    src={photoDataUrl}
+                    alt={isEn ? 'Captured idea photo' : 'عکس ثبت‌شده ایده'}
+                    className="w-full h-full object-cover relative z-10"
+                  />
+                )}
+
+                {!isPhotoCameraActive && !photoDataUrl && (
+                  <div className="flex flex-col items-center text-stone-400 text-xs gap-2 p-4 text-center relative z-10">
+                    <Camera className="w-8 h-8 text-indigo-400" />
+                    <span>
+                      {cameraErrorMsg ||
+                        (isEn ? 'Rear camera preview' : 'پیش‌نمایش زنده دوربین پشتی جهت عکس‌برداری')}
+                    </span>
                   </div>
                 )}
 
-                {isRecordingVideo && (
-                  <div className="absolute top-2 right-2 flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-bold animate-pulse">
-                    <span className="w-2 h-2 rounded-full bg-white" />
-                    <span>در حال ضبط</span>
+                {isPhotoCameraActive && (
+                  <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/65 border border-white/15 text-white text-[10px] font-bold">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>{isEn ? 'Live Rear Camera' : 'پیش‌نمایش زنده دوربین پشتی'}</span>
                   </div>
                 )}
               </div>
 
-              {!isRecordingVideo ? (
+              <div className="flex items-center justify-center gap-2.5 flex-wrap">
+                {!isPhotoCameraActive ? (
+                  <button
+                    type="button"
+                    onClick={() => startRearPhotoCamera(false)}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>
+                      {photoDataUrl
+                        ? (isEn ? 'Retake Photo (Rear Camera)' : 'ثبت مجدد عکس با دوربین پشتی')
+                        : (isEn ? 'Open Rear Camera' : 'باز کردن دوربین پشتی')}
+                    </span>
+                  </button>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={capturePhotoFromRearCamera}
+                      className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs shadow-lg shadow-emerald-500/25 transition-all cursor-pointer"
+                    >
+                      <Camera className="w-4 h-4" />
+                      <span>{isEn ? 'Take Photo' : 'ثبت عکس'}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopRearPhotoCamera}
+                      className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold text-xs transition-all cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                      <span>{isEn ? 'Close Camera' : 'بستن دوربین'}</span>
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* TAB 3: VIDEO RECORDING (Live Viewfinder + Rear / Selfie Camera Switch) */}
+          {activeTab === 'video' && (
+            <div className="p-4 rounded-xl bg-stone-950 border border-stone-800 flex flex-col items-center justify-center space-y-3">
+              {/* Camera Selection Header */}
+              <div className="w-full max-w-sm flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-stone-300 flex items-center gap-1.5">
+                  <Video className="w-4 h-4 text-indigo-400" />
+                  <span>
+                    {videoFacingMode === 'environment'
+                      ? (isEn ? 'Rear Camera' : 'دوربین پشتی')
+                      : (isEn ? 'Front Selfie Camera' : 'دوربین سلفی (جلو)')}
+                  </span>
+                </span>
                 <button
                   type="button"
-                  onClick={startVideoRecording}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-500 text-white font-bold text-xs shadow-md"
+                  onClick={toggleVideoCameraFacing}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-700 text-indigo-300 text-xs font-bold transition-all cursor-pointer"
+                  title={isEn ? 'Switch between rear and selfie camera' : 'تغییر بین دوربین پشتی و دوربین سلفی'}
                 >
-                  <Video className="w-4 h-4" />
-                  <span>شروع ضبط ویدیویی ایده</span>
+                  <SwitchCamera className="w-4 h-4" />
+                  <span>
+                    {videoFacingMode === 'environment'
+                      ? (isEn ? 'Switch to Selfie' : 'تغییر به دوربین سلفی')
+                      : (isEn ? 'Switch to Rear Camera' : 'تغییر به دوربین پشتی')}
+                  </span>
                 </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={stopVideoRecording}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 text-white font-bold text-xs"
-                >
-                  <Square className="w-4 h-4" />
-                  <span>توقف ضبط ویدیو</span>
-                </button>
-              )}
+              </div>
+
+              <div className="w-full max-w-sm aspect-video bg-black rounded-xl overflow-hidden border border-stone-800 relative flex items-center justify-center">
+                {/* Keep live video element rendered without display:none so WebView always decodes live frames */}
+                <video
+                  ref={setVideoPreviewElement}
+                  autoPlay
+                  muted
+                  playsInline
+                  onLoadedMetadata={(e) => {
+                    e.currentTarget.play().catch(() => {});
+                  }}
+                  onCanPlay={(e) => {
+                    e.currentTarget.play().catch(() => {});
+                  }}
+                  className={`w-full h-full object-cover transition-opacity duration-150 ${
+                    isRecordingVideo || isVideoPreviewActive
+                      ? 'opacity-100 relative z-10'
+                      : 'opacity-0 pointer-events-none absolute inset-0'
+                  } ${videoFacingMode === 'user' ? 'scale-x-[-1]' : ''}`}
+                />
+
+                {!isRecordingVideo && !isVideoPreviewActive && videoBlobUrl && (
+                  <video src={videoBlobUrl} controls playsInline className="w-full h-full object-cover relative z-10" />
+                )}
+
+                {!isRecordingVideo && !isVideoPreviewActive && !videoBlobUrl && (
+                  <div className="flex flex-col items-center text-stone-400 text-xs gap-2 p-4 text-center relative z-10">
+                    <Video className="w-8 h-8 text-indigo-400" />
+                    <span>
+                      {cameraErrorMsg ||
+                        (isEn ? 'Live Video Preview' : 'پیش‌نمایش زنده ویدیو هنگام فیلم‌برداری')}
+                    </span>
+                  </div>
+                )}
+
+                {isRecordingVideo ? (
+                  <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-red-600/90 text-white text-[10px] font-bold animate-pulse shadow-md">
+                    <span className="w-2 h-2 rounded-full bg-white" />
+                    <span>{isEn ? 'Recording Live' : 'در حال ضبط زنده'}</span>
+                  </div>
+                ) : (
+                  isVideoPreviewActive && (
+                    <div className="absolute top-2 right-2 z-20 flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/65 border border-white/15 text-white text-[10px] font-bold">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>{isEn ? 'Live Viewfinder Ready' : 'پیش‌نمایش زنده آماده ضبط'}</span>
+                    </div>
+                  )
+                )}
+              </div>
+
+              <div className="flex items-center justify-center gap-2.5 flex-wrap">
+                {!isRecordingVideo ? (
+                  <>
+                    {!isVideoPreviewActive && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVideoBlobUrl(null);
+                          startVideoLivePreview(videoFacingMode, false);
+                        }}
+                        className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold text-xs transition-all cursor-pointer"
+                      >
+                        <Camera className="w-4 h-4 text-indigo-400" />
+                        <span>{isEn ? 'Open Live Preview' : 'باز کردن پیش‌نمایش زنده'}</span>
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => startVideoRecording()}
+                      className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+                    >
+                      <Video className="w-4 h-4" />
+                      <span>
+                        {videoBlobUrl
+                          ? (isEn ? 'Record New Video' : 'ضبط مجدد ویدیو')
+                          : (isEn ? 'Start Video Recording' : 'شروع ضبط ویدیویی ایده')}
+                      </span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={stopVideoRecording}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
+                  >
+                    <Square className="w-4 h-4 fill-white" />
+                    <span>{isEn ? 'Stop Video Recording' : 'توقف و ذخیره ویدیو'}</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
 

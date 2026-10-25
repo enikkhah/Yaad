@@ -52,7 +52,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
   const anniversaryLabel = getOccasionAnniversaryLabel(occasion, yearsPassed, language);
 
   const renderIcon = () => {
-    const iconClass = "w-4 h-4 text-stone-400";
+    const iconClass = `w-4 h-4 ${meta.accentTextClass}`;
     switch (meta.iconName) {
       case 'Cake':
         return <Cake className={iconClass} />;
@@ -72,11 +72,24 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
     }
   };
 
+  const renderNoteIcon = () => {
+    if (occasion.type === 'memorial') {
+      return <Flame className={`w-3.5 h-3.5 ${meta.accentTextClass} shrink-0 mt-0.5`} />;
+    }
+    if (occasion.type === 'work') {
+      return <Briefcase className={`w-3.5 h-3.5 ${meta.accentTextClass} shrink-0 mt-0.5`} />;
+    }
+    if (occasion.type === 'family') {
+      return <Users className={`w-3.5 h-3.5 ${meta.accentTextClass} shrink-0 mt-0.5`} />;
+    }
+    return <Gift className={`w-3.5 h-3.5 ${meta.accentTextClass} shrink-0 mt-0.5`} />;
+  };
+
   return (
     <div 
       className={`rounded-2xl border transition-all duration-200 flex flex-col justify-between overflow-hidden shadow-sm ${
         isToday
-          ? 'bg-stone-900 border-indigo-500/50'
+          ? `bg-stone-900 ${meta.borderCol}`
           : 'bg-stone-900 border-stone-800 hover:border-stone-700'
       } p-3.5 sm:p-4 gap-3 text-right rtl:text-right ltr:text-left`}
       dir={isEn ? 'ltr' : 'rtl'}
@@ -90,13 +103,13 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
               {renderIcon()}
             </div>
             <div>
-              <span className={`text-[10px] font-medium px-2 py-0.5 rounded-md border ${meta.badgeBg} ${meta.badgeText} ${meta.borderCol}`}>
+              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${meta.badgeBg} ${meta.badgeText} ${meta.borderCol}`}>
                 {isEn ? meta.labelEn : meta.labelFa}
               </span>
               {isToday && (
-                <span className="ms-1.5 inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full bg-indigo-500 text-white">
-                  <PartyPopper className="w-3 h-3" />
-                  {isEn ? 'TODAY!' : 'امروز!'}
+                <span className={`ms-1.5 inline-flex items-center gap-1 text-[10px] font-black px-2 py-0.5 rounded-full border ${meta.badgeBg} ${meta.badgeText} ${meta.borderCol}`}>
+                  {occasion.type === 'memorial' ? <Flame className="w-3 h-3" /> : <PartyPopper className="w-3 h-3" />}
+                  {isEn ? 'TODAY' : 'امروز'}
                 </span>
               )}
             </div>
@@ -144,7 +157,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
       <div className="bg-stone-950/60 p-2.5 rounded-xl border border-stone-800/80 flex items-center justify-between gap-2 text-xs">
         <div className="space-y-0.5">
           <div className="flex items-center gap-1.5 text-stone-300 font-bold">
-            <Calendar className="w-3.5 h-3.5 text-indigo-400" />
+            <Calendar className={`w-3.5 h-3.5 ${meta.accentTextClass}`} />
             <span>{formattedTargetDate}</span>
           </div>
           <div className="flex items-center gap-1 text-[11px] text-stone-400">
@@ -154,13 +167,13 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
         </div>
 
         {/* Countdown Badge */}
-        <div className="text-center px-2.5 py-1 rounded-xl bg-stone-900 border border-stone-700/80">
+        <div className={`text-center px-2.5 py-1 rounded-xl border ${meta.badgeBg} ${meta.borderCol}`}>
           {isToday ? (
-            <span className="text-xs font-black text-indigo-400">
+            <span className={`text-xs font-black ${meta.badgeText}`}>
               {isEn ? 'Today' : 'امروز'}
             </span>
           ) : daysRemaining === 1 ? (
-            <span className="text-xs font-black text-indigo-400">
+            <span className={`text-xs font-black ${meta.badgeText}`}>
               {isEn ? 'Tomorrow' : 'فردا'}
             </span>
           ) : (
@@ -176,10 +189,10 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
         </div>
       </div>
 
-      {/* Note / Gift Idea if present */}
+      {/* Note / Contextual Details if present */}
       {occasion.customNote && (
         <div className="text-[11px] text-stone-300 bg-stone-950/40 p-2 rounded-xl border border-stone-800/40 flex items-start gap-1.5 line-clamp-2">
-          <Gift className="w-3.5 h-3.5 text-indigo-400 shrink-0 mt-0.5" />
+          {renderNoteIcon()}
           <span className="leading-relaxed">{occasion.customNote}</span>
         </div>
       )}
@@ -190,9 +203,9 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
           <button
             type="button"
             onClick={() => onCreateReminder(occasion)}
-            className="w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-bold transition-all active:scale-95 cursor-pointer"
+            className={`w-full flex items-center justify-center gap-1.5 py-1.5 px-3 rounded-xl ${meta.badgeBg} hover:opacity-90 ${meta.badgeText} border ${meta.borderCol} text-xs font-bold transition-all active:scale-95 cursor-pointer`}
           >
-            <BellRing className="w-3.5 h-3.5 text-indigo-400" />
+            <BellRing className={`w-3.5 h-3.5 ${meta.accentTextClass}`} />
             <span>{isEn ? 'Set Alarm Reminder' : 'تنظیم یادآور و آلارم در تقویم'}</span>
           </button>
         </div>

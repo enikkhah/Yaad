@@ -124,6 +124,32 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
           </div>
         )}
 
+        {/* Captured Photo (Rear Camera) */}
+        {idea.photoDataUrl && (
+          <div 
+            onClick={() => onViewImage && onViewImage(idea.photoDataUrl!)}
+            className="rounded-xl overflow-hidden border border-stone-800 bg-stone-950 p-1.5 relative group cursor-pointer"
+          >
+            <div className="flex items-center justify-between pb-1 px-1">
+              <span className="text-xs text-indigo-400 font-bold flex items-center gap-1.5">
+                < ImageIcon className="w-3.5 h-3.5" /> {language === 'en' ? 'Captured Photo' : 'تصویر ثبت‌شده با دوربین'}
+              </span>
+              <span className="text-[10px] text-stone-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                {language === 'en' ? 'Enlarge' : 'بزرگنمایی'}
+              </span>
+            </div>
+            <div className="relative flex items-center justify-center bg-stone-900/50 rounded-lg overflow-hidden">
+              <img 
+                src={idea.photoDataUrl} 
+                alt={language === 'en' ? 'Idea Photo' : 'تصویر ایده'} 
+                loading="lazy"
+                decoding="async"
+                className="w-full max-h-52 object-cover rounded-lg" 
+              />
+            </div>
+          </div>
+        )}
+
         {/* Drawing Sketch - Optimized Lazy Loaded */}
         {idea.drawingDataUrl && (
           <div 

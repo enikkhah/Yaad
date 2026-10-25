@@ -1,6 +1,10 @@
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect, useCallback } from 'react';
 import { Camera, X, RefreshCw, Check, Smartphone, AlertCircle } from 'lucide-react';
-import { openAndroidSettings } from '../utils/nativePermissions';
+import {
+  openAndroidSettings,
+  ensureNativeAndroidCameraPermission,
+  markPermissionGranted,
+} from '../utils/nativePermissions';
 
 interface CameraCaptureModalProps {
   isOpen: boolean;
@@ -13,12 +17,119 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
   onClose,
   onCapture,
 }) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const [capturedPhoto, setCapturedPhoto] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const attachStreamToVideoEl = useCallback((el: HTMLVideoElement | null, mediaStream: MediaStream | null) => {
+    if (!el || !mediaStream) return;
+    try {
+      el.muted = true;
+      el.defaultMuted = true;
+      el.playsInline = true;
+      el.setAttribute('playsinline', 'true');
+      el.setAttribute('webkit-playsinline', 'true');
+      if (el.srcObject !== mediaStream) {
+        el.srcObject = mediaStream;
+      }
+      const playPromise = el.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {});
+      }
+      requestAnimationFrame(() => {
+        if (el.srcObject === mediaStream && el.paused) {
+          el.play().catch(() => {});
+        }
+      });
+    } catch {
+      // Ignore play race conditions
+    }
+  }, []);
+
+  const setVideoElementRef = useCallback(
+    (node: HTMLVideoElement | null) => {
+      videoRef.current = node;
+      if (node && streamRef.current) {
+        attachStreamToVideoEl(node, streamRef.current);
+      }
+    },
+    [attachStreamToVideoEl]
+  );
+
+  const stopCamera = useCallback(() => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    stopCamera();
+    setErrorMsg(null);
+    try {
+      await ensureNativeAndroidCameraPermission(false);
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('دوربین در این مرورگر پشتیبانی نمی‌شود');
+      }
+
+      let mediaStream: MediaStream | null = null;
+      const constraintCandidates: MediaStreamConstraints[] = [
+        {
+          video: {
+            facingMode: { exact: facingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        },
+        {
+          video: {
+            facingMode: { ideal: facingMode },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          audio: false,
+        },
+        {
+          video: { facingMode },
+          audio: false,
+        },
+        {
+          video: true,
+          audio: false,
+        },
+      ];
+
+      for (const constraints of constraintCandidates) {
+        try {
+          mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
+          if (mediaStream) break;
+        } catch {
+          // Try next fallback constraint
+        }
+      }
+
+      if (!mediaStream) {
+        throw new Error('Camera stream unavailable');
+      }
+
+      markPermissionGranted('camera');
+      streamRef.current = mediaStream;
+      if (videoRef.current) {
+        attachStreamToVideoEl(videoRef.current, mediaStream);
+      }
+    } catch (err) {
+      console.error('Camera access error:', err);
+      setErrorMsg('دسترسی به دوربین ممکن نشد. لطفاً مجوز دسترسی به دوربین را تأیید کنید یا از آپلود فایل استفاده نمایید.');
+    }
+  }, [facingMode, stopCamera, attachStreamToVideoEl]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -28,48 +139,13 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
       return;
     }
 
-    startCamera();
+    if (!capturedPhoto) {
+      startCamera();
+    }
     return () => {
       stopCamera();
     };
-  }, [isOpen, facingMode]);
-
-  const startCamera = async () => {
-    stopCamera();
-    setErrorMsg(null);
-    try {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('دوربین در این مرورگر پشتیبانی نمی‌شود');
-      }
-
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: facingMode },
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-        },
-        audio: false,
-      });
-
-      setStream(mediaStream);
-      if (videoRef.current) {
-        videoRef.current.srcObject = mediaStream;
-      }
-    } catch (err) {
-      console.error('Camera access error:', err);
-      setErrorMsg('دسترسی به دوربین ممکن نشد. لطفاً مجوز دسترسی به دوربین را تأیید کنید یا از آپلود فایل استفاده نمایید.');
-    }
-  };
-
-  const stopCamera = () => {
-    if (stream) {
-      stream.getTracks().forEach((track) => track.stop());
-      setStream(null);
-    }
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-    }
-  };
+  }, [isOpen, facingMode, capturedPhoto, startCamera, stopCamera]);
 
   const toggleFacing = () => {
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
@@ -79,8 +155,8 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
     if (!videoRef.current || !canvasRef.current) return;
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    canvas.width = video.videoWidth || video.clientWidth || 640;
+    canvas.height = video.videoHeight || video.clientHeight || 480;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
@@ -100,7 +176,6 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
 
   const retake = () => {
     setCapturedPhoto(null);
-    startCamera();
   };
 
   if (!isOpen) return null;
@@ -148,11 +223,17 @@ export const CameraCaptureModal: React.FC<CameraCaptureModalProps> = ({
           ) : (
             <>
               <video
-                ref={videoRef}
+                ref={setVideoElementRef}
                 autoPlay
                 playsInline
                 muted
-                className="w-full h-full object-cover"
+                onLoadedMetadata={(e) => {
+                  e.currentTarget.play().catch(() => {});
+                }}
+                onCanPlay={(e) => {
+                  e.currentTarget.play().catch(() => {});
+                }}
+                className={`w-full h-full object-cover ${facingMode === 'user' ? 'scale-x-[-1]' : ''}`}
               />
               {/* Reticle guide */}
               <div className="absolute inset-8 border border-white/20 rounded-2xl pointer-events-none" />

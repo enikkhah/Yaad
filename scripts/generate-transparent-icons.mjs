@@ -199,8 +199,43 @@ const srcTransparentPath = path.join(rootDir, 'public', 'logo-transparent.png');
 const srcBuffer = fs.readFileSync(srcTransparentPath);
 const srcImage = decodeRgbaPng(srcBuffer);
 
-// 1. Update web & Capacitor source icons with 100% transparent background
+// Recolor all non-transparent icon pixels to a vibrant, luminous Golden-Amber gradient
+// (#FFE066 -> #FFC107 -> #FFB300) and remove any dark/brownish edge contamination from the old black background
+for (let y = 0; y < srcImage.height; y++) {
+  const t = y / Math.max(1, srcImage.height - 1);
+  // Top-to-bottom luminous golden amber (high green channel prevents any muddy/brownish cast)
+  const targetR = 255;
+  const targetG = Math.round(218 - t * 26); // 218 at top (#FFDA2C) -> 192 at bottom (#FFC014)
+  const targetB = Math.round(44 - t * 24);  // 44 at top -> 20 at bottom
+
+  for (let x = 0; x < srcImage.width; x++) {
+    const idx = (y * srcImage.width + x) * 4;
+    const a = srcImage.data[idx + 3];
+    if (a > 0) {
+      srcImage.data[idx] = targetR;
+      srcImage.data[idx + 1] = targetG;
+      srcImage.data[idx + 2] = targetB;
+      // Slightly boost mid-alpha anti-aliased edge pixels so edges look crisp and golden, never dark
+      if (a > 24 && a < 255) {
+        srcImage.data[idx + 3] = Math.min(255, Math.round(Math.pow(a / 255, 0.72) * 255));
+      }
+    } else {
+      srcImage.data[idx] = 0;
+      srcImage.data[idx + 1] = 0;
+      srcImage.data[idx + 2] = 0;
+      srcImage.data[idx + 3] = 0;
+    }
+  }
+}
+
+const recoloredFullBuffer = encodeRgbaPng(srcImage.width, srcImage.height, srcImage.data);
+fs.writeFileSync(srcTransparentPath, recoloredFullBuffer);
+
+// 1. Update web & Capacitor source icons with 100% transparent background and vibrant golden-amber color
 const iconTargets = [
+  { file: 'public/logo-transparent.png', size: 1024, pad: 0 },
+  { file: 'src/assets/images/logo-transparent.png', size: 1024, pad: 0 },
+  { file: 'src/assets/images/icon.png', size: 1024, pad: 0 },
   { file: 'public/icon.png', size: 1024, pad: 0 },
   { file: 'resources/icon.png', size: 1024, pad: 0 },
   { file: 'resources/icon-only.png', size: 1024, pad: 0 },
@@ -216,7 +251,7 @@ for (const target of iconTargets) {
   const fullPath = path.join(rootDir, target.file);
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
   if (target.size === 1024 && target.pad === 0) {
-    fs.writeFileSync(fullPath, srcBuffer);
+    fs.writeFileSync(fullPath, recoloredFullBuffer);
   } else {
     const outBuf = resizeRgba(srcImage, target.size, target.size, target.pad);
     fs.writeFileSync(fullPath, outBuf);

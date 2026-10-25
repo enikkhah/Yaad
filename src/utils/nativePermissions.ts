@@ -151,6 +151,37 @@ export async function requestCameraPermission(): Promise<boolean> {
 }
 
 /**
+ * Ensures native Android OS runtime permission for CAMERA (and optionally RECORD_AUDIO)
+ * is granted before calling WebView navigator.mediaDevices.getUserMedia, without
+ * opening and closing a temporary stream that could lock the camera hardware.
+ */
+export async function ensureNativeAndroidCameraPermission(withMicrophone = false): Promise<void> {
+  if (!isNativeAndroidApp()) return;
+  try {
+    const camRes = await (LocalNotifications.requestPermissions as any)({
+      permissions: ['camera'],
+    });
+    if (camRes?.camera === 'granted') {
+      markPermissionGranted('camera');
+    }
+  } catch {
+    // Ignore and let getUserMedia proceed
+  }
+  if (withMicrophone) {
+    try {
+      const micRes = await (LocalNotifications.requestPermissions as any)({
+        permissions: ['microphone'],
+      });
+      if (micRes?.microphone === 'granted') {
+        markPermissionGranted('microphone');
+      }
+    } catch {
+      // Ignore and let getUserMedia proceed
+    }
+  }
+}
+
+/**
  * Request GPS / Geolocation Permission (forces Android OS / WebView permission prompt)
  */
 export async function requestLocationPermission(): Promise<boolean> {
