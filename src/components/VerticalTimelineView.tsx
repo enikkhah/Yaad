@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, LayoutGroup } from 'motion/react';
-import { Reminder, Category } from '../types';
+import { Reminder, Category, InProgressItem, MedicationItem } from '../types';
+import { InProgressPanel } from './InProgressPanel';
+import { MedicationPanel } from './MedicationPanel';
+import { isInProgressItemOverdue } from '../utils/inProgressNotifications';
+import { isMedicationActiveOnDate, isMedicationLowStock } from '../utils/medicationNotifications';
 import { 
   formatJalaliTime, 
   getDayHeaderLabel, 
@@ -24,7 +28,10 @@ import {
   Tag, 
   RotateCcw,
   Sparkles,
-  Search
+  Search,
+  Layers,
+  Bell,
+  Pill
 } from 'lucide-react';
 
 interface VerticalTimelineViewProps {
@@ -39,6 +46,29 @@ interface VerticalTimelineViewProps {
   language?: 'fa' | 'en';
   searchQuery?: string;
   onClearSearch?: () => void;
+  inProgressItems?: InProgressItem[];
+  onSaveInProgressItem?: (
+    itemData: Omit<InProgressItem, 'id' | 'createdAt' | 'lastUpdatedAt'>,
+    editingId?: string
+  ) => void;
+  onUpdateInProgressProgress?: (id: string, newProgress: number, customNote?: string) => void;
+  onToggleInProgressComplete?: (id: string) => void;
+  onDeleteInProgressItem?: (id: string) => void;
+  medications?: MedicationItem[];
+  onSaveMedication?: (
+    medData: Omit<MedicationItem, 'id' | 'createdAt' | 'updatedAt' | 'history'>,
+    editingId?: string
+  ) => void;
+  onLogMedicationDose?: (
+    medicationId: string,
+    dateKey: string,
+    scheduledTime: string,
+    status: 'taken' | 'missed' | 'reset'
+  ) => void;
+  onDeleteMedication?: (id: string) => void;
+  onRefillMedicationStock?: (id: string, addedAmount: number) => void;
+  activeSubPage?: 'timeline' | 'in_progress' | 'medication';
+  onChangeSubPage?: (page: 'timeline' | 'in_progress' | 'medication') => void;
 }
 
 export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
@@ -53,8 +83,26 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   language = 'fa',
   searchQuery = '',
   onClearSearch,
+  inProgressItems = [],
+  onSaveInProgressItem,
+  onUpdateInProgressProgress,
+  onToggleInProgressComplete,
+  onDeleteInProgressItem,
+  medications = [],
+  onSaveMedication,
+  onLogMedicationDose,
+  onDeleteMedication,
+  onRefillMedicationStock,
+  activeSubPage: controlledSubPage,
+  onChangeSubPage,
 }) => {
   const isEn = language === 'en';
+  const [internalSubPage, setInternalSubPage] = useState<'timeline' | 'in_progress' | 'medication'>('timeline');
+  const activeSubPage = controlledSubPage ?? internalSubPage;
+  const setActiveSubPage = (page: 'timeline' | 'in_progress' | 'medication') => {
+    setInternalSubPage(page);
+    onChangeSubPage?.(page);
+  };
   const [nowMs, setNowMs] = useState<number>(Date.now());
   const [selectedReminder, setSelectedReminder] = useState<Reminder | null>(null);
   const [isFilterSheetOpen, setIsFilterSheetOpen] = useState<boolean>(false);
@@ -291,10 +339,134 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     }
   };
 
+  const activeInProgressCount = inProgressItems.filter((i) => !i.deletedAt && !i.completed).length;
+  const overdueInProgressCount = inProgressItems.filter((i) => isInProgressItemOverdue(i, nowMs)).length;
+  const activeMedicationCount = medications.filter(
+    (m) => !m.deletedAt && isMedicationActiveOnDate(m, new Date(nowMs))
+  ).length;
+  const lowStockMedicationCount = medications.filter(
+    (m) => !m.deletedAt && isMedicationLowStock(m)
+  ).length;
+
   return (
-    <div className="space-y-6 pb-28 select-none" dir={isEn ? 'ltr' : 'rtl'}>
+    <div className="space-y-5 pb-28 select-none" dir={isEn ? 'ltr' : 'rtl'}>
+      {/* TOP SUB-PAGE SWITCHER: FROZEN (STICKY) AT TOP OF PAGE ON SCROLL */}
+      <div className="sticky top-16 sm:top-18 z-25 -mt-4 sm:-mt-6 -mx-3 sm:-mx-6 px-3 sm:px-6 py-2.5 bg-stone-950/95 backdrop-blur-md border-b border-stone-800/80 shadow-md transition-colors duration-200">
+        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 p-1.5 rounded-2xl bg-stone-900 border border-stone-800 max-w-3xl mx-auto">
+          <button
+            type="button"
+            onClick={() => setActiveSubPage('timeline')}
+            className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+              activeSubPage === 'timeline'
+                ? 'bg-indigo-500 text-white shadow-sm'
+                : 'text-stone-400 hover:text-white'
+            }`}
+          >
+            <Bell className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <span className="truncate">{isEn ? 'Reminders' : 'یادآورهای زمانی'}</span>
+            <span
+              className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
+                activeSubPage === 'timeline'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-stone-800 text-stone-300'
+              }`}
+            >
+              {isEn ? sortedReminders.length : toPersianDigits(sortedReminders.length)}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubPage('in_progress')}
+            className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+              activeSubPage === 'in_progress'
+                ? 'bg-indigo-500 text-white shadow-sm'
+                : 'text-stone-400 hover:text-white'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <span className="truncate">{isEn ? 'In-Progress' : 'کار در جریان'}</span>
+            {activeInProgressCount > 0 && (
+              <span
+                className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
+                  overdueInProgressCount > 0 && activeSubPage !== 'in_progress'
+                    ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
+                    : activeSubPage === 'in_progress'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-stone-800 text-stone-300'
+                }`}
+              >
+                {isEn ? activeInProgressCount : toPersianDigits(activeInProgressCount)}
+              </span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSubPage('medication')}
+            className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+              activeSubPage === 'medication'
+                ? 'bg-indigo-500 text-white shadow-sm'
+                : 'text-stone-400 hover:text-white'
+            }`}
+          >
+            <Pill className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <span className="truncate">{isEn ? 'Medication' : 'یادآور دارو'}</span>
+            {activeMedicationCount > 0 && (
+              <span
+                className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
+                  lowStockMedicationCount > 0 && activeSubPage !== 'medication'
+                    ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
+                    : activeSubPage === 'medication'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-stone-800 text-stone-300'
+                }`}
+              >
+                {isEn ? activeMedicationCount : toPersianDigits(activeMedicationCount)}
+              </span>
+            )}
+          </button>
+        </div>
+      </div>
+
+      {activeSubPage === 'medication' &&
+      onSaveMedication &&
+      onLogMedicationDose &&
+      onDeleteMedication &&
+      onRefillMedicationStock ? (
+        <div className="max-w-3xl mx-auto">
+          <MedicationPanel
+            medications={medications}
+            onSaveMedication={onSaveMedication}
+            onLogDose={onLogMedicationDose}
+            onDeleteMedication={onDeleteMedication}
+            onRefillStock={onRefillMedicationStock}
+            language={language}
+            mode="page"
+            searchQuery={searchQuery}
+          />
+        </div>
+      ) : activeSubPage === 'in_progress' &&
+      onSaveInProgressItem &&
+      onUpdateInProgressProgress &&
+      onToggleInProgressComplete &&
+      onDeleteInProgressItem ? (
+        <div className="max-w-3xl mx-auto">
+          <InProgressPanel
+            items={inProgressItems}
+            onSaveItem={onSaveInProgressItem}
+            onUpdateProgress={onUpdateInProgressProgress}
+            onToggleComplete={onToggleInProgressComplete}
+            onDeleteItem={onDeleteInProgressItem}
+            language={language}
+            mode="page"
+            searchQuery={searchQuery}
+          />
+        </div>
+      ) : (
+        <>
       {/* 1. MINIMAL HEADER WITH CATEGORY FILTER BUTTON */}
-      <div className="flex items-center justify-between pb-3 border-b border-stone-800/80">
+      <div className="flex items-center justify-between pb-3 border-b border-stone-800/80 max-w-3xl mx-auto">
         <div className="flex items-center gap-3">
           <h2 className="text-xl sm:text-2xl font-black text-white">
             {isEn ? 'Reminders' : 'یادآورها'}
@@ -857,6 +1029,8 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

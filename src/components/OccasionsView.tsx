@@ -26,7 +26,6 @@ interface OccasionsViewProps {
   onCreateReminder: (occasion: Occasion) => void;
   language?: AppLanguage;
   globalSearchQuery?: string;
-  onTriggerNotFoundPopup?: (query: string) => void;
   selectedTypeFilter?: OccasionType | 'all';
   onSelectTypeFilter?: (type: OccasionType | 'all') => void;
 }

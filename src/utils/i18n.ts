@@ -84,7 +84,6 @@ export interface Translations {
   addOccasionDesc: string;
   titlePlaceholder: string;
   descriptionPlaceholder: string;
-  importFromSms: string;
   cameraPhoto: string;
   uploadPhoto: string;
   saveReminder: string;
@@ -209,7 +208,6 @@ export const translations: Record<AppLanguage, Translations> = {
     addOccasionDesc: 'تولد، سالگرد ازدواج و رویدادهای مهم',
     titlePlaceholder: 'عنوان یادآور (مثلاً: تماس با همکار، نوبت دندانپزشکی...)',
     descriptionPlaceholder: 'توضیحات و جزئیات تکمیلی یادآور...',
-    importFromSms: 'ورود از پیامک',
     cameraPhoto: 'گرفتن عکس با دوربین',
     uploadPhoto: 'آپلود فایل عکس',
     saveReminder: 'ثبت نهایی یادآور',
@@ -332,7 +330,6 @@ export const translations: Record<AppLanguage, Translations> = {
     addOccasionDesc: 'Birthdays, anniversaries & milestones',
     titlePlaceholder: 'Reminder title (e.g., Call colleague, Dentist appointment...)',
     descriptionPlaceholder: 'Additional notes and details...',
-    importFromSms: 'Import from SMS',
     cameraPhoto: 'Take Camera Photo',
     uploadPhoto: 'Upload Photo',
     saveReminder: 'Save Reminder',

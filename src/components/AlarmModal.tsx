@@ -6,6 +6,8 @@ import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound, speakReminderTe
 import {
   triggerOutOfAppPersistentNotification,
   clearOutOfAppPersistentNotification,
+  isAppCurrentlyInForeground,
+  dismissDeliveredNotifications,
 } from '../utils/nativeLocalNotifications';
 import {
   CheckCircle2,
@@ -136,17 +138,17 @@ function getAlarmCardPalette(theme: AppTheme = 'dark-gold'): CardThemePalette {
       };
     case 'sketch-contrast':
       return {
-        cardBg: 'bg-zinc-950',
-        cardBorder: 'border-teal-400 border-dashed',
-        titleText: 'text-white',
-        bodyText: 'text-zinc-300',
-        mutedText: 'text-zinc-400',
-        accentText: 'text-teal-400',
-        accentBg: 'bg-zinc-900 border-teal-400/50 border-dashed',
-        doneBtn: 'bg-teal-600 hover:bg-teal-500 text-white border border-teal-300',
-        secondaryBtn: 'bg-zinc-900 hover:bg-zinc-800 text-teal-300 border-dashed border-teal-500/60',
-        editBtn: 'bg-zinc-900 hover:bg-zinc-800 text-white border-dashed border-white/70',
-        progressFill: 'bg-teal-400',
+        cardBg: 'bg-[#2A1B30]',
+        cardBorder: 'border-[#EC4899]/75',
+        titleText: 'text-[#FDF2F8]',
+        bodyText: 'text-[#F5D0FE]',
+        mutedText: 'text-[#D8B4E2]',
+        accentText: 'text-[#F472B6]',
+        accentBg: 'bg-[#392442] border-[#EC4899]/45',
+        doneBtn: 'bg-[#DB2777] hover:bg-[#EC4899] text-white',
+        secondaryBtn: 'bg-[#392442] hover:bg-[#482E54] text-[#FDF2F8] border-[#5E3A6E]',
+        editBtn: 'bg-[#392442] hover:bg-[#482E54] text-[#F472B6] border-[#EC4899]/60',
+        progressFill: 'bg-[#F472B6]',
       };
     case 'dark-gold':
     default:
@@ -192,8 +194,13 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       // ignore
     }
 
-    // Trigger single persistent out-of-app notification
-    triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
+    // Trigger persistent out-of-app notification ONLY when outside the app;
+    // when inside the app, ensure no status-bar notification overlaps the in-app modal.
+    if (!isAppCurrentlyInForeground()) {
+      triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
+    } else {
+      dismissDeliveredNotifications(reminder.id).catch(() => {});
+    }
 
     // Ring alarm for 1 minute (60 seconds)
     const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
@@ -317,7 +324,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
               >
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-xl opacity-20 bg-current" />
                 <img
-                  src={appIcon}
+                  src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`}
                   alt="YAAD"
                   className="relative z-10 w-full h-full object-cover rounded-[9px]"
                   draggable={false}

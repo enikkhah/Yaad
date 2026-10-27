@@ -10,15 +10,11 @@ import {
   Calendar, 
   Loader2,
   Pencil,
-  BellRing,
   Lightbulb,
   Radio,
   Pause,
   Play,
-  Volume2,
-  Sliders,
-  Crosshair,
-  Bell
+  Crosshair
 } from 'lucide-react';
 import { SavedLocation } from '../types';
 import { formatJalaliFull, toPersianDigits } from '../utils/jalali';
@@ -29,28 +25,24 @@ interface SavedLocationCardProps {
   location: SavedLocation;
   onDelete: (id: string) => void;
   onEdit?: (location: SavedLocation) => void;
-  onCreateReminderFromLocation?: (location: SavedLocation) => void;
   onCreateIdeaFromLocation?: (location: SavedLocation) => void;
   onViewPhoto?: (url: string) => void;
   language?: AppLanguage;
   userPosition?: { latitude: number; longitude: number } | null;
   onToggleCheckpoint?: (locationId: string) => void;
   onSimulateCheckpointTrigger?: (location: SavedLocation, type: 'enter' | 'exit') => void;
-  isGeofenceServiceActive?: boolean;
 }
 
 export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   location,
   onDelete,
   onEdit,
-  onCreateReminderFromLocation,
   onCreateIdeaFromLocation,
   onViewPhoto,
   language = 'fa',
   userPosition = null,
   onToggleCheckpoint,
   onSimulateCheckpointTrigger,
-  isGeofenceServiceActive = true,
 }) => {
   const isEn = language === 'en';
   const [copied, setCopied] = useState(false);

@@ -532,7 +532,7 @@ const legacyImmediateNotifyV1 = `            if (!isSilentChannel) {
                 }
             }`;
 
-const patchedImmediateNotify = `            if (!isSilentChannel) {
+const legacyImmediateNotifyV2 = `            if (!isSilentChannel) {
                 try {
                     val notificationJson = JSObject(localNotification.source ?: "{}")
                     LocalNotificationsPlugin.fireReceived(notificationJson)
@@ -547,14 +547,31 @@ const patchedImmediateNotify = `            if (!isSilentChannel) {
                 }
             }`;
 
+const patchedImmediateNotify = `            if (!isSilentChannel) {
+                try {
+                    val notificationJson = JSObject(localNotification.source ?: "{}")
+                    LocalNotificationsPlugin.fireReceived(notificationJson)
+                } catch (e: JSONException) {
+                }
+            }
+            if (isSilentChannel || !LocalNotificationsPlugin.isAppInForeground(context)) {
+                localNotification.id?.let {
+                    notificationManager.notify(it, buildNotification)
+                    if (!isSilentChannel && (buildNotification.flags and Notification.FLAG_INSISTENT) != 0) {
+                        scheduleMuteAfterOneMinute(it, localNotification.source)
+                        YaadAlarmPopupActivity.launch(context, it, localNotification.source)
+                    }
+                }
+            }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'scheduleMuteAfterOneMinute and YaadAlarmPopupActivity on immediate notify',
+  'scheduleMuteAfterOneMinute, YaadAlarmPopupActivity, and foreground suppression on immediate notify',
   origImmediateNotify,
   patchedImmediateNotify,
-  'YaadAlarmPopupActivity.launch(context, it, localNotification.source)',
-  [legacyImmediateNotifyV1]
+  'if (isSilentChannel || !LocalNotificationsPlugin.isAppInForeground(context))',
+  [legacyImmediateNotifyV1, legacyImmediateNotifyV2]
 );
 
 const origOpenIntent = `        // Open intent
@@ -920,6 +937,16 @@ class TimedNotificationPublisher : BroadcastReceiver() {
         val reminderId = notificationJson?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
         if (reminderId.isNotEmpty() && id != Int.MIN_VALUE) {
             cancelPreviousActiveNotificationsForReminder(storage, notificationManager, id, reminderId)
+        }
+
+        // Do NOT emit a status-bar notification or popup card when the user is actively inside the app
+        if (LocalNotificationsPlugin.isAppInForeground(context)) {
+            LocalNotificationsPlugin.fireReceived(notificationJson)
+            if (id != Int.MIN_VALUE) {
+                storage.deleteNotification(id.toString())
+            }
+            rescheduleNotificationIfNeeded(context, intent, id)
+            return
         }
 
         LocalNotificationsPlugin.fireReceived(notificationJson)
@@ -1690,7 +1717,7 @@ const legacyPluginLoadV6 = `        configureWebViewForGoogleOAuth()
         }
     }`;
 
-const patchedPluginLoad = `        configureWebViewForGoogleOAuth()
+const legacyPluginLoadV7 = `        configureWebViewForGoogleOAuth()
         purgeStaleOneShotNotifications()
         LegacyNotificationMigrator.run(context, notificationStorage, manager)
         flushQueuedBackgroundActions()
@@ -1751,14 +1778,82 @@ const patchedPluginLoad = `        configureWebViewForGoogleOAuth()
         }
     }`;
 
+const patchedPluginLoad = `        isAppInForegroundState = true
+        configureWebViewForGoogleOAuth()
+        purgeStaleOneShotNotifications()
+        LegacyNotificationMigrator.run(context, notificationStorage, manager)
+        flushQueuedBackgroundActions()
+        activity?.intent?.let { handleOnNewIntent(it) }
+    }
+
+    private fun configureWebViewForGoogleOAuth() {
+        try {
+            activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+            val wv = bridge?.webView
+            if (wv != null) {
+                val ua = wv.settings.userAgentString ?: ""
+                if (ua.contains("; wv") || ua.contains("Version/")) {
+                    wv.settings.userAgentString = ua
+                        .replace("; wv", "")
+                        .replace(Regex("Version/\\\\d+\\\\.\\\\d+\\\\s*"), "")
+                }
+                wv.settings.javaScriptCanOpenWindowsAutomatically = true
+                wv.settings.mediaPlaybackRequiresUserGesture = false
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun purgeStaleOneShotNotifications() {
+        try {
+            val now = System.currentTimeMillis()
+            for (n in notificationStorage.getSavedNotifications()) {
+                val id = n.id ?: continue
+                val sched = n.schedule ?: continue
+                val atDate = sched.at ?: continue
+                if (!sched.isPerpetual() && atDate.time < now - 60000L) {
+                    notificationStorage.deleteNotification(id.toString())
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun handleOnResume() {
+        super.handleOnResume()
+        isAppInForegroundState = true
+        activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+        flushQueuedBackgroundActions()
+    }
+
+    override fun handleOnPause() {
+        super.handleOnPause()
+        isAppInForegroundState = false
+    }
+
+    private fun flushQueuedBackgroundActions() {
+        try {
+            val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(BG_ACTION_KEY, null) ?: return
+            prefs.edit().remove(BG_ACTION_KEY).apply()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val itemStr = arr.optString(i, null) ?: continue
+                val itemJson = JSObject(itemStr)
+                notifyListeners("localNotificationActionPerformed", itemJson, true)
+            }
+        } catch (e: Exception) {
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'load configureWebViewForGoogleOAuth, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
+  'load configureWebViewForGoogleOAuth, foreground state tracking, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
   origPluginLoad,
   patchedPluginLoad,
-  'wv.settings.mediaPlaybackRequiresUserGesture = false',
-  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6]
+  'override fun handleOnPause()',
+  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7]
 );
 
 const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
@@ -2231,9 +2326,82 @@ const legacyCompanionFireV2 = `        private const val BG_ACTION_PREFS = "YAAD
             }
         }`;
 
+const legacyCompanionFireV3 = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+        private const val BG_ACTION_KEY = "queued_actions"
+        private var activeMediaPlayer: android.media.MediaPlayer? = null
+
+        fun stopActiveMediaPlayer() {
+            try {
+                activeMediaPlayer?.let { mp ->
+                    if (mp.isPlaying) {
+                        mp.stop()
+                    }
+                    mp.release()
+                }
+            } catch (e: Exception) {
+            } finally {
+                activeMediaPlayer = null
+            }
+        }
+
+        fun fireReceived(notification: JSObject?) {
+            getLocalNotificationsInstance()?.dispatchReceived(notification)
+        }
+
+        fun fireActionPerformed(dataJson: JSObject): Boolean {
+            val instance = getLocalNotificationsInstance()
+            val act = instance?.activity
+            if (instance != null && act != null && !act.isFinishing && !act.isDestroyed) {
+                instance.dispatchActionPerformed(dataJson)
+                return true
+            }
+            return false
+        }
+
+        fun queueBackgroundAction(context: Context, dataJson: JSObject) {
+            try {
+                val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BG_ACTION_KEY, "[]")
+                val arr = JSONArray(existing)
+                val newRemId = dataJson.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                val filteredArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val itemStr = arr.optString(i, null) ?: continue
+                    if (newRemId.isNotEmpty()) {
+                        try {
+                            val prevObj = JSObject(itemStr)
+                            val prevRemId = prevObj.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (prevRemId == newRemId) continue
+                        } catch (e: Exception) {
+                        }
+                    }
+                    filteredArr.put(itemStr)
+                }
+                filteredArr.put(dataJson.toString())
+                prefs.edit().putString(BG_ACTION_KEY, filteredArr.toString()).apply()
+            } catch (e: Exception) {
+            }
+        }`;
+
 const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
         private const val BG_ACTION_KEY = "queued_actions"
         private var activeMediaPlayer: android.media.MediaPlayer? = null
+        private var isAppInForegroundState: Boolean = false
+
+        fun isAppInForeground(context: Context): Boolean {
+            if (!isAppInForegroundState) return false
+            val instance = getLocalNotificationsInstance() ?: return false
+            val act = instance.activity ?: return false
+            if (act.isFinishing || act.isDestroyed) return false
+            try {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (pm != null && !pm.isInteractive) return false
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                if (km != null && km.isKeyguardLocked) return false
+            } catch (e: Exception) {
+            }
+            return true
+        }
 
         fun stopActiveMediaPlayer() {
             try {
@@ -2291,11 +2459,11 @@ const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'companion stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
+  'companion isAppInForeground, stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
   origCompanionFire,
   patchedCompanionFire,
-  'fun stopActiveMediaPlayer()',
-  [legacyCompanionFire, legacyCompanionFireV2]
+  'fun isAppInForeground(context: Context): Boolean',
+  [legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3]
 );
 
 // 8. Create standalone YaadAlarmPopupActivity.kt (Out-of-app minimal theme-matched 1-minute notification card)

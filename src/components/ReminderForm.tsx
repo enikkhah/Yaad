@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Category, Priority, Reminder, RecurrenceType, SavedLocation, LocationGeofenceConfig, GeofenceTriggerType } from '../types';
+import { Category, Priority, Reminder, RecurrenceType, SavedLocation, GeofenceTriggerType, InProgressItem, MedicationItem } from '../types';
 import { 
   getJalaliComponents, 
   PERSIAN_MONTHS, 
@@ -22,41 +22,36 @@ import {
   HOURLY_INTERVALS 
 } from '../utils/recurrence';
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
-import { parseSmsOrText } from '../utils/smsParser';
 import { CameraCaptureModal } from './CameraCaptureModal';
-import { requestMicrophonePermission, requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
+import { InProgressPanel } from './InProgressPanel';
+import { MedicationPanel } from './MedicationPanel';
+import { isMedicationActiveOnDate } from '../utils/medicationNotifications';
+import { requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 import { 
   Mic, 
-  MicOff, 
   Calendar, 
-  Clock, 
   Briefcase, 
   Heart, 
   Tag, 
   Camera, 
   Upload, 
-  Sparkles, 
-  MessageSquare, 
-  Volume2, 
   Zap, 
   X, 
   Plus,
   Trash2,
   Check,
   Repeat,
-  ShieldCheck,
-  FileText,
   AlertCircle,
   Smartphone,
   MapPin,
-  Navigation,
   Crosshair,
-  Radio,
-  Compass,
   ChevronDown,
-  Sliders
+  Sliders,
+  Layers,
+  Bell,
+  Pill
 } from 'lucide-react';
 import { WheelPicker } from './WheelPicker';
 import { AppLanguage, getT, formatSavedLocationTitle } from '../utils/i18n';
@@ -72,6 +67,28 @@ interface ReminderFormProps {
   savedLocations?: SavedLocation[];
   language?: AppLanguage;
   defaultEnableGeofence?: boolean;
+  initialTab?: 'reminder' | 'in_progress' | 'medication';
+  inProgressItems?: InProgressItem[];
+  onSaveInProgressItem?: (
+    itemData: Omit<InProgressItem, 'id' | 'createdAt' | 'lastUpdatedAt'>,
+    editingId?: string
+  ) => void;
+  onUpdateInProgressProgress?: (id: string, newProgress: number, customNote?: string) => void;
+  onToggleInProgressComplete?: (id: string) => void;
+  onDeleteInProgressItem?: (id: string) => void;
+  medications?: MedicationItem[];
+  onSaveMedication?: (
+    medData: Omit<MedicationItem, 'id' | 'createdAt' | 'updatedAt' | 'history'>,
+    editingId?: string
+  ) => void;
+  onLogMedicationDose?: (
+    medicationId: string,
+    dateKey: string,
+    scheduledTime: string,
+    status: 'taken' | 'missed' | 'reset'
+  ) => void;
+  onDeleteMedication?: (id: string) => void;
+  onRefillMedicationStock?: (id: string, addedAmount: number) => void;
 }
 
 
@@ -101,14 +118,34 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   savedLocations = [],
   language = 'fa',
   defaultEnableGeofence = false,
+  initialTab = 'reminder',
+  inProgressItems = [],
+  onSaveInProgressItem,
+  onUpdateInProgressProgress,
+  onToggleInProgressComplete,
+  onDeleteInProgressItem,
+  medications = [],
+  onSaveMedication,
+  onLogMedicationDose,
+  onDeleteMedication,
+  onRefillMedicationStock,
 }) => {
   const t = getT(language);
   const isEn = language === 'en';
+  const [activeFormTab, setActiveFormTab] = useState<'reminder' | 'in_progress' | 'medication'>(
+    initialData ? 'reminder' : initialTab
+  );
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<Category>('work');
   const [priority, setPriority] = useState<Priority>('medium');
   const [priorityLevel, setPriorityLevel] = useState<number>(3); // 1 to 10 numerical priority
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveFormTab(initialData ? 'reminder' : initialTab);
+    }
+  }, [isOpen, initialData, initialTab]);
 
   const handleSelectPriority = (level: number) => {
     const clamped = Math.max(1, Math.min(10, level));
@@ -200,14 +237,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     titleRef.current = title;
   }, [title]);
 
-  // Camera & SMS states
+  // Camera state
   const [isCameraOpen, setIsCameraOpen] = useState(false);
-  const [isSmsImportOpen, setIsSmsImportOpen] = useState(false);
-  const [smsRawText, setSmsRawText] = useState('');
-  const [smsPermissionStatus, setSmsPermissionStatus] = useState<'idle' | 'listening' | 'granted' | 'denied'>('idle');
-  const [smsStatusMsg, setSmsStatusMsg] = useState<string>('');
-  const smsAbortControllerRef = useRef<AbortController | null>(null);
-  const smsFileInputRef = useRef<HTMLInputElement>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -342,8 +373,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     };
   }, [isOpen, initialData, defaultEnableGeofence]);
 
-  // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
+  // Virtual keyboard tracking: keeps modal & active input pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
+  const [viewportOffsetTop, setViewportOffsetTop] = useState<number>(0);
 
   useEffect(() => {
     if (!isOpen) {
@@ -362,6 +394,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     const handleViewportChange = () => {
       if (window.visualViewport) {
         setViewportHeight(window.visualViewport.height);
+        setViewportOffsetTop(window.visualViewport.offsetTop || 0);
       }
     };
     window.visualViewport.addEventListener('resize', handleViewportChange);
@@ -492,20 +525,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     if (updatedTitle !== currentTitle) {
                       titleRef.current = updatedTitle;
                       setTitle(updatedTitle);
-
-                      const parsed = parseSmsOrText(updatedTitle);
-                      if (parsed.suggestedTimestamp) {
-                        const j = getJalaliComponents(parsed.suggestedTimestamp);
-                        setSelectedHour(j.hour);
-                        setSelectedMinute(j.minute);
-                        setSelectedDay(j.day);
-                        setSelectedMonth(j.month);
-                        setSelectedYear(j.year);
-                      }
-                      if (parsed.category) {
-                        setCategory(parsed.category);
-                        setRingTune(parsed.category);
-                      }
                     }
                   }
                 }
@@ -622,26 +641,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     }
   };
 
-  const setTonight = () => {
-    const now = new Date();
-    now.setHours(20, 0, 0, 0);
-    if (now.getTime() <= Date.now()) {
-      now.setDate(now.getDate() + 1);
-    }
-    if (isEn) {
-      setSelectedYear(now.getFullYear());
-      setSelectedMonth(now.getMonth() + 1);
-      setSelectedDay(now.getDate());
-    } else {
-      const j = getJalaliComponents(now.getTime());
-      setSelectedYear(j.year);
-      setSelectedMonth(j.month);
-      setSelectedDay(j.day);
-    }
-    setSelectedHour(20);
-    setSelectedMinute(0);
-  };
-
   const setTomorrowMorning = () => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -683,114 +682,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       }
     };
     reader.readAsDataURL(file);
-  };
-
-  // Handle SMS / External Text Import
-  const handleSmsImport = () => {
-    if (!smsRawText.trim()) return;
-    const parsed = parseSmsOrText(smsRawText);
-    setTitle(parsed.title);
-    if (parsed.description) {
-      setDescription(parsed.description);
-    }
-    setCategory(parsed.category);
-    setRingTune(parsed.category);
-    setPriority(parsed.priority);
-    setPriorityLevel(parsed.priority === 'high' ? 5 : parsed.priority === 'medium' ? 3 : 1);
-
-    if (parsed.suggestedTimestamp) {
-      const j = getJalaliComponents(parsed.suggestedTimestamp);
-      setSelectedYear(j.year);
-      setSelectedMonth(j.month);
-      setSelectedDay(j.day);
-      setSelectedHour(j.hour);
-      setSelectedMinute(j.minute);
-    }
-
-    if (smsAbortControllerRef.current) {
-      smsAbortControllerRef.current.abort();
-    }
-    setIsSmsImportOpen(false);
-    setSmsRawText('');
-    setSmsPermissionStatus('idle');
-    setSmsStatusMsg('');
-  };
-
-  // Direct Native SMS Permission & WebOTP Receiver
-  const requestDirectSmsPermission = async () => {
-    // 1. Check if WebOTP API is available in browser (Chrome Android / PWA)
-    if ('credentials' in navigator && (window as any).OTPCredential) {
-      try {
-        if (smsAbortControllerRef.current) {
-          smsAbortControllerRef.current.abort();
-        }
-        const ac = new AbortController();
-        smsAbortControllerRef.current = ac;
-        setSmsPermissionStatus('listening');
-        setSmsStatusMsg('در حال اتصال و دریافت خودکار پیامک از سیستم...');
-
-        const content: any = await (navigator.credentials as any).get({
-          otp: { transport: ['sms'] },
-          signal: ac.signal,
-        });
-
-        if (content && (content.code || content.message)) {
-          const raw = content.message || content.code || '';
-          setSmsRawText(raw);
-          setSmsPermissionStatus('granted');
-          setSmsStatusMsg('پیامک با موفقیت از سیستم دریافت و مشخصات استخراج شد!');
-        }
-      } catch (err: any) {
-        if (err.name === 'AbortError') return;
-        console.warn('WebOTP direct SMS error:', err);
-        setSmsPermissionStatus('idle');
-        setSmsStatusMsg('دریافت مستقیم پیامک انجام نشد. از گزینه کلیپ‌بورد یا فایل استفاده فرمایید.');
-      }
-    } else {
-      // 2. Clipboard SMS reading with permission query
-      try {
-        setSmsStatusMsg('در حال خواندن مستقیم متن پیامک از کلیپ‌بورد...');
-        const text = await navigator.clipboard.readText();
-        if (text && text.trim()) {
-          setSmsRawText(text);
-          setSmsPermissionStatus('granted');
-          setSmsStatusMsg('متن پیامک با موفقیت از سیستم خوانده شد.');
-        } else {
-          setSmsStatusMsg('کلیپ‌بورد خالی است. متن پیامک را کپی کنید.');
-        }
-      } catch (err) {
-        setSmsPermissionStatus('denied');
-        setSmsStatusMsg('دسترسی به کلیپ‌بورد محدود است. متن را در کادر زیر وارد کنید.');
-      }
-    }
-  };
-
-  const readFromClipboard = async () => {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) {
-        setSmsRawText(text);
-        setSmsPermissionStatus('granted');
-        setSmsStatusMsg('متن پیامک با موفقیت از کلیپ‌بورد خوانده شد.');
-      }
-    } catch {
-      setSmsStatusMsg('دسترسی به کلیپ‌بورد توسط مرورگر محدود شده است.');
-    }
-  };
-
-  const handleSmsFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const text = event.target?.result as string;
-      if (text) {
-        setSmsRawText(text);
-        setSmsPermissionStatus('granted');
-        setSmsStatusMsg('فایل پیامک با موفقیت خوانده شد.');
-      }
-    };
-    reader.readAsText(file);
   };
 
   const handleGetQuickGps = async () => {
@@ -892,51 +783,171 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     <>
       <div 
         className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
-        style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
+        style={{
+          height: viewportHeight ? `${viewportHeight}px` : '100dvh',
+          top: viewportOffsetTop ? `${viewportOffsetTop}px` : 0,
+          bottom: 'auto',
+        }}
         dir={isEn ? 'ltr' : 'rtl'}
       >
         <div 
           className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-150"
           style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '92dvh' }}
         >
-          {/* Header */}
-          <div className="px-2.5 sm:px-6 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-950/60 sticky top-0 z-10 backdrop-blur shrink-0">
-            <div className="flex items-center gap-2.5 sm:gap-3">
-              <div className="p-1.5 sm:p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                <Plus className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
+          {/* Header & Top Tab Switcher (ثبت یادآور زمانی | در جریان) — Frozen at top on scroll */}
+          <div className="px-2.5 sm:px-6 py-3 border-b border-stone-800 bg-stone-950/95 sticky top-0 z-30 backdrop-blur-md shrink-0 space-y-2.5 shadow-md">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5 sm:gap-3">
+                <div className="p-1.5 sm:p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
+                  {activeFormTab === 'in_progress' ? (
+                    <Layers className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
+                  ) : (
+                    <Plus className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
+                  )}
+                </div>
+                <h2 className="text-base sm:text-lg font-bold text-white">
+                  {activeFormTab === 'in_progress'
+                    ? isEn
+                      ? 'In-Progress Task'
+                      : 'کار در جریان'
+                    : initialData
+                    ? isEn
+                      ? 'Edit Reminder'
+                      : 'ویرایش یادآور'
+                    : isEn
+                    ? 'Add New Reminder'
+                    : 'ثبت سریع یادآور'}
+                </h2>
               </div>
-              <h2 className="text-base sm:text-lg font-bold text-white">
-                {initialData 
-                  ? (isEn ? 'Edit Reminder' : 'ویرایش یادآور') 
-                  : (isEn ? 'Add New Reminder' : 'ثبت سریع یادآور')}
-              </h2>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="p-1.5 sm:p-2 rounded-full text-stone-400 hover:text-white hover:bg-stone-800 cursor-pointer"
+                  title={isEn ? 'Close' : 'بستن'}
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => setIsSmsImportOpen(true)}
-                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs rounded-xl bg-cyan-950/60 text-cyan-300 border border-cyan-500/30 hover:bg-cyan-900/50 transition-colors cursor-pointer"
-              >
-                <MessageSquare className="w-3.5 h-3.5" />
-                <span>{isEn ? 'Import from SMS' : 'ورود از پیامک'}</span>
-              </button>
+            {/* Dedicated Top Tabs inside Reminder Registration Modal */}
+            {!initialData && (
+              <div className="grid grid-cols-3 gap-1.5 p-1 rounded-2xl bg-stone-900 border border-stone-800">
+                <button
+                  type="button"
+                  onClick={() => setActiveFormTab('reminder')}
+                  className={`min-h-[40px] px-2 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+                    activeFormTab === 'reminder'
+                      ? 'bg-indigo-500 text-white shadow-sm'
+                      : 'text-stone-400 hover:text-white'
+                  }`}
+                >
+                  <Bell className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <span className="truncate">{isEn ? 'Reminder' : 'یادآور زمانی'}</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={onClose}
-                className="p-1.5 sm:p-2 rounded-full text-stone-400 hover:text-white hover:bg-stone-800 cursor-pointer"
-                title={isEn ? 'Close' : 'بستن'}
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isListening) stopVoiceListening();
+                    setActiveFormTab('in_progress');
+                  }}
+                  className={`min-h-[40px] px-2 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+                    activeFormTab === 'in_progress'
+                      ? 'bg-indigo-500 text-white shadow-sm'
+                      : 'text-stone-400 hover:text-white'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <span className="truncate">{isEn ? 'In-Progress' : 'کار در جریان'}</span>
+                  {inProgressItems.filter((i) => !i.deletedAt && !i.completed).length > 0 && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
+                        activeFormTab === 'in_progress'
+                          ? 'bg-white/20 text-white'
+                          : 'bg-stone-800 text-stone-300'
+                      }`}
+                    >
+                      {isEn
+                        ? inProgressItems.filter((i) => !i.deletedAt && !i.completed).length
+                        : toPersianDigits(
+                            inProgressItems.filter((i) => !i.deletedAt && !i.completed).length
+                          )}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isListening) stopVoiceListening();
+                    setActiveFormTab('medication');
+                  }}
+                  className={`min-h-[40px] px-2 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
+                    activeFormTab === 'medication'
+                      ? 'bg-indigo-500 text-white shadow-sm'
+                      : 'text-stone-400 hover:text-white'
+                  }`}
+                >
+                  <Pill className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <span className="truncate">{isEn ? 'Medication' : 'یادآور دارو'}</span>
+                  {medications.filter((m) => !m.deletedAt && isMedicationActiveOnDate(m, new Date())).length > 0 && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
+                        activeFormTab === 'medication'
+                          ? 'bg-white/20 text-white'
+                          : 'bg-stone-800 text-stone-300'
+                      }`}
+                    >
+                      {isEn
+                        ? medications.filter((m) => !m.deletedAt && isMedicationActiveOnDate(m, new Date())).length
+                        : toPersianDigits(
+                            medications.filter((m) => !m.deletedAt && isMedicationActiveOnDate(m, new Date())).length
+                          )}
+                    </span>
+                  )}
+                </button>
+              </div>
+            )}
           </div>
 
-          {/* Form */}
+          {activeFormTab === 'medication' &&
+          onSaveMedication &&
+          onLogMedicationDose &&
+          onDeleteMedication &&
+          onRefillMedicationStock ? (
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2.5 py-4 sm:p-6">
+              <MedicationPanel
+                medications={medications}
+                onSaveMedication={onSaveMedication}
+                onLogDose={onLogMedicationDose}
+                onDeleteMedication={onDeleteMedication}
+                onRefillStock={onRefillMedicationStock}
+                language={language}
+                mode="modal-tab"
+                initialOpenForm={true}
+              />
+            </div>
+          ) : activeFormTab === 'in_progress' && onSaveInProgressItem && onUpdateInProgressProgress && onToggleInProgressComplete && onDeleteInProgressItem ? (
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2.5 py-4 sm:p-6">
+              <InProgressPanel
+                items={inProgressItems}
+                onSaveItem={onSaveInProgressItem}
+                onUpdateProgress={onUpdateInProgressProgress}
+                onToggleComplete={onToggleInProgressComplete}
+                onDeleteItem={onDeleteInProgressItem}
+                language={language}
+                mode="modal-tab"
+                initialOpenForm={true}
+              />
+            </div>
+          ) : (
+          /* Form */
           <form onSubmit={handleSubmit} className="flex-1 flex flex-col min-h-0 overflow-hidden">
             {/* Scrollable Form Body */}
-            <div className="flex-1 overflow-y-auto px-2.5 py-4 sm:p-6 space-y-4 sm:space-y-6">
+            <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2.5 py-4 sm:p-6 space-y-4 sm:space-y-6">
               {/* Required Field Validation Alert Banner */}
               {validationError && (
                 <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-2">
@@ -949,9 +960,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
             <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-indigo-950/55 via-stone-900/95 to-stone-950 border-2 border-indigo-500/55 shadow-lg shadow-indigo-500/10 space-y-2">
               <div className="flex items-center justify-between flex-wrap gap-1.5">
                 <label className="text-sm sm:text-base font-black text-white tracking-tight flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] shrink-0" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-[#F7941E] shadow-[0_0_8px_rgba(247,148,30,0.85)] shrink-0" />
                   <span>{isEn ? 'Reminder Title' : 'عنوان یادآور'}</span>
-                  <span className="text-amber-400 font-black text-base">*</span>
+                  <span className="text-[#F7941E] font-black text-base">*</span>
                 </label>
                 <div className="flex items-center gap-2">
                   {isListening && (
@@ -980,8 +991,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   placeholder={isEn ? 'e.g. Project delivery, Doctor appointment, Buy groceries...' : 'مثال: تحویل پروژه، تماس با پزشک، خرید نان...'}
                   className={`w-full bg-stone-950 border-2 rounded-2xl ${isEn ? 'pl-4 pr-14' : 'pr-4 pl-14'} py-3.5 text-white placeholder-stone-400 focus:outline-none transition-all text-base sm:text-lg font-extrabold shadow-inner ${
                     isListening
-                      ? 'border-amber-400 ring-2 ring-amber-400/30 shadow-lg shadow-amber-500/15'
-                      : 'border-indigo-400/70 focus:border-amber-400 ring-2 ring-indigo-500/15 focus:ring-amber-400/25'
+                      ? 'border-[#F7941E] ring-2 ring-[#F7941E]/30 shadow-lg shadow-[#F7941E]/15'
+                      : 'border-indigo-400/70 focus:border-[#F7941E] ring-2 ring-indigo-500/15 focus:ring-[#F7941E]/25'
                   }`}
                 />
 
@@ -1443,14 +1454,14 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <label className="text-xs font-semibold text-stone-300 flex items-center gap-1.5">
-                        <Zap className="w-3.5 h-3.5 text-amber-400" />
+                        <Zap className="w-3.5 h-3.5 text-[#F7941E]" />
                         <span>{isEn ? 'Reminder Priority' : 'اولویت یادآوری'}</span>
                       </label>
                       <span className={`text-[11px] font-black px-2.5 py-0.5 rounded-lg border flex items-center gap-1 ${
                         priorityLevel >= 5
                           ? 'bg-red-500/15 border-red-500/40 text-red-300'
                           : priorityLevel >= 4
-                          ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                          ? 'bg-[#F7941E]/15 border-[#F7941E]/40 text-[#F7941E]'
                           : priorityLevel >= 2
                           ? 'bg-indigo-500/15 border-indigo-500/40 text-indigo-300'
                           : 'bg-stone-800 border-stone-700 text-stone-300'
@@ -1492,7 +1503,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         onClick={() => handleSelectPriority(4)}
                         className={`py-2.5 px-1 rounded-xl border text-center transition-all cursor-pointer active:scale-95 flex items-center justify-center ${
                           priorityLevel === 4
-                            ? 'bg-amber-950/90 border-amber-500 text-amber-300 font-bold ring-1 ring-amber-500/40 shadow-xs'
+                            ? 'bg-[#F7941E]/20 border-[#F7941E] text-[#F7941E] font-bold ring-1 ring-[#F7941E]/40 shadow-xs'
                             : 'bg-stone-950/60 border-stone-800 text-stone-400 hover:text-stone-200 hover:bg-stone-900'
                         }`}
                       >
@@ -2086,6 +2097,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </button>
             </div>
           </form>
+          )}
         </div>
       </div>
 
@@ -2107,191 +2119,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         onClose={() => setIsCameraOpen(false)}
         onCapture={(img) => setImageUrl(img)}
       />
-
-      {/* SMS Import Modal with Direct Permission & WebOTP */}
-      {isSmsImportOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto">
-          <div className="bg-stone-900 border border-cyan-500/40 rounded-3xl w-full max-w-lg p-5 sm:p-6 shadow-2xl space-y-4 my-auto">
-            {/* Modal Header */}
-            <div className="flex items-center justify-between border-b border-stone-800 pb-3">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                  <MessageSquare className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-sm sm:text-base text-white">
-                    دسترسی مستقیم و استخراج از پیامک‌ها
-                  </h3>
-                  <p className="text-[11px] text-stone-400">
-                    دریافت هوشمند مشخصات یادآور از پیامک‌های بانکی، پزشکی و کاری
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  if (smsAbortControllerRef.current) {
-                    smsAbortControllerRef.current.abort();
-                  }
-                  setIsSmsImportOpen(false);
-                }}
-                className="p-1.5 rounded-full text-stone-400 hover:text-white hover:bg-stone-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Direct SMS Permission Actions */}
-            <div className="space-y-2">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                {/* 1. Direct Native SMS Permission (WebOTP API) */}
-                <button
-                  type="button"
-                  onClick={requestDirectSmsPermission}
-                  className={`p-3 rounded-2xl border text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
-                    smsPermissionStatus === 'granted'
-                      ? 'bg-emerald-500/20 border-emerald-500/60 text-emerald-300'
-                      : 'bg-cyan-950/70 border-cyan-500/40 text-cyan-300 hover:bg-cyan-900/50'
-                  }`}
-                >
-                  <ShieldCheck className="w-4 h-4 text-cyan-400" />
-                  <span>
-                    {smsPermissionStatus === 'granted'
-                      ? '✓ پیامک با موفقیت دریافت شد'
-                      : 'دریافت مستقیم پیامک از گوشی (WebOTP)'}
-                  </span>
-                </button>
-
-                {/* 2. Direct Clipboard Read */}
-                <button
-                  type="button"
-                  onClick={readFromClipboard}
-                  className="p-3 rounded-2xl bg-stone-950 border border-stone-800 hover:border-stone-700 text-stone-300 hover:text-white text-xs font-bold transition-colors flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <span>خواندن از کلیپ‌بورد پیامک</span>
-                </button>
-              </div>
-
-              {/* 3. File backup upload (optional) */}
-              <div className="flex items-center justify-between px-1 text-xs">
-                <button
-                  type="button"
-                  onClick={() => smsFileInputRef.current?.click()}
-                  className="text-[11px] text-stone-400 hover:text-cyan-400 flex items-center gap-1 cursor-pointer transition-colors"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>بارگذاری از فایل پیامک (XML / TXT)</span>
-                </button>
-                <input
-                  ref={smsFileInputRef}
-                  type="file"
-                  accept=".txt,.xml,.json"
-                  onChange={handleSmsFileUpload}
-                  className="hidden"
-                />
-              </div>
-
-              {/* Status message */}
-              {smsStatusMsg && (
-                <div className={`p-2.5 rounded-xl text-xs font-medium border ${
-                  smsPermissionStatus === 'granted'
-                    ? 'bg-emerald-950/50 text-emerald-300 border-emerald-500/30'
-                    : smsPermissionStatus === 'listening'
-                    ? 'bg-indigo-950/50 text-indigo-300 border-indigo-500/30'
-                    : 'bg-stone-950 text-stone-300 border-stone-800'
-                }`}>
-                  {smsStatusMsg}
-                </div>
-              )}
-            </div>
-
-            {/* Raw SMS Textarea */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-semibold text-stone-300 flex items-center justify-between">
-                <span>متن پیامک:</span>
-                <span className="text-[11px] text-stone-400">می‌توانید متن را مستقیماً ویرایش کنید</span>
-              </label>
-              <textarea
-                value={smsRawText}
-                onChange={(e) => setSmsRawText(e.target.value)}
-                placeholder="مثال: یادآوری نوبت دندانپزشکی فردا ساعت ۱۷:۰۰ در کلینیک..."
-                rows={3}
-                className="w-full bg-stone-950 border border-stone-700 focus:border-cyan-500 rounded-2xl p-3 text-xs text-white placeholder-stone-500 focus:outline-none transition-colors"
-              />
-            </div>
-
-            {/* Quick Sample SMS for instant test */}
-            <div className="space-y-1">
-              <span className="text-[11px] text-stone-400">نمونه‌های آزمایشی پیامک:</span>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => setSmsRawText('یادآوری نوبت دندانپزشکی فردا ساعت ۱۷:۰۰ در کلینیک دکتر علوی')}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
-                >
-                  نوبت پزشک (فردا ۱۷:۰۰)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSmsRawText('مشتری گرامی، زمان پرداخت قسط وام شما پس‌فردا ساعت ۱۰:۰۰ می‌باشد')}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
-                >
-                  قسط بانکی (پس‌فردا ۱۰:۰۰)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSmsRawText('جلسه کاری با مدیر پروژه امشب ساعت ۲۰:۰۰ در سالن اجتماعات شرکت')}
-                  className="text-[11px] px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 border border-stone-700 cursor-pointer"
-                >
-                  جلسه کاری (امشب ۲۰:۰۰)
-                </button>
-              </div>
-            </div>
-
-            {/* Extracted Preview Badge */}
-            {smsRawText.trim() && (() => {
-              const preview = parseSmsOrText(smsRawText);
-              return (
-                <div className="p-3 rounded-2xl bg-stone-950 border border-indigo-500/25 space-y-1.5 text-xs">
-                  <div className="font-bold text-indigo-400 flex items-center gap-1">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>اطلاعات استخراج‌شده هوشمند:</span>
-                  </div>
-                  <div className="text-white font-medium">عنوان: {preview.title}</div>
-                  <div className="flex items-center gap-2 text-[11px] text-stone-400">
-                    <span>دسته‌بندی: {preview.category === 'work' ? 'کار' : preview.category === 'family' ? 'خانواده' : 'سایر'}</span>
-                    <span>•</span>
-                    <span>اولویت: {preview.priority === 'high' ? 'فوری' : preview.priority === 'medium' ? 'متوسط' : 'عادی'}</span>
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Footer Buttons */}
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-stone-800">
-              <button
-                type="button"
-                onClick={() => {
-                  if (smsAbortControllerRef.current) {
-                    smsAbortControllerRef.current.abort();
-                  }
-                  setIsSmsImportOpen(false);
-                }}
-                className="px-4 py-2 rounded-xl bg-stone-800 text-stone-300 text-xs font-medium hover:bg-stone-700 cursor-pointer"
-              >
-                انصراف
-              </button>
-              <button
-                type="button"
-                onClick={handleSmsImport}
-                disabled={!smsRawText.trim()}
-                className="px-5 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 disabled:opacity-50 text-white font-black text-xs shadow-lg shadow-indigo-500/25 active:scale-95 transition-all cursor-pointer"
-              >
-                تأیید و درج در یادآور
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 };

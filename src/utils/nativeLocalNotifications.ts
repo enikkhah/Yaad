@@ -265,6 +265,15 @@ export function isNativeApp(): boolean {
   }
 }
 
+/**
+ * Checks whether the user is currently inside the app (foreground & visible).
+ * When inside the app, status-bar / heads-up notifications must NOT be posted on top of in-app alerts.
+ */
+export function isAppCurrentlyInForeground(): boolean {
+  if (typeof document === 'undefined') return false;
+  return document.visibilityState === 'visible';
+}
+
 // Initialize default debug state
 function loadInitialDebugState(): LocalNotificationDebugInfo {
   const defaultState: LocalNotificationDebugInfo = {
@@ -1111,6 +1120,11 @@ export async function fireImmediateLocalNotification(
   body: string,
   extraData?: any
 ): Promise<void> {
+  // Do NOT emit a notification-bar alert when the user is currently inside the app
+  if (isAppCurrentlyInForeground()) {
+    return;
+  }
+
   if (!isNativeApp()) {
     // In web environment, log or trigger HTML5 notification if granted
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
@@ -1229,6 +1243,21 @@ export function setupNotificationListeners(
   if (!isNativeApp()) return;
 
   try {
+    // When a scheduled notification arrives while the user is actively inside the app,
+    // immediately remove any delivered status-bar banner so it never overlaps the in-app notification modal.
+    LocalNotifications.addListener('localNotificationReceived', (notification) => {
+      if (isAppCurrentlyInForeground()) {
+        const remId = notification?.extra?.reminderId;
+        if (remId) {
+          dismissDeliveredNotifications(remId).catch(() => {});
+        } else if (typeof notification?.id === 'number') {
+          LocalNotifications.removeDeliveredNotifications({
+            notifications: [{ id: notification.id, title: '', body: '' }],
+          }).catch(() => {});
+        }
+      }
+    });
+
     LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
       const actionId = action.actionId;
       const notifId = action.notification?.id;
@@ -1324,6 +1353,12 @@ export async function triggerOutOfAppPersistentNotification(
   settings?: AppSettings,
   onClickOpen?: (r: Reminder) => void
 ): Promise<void> {
+  // Never post a notification-bar alert while the user is inside the app
+  if (isAppCurrentlyInForeground()) {
+    dismissDeliveredNotifications(reminder.id).catch(() => {});
+    return;
+  }
+
   const isEn = settings?.language === 'en';
   const timeFormatted = formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa');
   const title = reminder.title;

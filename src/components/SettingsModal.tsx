@@ -3,17 +3,12 @@ import { AppSettings, AppTheme, PhoneAlarmSound, Reminder, IdeaNote, SavedLocati
 import { 
   X, 
   Palette, 
-  Clock, 
   LogOut,
-  Sliders,
   Bell,
   BarChart3,
-  Sparkles,
   Type,
   Smartphone,
-  CheckCircle2,
   Globe,
-  Upload,
   Database,
   FileJson,
   MapPin,
@@ -27,34 +22,24 @@ import {
   Volume2,
   Play,
   Square,
-  Music,
-  Loader2,
-  Navigation,
-  Crosshair,
   Radio,
-  Compass,
   ChevronDown,
   ChevronUp,
-  Sun,
-  Moon,
   Trash2,
   RotateCcw,
   Calendar,
   Lightbulb,
-  Mail,
   ExternalLink,
   FolderOpen,
   HardDrive,
-  RefreshCw
+  RefreshCw,
+  Mail
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
-import { APP_VERSION, APP_VERSION_INFO } from '../utils/version';
+import { APP_VERSION } from '../utils/version';
 import { toPersianDigits, formatJalaliFull } from '../utils/jalali';
 import { 
-  isGeofenceTrackingEnabled, 
-  setGeofenceTrackingEnabled, 
-  getLastKnownPosition,
-  UserPosition
+  setGeofenceTrackingEnabled
 } from '../utils/geofenceManager';
 import { 
   isNativeAndroidApp,
@@ -71,7 +56,6 @@ import {
 import {
   performAutoBackup,
   retrieveFromLocalYaadFolder,
-  safeParseJsonFromReadFileData,
   getSnapshotItemCount,
   LOCAL_BACKUP_FOLDER_NAME
 } from '../utils/backupStorage';
@@ -100,7 +84,6 @@ interface SettingsModalProps {
   savedLocations?: SavedLocation[];
   occasions?: Occasion[];
   onRestoreData?: (data: { reminders?: Reminder[]; ideas?: IdeaNote[]; savedLocations?: SavedLocation[]; occasions?: Occasion[]; settings?: Partial<AppSettings> }, mode: 'replace' | 'merge') => void;
-  onTestHeadsUpBanner?: (reminder: Reminder) => void;
   isGeofenceActive?: boolean;
   onToggleGeofenceActive?: (active: boolean) => void;
   onRestoreItem?: (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => void;
@@ -123,7 +106,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   savedLocations = [],
   occasions = [],
   onRestoreData,
-  onTestHeadsUpBanner,
   isGeofenceActive = true,
   onToggleGeofenceActive,
   onRestoreItem,
@@ -134,6 +116,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const isFa = currentLanguage === 'fa';
   const t = getT(currentLanguage);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [activeInfoDialog, setActiveInfoDialog] = useState<'privacy' | 'about' | null>(null);
 
   // Backup & Restore state
   const [backupSuccessMessage, setBackupSuccessMessage] = useState<string | null>(null);
@@ -151,7 +134,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   // Recycle Bin state
   const [isConfirmingEmptyBin, setIsConfirmingEmptyBin] = useState<boolean>(false);
-  const [activeInfoDialog, setActiveInfoDialog] = useState<'privacy' | 'about' | null>(null);
 
   // Local Folder Backup state (Fixed root folder: YAAD)
   const [isLocalSyncing, setIsLocalSyncing] = useState<boolean>(false);
@@ -331,13 +313,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     syncAllRemindersWithLocalNotifications(reminders, updatedSettings).catch(() => {});
   };
 
-  const handleVolumeChange = (newVolume: number) => {
-    const clamped = Math.max(0.0, Math.min(1.0, newVolume));
-    onUpdateSettings({ alarmVolume: clamped });
-    setGlobalVolume(clamped);
-    syncNotificationSoundAndVolume(settings.alarmSound || 'digital_beep', clamped).catch(() => {});
-  };
-
   const themes: { id: AppTheme; name: string; subtitle?: string; preview: string }[] = [
     { id: 'system', name: isFa ? 'خودکار (پیروی از گوشی)' : 'System (Auto)', preview: 'bg-gradient-to-tr from-[#181C20] via-[#14B8A6] to-[#F3F5F7] border-[#14B8A6]' },
     { id: 'dark-gold', name: isFa ? 'مشکی نیلی' : 'Obsidian Indigo', preview: 'bg-[#07070D] border-[#6366F1]' },
@@ -447,9 +422,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Header */}
         <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden border border-amber-500/30 flex-shrink-0 bg-stone-950 shadow-sm p-0.5">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden border border-[#F7941E]/35 flex-shrink-0 bg-stone-950 shadow-sm p-0.5">
               <img
-                src={appIcon}
+                src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`}
                 alt="YAAD"
                 className="w-full h-full object-cover rounded-[10px]"
                 draggable={false}
@@ -1038,15 +1013,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div
                     onClick={() => openAndroidSettings('all_files')}
                     dir={isFa ? 'rtl' : 'ltr'}
-                    className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-start justify-between gap-2.5 cursor-pointer leading-relaxed"
+                    className="p-3 rounded-xl bg-[#F7941E]/15 border border-[#F7941E]/40 text-[#F7941E] text-xs flex items-start justify-between gap-2.5 cursor-pointer leading-relaxed"
                   >
                     <div className="space-y-1.5">
-                      <p className="font-bold text-amber-100">
+                      <p className="font-bold text-stone-100">
                         {isFa
                           ? 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:'
                           : 'To create the backup folder, please grant the required permission from the following path:'}
                       </p>
-                      <p className="font-black text-amber-300">
+                      <p className="font-black text-[#F7941E]">
                         {isFa
                           ? 'تنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
                           : 'Setting → Apps → 3-point menu → Special access → All files access → Yaad slide key'}
@@ -1058,7 +1033,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         e.stopPropagation();
                         setShowStoragePermNotice(false);
                       }}
-                      className="p-1 rounded-lg hover:bg-amber-500/20 text-amber-300 shrink-0 cursor-pointer"
+                      className="p-1 rounded-lg hover:bg-[#F7941E]/20 text-[#F7941E] shrink-0 cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -1676,7 +1651,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {/* Row 1: App Version */}
               <div className="flex items-center justify-between pb-2.5 border-b border-stone-800/80">
                 <div className="flex items-center gap-2">
-                  <img src={appIcon} alt="YAAD" className="w-5 h-5 rounded-md object-cover" />
+                  <img src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`} alt="YAAD" className="w-5 h-5 rounded-md object-cover" />
                   <span className="text-xs font-bold text-stone-300">
                     {isFa ? 'ورژن اپ' : 'App Version'}
                   </span>

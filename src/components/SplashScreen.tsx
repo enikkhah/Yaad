@@ -26,6 +26,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
   onFinishRef.current = onFinish;
 
   const isEn = language === 'en';
+  const logoSrc = `${transparentLogo}${transparentLogo.includes('?') ? '&' : '?'}v=f7941e`;
 
   useEffect(() => {
     // Maximum 2.5 seconds (2500ms) per user requirement
@@ -78,22 +79,22 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           0% {
             opacity: 0;
             transform: translate3d(0, -34px, 0) scale(0.48);
-            filter: drop-shadow(0 0 0px rgba(246, 165, 47, 0));
+            filter: drop-shadow(0 0 0px rgba(247, 148, 30, 0));
           }
           42% {
             opacity: 1;
             transform: translate3d(0, 5px, 0) scale(1.04);
-            filter: drop-shadow(0 6px 26px rgba(246, 165, 47, 0.58));
+            filter: drop-shadow(0 6px 26px rgba(247, 148, 30, 0.58));
           }
           68% {
             opacity: 1;
             transform: translate3d(0, -4px, 0) scale(0.98);
-            filter: drop-shadow(0 8px 22px rgba(246, 165, 47, 0.48));
+            filter: drop-shadow(0 8px 22px rgba(247, 148, 30, 0.48));
           }
           100% {
             opacity: 1;
             transform: translate3d(0, 0px, 0) scale(1.05);
-            filter: drop-shadow(0 10px 34px rgba(246, 165, 47, 0.72));
+            filter: drop-shadow(0 10px 34px rgba(247, 148, 30, 0.72));
           }
         }
         @keyframes splashRadarRing {
@@ -136,7 +137,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
 
       {/* Ambient radial lighting without any dark box */}
       <div
-        className={`absolute w-72 h-72 sm:w-96 sm:h-96 rounded-full bg-gradient-to-tr from-blue-600/20 via-sky-500/15 to-amber-400/25 blur-3xl pointer-events-none transition-opacity ease-in-out ${
+        className={`absolute w-72 h-72 sm:w-96 sm:h-96 rounded-full bg-gradient-to-tr from-blue-600/20 via-sky-500/15 to-[#F7941E]/25 blur-3xl pointer-events-none transition-opacity ease-in-out ${
           isFadingOut ? 'opacity-0 duration-500' : 'opacity-100 duration-700'
         }`}
       />
@@ -145,12 +146,12 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
       <div className="relative flex flex-col items-center justify-center">
         <div className="relative flex items-center justify-center w-36 h-36 sm:w-44 sm:h-44">
           {/* App-themed Location & Time Radar Ripple Rings */}
-          <div className="absolute w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 border-amber-400/40 pointer-events-none animate-splash-radar-1" />
+          <div className="absolute w-24 h-24 sm:w-28 sm:h-28 rounded-full border-2 border-[#F7941E]/45 pointer-events-none animate-splash-radar-1" />
           <div className="absolute w-24 h-24 sm:w-28 sm:h-28 rounded-full border border-sky-400/35 pointer-events-none animate-splash-radar-2" />
 
           {/* New Resized Transparent Icon Image */}
           <img
-            src={transparentLogo}
+            src={logoSrc}
             alt="YAAD"
             className="relative w-32 h-32 sm:w-40 sm:h-40 object-contain select-none pointer-events-none animate-splash-pin"
             draggable={false}
@@ -164,7 +165,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
               dir="rtl"
               className="font-['Vazirmatn',sans-serif] text-base sm:text-lg font-extrabold tracking-normal text-stone-100 drop-shadow-sm"
             >
-              <span className="text-amber-400">یاد؛</span>{' '}
+              <span className="text-[#F7941E]">یاد؛</span>{' '}
               <span className="bg-gradient-to-l from-white via-stone-100 to-indigo-200 bg-clip-text text-transparent">
                 یادآور آنچه مهم است.
               </span>
@@ -173,7 +174,7 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
               dir="ltr"
               className="font-['Vazirmatn',sans-serif] text-xs sm:text-sm font-semibold text-indigo-200/85 tracking-wide drop-shadow-xs"
             >
-              <span className="text-amber-400/95 font-bold">YAAD;</span> Reminding What Matters.
+              <span className="text-[#F7941E] font-bold">YAAD;</span> Reminding What Matters.
             </p>
           </div>
 

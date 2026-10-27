@@ -1,11 +1,22 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
+import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType, InProgressItem, MedicationItem, MedicationDoseLog } from './types';
 import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
-import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging, unlockAudio } from './utils/audio';
+import { speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
-import { TimelineWidget } from './components/TimelineWidget';
 import { ReminderForm } from './components/ReminderForm';
-import { ReminderCard } from './components/ReminderCard';
+import {
+  IN_PROGRESS_STORAGE_KEY,
+  scheduleInProgressInactivityNotification,
+  cancelInProgressInactivityNotification,
+  syncAllInProgressNotifications,
+} from './utils/inProgressNotifications';
+import {
+  MEDICATION_STORAGE_KEY,
+  scheduleMedicationNotifications,
+  cancelMedicationNotifications,
+  cancelSingleMedicationDoseNotification,
+  syncAllMedicationsNotifications,
+} from './utils/medicationNotifications';
 import { AlarmModal } from './components/AlarmModal';
 import { StatisticsModal } from './components/StatisticsModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -13,24 +24,23 @@ import { IdeaCaptureModal } from './components/IdeaCaptureModal';
 import { IdeaCard } from './components/IdeaCard';
 import { LocationCaptureModal } from './components/LocationCaptureModal';
 import { SavedLocationCard } from './components/SavedLocationCard';
-import { LocationReminderModal } from './components/LocationReminderModal';
 import { OccasionsView } from './components/OccasionsView';
 import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
 import { AndroidPermissionType, openAndroidSettings, requestNotificationPermission, requestLocationPermission } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
-import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, requestLocalFolderPermission, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
+import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
 import { useFabVisibility } from './hooks/useFabVisibility';
+import { useKeyboardInputScroll } from './hooks/useKeyboardInputScroll';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { 
   initGoogleAuth, 
   signInWithGoogle, 
   signOutGoogle, 
-  syncReminderToCalendar, 
-  syncToGoogleTasks 
+  syncReminderToCalendar
 } from './utils/googleSync';
 import { User } from 'firebase/auth';
 import appIcon from './assets/images/icon.png';
@@ -47,7 +57,8 @@ import {
   fireImmediateLocalNotification,
   dismissDeliveredNotifications,
   triggerOutOfAppPersistentNotification,
-  clearOutOfAppPersistentNotification
+  clearOutOfAppPersistentNotification,
+  isAppCurrentlyInForeground
 } from './utils/nativeLocalNotifications';
 import { 
   evaluateGeofences, 
@@ -65,21 +76,9 @@ import { getT, formatSavedLocationTitle } from './utils/i18n';
 import { APP_VERSION } from './utils/version';
 import { 
   Plus, 
-  BarChart3, 
-  Calendar, 
-  Clock, 
   Search, 
-  Briefcase, 
-  Heart, 
-  Tag, 
-  CheckCircle2, 
   Bell, 
-  Filter, 
-  MessageSquare, 
-  Volume2, 
-  Zap, 
   X,
-  Sparkles,
   Settings as SettingsIcon,
   Lightbulb,
   Check,
@@ -88,13 +87,7 @@ import {
   RotateCcw,
   Trash2,
   Cake,
-  CalendarHeart,
   Radio,
-  Navigation,
-  Crosshair,
-  Moon,
-  Sun,
-  Smartphone,
   ShieldCheck,
   Info,
   Mail,
@@ -170,6 +163,7 @@ export default function App() {
   const t = getT(settings.language);
   const isEn = settings.language === 'en';
   const formatNumber = (val: number | string) => (settings.language === 'en' ? val.toString() : toPersianDigits(val));
+  const isKeyboardOpen = useKeyboardInputScroll();
 
   // Dynamic Global Font Sizing (سایز فونت با اسلایدر در کل برنامه)
   useEffect(() => {
@@ -305,6 +299,56 @@ export default function App() {
       // Ignore
     }
   }, [occasions]);
+
+  // In-Progress (در جریان) state: tracks ongoing, multi-step tasks/processes
+  const [inProgressItems, setInProgressItems] = useState<InProgressItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(IN_PROGRESS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((item: any) => item && item.id && item.title);
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(IN_PROGRESS_STORAGE_KEY, JSON.stringify(inProgressItems));
+    } catch {
+      // Ignore
+    }
+    syncAllInProgressNotifications(inProgressItems, settings).catch(() => {});
+  }, [inProgressItems, settings]);
+
+  // Medication Reminder (یادآور دارو) state: dedicated module with dose history, stock inventory, and high-priority Capacitor notifications
+  const [medications, setMedications] = useState<MedicationItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(MEDICATION_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((m: any) => m && m.id && m.name);
+        }
+      }
+    } catch {
+      // Ignore
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(MEDICATION_STORAGE_KEY, JSON.stringify(medications));
+    } catch {
+      // Ignore
+    }
+    syncAllMedicationsNotifications(medications, settings).catch(() => {});
+  }, [medications, settings]);
 
   // Active (non-deleted) collections for display in all tabs, timelines, counters, and background alarms
   const activeReminders = useMemo(() => reminders.filter((r) => !r.deletedAt), [reminders]);
@@ -529,15 +573,232 @@ export default function App() {
 
   // Modals state
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [reminderFormInitialTab, setReminderFormInitialTab] = useState<'reminder' | 'in_progress' | 'medication'>('reminder');
+  const [remindersSubPage, setRemindersSubPage] = useState<'timeline' | 'in_progress' | 'medication'>('timeline');
   const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
+
+  // Handlers for In-Progress (در جریان) items + automatic Capacitor Local Notification reset on progress updates
+  const handleSaveInProgressItem = useCallback(
+    (
+      itemData: Omit<InProgressItem, 'id' | 'createdAt' | 'lastUpdatedAt'>,
+      editingId?: string
+    ) => {
+      const now = Date.now();
+      if (editingId) {
+        setInProgressItems((prev) =>
+          prev.map((item) => {
+            if (item.id !== editingId) return item;
+            const updated: InProgressItem = {
+              ...item,
+              ...itemData,
+              lastUpdatedAt: now,
+            };
+            scheduleInProgressInactivityNotification(updated, settings).catch(() => {});
+            return updated;
+          })
+        );
+      } else {
+        const newItem: InProgressItem = {
+          ...itemData,
+          id: `inprog_${now}_${Math.random().toString(36).slice(2, 7)}`,
+          createdAt: now,
+          lastUpdatedAt: now,
+        };
+        setInProgressItems((prev) => [newItem, ...prev]);
+        scheduleInProgressInactivityNotification(newItem, settings).catch(() => {});
+      }
+    },
+    [settings]
+  );
+
+  const handleUpdateInProgressProgress = useCallback(
+    (id: string, newProgress: number, customNote?: string) => {
+      const now = Date.now();
+      setInProgressItems((prev) =>
+        prev.map((item) => {
+          if (item.id !== id) return item;
+          const clampedProgress =
+            item.totalProgress && item.totalProgress > 0
+              ? Math.min(item.totalProgress, Math.max(0, newProgress))
+              : Math.max(0, newProgress);
+          const autoCompleted =
+            item.totalProgress !== undefined &&
+            item.totalProgress > 0 &&
+            clampedProgress >= item.totalProgress;
+          const updated: InProgressItem = {
+            ...item,
+            currentProgress: clampedProgress,
+            notes: customNote !== undefined ? customNote || undefined : item.notes,
+            completed: autoCompleted ? true : item.completed,
+            lastUpdatedAt: now,
+          };
+          // Reset smart inactivity notification timer for another `inactivityDays`
+          scheduleInProgressInactivityNotification(updated, settings).catch(() => {});
+          return updated;
+        })
+      );
+    },
+    [settings]
+  );
+
+  const handleToggleInProgressComplete = useCallback(
+    (id: string) => {
+      const now = Date.now();
+      setInProgressItems((prev) =>
+        prev.map((item) => {
+          if (item.id !== id) return item;
+          const nextCompleted = !item.completed;
+          const updated: InProgressItem = {
+            ...item,
+            completed: nextCompleted,
+            currentProgress:
+              nextCompleted && item.totalProgress && item.totalProgress > 0
+                ? item.totalProgress
+                : item.currentProgress,
+            lastUpdatedAt: now,
+          };
+          scheduleInProgressInactivityNotification(updated, settings).catch(() => {});
+          return updated;
+        })
+      );
+    },
+    [settings]
+  );
+
+  const handleDeleteInProgressItem = useCallback((id: string) => {
+    cancelInProgressInactivityNotification(id).catch(() => {});
+    setInProgressItems((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+
+  // Handlers for Medication Reminder (یادآور دارو) + Capacitor Local Notifications & Stock Deduction
+  const handleSaveMedication = useCallback(
+    (
+      medData: Omit<MedicationItem, 'id' | 'createdAt' | 'updatedAt' | 'history'>,
+      editingId?: string
+    ) => {
+      const now = Date.now();
+      requestNotificationPermission().catch(() => {});
+      if (editingId) {
+        setMedications((prev) =>
+          prev.map((med) => {
+            if (med.id !== editingId) return med;
+            const updated: MedicationItem = {
+              ...med,
+              ...medData,
+              updatedAt: now,
+            };
+            scheduleMedicationNotifications(updated, settings).catch(() => {});
+            return updated;
+          })
+        );
+      } else {
+        const newMed: MedicationItem = {
+          ...medData,
+          id: `med_${now}_${Math.random().toString(36).slice(2, 7)}`,
+          history: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        setMedications((prev) => [newMed, ...prev]);
+        scheduleMedicationNotifications(newMed, settings).catch(() => {});
+      }
+    },
+    [settings]
+  );
+
+  const handleLogMedicationDose = useCallback(
+    (
+      medicationId: string,
+      dateKey: string,
+      scheduledTime: string,
+      status: 'taken' | 'missed' | 'reset'
+    ) => {
+      const now = Date.now();
+      if (status !== 'reset') {
+        cancelSingleMedicationDoseNotification(medicationId, dateKey, scheduledTime).catch(
+          () => {}
+        );
+      }
+      setMedications((prev) =>
+        prev.map((med) => {
+          if (med.id !== medicationId) return med;
+          const existingLog = med.history.find(
+            (h) => h.dateKey === dateKey && h.scheduledTime === scheduledTime
+          );
+          const wasTaken = existingLog?.status === 'taken';
+          const willBeTaken = status === 'taken';
+
+          let nextStock = med.stockCount;
+          if (typeof nextStock === 'number') {
+            if (!wasTaken && willBeTaken) {
+              nextStock = Math.max(0, Number((nextStock - med.dosageAmount).toFixed(2)));
+            } else if (wasTaken && !willBeTaken) {
+              nextStock = Number((nextStock + med.dosageAmount).toFixed(2));
+            }
+          }
+
+          let nextHistory: MedicationDoseLog[];
+          if (status === 'reset') {
+            nextHistory = med.history.filter(
+              (h) => !(h.dateKey === dateKey && h.scheduledTime === scheduledTime)
+            );
+          } else if (existingLog) {
+            nextHistory = med.history.map((h) =>
+              h.dateKey === dateKey && h.scheduledTime === scheduledTime
+                ? { ...h, status, actionTimestamp: now }
+                : h
+            );
+          } else {
+            const newLog: MedicationDoseLog = {
+              id: `medlog_${now}_${Math.random().toString(36).slice(2, 6)}`,
+              dateKey,
+              scheduledTime,
+              status,
+              actionTimestamp: now,
+            };
+            nextHistory = [newLog, ...med.history];
+          }
+
+          const updated: MedicationItem = {
+            ...med,
+            stockCount: nextStock,
+            history: nextHistory,
+            updatedAt: now,
+          };
+          scheduleMedicationNotifications(updated, settings).catch(() => {});
+          return updated;
+        })
+      );
+    },
+    [settings]
+  );
+
+  const handleDeleteMedication = useCallback((id: string) => {
+    cancelMedicationNotifications(id).catch(() => {});
+    setMedications((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+
+  const handleRefillMedicationStock = useCallback((id: string, addedAmount: number) => {
+    if (!Number.isFinite(addedAmount) || addedAmount <= 0) return;
+    const now = Date.now();
+    setMedications((prev) =>
+      prev.map((med) => {
+        if (med.id !== id) return med;
+        const currentStock = typeof med.stockCount === 'number' ? med.stockCount : 0;
+        return {
+          ...med,
+          stockCount: Number((currentStock + addedAmount).toFixed(2)),
+          updatedAt: now,
+        };
+      })
+    );
+  }, []);
   const [isStatsOpen, setIsStatsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isIdeaModalOpen, setIsIdeaModalOpen] = useState(false);
   const [editingIdea, setEditingIdea] = useState<IdeaNote | null>(null);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<SavedLocation | null>(null);
-  const [isLocationReminderModalOpen, setIsLocationReminderModalOpen] = useState(false);
-  const [targetLocationForReminder, setTargetLocationForReminder] = useState<SavedLocation | null>(null);
   const [isOccasionModalOpen, setIsOccasionModalOpen] = useState(false);
   const [editingOccasion, setEditingOccasion] = useState<Occasion | null>(null);
   const [selectedOccasionTypeFilter, setSelectedOccasionTypeFilter] = useState<OccasionType | 'all'>('all');
@@ -632,7 +893,7 @@ export default function App() {
   // 2. HARDWARE & BROWSER BACK BUTTON HANDLER (بسته شدن پنجره‌ها با دکمه بازگشت گوشی، به جز آلارم فعال که نیازمند واکنش قطعی کاربر است)
   const isAnyModalCurrentlyOpen = Boolean(
     isFormOpen || isStatsOpen || isSettingsOpen || isIdeaModalOpen ||
-    isLocationModalOpen || isLocationReminderModalOpen || isOccasionModalOpen ||
+    isLocationModalOpen || isOccasionModalOpen ||
     isCreateChoiceOpen || viewingImageUrl || isInstallModalOpen
   );
 
@@ -644,7 +905,6 @@ export default function App() {
     if (viewingImageUrl) { setViewingImageUrl(null); return true; }
     if (isCreateChoiceOpen) { setIsCreateChoiceOpen(false); return true; }
     if (isInstallModalOpen) { setIsInstallModalOpen(false); return true; }
-    if (isLocationReminderModalOpen) { setIsLocationReminderModalOpen(false); return true; }
     if (isLocationModalOpen) { setIsLocationModalOpen(false); setEditingLocation(null); return true; }
     if (isIdeaModalOpen) { setIsIdeaModalOpen(false); setEditingIdea(null); return true; }
     if (isOccasionModalOpen) { setIsOccasionModalOpen(false); setEditingOccasion(null); return true; }
@@ -654,7 +914,7 @@ export default function App() {
     return false;
   }, [
     viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
-    isLocationReminderModalOpen, isLocationModalOpen, isIdeaModalOpen,
+    isLocationModalOpen, isIdeaModalOpen,
     isOccasionModalOpen, isFormOpen, isSettingsOpen, isStatsOpen,
     activeAlarmReminder
   ]);
@@ -787,7 +1047,6 @@ export default function App() {
   const fabMenuRef = useRef<HTMLDivElement>(null);
   const fabBtnRef = useRef<HTMLButtonElement>(null);
   const [categoryFilter, setCategoryFilter] = useState<'all' | Category | 'completed'>('all');
-  const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
 
   // Close logo menu when clicking outside
   useEffect(() => {
@@ -865,7 +1124,6 @@ export default function App() {
 
   // Floating Action Button (+) intelligent visibility & scroll edge boundary management
   const {
-    isFabHidden: isFabHiddenOnScroll,
     resetFabPosition,
     fabContainerStyle,
     fabContainerClassName,
@@ -1101,7 +1359,6 @@ export default function App() {
       setIsStatsOpen(false);
       setIsIdeaModalOpen(false);
       setIsLocationModalOpen(false);
-      setIsLocationReminderModalOpen(false);
       setIsOccasionModalOpen(false);
       setCategoryFilter('all');
       setActiveMainTab('reminders');
@@ -1331,7 +1588,11 @@ export default function App() {
                 triggeredAlarmsRef.current.add(cycleKey);
                 const updatedForCycle: Reminder = { ...r, dueTimestamp: currentCycleStart, status: 'postponed' };
                 setActiveAlarmReminder(updatedForCycle);
-                triggerOutOfAppPersistentNotification(updatedForCycle, settings).catch(() => {});
+                if (!isAppCurrentlyInForeground()) {
+                  triggerOutOfAppPersistentNotification(updatedForCycle, settings).catch(() => {});
+                } else {
+                  dismissDeliveredNotifications(r.id).catch(() => {});
+                }
               }
             } else {
               // Outside the 1-minute window: move dueTimestamp to the next 15-minute mark after NOW in the timeline
@@ -1366,11 +1627,15 @@ export default function App() {
             triggeredAlarmsRef.current.add(cycleKey);
             setActiveAlarmReminder({ ...r });
 
-            // Trigger out-of-app notification alongside in-app modal
-            triggerOutOfAppPersistentNotification(
-              r,
-              settings
-            ).catch(() => {});
+            // Trigger out-of-app notification ONLY when outside the app
+            if (!isAppCurrentlyInForeground()) {
+              triggerOutOfAppPersistentNotification(
+                r,
+                settings
+              ).catch(() => {});
+            } else {
+              dismissDeliveredNotifications(r.id).catch(() => {});
+            }
           }
         }
       });
@@ -1602,76 +1867,6 @@ export default function App() {
       playPhoneAlarmSound('radar');
       speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
     }
-  };
-
-  const handleToggleReminderGeofence = (reminderId: string) => {
-    setReminders((prev) =>
-      prev.map((r) => {
-        if (r.id !== reminderId) return r;
-        if (!r.geofence) return r;
-        const willBeEnabled = !r.geofence.enabled;
-        return {
-          ...r,
-          geofence: {
-            ...r.geofence,
-            enabled: willBeEnabled,
-          },
-        };
-      })
-    );
-    showSyncNotification(
-      isEn ? 'Geofence status updated' : 'وضعیت حصار مکانی به‌روزرسانی شد'
-    );
-  };
-
-  const handleSimulateGeofenceTrigger = (reminder: Reminder) => {
-    setActiveAlarmReminder(reminder);
-    const actionText = isEn ? 'Arrival simulated at' : 'شبیه‌سازی ورود به';
-    fireImmediateLocalNotification(
-      `📍 هشدار حصار مکانی: ${reminder.title}`,
-      `${actionText} ${reminder.geofence?.locationName || 'مکان حصار مکانی'}`,
-      { reminderId: reminder.id, geofence: true }
-    );
-    setReminders((prev) =>
-      prev.map((item) =>
-        item.id === reminder.id
-          ? {
-              ...item,
-              geofence: item.geofence
-                ? { ...item.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
-                : undefined,
-            }
-          : item
-      )
-    );
-  };
-
-  const handleRefreshUserGps = () => {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      showSyncNotification(isEn ? 'GPS not supported on device' : 'سخت‌افزار دستگاه از GPS پشتیبانی نمی‌کند');
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const userPos: UserPosition = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
-          timestamp: pos.timestamp || Date.now(),
-        };
-        setCurrentUserPosition(userPos);
-        saveLastKnownPosition(userPos);
-        showSyncNotification(
-          isEn 
-            ? `GPS updated (±${Math.round(userPos.accuracy)}m)` 
-            : `موقعیت GPS ثبت شد (دقت: ±${toPersianDigits(Math.round(userPos.accuracy))} متر)`
-        );
-      },
-      (err) => {
-        showSyncNotification(isEn ? 'Failed to get GPS' : 'خطا در دریافت مختصات GPS');
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
   };
 
   // Google sign in / out handlers
@@ -2478,10 +2673,6 @@ export default function App() {
       if (r.category !== categoryFilter) return false;
     }
 
-    if (priorityFilter !== 'all' && r.priority !== priorityFilter) {
-      return false;
-    }
-
     if (searchQuery.trim()) {
       return matchesReminderSearch(r, searchQuery);
     }
@@ -2531,29 +2722,6 @@ export default function App() {
     filteredGlobalLocations.length,
     filteredGlobalIdeas.length,
   ]);
-
-  const sortedReminders = [...filteredReminders].sort((a, b) => {
-    if (a.status === 'completed' && b.status !== 'completed') return 1;
-    if (a.status !== 'completed' && b.status === 'completed') return -1;
-    return a.dueTimestamp - b.dueTimestamp;
-  });
-
-  const upcomingReminder =
-    reminders
-      .filter((r) => (r.status === 'pending' || r.status === 'postponed') && r.dueTimestamp >= currentTime)
-      .sort((a, b) => a.dueTimestamp - b.dueTimestamp)[0] || null;
-
-  const upcomingCountdown = upcomingReminder
-    ? (() => {
-        const diffMs = Math.max(0, upcomingReminder.dueTimestamp - currentTime);
-        const totalSecs = Math.floor(diffMs / 1000);
-        return {
-          hours: Math.floor(totalSecs / 3600),
-          minutes: Math.floor((totalSecs % 3600) / 60),
-          seconds: totalSecs % 60,
-        };
-      })()
-    : null;
 
   const todayJalali = getJalaliComponents(currentTime);
   const todayGregorian = getGregorianComponents(currentTime);
@@ -2669,13 +2837,13 @@ export default function App() {
               className={`min-h-[48px] min-w-[48px] w-12 h-12 rounded-2xl p-1 border flex items-center justify-center flex-shrink-0 group cursor-pointer active:scale-95 transition-all duration-200 shadow-md ${
                 isLogoMenuOpen
                   ? 'bg-stone-900 border-indigo-500 ring-1 ring-indigo-400/50 shadow-indigo-500/20'
-                  : 'bg-stone-950 border-stone-700/90 hover:border-amber-400/80 shadow-amber-500/10'
+                  : 'bg-stone-950 border-stone-700/90 hover:border-[#F7941E]/80 shadow-[#F7941E]/10'
               }`}
               title={isEn ? 'App Info & Support' : 'اطلاعات برنامه و پشتیبانی'}
               aria-label={isEn ? 'App Info & Support' : 'اطلاعات برنامه و پشتیبانی'}
             >
               <img
-                src={appIcon}
+                src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`}
                 alt="YAAD"
                 className="w-full h-full object-cover rounded-xl transition-transform duration-200 group-hover:scale-105"
                 draggable={false}
@@ -2693,7 +2861,7 @@ export default function App() {
                 {/* 1. App Version */}
                 <div className="flex items-center justify-between px-2.5 py-2 rounded-xl bg-stone-950/80 border border-stone-800/80">
                   <div className="flex items-center gap-2">
-                    <img src={appIcon} alt="YAAD" className="w-5 h-5 rounded-md object-cover" />
+                    <img src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`} alt="YAAD" className="w-5 h-5 rounded-md object-cover" />
                     <span className="text-xs font-bold text-stone-200">
                       {isEn ? 'App Version' : 'ورژن اپ'}
                     </span>
@@ -2785,7 +2953,7 @@ export default function App() {
 
             <div className="flex flex-col">
               <div className="flex items-center gap-1.5">
-                <span className="font-black text-sm sm:text-base tracking-tight text-indigo-400">
+                <span className="font-black text-sm sm:text-base tracking-tight !text-[#F7941E]">
                   {isEn ? 'YAAD' : 'یاد'}
                 </span>
               </div>
@@ -2797,15 +2965,15 @@ export default function App() {
             </div>
           </div>
 
-          {/* Desktop/Tablet Navigation Pills (Hidden on mobile where bottom nav is active) */}
-          <div className="hidden md:flex items-center bg-stone-800/80 p-1 rounded-2xl border border-stone-700/60 text-xs gap-1">
+          {/* Desktop/Tablet Navigation Tabs (Hidden on mobile where bottom nav is active) */}
+          <div className="hidden md:flex items-center text-xs gap-4">
             <button
               type="button"
               onClick={() => setActiveMainTab('reminders')}
-              className={`main-nav-tab px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer border ${
+              className={`main-nav-tab px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'reminders'
-                  ? 'main-nav-tab-active font-black shadow-sm'
-                  : 'main-nav-tab-inactive border-transparent text-stone-300 hover:text-white'
+                  ? 'main-nav-tab-active font-black'
+                  : 'main-nav-tab-inactive font-semibold text-stone-400 hover:text-stone-200'
               }`}
             >
               <span>{t.tabReminders}</span>
@@ -2817,10 +2985,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveMainTab('occasions')}
-              className={`main-nav-tab flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer border ${
+              className={`main-nav-tab flex items-center gap-1 px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'occasions'
-                  ? 'main-nav-tab-active font-black shadow-sm'
-                  : 'main-nav-tab-inactive border-transparent text-stone-300 hover:text-white'
+                  ? 'main-nav-tab-active font-black'
+                  : 'main-nav-tab-inactive font-semibold text-stone-400 hover:text-stone-200'
               }`}
             >
               <Cake className="w-3.5 h-3.5 shrink-0" />
@@ -2833,10 +3001,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveMainTab('locations')}
-              className={`main-nav-tab flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer border ${
+              className={`main-nav-tab flex items-center gap-1 px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'locations'
-                  ? 'main-nav-tab-active font-black shadow-sm'
-                  : 'main-nav-tab-inactive border-transparent text-stone-300 hover:text-white'
+                  ? 'main-nav-tab-active font-black'
+                  : 'main-nav-tab-inactive font-semibold text-stone-400 hover:text-stone-200'
               }`}
             >
               <MapPin className="w-3.5 h-3.5 shrink-0" />
@@ -2849,10 +3017,10 @@ export default function App() {
             <button
               type="button"
               onClick={() => setActiveMainTab('ideas')}
-              className={`main-nav-tab flex items-center gap-1 px-3 py-1.5 rounded-xl font-bold transition-all duration-200 whitespace-nowrap cursor-pointer border ${
+              className={`main-nav-tab flex items-center gap-1 px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'ideas'
-                  ? 'main-nav-tab-active font-black shadow-sm'
-                  : 'main-nav-tab-inactive border-transparent text-stone-300 hover:text-white'
+                  ? 'main-nav-tab-active font-black'
+                  : 'main-nav-tab-inactive font-semibold text-stone-400 hover:text-stone-200'
               }`}
             >
               <Lightbulb className="w-3.5 h-3.5 shrink-0" />
@@ -3104,7 +3272,7 @@ export default function App() {
                         >
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-1.5">
-                              <span className="px-1.5 py-0.5 rounded-md bg-amber-500/15 text-amber-300 text-[9px] font-bold shrink-0">
+                              <span className="px-1.5 py-0.5 rounded-md bg-[#F7941E]/15 text-[#F7941E] text-[9px] font-bold shrink-0">
                                 {isEn ? 'Idea' : 'ایده'}
                               </span>
                               <p className="text-xs font-bold text-white truncate">{idea.title}</p>
@@ -3130,7 +3298,7 @@ export default function App() {
       {/* Main Container - Maximum Width coverage across screen with ample padding for bottom nav and FAB */}
       <main className="flex-1 w-full px-3 sm:px-6 py-4 sm:py-6 space-y-6 pb-36 sm:pb-44">
         
-        {/* VIEW 1: REMINDERS TAB - SINGLE VERTICAL TIMELINE */}
+        {/* VIEW 1: REMINDERS TAB - SINGLE VERTICAL TIMELINE, IN-PROGRESS & MEDICATION PAGE */}
         {activeMainTab === 'reminders' && (
           <VerticalTimelineView
             reminders={reminders}
@@ -3140,16 +3308,30 @@ export default function App() {
             onPostpone={handlePostpone}
             onEdit={(rem) => {
               setEditingReminder(rem);
+              setReminderFormInitialTab('reminder');
               setIsFormOpen(true);
             }}
             onDelete={handleDelete}
             onCreateNew={() => {
               setEditingReminder(null);
+              setReminderFormInitialTab('reminder');
               setIsFormOpen(true);
             }}
             language={settings.language}
             searchQuery={searchQuery}
             onClearSearch={() => setSearchQuery('')}
+            inProgressItems={inProgressItems}
+            onSaveInProgressItem={handleSaveInProgressItem}
+            onUpdateInProgressProgress={handleUpdateInProgressProgress}
+            onToggleInProgressComplete={handleToggleInProgressComplete}
+            onDeleteInProgressItem={handleDeleteInProgressItem}
+            medications={medications}
+            onSaveMedication={handleSaveMedication}
+            onLogMedicationDose={handleLogMedicationDose}
+            onDeleteMedication={handleDeleteMedication}
+            onRefillMedicationStock={handleRefillMedicationStock}
+            activeSubPage={remindersSubPage}
+            onChangeSubPage={setRemindersSubPage}
           />
         )}
 
@@ -3395,10 +3577,6 @@ export default function App() {
                           setEditingLocation(item);
                           setIsLocationModalOpen(true);
                         }}
-                        onCreateReminderFromLocation={(targetLoc) => {
-                          setTargetLocationForReminder(targetLoc);
-                          setIsLocationReminderModalOpen(true);
-                        }}
                         onCreateIdeaFromLocation={(targetLoc) => {
                           setEditingIdea({
                             id: 'temp_idea',
@@ -3414,7 +3592,6 @@ export default function App() {
                         userPosition={currentUserPosition}
                         onToggleCheckpoint={handleToggleLocationCheckpoint}
                         onSimulateCheckpointTrigger={handleSimulateLocationCheckpointTrigger}
-                        isGeofenceServiceActive={isGeofenceActive}
                       />
                     ))}
                 </div>
@@ -3491,7 +3668,7 @@ export default function App() {
 
       {/* FLOATING ACTION BUTTON (+) - POSITIONED DIRECTLY ABOVE BOTTOM NAVIGATION BAR */}
       <div 
-        className={`${fabContainerClassName} ${isCreateChoiceOpen ? '!z-50' : ''}`}
+        className={`fab-add-container ${fabContainerClassName} ${isCreateChoiceOpen ? '!z-50' : ''} ${isKeyboardOpen ? 'hidden sm:flex' : ''}`}
         style={fabContainerStyle}
         dir="ltr"
       >
@@ -3510,14 +3687,15 @@ export default function App() {
                 onClick={() => {
                   setIsCreateChoiceOpen(false);
                   setEditingReminder(null);
+                  setReminderFormInitialTab('reminder');
                   setIsFormOpen(true);
                 }}
-                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-1"
+                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-[#F7941E] transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-[#F7941E]/35 animate-fab-item-1"
               >
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                <div className="w-9 h-9 rounded-xl bg-[#F7941E]/15 border border-[#F7941E]/35 text-[#F7941E] flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
                   <Bell className="w-4.5 h-4.5" />
                 </div>
-                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                <span className="text-sm font-bold text-stone-200 group-hover:text-[#F7941E]">
                   {isEn ? 'New Reminder' : 'ثبت یادآور'}
                 </span>
               </button>
@@ -3530,12 +3708,12 @@ export default function App() {
                   setEditingOccasion(null);
                   setIsOccasionModalOpen(true);
                 }}
-                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-2"
+                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-[#F7941E] transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-[#F7941E]/35 animate-fab-item-2"
               >
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                <div className="w-9 h-9 rounded-xl bg-[#F7941E]/15 border border-[#F7941E]/35 text-[#F7941E] flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
                   <Cake className="w-4.5 h-4.5" />
                 </div>
-                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                <span className="text-sm font-bold text-stone-200 group-hover:text-[#F7941E]">
                   {isEn ? 'Add Occasion' : 'ثبت مناسبت'}
                 </span>
               </button>
@@ -3547,12 +3725,12 @@ export default function App() {
                   setIsCreateChoiceOpen(false);
                   setIsIdeaModalOpen(true);
                 }}
-                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-3"
+                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-[#F7941E] transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-[#F7941E]/35 animate-fab-item-3"
               >
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                <div className="w-9 h-9 rounded-xl bg-[#F7941E]/15 border border-[#F7941E]/35 text-[#F7941E] flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
                   <Lightbulb className="w-4.5 h-4.5" />
                 </div>
-                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                <span className="text-sm font-bold text-stone-200 group-hover:text-[#F7941E]">
                   {isEn ? 'Capture Idea' : 'ثبت ایده'}
                 </span>
               </button>
@@ -3564,19 +3742,19 @@ export default function App() {
                   setIsCreateChoiceOpen(false);
                   setIsLocationModalOpen(true);
                 }}
-                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-4"
+                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-[#F7941E] transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-[#F7941E]/35 animate-fab-item-4"
               >
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                <div className="w-9 h-9 rounded-xl bg-[#F7941E]/15 border border-[#F7941E]/35 text-[#F7941E] flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
                   <MapPin className="w-4.5 h-4.5" />
                 </div>
-                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                <span className="text-sm font-bold text-stone-200 group-hover:text-[#F7941E]">
                   {isEn ? 'Save Place' : 'ثبت مکان'}
                 </span>
               </button>
             </div>
           )}
 
-          {/* Circular FAB (+) — Always Golden Amber across ALL themes */}
+          {/* Circular FAB (+) — Always Brand Orange (#F7941E) across ALL themes */}
           <button
             ref={fabBtnRef}
             id="fab-create-btn"
@@ -3589,8 +3767,8 @@ export default function App() {
             }}
             className={`fab-add-btn rounded-full flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] border flex-shrink-0 cursor-pointer ${
               isCreateChoiceOpen 
-                ? 'rotate-45 bg-amber-400 text-stone-950 border-amber-200 shadow-amber-500/40' 
-                : 'rotate-0 bg-amber-500 hover:bg-amber-400 text-stone-950 border-amber-300/90 shadow-amber-500/30'
+                ? 'rotate-45 bg-[#F7941E] text-stone-950 border-[#F7941E] shadow-[#F7941E]/45' 
+                : 'rotate-0 bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 border-[#F7941E] shadow-[#F7941E]/40'
             }`}
             title={isEn ? 'Add New' : 'ثبت جدید'}
             aria-label={isEn ? 'Add New' : 'ثبت جدید'}
@@ -3600,9 +3778,11 @@ export default function App() {
         </div>
       </div>
 
-      {/* FIXED BOTTOM NAVIGATION BAR (منوی پایین ثابت زیر دکمه +: تغییر رنگ واضح تب فعال در تمامی تم‌ها) */}
+      {/* FIXED BOTTOM NAVIGATION BAR (منوی پایین ثابت: بدون کادر و پس‌زمینه، فقط تغییر رنگ نوشته متناسب با تم) */}
       <nav 
-        className={`fixed bottom-0 left-0 right-0 z-40 border-t backdrop-blur-xl transition-colors duration-200 pb-safe ${
+        className={`app-bottom-nav fixed bottom-0 left-0 right-0 z-40 border-t backdrop-blur-xl transition-colors duration-200 pb-safe ${
+          isKeyboardOpen ? 'hidden sm:block' : ''
+        } ${
           settings.theme === 'jade_warm_light'
             ? 'bg-[#FFFFFF]/95 border-[#DDE1DA] text-[#202A29] shadow-sm'
             : settings.theme === 'sketch-contrast'
@@ -3619,10 +3799,10 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveMainTab('reminders')}
-            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 rounded-2xl border transition-all duration-200 active:scale-95 cursor-pointer ${
+            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 transition-colors duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'reminders'
                 ? 'main-nav-tab-active font-black'
-                : 'main-nav-tab-inactive border-transparent text-stone-400 hover:text-stone-200'
+                : 'main-nav-tab-inactive font-medium text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
@@ -3637,17 +3817,17 @@ export default function App() {
                 </span>
               )}
             </div>
-            <span className="text-[11px] sm:text-xs font-bold">{t.tabReminders}</span>
+            <span className="text-[11px] sm:text-xs">{t.tabReminders}</span>
           </button>
 
           {/* Tab 2: Occasions (مناسبت‌ها) */}
           <button
             type="button"
             onClick={() => setActiveMainTab('occasions')}
-            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 rounded-2xl border transition-all duration-200 active:scale-95 cursor-pointer ${
+            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 transition-colors duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'occasions'
                 ? 'main-nav-tab-active font-black'
-                : 'main-nav-tab-inactive border-transparent text-stone-400 hover:text-stone-200'
+                : 'main-nav-tab-inactive font-medium text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
@@ -3662,17 +3842,17 @@ export default function App() {
                 </span>
               )}
             </div>
-            <span className="text-[11px] sm:text-xs font-bold">{t.tabOccasions}</span>
+            <span className="text-[11px] sm:text-xs">{t.tabOccasions}</span>
           </button>
 
           {/* Tab 3: Locations (مکان‌ها) */}
           <button
             type="button"
             onClick={() => setActiveMainTab('locations')}
-            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 rounded-2xl border transition-all duration-200 active:scale-95 cursor-pointer ${
+            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 transition-colors duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'locations'
                 ? 'main-nav-tab-active font-black'
-                : 'main-nav-tab-inactive border-transparent text-stone-400 hover:text-stone-200'
+                : 'main-nav-tab-inactive font-medium text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
@@ -3687,17 +3867,17 @@ export default function App() {
                 </span>
               )}
             </div>
-            <span className="text-[11px] sm:text-xs font-bold">{t.tabLocations}</span>
+            <span className="text-[11px] sm:text-xs">{t.tabLocations}</span>
           </button>
 
           {/* Tab 4: Ideas (ایده‌ها) */}
           <button
             type="button"
             onClick={() => setActiveMainTab('ideas')}
-            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 rounded-2xl border transition-all duration-200 active:scale-95 cursor-pointer ${
+            className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 transition-colors duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'ideas'
                 ? 'main-nav-tab-active font-black'
-                : 'main-nav-tab-inactive border-transparent text-stone-400 hover:text-stone-200'
+                : 'main-nav-tab-inactive font-medium text-stone-400 hover:text-stone-200'
             }`}
           >
             <div className="relative">
@@ -3712,23 +3892,35 @@ export default function App() {
                 </span>
               )}
             </div>
-            <span className="text-[11px] sm:text-xs font-bold">{t.tabIdeas}</span>
+            <span className="text-[11px] sm:text-xs">{t.tabIdeas}</span>
           </button>
         </div>
       </nav>
 
-      {/* REMINDER CREATION & EDIT MODAL */}
+      {/* REMINDER CREATION & EDIT MODAL (WITH DEDICATED IN-PROGRESS & MEDICATION TABS) */}
       <ReminderForm
         isOpen={isFormOpen}
         onClose={() => {
           setIsFormOpen(false);
           setEditingReminder(null);
+          setReminderFormInitialTab('reminder');
         }}
         onSave={handleSaveReminder}
         initialData={editingReminder}
         googleToken={googleToken}
         savedLocations={savedLocations}
         language={settings.language}
+        initialTab={reminderFormInitialTab}
+        inProgressItems={inProgressItems}
+        onSaveInProgressItem={handleSaveInProgressItem}
+        onUpdateInProgressProgress={handleUpdateInProgressProgress}
+        onToggleInProgressComplete={handleToggleInProgressComplete}
+        onDeleteInProgressItem={handleDeleteInProgressItem}
+        medications={medications}
+        onSaveMedication={handleSaveMedication}
+        onLogMedicationDose={handleLogMedicationDose}
+        onDeleteMedication={handleDeleteMedication}
+        onRefillMedicationStock={handleRefillMedicationStock}
       />
 
       {/* IDEA CAPTURE MODAL */}
@@ -3753,22 +3945,6 @@ export default function App() {
         }}
         onSave={handleSaveLocation}
         editingLocation={editingLocation}
-        language={settings.language}
-      />
-
-      {/* GEOFENCE LOCATION-BASED REMINDER MODAL */}
-      <LocationReminderModal
-        isOpen={isLocationReminderModalOpen}
-        onClose={() => {
-          setIsLocationReminderModalOpen(false);
-          setTargetLocationForReminder(null);
-        }}
-        onSave={(newRem) => {
-          handleSaveReminder(newRem);
-          showSyncNotification('یادآور ورود/خروج به محدوده مکانی فعال شد.');
-        }}
-        savedLocations={savedLocations}
-        initialLocation={targetLocationForReminder}
         language={settings.language}
       />
 
@@ -3801,9 +3977,6 @@ export default function App() {
         savedLocations={savedLocations}
         occasions={occasions}
         onRestoreData={handleRestoreData}
-        onTestHeadsUpBanner={(testRem) => {
-          setActiveAlarmReminder(testRem);
-        }}
         isGeofenceActive={isGeofenceActive}
         onToggleGeofenceActive={handleToggleGeofenceService}
         onRestoreItem={handleRestoreItem}
