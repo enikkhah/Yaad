@@ -19,6 +19,7 @@ import {
 } from '../utils/medicationNotifications';
 import { requestNotificationPermission } from '../utils/nativePermissions';
 import { ValidationAlertModal } from './ValidationAlertModal';
+import { WheelPicker } from './WheelPicker';
 import {
   Pill,
   Plus,
@@ -58,6 +59,7 @@ interface MedicationPanelProps {
   mode?: 'modal-tab' | 'page';
   searchQuery?: string;
   initialOpenForm?: boolean;
+  visitTrigger?: number;
 }
 
 const INSTRUCTION_OPTIONS: { id: MedicationInstruction; labelFa: string; labelEn: string }[] = [
@@ -84,6 +86,16 @@ const DURATION_PRESETS: { days: number | undefined; labelFa: string; labelEn: st
   { days: 30, labelFa: '۳۰ روز', labelEn: '30 Days' },
 ];
 
+const HOUR_WHEEL_ITEMS = Array.from({ length: 24 }, (_, i) => ({
+  value: i,
+  label: i.toString().padStart(2, '0'),
+}));
+
+const MINUTE_WHEEL_ITEMS = Array.from({ length: 60 }, (_, i) => ({
+  value: i,
+  label: i.toString().padStart(2, '0'),
+}));
+
 export const MedicationPanel: React.FC<MedicationPanelProps> = ({
   medications,
   onSaveMedication,
@@ -93,7 +105,8 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
   language = 'fa',
   mode = 'page',
   searchQuery = '',
-  initialOpenForm = false,
+  initialOpenForm = true,
+  visitTrigger = 0,
 }) => {
   const isEn = language === 'en';
   const formatNum = (val: number | string) =>
@@ -110,10 +123,8 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
     [medications]
   );
 
-  // Form visibility & state
-  const [isFormExpanded, setIsFormExpanded] = useState<boolean>(
-    mode === 'modal-tab' || initialOpenForm || activeMedications.length === 0
-  );
+  // Form visibility & state — always open on every visit to the Medication page
+  const [isFormExpanded, setIsFormExpanded] = useState<boolean>(true);
   const [editingMed, setEditingMed] = useState<MedicationItem | null>(null);
 
   const [name, setName] = useState('');
@@ -127,6 +138,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
   const [scheduledTimes, setScheduledTimes] = useState<string[]>(() =>
     generateScheduledTimesFromInterval(8, 8, 0)
   );
+  const [activeRollerSlotIndex, setActiveRollerSlotIndex] = useState<number | null>(null);
   const [durationDaysInput, setDurationDaysInput] = useState<string>('');
   const [isUnlimitedDuration, setIsUnlimitedDuration] = useState<boolean>(true);
   const [stockCountInput, setStockCountInput] = useState<string>('');
@@ -135,8 +147,43 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
   // Validation state
   const [validationAlertField, setValidationAlertField] = useState<string | null>(null);
   const [missingTarget, setMissingTarget] = useState<'name' | 'dose' | null>(null);
+  const registrationSectionRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const doseInputRef = useRef<HTMLInputElement>(null);
+  const submitBtnRef = useRef<HTMLButtonElement>(null);
+
+  const scrollRegistrationIntoView = (behavior: ScrollBehavior = 'smooth') => {
+    const scrollParent = registrationSectionRef.current?.closest('.overflow-y-auto') as HTMLElement | null;
+    if (scrollParent) {
+      scrollParent.scrollTo({ top: 0, behavior });
+    }
+    if (mode === 'page') {
+      window.scrollTo({ top: 0, behavior });
+    } else {
+      registrationSectionRef.current?.scrollIntoView({ behavior, block: 'start' });
+    }
+  };
+
+  // Ensure registration section is expanded and placed in user view on every visit to the page
+  useEffect(() => {
+    setIsFormExpanded(true);
+    scrollRegistrationIntoView('smooth');
+    const t1 = window.setTimeout(() => scrollRegistrationIntoView('smooth'), 80);
+    const t2 = window.setTimeout(() => scrollRegistrationIntoView('smooth'), 220);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [visitTrigger, mode]);
+
+  // Also bring registration section into view whenever user manually expands the form
+  useEffect(() => {
+    if (!isFormExpanded) return;
+    const timer = window.setTimeout(() => {
+      scrollRegistrationIntoView('smooth');
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [isFormExpanded]);
 
   // Expanded history log & refill UI states
   const [expandedHistoryId, setExpandedHistoryId] = useState<string | null>(null);
@@ -188,6 +235,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
     setIntervalHours(8);
     setHasManualInterval(false);
     setScheduledTimes(generateScheduledTimesFromInterval(8, 8, 0));
+    setActiveRollerSlotIndex(null);
     setDurationDaysInput('');
     setIsUnlimitedDuration(true);
     setStockCountInput('');
@@ -205,6 +253,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
     setIntervalHours(med.intervalHours || 8);
     setHasManualInterval(true);
     setScheduledTimes(med.scheduledTimes.length > 0 ? [...med.scheduledTimes] : ['08:00']);
+    setActiveRollerSlotIndex(null);
     if (med.durationDays && med.durationDays > 0) {
       setIsUnlimitedDuration(false);
       setDurationDaysInput(String(med.durationDays));
@@ -215,6 +264,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
     setStockCountInput(med.stockCount !== undefined ? String(med.stockCount) : '');
     setNotes(med.notes || '');
     setIsFormExpanded(true);
+    window.setTimeout(() => scrollRegistrationIntoView('smooth'), 50);
   };
 
   const handleSelectIntervalPreset = (hours: number) => {
@@ -247,13 +297,23 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
 
   const handleAddCustomTimeSlot = () => {
     setScheduleType('custom_times');
-    setScheduledTimes((prev) => [...prev, '14:00']);
+    setScheduledTimes((prev) => {
+      const next = [...prev, '14:00'];
+      setActiveRollerSlotIndex(next.length - 1);
+      return next;
+    });
   };
 
   const handleRemoveTimeSlot = (index: number) => {
     if (scheduledTimes.length <= 1) return;
     setScheduleType('custom_times');
     setScheduledTimes((prev) => prev.filter((_, idx) => idx !== index));
+    setActiveRollerSlotIndex((prevIdx) => {
+      if (prevIdx === null) return null;
+      if (prevIdx === index) return null;
+      if (prevIdx > index) return prevIdx - 1;
+      return prevIdx;
+    });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -312,9 +372,6 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
     );
 
     resetForm();
-    if (mode === 'page') {
-      setIsFormExpanded(false);
-    }
   };
 
   // Search filter
@@ -364,7 +421,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
   ).length;
 
   return (
-    <div className="space-y-5" dir={isEn ? 'ltr' : 'rtl'}>
+    <div className="space-y-4" dir={isEn ? 'ltr' : 'rtl'}>
       {/* Validation Alert Modal for Mandatory Fields */}
       <ValidationAlertModal
         isOpen={!!validationAlertField}
@@ -386,18 +443,21 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
       />
 
       {/* 1. MEDICATION REGISTRATION FORM (WITH FUZZY LOGIC) */}
-      <div className="rounded-2xl bg-stone-900 border border-stone-800 p-3.5 sm:p-4 shadow-sm space-y-3.5">
-        <div className="flex items-center justify-between gap-3 flex-wrap">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0">
-              <Pill className="w-4.5 h-4.5" />
+      <div
+        ref={registrationSectionRef}
+        className="scroll-mt-36 rounded-2xl bg-stone-900 border border-stone-800 p-3 sm:p-4 shadow-sm space-y-2.5"
+      >
+        <div className="flex items-center justify-between gap-2.5 flex-wrap">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-emerald-500/15 border border-emerald-500/35 text-emerald-400 flex items-center justify-center shrink-0">
+              <Pill className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-emerald-400" />
             </div>
             <div>
               <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2 flex-wrap">
                 <span>{isEn ? 'Medication Reminder' : 'یادآور تخصصی دارو'}</span>
                 {lowStockMedicationsCount > 0 && (
-                  <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[10px] font-bold flex items-center gap-1">
-                    <AlertTriangle className="w-3 h-3" />
+                  <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 text-[10px] font-bold flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-rose-400" />
                     <span>
                       {formatNum(lowStockMedicationsCount)}{' '}
                       {isEn ? 'low stock' : 'کمبود موجودی'}
@@ -405,7 +465,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                   </span>
                 )}
               </h3>
-              <p className="text-[11px] text-stone-400">
+              <p className="text-[10px] sm:text-[11px] text-stone-400">
                 {isEn
                   ? 'Smart unit & instruction detection with high-priority dose notifications'
                   : 'تشخیص هوشمند نوع دارو و واحد دوز + چک‌لیست روزانه و هشدار دقیق مصرف'}
@@ -422,17 +482,21 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                 setIsFormExpanded((prev) => !prev);
               }
             }}
-            className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95"
+            className={`min-h-[38px] px-3.5 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95 ${
+              isFormExpanded
+                ? 'bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700'
+                : 'btn-brand-submit bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 shadow-md shadow-[#F7941E]/25'
+            }`}
           >
             {isFormExpanded ? (
               <>
-                <ChevronUp className="w-4 h-4" />
+                <ChevronUp className="w-4 h-4 text-amber-400" />
                 <span>{isEn ? 'Hide Form' : 'بستن فرم'}</span>
               </>
             ) : (
               <>
                 <Plus className="w-4 h-4 stroke-[2.8]" />
-                <span>{isEn ? 'Add Medication' : 'افزودن داروی جدید'}</span>
+                <span>{isEn ? 'Register New Medication' : 'ثبت داروی جدید'}</span>
               </>
             )}
           </button>
@@ -441,20 +505,20 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
         {isFormExpanded && (
           <form
             onSubmit={handleSubmit}
-            className="pt-3 border-t border-stone-800 space-y-3.5 animate-in fade-in duration-150"
+            className="pt-2.5 border-t border-stone-800 space-y-2.5 animate-in fade-in duration-150"
           >
             {/* A. Prominent Mandatory Medication Name Input + Live Fuzzy Detection Badge */}
-            <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-indigo-950/55 via-stone-900/95 to-stone-950 border-2 border-indigo-500/55 shadow-lg shadow-indigo-500/10 space-y-2">
+            <div className="p-2.5 sm:p-3.5 rounded-2xl bg-gradient-to-br from-indigo-950/55 via-stone-900/95 to-stone-950 border-2 border-indigo-500/55 shadow-lg shadow-indigo-500/10 space-y-1.5">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <label className="text-sm sm:text-base font-black text-white tracking-tight flex items-center gap-2">
+                <label className="text-xs sm:text-sm font-black text-white tracking-tight flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#F7941E] shadow-[0_0_8px_rgba(247,148,30,0.85)] shrink-0" />
                   <span>{isEn ? 'Medication Name' : 'نام دارو'}</span>
-                  <span className="text-[#F7941E] font-black text-base">*</span>
+                  <span className="text-[#F7941E] font-black text-sm">*</span>
                 </label>
 
                 {name.trim().length > 0 && (
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[11px] font-bold animate-in fade-in duration-150">
-                    <Sparkles className="w-3 h-3 text-indigo-400 shrink-0" />
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 text-[11px] font-bold animate-in fade-in duration-150">
+                    <Sparkles className="w-3 h-3 text-amber-400 shrink-0" />
                     <span>{fuzzyInfo.categoryLabel}</span>
                     <span className="opacity-50">•</span>
                     <span>
@@ -474,18 +538,18 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                     ? 'e.g. Amoxicillin 500 Capsule, Diphenhydramine Syrup, Eye Drops, Vitamin D...'
                     : 'مثال: کپسول آموکسی‌سیلین ۵۰۰، شربت دیفن‌هیدرامین، قطره چشمی، قرص ویتامین دی...'
                 }
-                className="w-full bg-stone-950 border-2 border-indigo-400/70 focus:border-[#F7941E] ring-2 ring-indigo-500/15 focus:ring-[#F7941E]/25 rounded-2xl px-4 py-3.5 text-white placeholder-stone-400 focus:outline-none transition-all text-base sm:text-lg font-extrabold shadow-inner"
+                className="w-full bg-stone-950 border-2 border-indigo-400/70 focus:border-[#F7941E] ring-2 ring-indigo-500/15 focus:ring-[#F7941E]/25 rounded-xl px-3.5 py-2.5 text-white placeholder-stone-400 focus:outline-none transition-all text-sm sm:text-base font-extrabold shadow-inner"
               />
             </div>
 
             {/* B. Mandatory Dose Amount + Food Instruction */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {/* Mandatory Dose per intake */}
-              <div className="p-3 rounded-2xl bg-stone-950/70 border-2 border-indigo-500/45 space-y-1.5">
-                <label className="text-xs sm:text-sm font-black text-white flex items-center gap-1.5">
+              <div className="p-2.5 rounded-2xl bg-stone-950/70 border-2 border-indigo-500/45 space-y-1">
+                <label className="text-xs font-black text-white flex items-center gap-1.5">
                   <span className="w-2 h-2 rounded-full bg-[#F7941E] shadow-[0_0_6px_rgba(247,148,30,0.85)] shrink-0" />
                   <span>{fuzzyInfo.doseInputLabel}</span>
-                  <span className="text-[#F7941E] font-black text-sm">*</span>
+                  <span className="text-[#F7941E] font-black text-xs">*</span>
                 </label>
                 <div className="relative flex items-center">
                   <input
@@ -500,7 +564,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                       setHasManualDose(true);
                     }}
                     placeholder={fuzzyInfo.dosePlaceholder}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border-2 border-indigo-400/60 focus:border-[#F7941E] text-white placeholder-stone-400 text-center font-mono text-sm sm:text-base font-black focus:outline-none transition-colors shadow-inner"
+                    className="w-full px-3 py-1.5 rounded-xl bg-stone-950 border-2 border-indigo-400/60 focus:border-[#F7941E] text-white placeholder-stone-400 text-center font-mono text-sm font-black focus:outline-none transition-colors shadow-inner"
                   />
                   <span className="absolute end-3 text-[11px] font-bold text-indigo-300 pointer-events-none">
                     {fuzzyInfo.unit}
@@ -509,11 +573,11 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
               </div>
 
               {/* Instruction (قبل/بعد از غذا) */}
-              <div className="p-3 rounded-2xl bg-stone-950/40 border border-stone-800 space-y-1.5">
-                <label className="text-xs sm:text-sm font-bold text-stone-300 block">
+              <div className="p-2.5 rounded-2xl bg-stone-950/40 border border-stone-800 space-y-1">
+                <label className="text-xs font-bold text-stone-300 block">
                   {isEn ? 'Usage Instruction' : 'دستور مصرف'}
                 </label>
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1">
                   {INSTRUCTION_OPTIONS.map((opt) => (
                     <button
                       key={opt.id}
@@ -522,7 +586,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                         setInstruction(opt.id);
                         setHasManualInstruction(true);
                       }}
-                      className={`flex-1 min-w-[74px] py-2 px-2 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                      className={`flex-1 min-w-[64px] py-1.5 px-1.5 rounded-lg text-[10px] sm:text-[11px] font-bold border transition-all cursor-pointer ${
                         instruction === opt.id
                           ? 'bg-indigo-500 text-white border-indigo-400 font-black shadow-xs'
                           : 'bg-stone-900 border-stone-800 text-stone-300 hover:border-stone-700'
@@ -535,11 +599,11 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
               </div>
             </div>
 
-            {/* C. Schedule Interval & Exact Daily Dose Times */}
-            <div className="p-3 rounded-2xl bg-stone-950/50 border border-stone-800 space-y-2.5">
+            {/* C. Schedule Interval & Exact Daily Dose Times (with >= 30px margin on both sides on mobile) */}
+            <div className="p-2.5 rounded-2xl bg-stone-950/50 border border-stone-800 space-y-2">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <label className="text-xs sm:text-sm font-bold text-stone-200 flex items-center gap-1.5">
-                  <Clock className="w-4 h-4 text-indigo-400" />
+                <label className="text-xs font-bold text-stone-200 flex items-center gap-1.5">
+                  <Clock className="w-3.5 h-3.5 text-amber-400" />
                   <span>
                     {isEn ? 'Repeat Interval & Dose Hours' : 'بازه تکرار و ساعت‌های مصرف در روز'}
                   </span>
@@ -548,15 +612,15 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                 <button
                   type="button"
                   onClick={handleAddCustomTimeSlot}
-                  className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-indigo-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                  className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-100 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>{isEn ? 'Add Time' : 'افزودن ساعت'}</span>
+                  <Plus className="w-3.5 h-3.5 text-emerald-400 stroke-[2.5]" />
+                  <span>{isEn ? 'Register Time' : 'ثبت ساعت جدید'}</span>
                 </button>
               </div>
 
               {/* Interval Presets */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              <div className="grid grid-cols-4 gap-1 sm:gap-1.5">
                 {INTERVAL_PRESETS.map((preset) => {
                   const isSelected =
                     scheduleType === 'interval_hours' && intervalHours === preset.hours;
@@ -565,7 +629,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                       key={preset.hours}
                       type="button"
                       onClick={() => handleSelectIntervalPreset(preset.hours)}
-                      className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                      className={`py-1.5 px-1.5 rounded-xl text-[11px] sm:text-xs font-bold border transition-all cursor-pointer ${
                         isSelected
                           ? 'bg-indigo-500 text-white border-indigo-400 font-black shadow-xs'
                           : 'bg-stone-900 border-stone-800 text-stone-300 hover:border-stone-700'
@@ -577,44 +641,168 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                 })}
               </div>
 
-              {/* Editable Time Slots */}
-              <div className="flex items-center gap-2 flex-wrap pt-1">
-                {scheduledTimes.map((timeVal, idx) => (
-                  <div
-                    key={`slot-${idx}`}
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-stone-900 border border-stone-700/80"
-                  >
-                    <span className="text-[10px] font-bold text-stone-400">
-                      {isEn ? `#${idx + 1}` : `نوبت ${formatNum(idx + 1)}:`}
-                    </span>
-                    <input
-                      type="time"
-                      dir="ltr"
-                      value={timeVal}
-                      onChange={(e) => handleTimeSlotChange(idx, e.target.value)}
-                      className="bg-transparent text-white font-mono text-xs sm:text-sm font-black focus:outline-none cursor-pointer"
-                    />
-                    {scheduledTimes.length > 1 && (
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveTimeSlot(idx)}
-                        className="p-0.5 rounded-md text-stone-400 hover:text-rose-400 cursor-pointer"
-                        title={isEn ? 'Remove slot' : 'حذف این نوبت'}
+              {/* Dose Time Buttons + Expandable Roller Clock (opens on tap, closes after setting) */}
+              <div className="mx-[30px] max-w-[calc(100vw-60px)] sm:mx-auto sm:max-w-lg p-2 rounded-2xl bg-stone-950/90 border border-stone-800/90 space-y-2">
+                <p className="text-[10px] sm:text-[11px] text-stone-400 text-center">
+                  {isEn
+                    ? 'Tap any dose slot to open the roller clock and adjust its time:'
+                    : 'برای تنظیم ساعت هر نوبت، روی آن بزنید تا ساعت رولی باز شود:'}
+                </p>
+
+                <div className="grid grid-cols-2 gap-1.5 sm:gap-2">
+                  {scheduledTimes.map((timeVal, idx) => {
+                    const isRollerOpen = activeRollerSlotIndex === idx;
+                    return (
+                      <div
+                        key={`slot-${idx}`}
+                        className={`flex items-center justify-between gap-1 px-2.5 py-1.5 rounded-xl border transition-all min-w-0 ${
+                          isRollerOpen
+                            ? 'bg-indigo-500/15 border-[#F7941E] ring-1 ring-[#F7941E]/40 shadow-sm'
+                            : 'bg-stone-900 border-stone-700/80 hover:border-stone-600'
+                        }`}
                       >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                  </div>
-                ))}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setActiveRollerSlotIndex(isRollerOpen ? null : idx)
+                          }
+                          className="flex-1 flex items-center justify-between gap-1.5 min-w-0 cursor-pointer text-start"
+                        >
+                          <div className="flex items-center gap-1 min-w-0">
+                            <Clock className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <span className="text-[11px] sm:text-xs font-bold text-stone-200 truncate">
+                              {isEn ? `Dose #${idx + 1}` : `نوبت ${formatNum(idx + 1)}`}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <span
+                              className="px-2 py-0.5 rounded-md bg-stone-950 border border-stone-700 text-white font-mono text-xs font-black"
+                              dir="ltr"
+                            >
+                              {formatNum(timeVal || '08:00')}
+                            </span>
+                            {isRollerOpen ? (
+                              <ChevronUp className="w-3.5 h-3.5 text-[#F7941E] shrink-0" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            )}
+                          </div>
+                        </button>
+
+                        {scheduledTimes.length > 1 && (
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTimeSlot(idx)}
+                            className="p-0.5 rounded-md text-rose-400 hover:text-rose-300 hover:bg-stone-800 cursor-pointer shrink-0"
+                            title={isEn ? 'Remove slot' : 'حذف این نوبت'}
+                          >
+                            <X className="w-3 h-3 text-rose-400" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Expandable Roller Clock (WheelPicker) — Opens when a slot is clicked, closes when confirmed */}
+                {activeRollerSlotIndex !== null &&
+                  scheduledTimes[activeRollerSlotIndex] !== undefined &&
+                  (() => {
+                    const activeSlotTime = scheduledTimes[activeRollerSlotIndex] || '08:00';
+                    const [curH, curM] = activeSlotTime.split(':');
+                    const selectedHourVal = Math.min(
+                      23,
+                      Math.max(0, parseInt(curH || '8', 10) || 0)
+                    );
+                    const selectedMinVal = Math.min(
+                      59,
+                      Math.max(0, parseInt(curM || '0', 10) || 0)
+                    );
+
+                    return (
+                      <div className="p-3 rounded-2xl bg-stone-900 border-2 border-[#F7941E]/60 shadow-xl space-y-2.5 animate-in fade-in zoom-in-95 duration-150">
+                        <div className="flex items-center justify-between gap-2 pb-1.5 border-b border-stone-800">
+                          <div className="flex items-center gap-1.5">
+                            <Clock className="w-4 h-4 text-amber-400 shrink-0" />
+                            <span className="text-xs sm:text-sm font-black text-white">
+                              {isEn
+                                ? `Adjust Dose #${activeRollerSlotIndex + 1} Time`
+                                : `تنظیم ساعت نوبت ${formatNum(activeRollerSlotIndex + 1)}`}
+                            </span>
+                          </div>
+                          <span
+                            className="px-2.5 py-0.5 rounded-lg bg-stone-950 border border-[#F7941E]/50 text-[#F7941E] font-mono text-xs sm:text-sm font-black"
+                            dir="ltr"
+                          >
+                            {formatNum(activeSlotTime)}
+                          </span>
+                        </div>
+
+                        {/* Roller Clock (Hour & Minute WheelPickers) */}
+                        <div
+                          dir="ltr"
+                          className="grid grid-cols-2 gap-2 max-w-[200px] mx-auto px-1"
+                        >
+                          <WheelPicker
+                            key={`med-hour-${activeRollerSlotIndex}`}
+                            selectedValue={selectedHourVal}
+                            onChange={(newHour) => {
+                              const nextTime = `${String(newHour).padStart(2, '0')}:${String(
+                                selectedMinVal
+                              ).padStart(2, '0')}`;
+                              handleTimeSlotChange(activeRollerSlotIndex, nextTime);
+                            }}
+                            min={0}
+                            max={23}
+                            itemHeight={54}
+                            visibleCount={3}
+                            items={HOUR_WHEEL_ITEMS}
+                          />
+
+                          <WheelPicker
+                            key={`med-minute-${activeRollerSlotIndex}`}
+                            selectedValue={selectedMinVal}
+                            onChange={(newMin) => {
+                              const nextTime = `${String(selectedHourVal).padStart(
+                                2,
+                                '0'
+                              )}:${String(newMin).padStart(2, '0')}`;
+                              handleTimeSlotChange(activeRollerSlotIndex, nextTime);
+                            }}
+                            min={0}
+                            max={59}
+                            itemHeight={54}
+                            visibleCount={3}
+                            items={MINUTE_WHEEL_ITEMS}
+                          />
+                        </div>
+
+                        {/* Confirm & Close Roller Button */}
+                        <div className="pt-0.5 flex justify-center">
+                          <button
+                            type="button"
+                            onClick={() => setActiveRollerSlotIndex(null)}
+                            className="btn-brand-submit w-full sm:w-auto min-w-[160px] min-h-[38px] px-5 py-1.5 rounded-xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-md cursor-pointer active:scale-95"
+                          >
+                            <Check className="w-4 h-4 stroke-[3]" />
+                            <span>
+                              {isEn ? 'Confirm Time & Close' : 'ثبت ساعت و بستن'}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
               </div>
             </div>
 
             {/* D. Treatment Duration (طول دوره درمان) & Stock Inventory (موجودی دارو) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {/* Duration of Treatment */}
-              <div className="p-3 rounded-2xl bg-stone-950/40 border border-stone-800 space-y-2">
+              <div className="p-2.5 rounded-2xl bg-stone-950/40 border border-stone-800 space-y-1.5">
                 <label className="text-xs font-bold text-stone-300 flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-indigo-400" />
+                  <Calendar className="w-3.5 h-3.5 text-sky-400" />
                   <span>{isEn ? 'Treatment Duration' : 'طول دوره درمان'}</span>
                 </label>
                 <div className="flex flex-wrap gap-1">
@@ -636,7 +824,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                             setDurationDaysInput(String(preset.days));
                           }
                         }}
-                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer ${
+                        className={`px-2 py-1 rounded-lg text-[10px] sm:text-[11px] font-bold border transition-all cursor-pointer ${
                           isSelected
                             ? 'bg-indigo-500 text-white border-indigo-400 font-black'
                             : 'bg-stone-900 border-stone-800 text-stone-300 hover:border-stone-700'
@@ -648,7 +836,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                   })}
                 </div>
                 {!isUnlimitedDuration && (
-                  <div className="relative flex items-center pt-1">
+                  <div className="relative flex items-center pt-0.5">
                     <input
                       type="number"
                       min="1"
@@ -660,7 +848,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                         setDurationDaysInput(e.target.value);
                       }}
                       placeholder={isEn ? 'Custom days (e.g. 5)' : 'تعداد روز دوره درمان (مثلاً ۵)'}
-                      className="w-full px-3 py-2 rounded-xl bg-stone-900 border border-stone-700 text-white font-mono text-xs font-black text-center focus:outline-none focus:border-indigo-500"
+                      className="w-full px-3 py-1.5 rounded-xl bg-stone-900 border border-stone-700 text-white font-mono text-xs font-black text-center focus:outline-none focus:border-indigo-500"
                     />
                     <span className="absolute end-3 text-[11px] font-bold text-stone-400 pointer-events-none">
                       {isEn ? 'days' : 'روز'}
@@ -670,9 +858,9 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
               </div>
 
               {/* Medication Stock Inventory (محدودیت تعداد / موجودی دارو) */}
-              <div className="p-3 rounded-2xl bg-stone-950/40 border border-stone-800 space-y-2 flex flex-col justify-between">
+              <div className="p-2.5 rounded-2xl bg-stone-950/40 border border-stone-800 space-y-1.5 flex flex-col justify-between">
                 <label className="text-xs font-bold text-stone-300 flex items-center gap-1.5">
-                  <Package className="w-3.5 h-3.5 text-indigo-400" />
+                  <Package className="w-3.5 h-3.5 text-emerald-400" />
                   <span>{fuzzyInfo.stockInputLabel}</span>
                 </label>
                 <div className="relative flex items-center">
@@ -684,7 +872,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                     value={stockCountInput}
                     onChange={(e) => setStockCountInput(e.target.value)}
                     placeholder={fuzzyInfo.stockPlaceholder}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 focus:border-indigo-500 text-white placeholder-stone-500 text-center font-mono text-sm font-black focus:outline-none transition-colors"
+                    className="w-full px-3 py-1.5 rounded-xl bg-stone-950 border border-stone-800 focus:border-indigo-500 text-white placeholder-stone-500 text-center font-mono text-sm font-black focus:outline-none transition-colors"
                   />
                   <span className="absolute end-3 text-[11px] font-bold text-stone-400 pointer-events-none">
                     {fuzzyInfo.unit}
@@ -694,7 +882,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
             </div>
 
             {/* E. Optional Note + Submit Button */}
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 pt-0.5">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-0.5">
               <input
                 type="text"
                 value={notes}
@@ -704,7 +892,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                     ? 'Doctor note or special warning (optional)...'
                     : 'توضیح پزشک یا نکته تکمیلی (اختیاری)...'
                 }
-                className="flex-1 px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 focus:border-indigo-500 text-white placeholder-stone-400 text-xs focus:outline-none transition-colors"
+                className="flex-1 px-3.5 py-2 rounded-xl bg-stone-950 border border-stone-800 focus:border-indigo-500 text-white placeholder-stone-400 text-xs focus:outline-none transition-colors"
               />
 
               <div className="flex items-center justify-end gap-2 shrink-0">
@@ -712,23 +900,24 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                   <button
                     type="button"
                     onClick={resetForm}
-                    className="min-h-[44px] px-3.5 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-bold transition-colors cursor-pointer"
+                    className="min-h-[42px] px-3.5 py-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 text-xs font-bold transition-colors cursor-pointer"
                   >
                     {isEn ? 'Cancel' : 'انصراف'}
                   </button>
                 )}
                 <button
+                  ref={submitBtnRef}
                   type="submit"
-                  className="min-h-[44px] flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-md shadow-indigo-500/20 transition-all cursor-pointer active:scale-95"
+                  className="btn-brand-submit min-h-[44px] flex-1 sm:flex-initial px-6 py-2 rounded-xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-[#F7941E]/25 transition-all cursor-pointer active:scale-95"
                 >
                   <Check className="w-4 h-4 stroke-[3]" />
                   <span>
                     {editingMed
                       ? isEn
-                        ? 'Save Changes'
-                        : 'ذخیره تغییرات دارو'
+                        ? 'Save Medication Changes'
+                        : 'ثبت تغییرات دارو'
                       : isEn
-                      ? 'Save Medication'
+                      ? 'Register Medication'
                       : 'ثبت یادآور دارو'}
                   </span>
                 </button>
@@ -744,7 +933,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 flex items-center justify-center shrink-0">
-                <CheckCircle2 className="w-4.5 h-4.5" />
+                <CheckCircle2 className="w-4.5 h-4.5 text-emerald-400" />
               </div>
               <div>
                 <h4 className="text-sm sm:text-base font-black text-white">
@@ -840,9 +1029,9 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                           onClick={() =>
                             onLogDose(med.id, todayKey, scheduledTime, 'taken')
                           }
-                          className="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-white font-black text-xs flex items-center gap-1 shadow-sm cursor-pointer active:scale-95"
+                          className="min-h-[38px] px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center gap-1 shadow-sm cursor-pointer active:scale-95"
                         >
-                          <Check className="w-4 h-4 stroke-[3]" />
+                          <Check className="w-4 h-4 stroke-[3] text-amber-300" />
                           <span>{isEn ? 'Taken' : 'مصرف شد'}</span>
                         </button>
                         <button
@@ -850,10 +1039,10 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                           onClick={() =>
                             onLogDose(med.id, todayKey, scheduledTime, 'missed')
                           }
-                          className="min-h-[38px] p-2 rounded-xl bg-stone-900 hover:bg-rose-500/20 border border-stone-800 hover:border-rose-500/40 text-stone-400 hover:text-rose-300 transition-colors cursor-pointer"
+                          className="min-h-[38px] p-2 rounded-xl bg-stone-900 hover:bg-rose-500/20 border border-stone-800 hover:border-rose-500/40 text-rose-400 hover:text-rose-300 transition-colors cursor-pointer"
                           title={isEn ? 'Mark as Missed' : 'ثبت به عنوان فراموش‌شده'}
                         >
-                          <XCircle className="w-4 h-4" />
+                          <XCircle className="w-4 h-4 text-rose-400" />
                         </button>
                       </>
                     ) : (
@@ -862,10 +1051,10 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                         onClick={() =>
                           onLogDose(med.id, todayKey, scheduledTime, 'reset')
                         }
-                        className="min-h-[36px] px-2.5 py-1 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                        className="min-h-[36px] px-2.5 py-1 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                         title={isEn ? 'Undo status' : 'بازگردانی وضعیت این نوبت'}
                       >
-                        <RotateCcw className="w-3.5 h-3.5" />
+                        <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
                         <span>{isEn ? 'Undo' : 'بازگردانی'}</span>
                       </button>
                     )}
@@ -880,8 +1069,8 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
       {/* 3. REGISTERED MEDICATION CARDS & INTAKE HISTORY LOG */}
       {searchedMedications.length === 0 ? (
         <div className="py-10 px-4 text-center rounded-3xl border border-dashed border-stone-800 bg-stone-900/40 space-y-3">
-          <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-400 flex items-center justify-center mx-auto">
-            <Pill className="w-6 h-6" />
+          <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 flex items-center justify-center mx-auto">
+            <Pill className="w-6 h-6 text-emerald-400" />
           </div>
           <div className="space-y-1">
             <h4 className="text-sm sm:text-base font-bold text-white">
@@ -889,10 +1078,20 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
             </h4>
             <p className="text-xs text-stone-400 max-w-md mx-auto leading-relaxed">
               {isEn
-                ? 'Add your medications above to get accurate high-priority dose notifications, daily checklist tracking, and low-stock alerts.'
-                : 'داروهای خود را در فرم بالا وارد کنید تا نوتیفیکیشن دقیق هر نوبت، چک‌لیست روزانه و هشدار اتمام موجودی دارو برایتان فعال شود.'}
+                ? 'Register your medications above to get accurate high-priority dose notifications, daily checklist tracking, and low-stock alerts.'
+                : 'داروهای خود را در فرم بالا ثبت کنید تا نوتیفیکیشن دقیق هر نوبت، چک‌لیست روزانه و هشدار اتمام موجودی دارو برایتان فعال شود.'}
             </p>
           </div>
+          {!isFormExpanded && (
+            <button
+              type="button"
+              onClick={() => setIsFormExpanded(true)}
+              className="btn-brand-submit min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs shadow-md cursor-pointer active:scale-95"
+            >
+              <Plus className="w-4 h-4 stroke-[2.8]" />
+              <span>{isEn ? 'Register First Medication' : 'ثبت اولین دارو'}</span>
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
@@ -956,18 +1155,18 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                     <button
                       type="button"
                       onClick={() => handleStartEdit(med)}
-                      className="p-2 rounded-xl bg-stone-950 border border-stone-800 text-stone-400 hover:text-white hover:border-stone-700 transition-colors cursor-pointer"
+                      className="p-2 rounded-xl bg-stone-950 border border-stone-800 text-sky-400 hover:text-sky-300 hover:border-stone-700 transition-colors cursor-pointer"
                       title={isEn ? 'Edit' : 'ویرایش دارو'}
                     >
-                      <Edit3 className="w-4 h-4" />
+                      <Edit3 className="w-4 h-4 text-sky-400" />
                     </button>
                     <button
                       type="button"
                       onClick={() => onDeleteMedication(med.id)}
-                      className="p-2 rounded-xl bg-stone-950 border border-stone-800 text-stone-400 hover:text-rose-400 hover:border-stone-700 transition-colors cursor-pointer"
+                      className="p-2 rounded-xl bg-stone-950 border border-stone-800 text-rose-400 hover:text-rose-300 hover:border-stone-700 transition-colors cursor-pointer"
                       title={isEn ? 'Delete' : 'حذف دارو'}
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4 text-rose-400" />
                     </button>
                   </div>
                 </div>
@@ -975,7 +1174,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                 {/* Dose & Daily Times Summary */}
                 <div className="flex items-center justify-between gap-2 flex-wrap p-2.5 rounded-xl bg-stone-950/80 border border-stone-800/90">
                   <div className="flex items-center gap-1.5">
-                    <Pill className="w-4 h-4 text-indigo-400 shrink-0" />
+                    <Pill className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span className="text-xs font-bold text-stone-300">
                       {isEn ? 'Dose:' : 'هر نوبت:'}{' '}
                       <strong className="text-white font-black">
@@ -985,7 +1184,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1 flex-wrap">
-                    <Bell className="w-3.5 h-3.5 text-indigo-400 me-0.5" />
+                    <Bell className="w-3.5 h-3.5 text-amber-400 me-0.5" />
                     {med.scheduledTimes.map((tStr) => (
                       <span
                         key={tStr}
@@ -1012,7 +1211,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                       {lowStock ? (
                         <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
                       ) : (
-                        <Package className="w-4 h-4 text-indigo-400 shrink-0" />
+                        <Package className="w-4 h-4 text-emerald-400 shrink-0" />
                       )}
                       <span>
                         {isEn ? 'Remaining Stock:' : 'موجودی باقی‌مانده:'}{' '}
@@ -1039,9 +1238,10 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                           setRefillMedId(isRefilling ? null : med.id);
                           setRefillAmountInput('20');
                         }}
-                        className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-indigo-300 text-[11px] font-bold cursor-pointer"
+                        className="px-2.5 py-1 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-100 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                       >
-                        {isEn ? '+ Refill' : '+ شارژ موجودی'}
+                        <Plus className="w-3.5 h-3.5 text-emerald-400 stroke-[2.5]" />
+                        <span>{isEn ? 'Register Stock' : 'ثبت موجودی جدید'}</span>
                       </button>
                     )}
                   </div>
@@ -1050,7 +1250,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                 {isRefilling && onRefillStock && (
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 flex items-center gap-2">
                     <span className="text-xs font-bold text-stone-300">
-                      {isEn ? `Add (${med.dosageUnit}):` : `افزودن به موجودی (${med.dosageUnit}):`}
+                      {isEn ? `Register (${med.dosageUnit}):` : `ثبت موجودی (${med.dosageUnit}):`}
                     </span>
                     <input
                       type="number"
@@ -1070,9 +1270,9 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                         }
                         setRefillMedId(null);
                       }}
-                      className="px-3 py-1 rounded-lg bg-indigo-500 text-white text-xs font-black cursor-pointer"
+                      className="btn-brand-submit px-3 py-1 rounded-lg text-xs font-black cursor-pointer"
                     >
-                      {isEn ? 'Add' : 'ثبت'}
+                      {isEn ? 'Register' : 'ثبت'}
                     </button>
                   </div>
                 )}
@@ -1098,14 +1298,14 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
                     onClick={() =>
                       setExpandedHistoryId(isHistoryOpen ? null : med.id)
                     }
-                    className="px-2.5 py-1 rounded-lg bg-stone-950 hover:bg-stone-800 border border-stone-800 text-indigo-300 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
+                    className="px-2.5 py-1 rounded-lg bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-[11px] font-bold flex items-center gap-1 cursor-pointer"
                   >
-                    <History className="w-3.5 h-3.5" />
+                    <History className="w-3.5 h-3.5 text-amber-400" />
                     <span>{isEn ? 'History Log' : 'تاریخچه مصرف'}</span>
                     {isHistoryOpen ? (
-                      <ChevronUp className="w-3.5 h-3.5" />
+                      <ChevronUp className="w-3.5 h-3.5 text-amber-400" />
                     ) : (
-                      <ChevronDown className="w-3.5 h-3.5" />
+                      <ChevronDown className="w-3.5 h-3.5 text-amber-400" />
                     )}
                   </button>
                 </div>

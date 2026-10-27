@@ -2581,141 +2581,103 @@ class YaadAlarmPopupActivity : Activity() {
         return sb.toString()
     }
 
-    private fun resolvePalette(themeName: String): ThemePalette {
-        return when (themeName) {
-            "dark-slate" -> ThemePalette(
-                cardBg = Color.parseColor("#11223D"),
-                cardBorder = Color.parseColor("#0EA5E9"),
-                titleColor = Color.parseColor("#EFF6FF"),
-                bodyColor = Color.parseColor("#BAE6FD"),
-                mutedColor = Color.parseColor("#7DD3FC"),
-                accentColor = Color.parseColor("#38BDF8"),
+    private fun resolveFeatureKey(featureType: String, rawTitle: String): String {
+        if (featureType == "medication" || featureType == "medication_dose" || rawTitle.startsWith("💊")) {
+            return "medication"
+        }
+        if (featureType == "in_progress" || featureType == "in_progress_inactivity" || rawTitle.startsWith("⏳")) {
+            return "in_progress"
+        }
+        if (featureType == "occasion" || rawTitle.startsWith("🎂") || rawTitle.startsWith("🎉")) {
+            return "occasion"
+        }
+        if (featureType == "geofence" || featureType == "location" || rawTitle.startsWith("📍")) {
+            return "geofence"
+        }
+        return "reminder"
+    }
+
+    private fun resolvePalette(themeName: String, featureKey: String = "reminder"): ThemePalette {
+        return when (featureKey) {
+            "medication" -> ThemePalette(
+                cardBg = Color.parseColor("#E6F7EE"),
+                cardBorder = Color.parseColor("#10B981"),
+                titleColor = Color.parseColor("#064E3B"),
+                bodyColor = Color.parseColor("#065F46"),
+                mutedColor = Color.parseColor("#047857"),
+                accentColor = Color.parseColor("#059669"),
+                doneBtnBg = Color.parseColor("#059669"),
+                doneBtnText = Color.parseColor("#FFFFFF"),
+                secondaryBtnBg = Color.parseColor("#D1FAE5"),
+                secondaryBtnBorder = Color.parseColor("#6EE7B7"),
+                secondaryBtnText = Color.parseColor("#065F46"),
+                editBtnBg = Color.parseColor("#ECFDF5"),
+                editBtnBorder = Color.parseColor("#10B981"),
+                editBtnText = Color.parseColor("#047857")
+            )
+            "in_progress" -> ThemePalette(
+                cardBg = Color.parseColor("#FEF3C7"),
+                cardBorder = Color.parseColor("#F59E0B"),
+                titleColor = Color.parseColor("#78350F"),
+                bodyColor = Color.parseColor("#92400E"),
+                mutedColor = Color.parseColor("#B45309"),
+                accentColor = Color.parseColor("#D97706"),
+                doneBtnBg = Color.parseColor("#D97706"),
+                doneBtnText = Color.parseColor("#FFFFFF"),
+                secondaryBtnBg = Color.parseColor("#FDE68A"),
+                secondaryBtnBorder = Color.parseColor("#FBBF24"),
+                secondaryBtnText = Color.parseColor("#78350F"),
+                editBtnBg = Color.parseColor("#FFFBEB"),
+                editBtnBorder = Color.parseColor("#F59E0B"),
+                editBtnText = Color.parseColor("#B45309")
+            )
+            "occasion" -> ThemePalette(
+                cardBg = Color.parseColor("#FCE7F3"),
+                cardBorder = Color.parseColor("#EC4899"),
+                titleColor = Color.parseColor("#831843"),
+                bodyColor = Color.parseColor("#9D174D"),
+                mutedColor = Color.parseColor("#BE185D"),
+                accentColor = Color.parseColor("#DB2777"),
+                doneBtnBg = Color.parseColor("#DB2777"),
+                doneBtnText = Color.parseColor("#FFFFFF"),
+                secondaryBtnBg = Color.parseColor("#FBCFE8"),
+                secondaryBtnBorder = Color.parseColor("#F472B6"),
+                secondaryBtnText = Color.parseColor("#831843"),
+                editBtnBg = Color.parseColor("#FDF2F8"),
+                editBtnBorder = Color.parseColor("#EC4899"),
+                editBtnText = Color.parseColor("#BE185D")
+            )
+            "geofence" -> ThemePalette(
+                cardBg = Color.parseColor("#E0F2FE"),
+                cardBorder = Color.parseColor("#06B6D4"),
+                titleColor = Color.parseColor("#0C4A6E"),
+                bodyColor = Color.parseColor("#155E75"),
+                mutedColor = Color.parseColor("#0369A1"),
+                accentColor = Color.parseColor("#0284C7"),
                 doneBtnBg = Color.parseColor("#0284C7"),
                 doneBtnText = Color.parseColor("#FFFFFF"),
-                secondaryBtnBg = Color.parseColor("#193154"),
-                secondaryBtnBorder = Color.parseColor("#274875"),
-                secondaryBtnText = Color.parseColor("#EFF6FF"),
-                editBtnBg = Color.parseColor("#0E1F38"),
-                editBtnBorder = Color.parseColor("#0EA5E9"),
-                editBtnText = Color.parseColor("#38BDF8")
-            )
-            "system" -> {
-                val isNight = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-                if (isNight) {
-                    ThemePalette(
-                        cardBg = Color.parseColor("#1C2126"),
-                        cardBorder = Color.parseColor("#14B8A6"),
-                        titleColor = Color.parseColor("#F1F5F9"),
-                        bodyColor = Color.parseColor("#CBD5E1"),
-                        mutedColor = Color.parseColor("#94A3B8"),
-                        accentColor = Color.parseColor("#2DD4BF"),
-                        doneBtnBg = Color.parseColor("#0D9488"),
-                        doneBtnText = Color.parseColor("#FFFFFF"),
-                        secondaryBtnBg = Color.parseColor("#252C33"),
-                        secondaryBtnBorder = Color.parseColor("#333D47"),
-                        secondaryBtnText = Color.parseColor("#F1F5F9"),
-                        editBtnBg = Color.parseColor("#191E23"),
-                        editBtnBorder = Color.parseColor("#14B8A6"),
-                        editBtnText = Color.parseColor("#2DD4BF")
-                    )
-                } else {
-                    ThemePalette(
-                        cardBg = Color.parseColor("#FFFFFF"),
-                        cardBorder = Color.parseColor("#0D9488"),
-                        titleColor = Color.parseColor("#0F172A"),
-                        bodyColor = Color.parseColor("#334155"),
-                        mutedColor = Color.parseColor("#64748B"),
-                        accentColor = Color.parseColor("#0D9488"),
-                        doneBtnBg = Color.parseColor("#0D9488"),
-                        doneBtnText = Color.parseColor("#FFFFFF"),
-                        secondaryBtnBg = Color.parseColor("#F1F5F9"),
-                        secondaryBtnBorder = Color.parseColor("#CBD5E1"),
-                        secondaryBtnText = Color.parseColor("#0F172A"),
-                        editBtnBg = Color.parseColor("#F0FDFA"),
-                        editBtnBorder = Color.parseColor("#0D9488"),
-                        editBtnText = Color.parseColor("#0F766E")
-                    )
-                }
-            }
-            "light-clean" -> ThemePalette(
-                cardBg = Color.parseColor("#FFFFFF"),
-                cardBorder = Color.parseColor("#0D9488"),
-                titleColor = Color.parseColor("#1C1917"),
-                bodyColor = Color.parseColor("#44403C"),
-                mutedColor = Color.parseColor("#78716C"),
-                accentColor = Color.parseColor("#0D9488"),
-                doneBtnBg = Color.parseColor("#0D9488"),
-                doneBtnText = Color.parseColor("#FFFFFF"),
-                secondaryBtnBg = Color.parseColor("#F5F5F4"),
-                secondaryBtnBorder = Color.parseColor("#D6D3D1"),
-                secondaryBtnText = Color.parseColor("#1C1917"),
-                editBtnBg = Color.parseColor("#F0FDFA"),
-                editBtnBorder = Color.parseColor("#0D9488"),
-                editBtnText = Color.parseColor("#0F766E")
-            )
-            "jade_warm_light" -> ThemePalette(
-                cardBg = Color.parseColor("#F7F6F0"),
-                cardBorder = Color.parseColor("#168779"),
-                titleColor = Color.parseColor("#202A29"),
-                bodyColor = Color.parseColor("#3D4B49"),
-                mutedColor = Color.parseColor("#5C6B68"),
-                accentColor = Color.parseColor("#168779"),
-                doneBtnBg = Color.parseColor("#168779"),
-                doneBtnText = Color.parseColor("#FFFFFF"),
-                secondaryBtnBg = Color.parseColor("#EFEFE8"),
-                secondaryBtnBorder = Color.parseColor("#DDE1DA"),
-                secondaryBtnText = Color.parseColor("#202A29"),
-                editBtnBg = Color.parseColor("#DDEFEA"),
-                editBtnBorder = Color.parseColor("#168779"),
-                editBtnText = Color.parseColor("#168779")
-            )
-            "midnight_blue_silver" -> ThemePalette(
-                cardBg = Color.parseColor("#202B3A"),
-                cardBorder = Color.parseColor("#9CBCE0"),
-                titleColor = Color.parseColor("#F0F3F7"),
-                bodyColor = Color.parseColor("#C5D9EE"),
-                mutedColor = Color.parseColor("#9CBCE0"),
-                accentColor = Color.parseColor("#9CBCE0"),
-                doneBtnBg = Color.parseColor("#9CBCE0"),
-                doneBtnText = Color.parseColor("#101722"),
-                secondaryBtnBg = Color.parseColor("#172130"),
-                secondaryBtnBorder = Color.parseColor("#39475A"),
-                secondaryBtnText = Color.parseColor("#F0F3F7"),
-                editBtnBg = Color.parseColor("#293648"),
-                editBtnBorder = Color.parseColor("#9CBCE0"),
-                editBtnText = Color.parseColor("#C5D9EE")
-            )
-            "sketch-contrast" -> ThemePalette(
-                cardBg = Color.parseColor("#09090B"),
-                cardBorder = Color.parseColor("#2DD4BF"),
-                titleColor = Color.parseColor("#FFFFFF"),
-                bodyColor = Color.parseColor("#D4D4D8"),
-                mutedColor = Color.parseColor("#A1A1AA"),
-                accentColor = Color.parseColor("#2DD4BF"),
-                doneBtnBg = Color.parseColor("#0D9488"),
-                doneBtnText = Color.parseColor("#FFFFFF"),
-                secondaryBtnBg = Color.parseColor("#18181B"),
-                secondaryBtnBorder = Color.parseColor("#2DD4BF"),
-                secondaryBtnText = Color.parseColor("#5EEAD4"),
-                editBtnBg = Color.parseColor("#18181B"),
-                editBtnBorder = Color.parseColor("#FFFFFF"),
-                editBtnText = Color.parseColor("#FFFFFF")
+                secondaryBtnBg = Color.parseColor("#BAE6FD"),
+                secondaryBtnBorder = Color.parseColor("#38BDF8"),
+                secondaryBtnText = Color.parseColor("#0C4A6E"),
+                editBtnBg = Color.parseColor("#F0F9FF"),
+                editBtnBorder = Color.parseColor("#06B6D4"),
+                editBtnText = Color.parseColor("#0369A1")
             )
             else -> ThemePalette(
-                cardBg = Color.parseColor("#101222"),
+                cardBg = Color.parseColor("#EEF2FF"),
                 cardBorder = Color.parseColor("#6366F1"),
-                titleColor = Color.parseColor("#F3F4F8"),
-                bodyColor = Color.parseColor("#C7CBF0"),
-                mutedColor = Color.parseColor("#8A90BD"),
-                accentColor = Color.parseColor("#818CF8"),
+                titleColor = Color.parseColor("#1E1B4B"),
+                bodyColor = Color.parseColor("#312E81"),
+                mutedColor = Color.parseColor("#4338CA"),
+                accentColor = Color.parseColor("#4F46E5"),
                 doneBtnBg = Color.parseColor("#4F46E5"),
                 doneBtnText = Color.parseColor("#FFFFFF"),
-                secondaryBtnBg = Color.parseColor("#191C33"),
-                secondaryBtnBorder = Color.parseColor("#282C4A"),
-                secondaryBtnText = Color.parseColor("#F3F4F8"),
-                editBtnBg = Color.parseColor("#191C33"),
+                secondaryBtnBg = Color.parseColor("#E0E7FF"),
+                secondaryBtnBorder = Color.parseColor("#818CF8"),
+                secondaryBtnText = Color.parseColor("#1E1B4B"),
+                editBtnBg = Color.parseColor("#F5F3FF"),
                 editBtnBorder = Color.parseColor("#6366F1"),
-                editBtnText = Color.parseColor("#818CF8")
+                editBtnText = Color.parseColor("#4338CA")
             )
         }
     }
@@ -2757,18 +2719,22 @@ class YaadAlarmPopupActivity : Activity() {
         val extraObj = requestJson?.optJSONObject("extra")
         val themeName = extraObj?.optString("theme", "dark-gold")?.takeIf { it.isNotEmpty() } ?: "dark-gold"
         val lang = extraObj?.optString("language", "fa")?.takeIf { it.isNotEmpty() } ?: "fa"
+        val rawFeatureType = extraObj?.optString("featureType", "")?.takeIf { it.isNotEmpty() }
+            ?: extraObj?.optString("type", "")?.takeIf { it.isNotEmpty() }
+            ?: ""
         isPersian = lang != "en"
 
         val rawTitle = requestJson?.getString("title") ?: (if (isPersian) "یادآور" else "Reminder")
+        val featureKey = resolveFeatureKey(rawFeatureType, rawTitle)
         val cleanTitle = rawTitle.replaceFirst("🔔 یادآور: ", "").replaceFirst("یادآور: ", "").replaceFirst("🔔 ", "").trim()
         val bodyText = requestJson?.getString("body") ?: ""
 
-        val palette = resolvePalette(themeName)
-        buildMinimalCardUI(palette, cleanTitle, bodyText)
+        val palette = resolvePalette(themeName, featureKey)
+        buildMinimalCardUI(palette, cleanTitle, bodyText, featureKey)
         startOneMinuteCountdown()
     }
 
-    private fun buildMinimalCardUI(palette: ThemePalette, titleStr: String, bodyStr: String) {
+    private fun buildMinimalCardUI(palette: ThemePalette, titleStr: String, bodyStr: String, featureKey: String = "reminder") {
         val root = FrameLayout(this)
         root.layoutParams = ViewGroup.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -2839,7 +2805,13 @@ class YaadAlarmPopupActivity : Activity() {
         }
 
         val brandTv = TextView(this)
-        brandTv.text = if (isPersian) "یادآور هوشمند یاد" else "YAAD Reminder"
+        brandTv.text = when (featureKey) {
+            "medication" -> if (isPersian) "💊 یادآور مصرف دارو" else "💊 Medication Reminder"
+            "in_progress" -> if (isPersian) "⏳ یادآور کار در جریان" else "⏳ In-Progress Task"
+            "occasion" -> if (isPersian) "🎂 یادآور مناسبت" else "🎂 Occasion Reminder"
+            "geofence" -> if (isPersian) "📍 هشدار حصار مکانی" else "📍 Geofence Alert"
+            else -> if (isPersian) "⏰ یادآور هوشمند یاد" else "⏰ YAAD Reminder"
+        }
         brandTv.setTextColor(palette.accentColor)
         brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
         brandTv.setTypeface(Typeface.DEFAULT_BOLD)

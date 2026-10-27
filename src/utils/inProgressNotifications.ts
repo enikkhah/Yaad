@@ -43,9 +43,30 @@ export const cancelInProgressInactivityNotification = async (itemId: string): Pr
 };
 
 /**
+ * Computes the scheduled notification timestamp for an In-Progress item
+ * based on `lastUpdatedAt`, `inactivityDays` (default 1 day), and optional `notifyTime` ("HH:mm").
+ */
+export const getInProgressNotificationTimestamp = (item: InProgressItem): number => {
+  const days = Math.max(1, item.inactivityDays || 1);
+  const baseMs = item.lastUpdatedAt || Date.now();
+  const rawTargetMs = baseMs + days * DAY_MS;
+
+  if (item.notifyTime && /^\d{1,2}:\d{2}$/.test(item.notifyTime)) {
+    const [hStr, mStr] = item.notifyTime.split(':');
+    const hour = Math.min(23, Math.max(0, parseInt(hStr || '10', 10) || 10));
+    const minute = Math.min(59, Math.max(0, parseInt(mStr || '0', 10) || 0));
+    const targetDate = new Date(rawTargetMs);
+    targetDate.setHours(hour, minute, 0, 0);
+    return targetDate.getTime();
+  }
+
+  return rawTargetMs;
+};
+
+/**
  * Schedules (or resets) a smart inactivity reminder notification via Capacitor Local Notifications.
  * Whenever an item's progress is updated (`lastUpdatedAt = Date.now()`), calling this function
- * cancels the old timer and schedules a fresh notification for `lastUpdatedAt + inactivityDays * 86400000`.
+ * cancels the old timer and schedules a fresh notification for the user-configured day & time.
  */
 export const scheduleInProgressInactivityNotification = async (
   item: InProgressItem,
@@ -68,7 +89,7 @@ export const scheduleInProgressInactivityNotification = async (
     return;
   }
 
-  const triggerTimestamp = item.lastUpdatedAt + item.inactivityDays * DAY_MS;
+  const triggerTimestamp = getInProgressNotificationTimestamp(item);
   const now = Date.now();
 
   // Only schedule future notifications (at least 5 seconds ahead)
@@ -122,9 +143,14 @@ export const scheduleInProgressInactivityNotification = async (
             allowWhileIdle: true,
           },
           channelId,
+          smallIcon: 'ic_stat_notify',
+          iconColor: '#F59E0B',
+          ongoing: true,
+          autoCancel: false,
           extra: {
             inProgressItemId: item.id,
             type: 'in_progress_inactivity',
+            featureType: 'in_progress',
           },
         },
       ],
@@ -160,16 +186,14 @@ export const getInactiveDaysCount = (item: InProgressItem, nowMs: number = Date.
 };
 
 /**
- * Returns true if the item is active, has inactivity reminder enabled, and has not been updated
- * for at least `inactivityDays` days.
+ * Returns true if the item is active, has inactivity reminder enabled, and has reached its scheduled reminder time.
  */
 export const isInProgressItemOverdue = (
   item: InProgressItem,
   nowMs: number = Date.now()
 ): boolean => {
   if (item.completed || item.deletedAt || !item.inactivityReminderEnabled) return false;
-  const thresholdMs = (item.inactivityDays || 3) * DAY_MS;
-  return nowMs - item.lastUpdatedAt >= thresholdMs;
+  return nowMs >= getInProgressNotificationTimestamp(item);
 };
 
 /**

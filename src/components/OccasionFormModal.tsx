@@ -863,11 +863,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
-              className={`min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95 shadow-lg ${
-                !title.trim()
-                  ? `${activeMeta.badgeBg} border ${activeMeta.borderCol} ${activeMeta.badgeText}`
-                  : activeMeta.primaryBtnClass
-              }`}
+              className="btn-brand-submit min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95"
             >
               <Check className="w-4 h-4 stroke-[3]" />
               <span className="font-black">

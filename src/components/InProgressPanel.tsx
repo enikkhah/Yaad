@@ -40,6 +40,7 @@ interface InProgressPanelProps {
   mode?: 'modal-tab' | 'page';
   searchQuery?: string;
   initialOpenForm?: boolean;
+  visitTrigger?: number;
 }
 
 export const InProgressPanel: React.FC<InProgressPanelProps> = ({
@@ -51,7 +52,8 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
   language = 'fa',
   mode = 'page',
   searchQuery = '',
-  initialOpenForm = false,
+  initialOpenForm = true,
+  visitTrigger = 0,
 }) => {
   const isEn = language === 'en';
   const formatNum = (val: number | string) =>
@@ -63,22 +65,58 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
     return () => window.clearInterval(timer);
   }, []);
 
-  // Form visibility & state
-  const [isFormExpanded, setIsFormExpanded] = useState<boolean>(
-    mode === 'modal-tab' || initialOpenForm || items.length === 0
-  );
+  // Form visibility & state — always open on every visit to the In-Progress page
+  const [isFormExpanded, setIsFormExpanded] = useState<boolean>(true);
   const [editingItem, setEditingItem] = useState<InProgressItem | null>(null);
 
   const [title, setTitle] = useState('');
   const [currentProgressInput, setCurrentProgressInput] = useState('');
   const [totalProgressInput, setTotalProgressInput] = useState('');
   const [notes, setNotes] = useState('');
+  const [inactivityReminderEnabled, setInactivityReminderEnabled] = useState<boolean>(true);
+  const [inactivityDaysInput, setInactivityDaysInput] = useState<number>(1);
+  const [notifyTimeInput, setNotifyTimeInput] = useState<string>('10:00');
   const [formError, setFormError] = useState<string | null>(null);
   const [validationAlertField, setValidationAlertField] = useState<string | null>(null);
   const [missingTarget, setMissingTarget] = useState<'title' | 'progress' | null>(null);
 
+  const registrationSectionRef = useRef<HTMLDivElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const currentProgressInputRef = useRef<HTMLInputElement>(null);
+  const submitBtnRef = useRef<HTMLButtonElement>(null);
+
+  const scrollRegistrationIntoView = (behavior: ScrollBehavior = 'smooth') => {
+    const scrollParent = registrationSectionRef.current?.closest('.overflow-y-auto') as HTMLElement | null;
+    if (scrollParent) {
+      scrollParent.scrollTo({ top: 0, behavior });
+    }
+    if (mode === 'page') {
+      window.scrollTo({ top: 0, behavior });
+    } else {
+      registrationSectionRef.current?.scrollIntoView({ behavior, block: 'start' });
+    }
+  };
+
+  // Ensure registration section is expanded and placed in user view on every visit to the page
+  useEffect(() => {
+    setIsFormExpanded(true);
+    scrollRegistrationIntoView('smooth');
+    const t1 = window.setTimeout(() => scrollRegistrationIntoView('smooth'), 80);
+    const t2 = window.setTimeout(() => scrollRegistrationIntoView('smooth'), 220);
+    return () => {
+      window.clearTimeout(t1);
+      window.clearTimeout(t2);
+    };
+  }, [visitTrigger, mode]);
+
+  // Also bring registration section into view whenever user manually expands the form
+  useEffect(() => {
+    if (!isFormExpanded) return;
+    const timer = window.setTimeout(() => {
+      scrollRegistrationIntoView('smooth');
+    }, 60);
+    return () => window.clearTimeout(timer);
+  }, [isFormExpanded]);
 
   // Real-time Fuzzy Logic inference from title
   const fuzzyInfo = useMemo(
@@ -97,6 +135,9 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
     setCurrentProgressInput('');
     setTotalProgressInput('');
     setNotes('');
+    setInactivityReminderEnabled(true);
+    setInactivityDaysInput(1);
+    setNotifyTimeInput('10:00');
     setFormError(null);
   };
 
@@ -106,8 +147,12 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
     setCurrentProgressInput(String(item.currentProgress));
     setTotalProgressInput(item.totalProgress !== undefined ? String(item.totalProgress) : '');
     setNotes(item.notes || '');
+    setInactivityReminderEnabled(item.inactivityReminderEnabled !== false);
+    setInactivityDaysInput(item.inactivityDays && item.inactivityDays > 0 ? item.inactivityDays : 1);
+    setNotifyTimeInput(item.notifyTime || '10:00');
     setFormError(null);
     setIsFormExpanded(true);
+    window.setTimeout(() => scrollRegistrationIntoView('smooth'), 50);
   };
 
   const handleFormSubmit = (e: React.FormEvent) => {
@@ -139,6 +184,8 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
     const isNowCompleted =
       rawTotal !== undefined && rawTotal > 0 && parsedCurrent >= rawTotal;
 
+    const parsedDays = Math.max(1, Math.round(Number(inactivityDaysInput) || 1));
+
     onSaveItem(
       {
         title: cleanTitle,
@@ -148,17 +195,15 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
         unit: fuzzyInfo.unit,
         stepSize: fuzzyInfo.stepSize,
         notes: notes.trim() || undefined,
-        inactivityDays: fuzzyInfo.inactivityDays,
-        inactivityReminderEnabled: true,
+        inactivityDays: parsedDays,
+        notifyTime: notifyTimeInput || '10:00',
+        inactivityReminderEnabled,
         completed: isNowCompleted,
       },
       editingItem?.id
     );
 
     resetForm();
-    if (mode === 'page') {
-      setIsFormExpanded(false);
-    }
   };
 
   // Filter items
@@ -188,7 +233,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
   });
 
   return (
-    <div className="space-y-5" dir={isEn ? 'ltr' : 'rtl'}>
+    <div className="space-y-4" dir={isEn ? 'ltr' : 'rtl'}>
       {/* Pop-up alert for missing required fields */}
       <ValidationAlertModal
         isOpen={!!validationAlertField}
@@ -210,11 +255,14 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
       />
 
       {/* TOP BAR & MINIMAL FUZZY-POWERED FORM */}
-      <div className="rounded-2xl bg-stone-900 border border-stone-800 p-3.5 sm:p-4 shadow-sm space-y-3.5">
+      <div
+        ref={registrationSectionRef}
+        className="scroll-mt-36 rounded-2xl bg-stone-900 border border-stone-800 p-3 sm:p-4 shadow-sm space-y-2.5"
+      >
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0">
-              <Layers className="w-4 h-4" />
+            <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-400 flex items-center justify-center shrink-0">
+              <Layers className="w-4 h-4 text-amber-400" />
             </div>
             <div>
               <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
@@ -222,7 +270,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                   {isEn ? 'In-Progress Task' : 'کار در جریان'}
                 </span>
                 {overdueCount > 0 && (
-                  <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[10px] font-bold">
+                  <span className="px-2 py-0.5 rounded-lg bg-amber-500/15 border border-amber-500/40 text-amber-200 text-[10px] font-bold">
                     {formatNum(overdueCount)}{' '}
                     {isEn ? 'needs attention' : 'نیازمند پیگیری'}
                   </span>
@@ -245,17 +293,21 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                 setIsFormExpanded((prev) => !prev);
               }
             }}
-            className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95"
+            className={`min-h-[40px] px-4 py-2 rounded-xl font-black text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95 ${
+              isFormExpanded
+                ? 'bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700'
+                : 'btn-brand-submit bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 shadow-md shadow-[#F7941E]/25'
+            }`}
           >
             {isFormExpanded ? (
               <>
-                <ChevronUp className="w-4 h-4" />
+                <ChevronUp className="w-4 h-4 text-amber-400" />
                 <span>{isEn ? 'Hide' : 'بستن فرم'}</span>
               </>
             ) : (
               <>
                 <Plus className="w-4 h-4 stroke-[2.8]" />
-                <span>{isEn ? 'New Item' : 'ثبت کار جدید'}</span>
+                <span>{isEn ? 'Register New Task' : 'ثبت کار جدید'}</span>
               </>
             )}
           </button>
@@ -265,10 +317,10 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
         {isFormExpanded && (
           <form
             onSubmit={handleFormSubmit}
-            className="pt-3 border-t border-stone-800 space-y-3.5 animate-in fade-in duration-150"
+            className="pt-2.5 border-t border-stone-800 space-y-2.5 animate-in fade-in duration-150"
           >
             {formError && (
-              <div className="p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center justify-between gap-2">
+              <div className="p-2 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center justify-between gap-2">
                 <span>{formError}</span>
                 <button
                   type="button"
@@ -281,17 +333,17 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
             )}
 
             {/* 1. Prominent Mandatory Title Input Box + Live Fuzzy Auto-Detection Badge */}
-            <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-indigo-950/55 via-stone-900/95 to-stone-950 border-2 border-indigo-500/55 shadow-lg shadow-indigo-500/10 space-y-2">
+            <div className="p-3 sm:p-3.5 rounded-2xl bg-gradient-to-br from-indigo-950/55 via-stone-900/95 to-stone-950 border-2 border-indigo-500/55 shadow-lg shadow-indigo-500/10 space-y-1.5">
               <div className="flex items-center justify-between gap-2 flex-wrap">
-                <label className="text-sm sm:text-base font-black text-white tracking-tight flex items-center gap-2">
+                <label className="text-xs sm:text-sm font-black text-white tracking-tight flex items-center gap-1.5">
                   <span className="w-2.5 h-2.5 rounded-full bg-[#F7941E] shadow-[0_0_8px_rgba(247,148,30,0.85)] shrink-0" />
                   <span>{isEn ? 'Task Title' : 'عنوان کار در جریان'}</span>
-                  <span className="text-[#F7941E] font-black text-base">*</span>
+                  <span className="text-[#F7941E] font-black text-sm">*</span>
                 </label>
 
                 {title.trim().length > 0 && (
-                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-[11px] font-bold animate-in fade-in duration-150">
-                    <Sparkles className="w-3 h-3 text-indigo-400 shrink-0" />
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-indigo-500/15 border border-indigo-500/30 text-indigo-200 text-[11px] font-bold animate-in fade-in duration-150">
+                    <Sparkles className="w-3 h-3 text-amber-400 shrink-0" />
                     <span>{fuzzyInfo.categoryLabel}</span>
                     <span className="opacity-50">•</span>
                     <span>
@@ -314,17 +366,17 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                     ? 'e.g. Podcast ChannelB, Atomic Habits Book, Breaking Bad Series, Design Project...'
                     : 'مثال: پادکست چنل‌بی، کتاب عادت‌های اتمی، سریال، دوره زبان، پروژه طراحی...'
                 }
-                className="w-full bg-stone-950 border-2 border-indigo-400/70 focus:border-[#F7941E] ring-2 ring-indigo-500/15 focus:ring-[#F7941E]/25 rounded-2xl px-4 py-3.5 text-white placeholder-stone-400 focus:outline-none transition-all text-base sm:text-lg font-extrabold shadow-inner"
+                className="w-full bg-stone-950 border-2 border-indigo-400/70 focus:border-[#F7941E] ring-2 ring-indigo-500/15 focus:ring-[#F7941E]/25 rounded-xl px-3.5 py-2.5 text-white placeholder-stone-400 focus:outline-none transition-all text-sm sm:text-base font-extrabold shadow-inner"
               />
             </div>
 
             {/* 2. Contextual Progress Inputs (Step / Current Progress is Mandatory) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="p-3 rounded-2xl bg-stone-950/70 border-2 border-indigo-500/45 space-y-1.5">
-                <label className="text-xs sm:text-sm font-black text-white flex items-center gap-1.5 transition-all">
+            <div className="grid grid-cols-2 gap-2 sm:gap-3">
+              <div className="p-2.5 rounded-2xl bg-stone-950/70 border-2 border-indigo-500/45 space-y-1">
+                <label className="text-[11px] sm:text-xs font-black text-white flex items-center gap-1 transition-all truncate">
                   <span className="w-2 h-2 rounded-full bg-[#F7941E] shadow-[0_0_6px_rgba(247,148,30,0.85)] shrink-0" />
-                  <span>{fuzzyInfo.currentInputLabel}</span>
-                  <span className="text-[#F7941E] font-black text-sm">*</span>
+                  <span className="truncate">{fuzzyInfo.currentInputLabel}</span>
+                  <span className="text-[#F7941E] font-black text-xs shrink-0">*</span>
                 </label>
                 <div className="relative flex items-center">
                   <input
@@ -339,16 +391,16 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                       if (formError) setFormError(null);
                     }}
                     placeholder={fuzzyInfo.currentPlaceholder}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border-2 border-indigo-400/60 focus:border-[#F7941E] text-white placeholder-stone-400 text-center font-mono text-sm sm:text-base font-black focus:outline-none transition-colors shadow-inner"
+                    className="w-full px-3 py-2 rounded-xl bg-stone-950 border-2 border-indigo-400/60 focus:border-[#F7941E] text-white placeholder-stone-400 text-center font-mono text-sm font-black focus:outline-none transition-colors shadow-inner"
                   />
-                  <span className="absolute end-3 text-[11px] font-bold text-indigo-300 pointer-events-none">
+                  <span className="absolute end-2.5 text-[10px] font-bold text-indigo-300 pointer-events-none">
                     {fuzzyInfo.unit}
                   </span>
                 </div>
               </div>
 
-              <div className="p-3 rounded-2xl bg-stone-950/40 border border-stone-800 space-y-1.5">
-                <label className="text-xs sm:text-sm font-bold text-stone-300 block transition-all">
+              <div className="p-2.5 rounded-2xl bg-stone-950/40 border border-stone-800 space-y-1">
+                <label className="text-[11px] sm:text-xs font-bold text-stone-300 block transition-all truncate">
                   {fuzzyInfo.totalInputLabel}
                 </label>
                 <div className="relative flex items-center">
@@ -360,13 +412,142 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                     value={totalProgressInput}
                     onChange={(e) => setTotalProgressInput(e.target.value)}
                     placeholder={fuzzyInfo.totalPlaceholder}
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 focus:border-indigo-500 text-white placeholder-stone-500 text-center font-mono text-sm sm:text-base font-black focus:outline-none transition-colors"
+                    className="w-full px-3 py-2 rounded-xl bg-stone-950 border border-stone-800 focus:border-indigo-500 text-white placeholder-stone-500 text-center font-mono text-sm font-black focus:outline-none transition-colors"
                   />
-                  <span className="absolute end-3 text-[11px] font-bold text-stone-400 pointer-events-none">
+                  <span className="absolute end-2.5 text-[10px] font-bold text-stone-400 pointer-events-none">
                     {fuzzyInfo.unit}
                   </span>
                 </div>
               </div>
+            </div>
+
+            {/* 2.5 Selectable Reminder & Notification Time (Default: 1 Day Later) */}
+            <div className="p-2.5 sm:p-3 rounded-2xl bg-stone-950/50 border border-stone-800 space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <label className="text-xs sm:text-sm font-bold text-stone-200 flex items-center gap-1.5">
+                  <Bell className="w-4 h-4 text-amber-400" />
+                  <span>
+                    {isEn
+                      ? 'Reminder & Notification Time'
+                      : 'زمان یادآوری و اعلان کار در جریان'}
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => setInactivityReminderEnabled((prev) => !prev)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold border flex items-center gap-1 transition-all cursor-pointer ${
+                    inactivityReminderEnabled
+                      ? 'bg-emerald-500/15 border-emerald-500/40 text-stone-100'
+                      : 'bg-stone-900 border-stone-800 text-stone-400'
+                  }`}
+                >
+                  {inactivityReminderEnabled ? (
+                    <>
+                      <Bell className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>{isEn ? 'Notification Active' : 'اعلان فعال'}</span>
+                    </>
+                  ) : (
+                    <>
+                      <BellOff className="w-3.5 h-3.5 text-rose-400" />
+                      <span>{isEn ? 'Notification Off' : 'اعلان غیرفعال'}</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {inactivityReminderEnabled && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
+                  {/* Day Interval Presets (Default = 1 Day Later) */}
+                  <div className="space-y-1.5">
+                    <span className="text-[11px] font-semibold text-stone-400 block">
+                      {isEn ? 'Remind me after:' : 'زمان یادآوری (پیش‌فرض ۱ روز بعد):'}
+                    </span>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[1, 2, 3, 7].map((d) => {
+                        const isSelected = inactivityDaysInput === d;
+                        return (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => setInactivityDaysInput(d)}
+                            className={`py-1.5 px-2 rounded-xl text-[11px] font-bold border transition-all cursor-pointer ${
+                              isSelected
+                                ? 'bg-indigo-500 text-white border-indigo-400 font-black'
+                                : 'bg-stone-900 border-stone-800 text-stone-300 hover:border-stone-700'
+                            }`}
+                          >
+                            {isEn ? `${d}d later` : `${formatNum(d)} روز بعد`}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Custom Days & Exact Notification Clock Time */}
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1 space-y-1">
+                      <span className="text-[11px] font-semibold text-stone-400 block">
+                        {isEn ? 'Days later:' : 'تعداد روز بعد:'}
+                      </span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="90"
+                        dir="ltr"
+                        value={inactivityDaysInput}
+                        onChange={(e) =>
+                          setInactivityDaysInput(Math.max(1, parseInt(e.target.value || '1', 10) || 1))
+                        }
+                        className="w-full px-2.5 py-1.5 rounded-xl bg-stone-900 border border-stone-700 text-white font-mono text-xs font-black text-center focus:outline-none focus:border-[#F7941E]"
+                      />
+                    </div>
+
+                    <div className="flex-1 space-y-1">
+                      <span className="text-[11px] font-semibold text-stone-400 block">
+                        {isEn ? 'Alert Clock:' : 'ساعت اعلان:'}
+                      </span>
+                      <div className="flex items-center justify-center gap-1 px-2 py-1 rounded-xl bg-stone-900 border border-stone-700" dir="ltr">
+                        <Clock className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                        <select
+                          aria-label={isEn ? 'Hour' : 'ساعت'}
+                          value={(notifyTimeInput.split(':')[0] || '10').padStart(2, '0')}
+                          onChange={(e) => {
+                            const curMin = (notifyTimeInput.split(':')[1] || '00').padStart(2, '0');
+                            setNotifyTimeInput(`${e.target.value}:${curMin}`);
+                          }}
+                          className="bg-transparent text-white font-mono text-xs font-black focus:outline-none cursor-pointer"
+                        >
+                          {Array.from({ length: 24 }, (_, h) => {
+                            const val = String(h).padStart(2, '0');
+                            return (
+                              <option key={val} value={val} className="bg-stone-900 text-white">
+                                {isEn ? val : toPersianDigits(val)}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        <span className="text-stone-400 font-mono font-black text-xs">:</span>
+                        <select
+                          aria-label={isEn ? 'Minute' : 'دقیقه'}
+                          value={(notifyTimeInput.split(':')[1] || '00').padStart(2, '0')}
+                          onChange={(e) => {
+                            const curHr = (notifyTimeInput.split(':')[0] || '10').padStart(2, '0');
+                            setNotifyTimeInput(`${curHr}:${e.target.value}`);
+                          }}
+                          className="bg-transparent text-white font-mono text-xs font-black focus:outline-none cursor-pointer"
+                        >
+                          {['00', '15', '30', '45'].map((mVal) => (
+                            <option key={mVal} value={mVal} className="bg-stone-900 text-white">
+                              {isEn ? mVal : toPersianDigits(mVal)}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 3. Optional Note + Submit Button in a single clean row */}
@@ -394,17 +575,18 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                   </button>
                 )}
                 <button
+                  ref={submitBtnRef}
                   type="submit"
-                  className="min-h-[44px] flex-1 sm:flex-initial px-5 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-md shadow-indigo-500/20 transition-all cursor-pointer active:scale-95"
+                  className="btn-brand-submit min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-[#F7941E]/25 transition-all cursor-pointer active:scale-95"
                 >
                   <Check className="w-4 h-4 stroke-[3]" />
                   <span>
                     {editingItem
                       ? isEn
-                        ? 'Save'
-                        : 'ذخیره تغییرات'
+                        ? 'Save Changes'
+                        : 'ثبت تغییرات'
                       : isEn
-                      ? 'Add Item'
+                      ? 'Register Task'
                       : 'ثبت کار در جریان'}
                   </span>
                 </button>
@@ -417,8 +599,8 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
       {/* IN-PROGRESS CARDS GRID */}
       {displayedItems.length === 0 ? (
         <div className="py-10 px-4 text-center rounded-3xl border border-dashed border-stone-800 bg-stone-900/40 space-y-3">
-          <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/25 text-indigo-400 flex items-center justify-center mx-auto">
-            <Layers className="w-6 h-6" />
+          <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/25 text-amber-400 flex items-center justify-center mx-auto">
+            <Layers className="w-6 h-6 text-amber-400" />
           </div>
           <div className="space-y-1">
             <h4 className="text-sm sm:text-base font-bold text-white">
@@ -426,7 +608,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
             </h4>
             <p className="text-xs text-stone-400 max-w-md mx-auto leading-relaxed">
               {isEn
-                ? 'Add any multi-step task, project, reading, course, or ongoing work above to track your exact progress and get smart inactivity reminders.'
+                ? 'Register any multi-step task, project, reading, course, or ongoing work above to track your exact progress and get smart inactivity reminders.'
                 : 'هر کار چندمرحله‌ای، پروژه، دوره، مطالعه یا فرآیند نیمه‌تمامی را ثبت کنید تا همیشه بدانید تا کجا پیش رفته‌اید و در صورت توقف، یادآور هوشمند دریافت کنید.'}
             </p>
           </div>
@@ -434,10 +616,10 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
             <button
               type="button"
               onClick={() => setIsFormExpanded(true)}
-              className="min-h-[42px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs shadow-md transition-all cursor-pointer active:scale-95"
+              className="btn-brand-submit min-h-[44px] inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs shadow-md transition-all cursor-pointer active:scale-95"
             >
               <Plus className="w-4 h-4 stroke-[3]" />
-              <span>{isEn ? 'Add First Ongoing Item' : 'ثبت اولین کار در جریان'}</span>
+              <span>{isEn ? 'Register First Ongoing Item' : 'ثبت اولین کار در جریان'}</span>
             </button>
           )}
         </div>
@@ -474,14 +656,14 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                         </span>
                       )}
                       {item.completed && (
-                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[10px] font-bold flex items-center gap-1">
-                          <Check className="w-3 h-3 stroke-[3]" />
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-200 text-[10px] font-bold flex items-center gap-1">
+                          <Check className="w-3 h-3 stroke-[3] text-amber-300" />
                           <span>{isEn ? 'Completed' : 'تکمیل شده'}</span>
                         </span>
                       )}
                       {isOverdue && !item.completed && (
-                        <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-300 text-[10px] font-bold flex items-center gap-1">
-                          <AlertTriangle className="w-3 h-3" />
+                        <span className="px-2 py-0.5 rounded-md bg-amber-500/15 border border-amber-500/40 text-amber-200 text-[10px] font-bold flex items-center gap-1">
+                          <AlertTriangle className="w-3 h-3 text-rose-400" />
                           <span>
                             {isEn
                               ? `${inactiveDays}d inactive`
@@ -515,14 +697,14 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                       }
                       className={`p-2 rounded-xl border transition-colors cursor-pointer ${
                         item.completed
-                          ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                          : 'bg-stone-950 border-stone-800 text-stone-400 hover:text-emerald-400 hover:border-stone-700'
+                          ? 'bg-emerald-500/20 border-emerald-500/40 text-amber-400'
+                          : 'bg-stone-950 border-stone-800 text-emerald-400 hover:text-emerald-300 hover:border-stone-700'
                       }`}
                     >
                       {item.completed ? (
-                        <RotateCcw className="w-4 h-4" />
+                        <RotateCcw className="w-4 h-4 text-amber-400" />
                       ) : (
-                        <CheckCircle2 className="w-4 h-4" />
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400" />
                       )}
                     </button>
 
@@ -530,18 +712,18 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                       type="button"
                       onClick={() => handleStartEdit(item)}
                       title={isEn ? 'Edit' : 'ویرایش'}
-                      className="p-2 rounded-xl bg-stone-950 border border-stone-800 text-stone-400 hover:text-white hover:border-stone-700 transition-colors cursor-pointer"
+                      className="p-2 rounded-xl bg-stone-950 border border-stone-800 text-sky-400 hover:text-sky-300 hover:border-stone-700 transition-colors cursor-pointer"
                     >
-                      <Edit3 className="w-4 h-4" />
+                      <Edit3 className="w-4 h-4 text-sky-400" />
                     </button>
 
                     <button
                       type="button"
                       onClick={() => onDeleteItem(item.id)}
                       title={isEn ? 'Delete' : 'حذف'}
-                      className="p-2 rounded-xl bg-stone-950 border border-stone-800 text-stone-400 hover:text-rose-400 hover:border-stone-700 transition-colors cursor-pointer"
+                      className="p-2 rounded-xl bg-stone-950 border border-stone-800 text-rose-400 hover:text-rose-300 hover:border-stone-700 transition-colors cursor-pointer"
                     >
-                      <Trash2 className="w-4 h-4" />
+                      <Trash2 className="w-4 h-4 text-rose-400" />
                     </button>
                   </div>
                 </div>
@@ -612,7 +794,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                         className="min-h-[42px] px-3.5 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 disabled:opacity-40 border border-stone-800 text-stone-200 font-mono text-xs font-black flex items-center justify-center gap-1 transition-all cursor-pointer active:scale-95"
                         title={isEn ? `Decrease by ${step}` : `کاهش به اندازه ${formatNum(step)}`}
                       >
-                        <Minus className="w-4 h-4" />
+                        <Minus className="w-4 h-4 text-rose-400" />
                         <span>{formatNum(step)}</span>
                       </button>
 
@@ -628,7 +810,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                         }}
                         className="min-h-[42px] flex-1 px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm flex items-center justify-center gap-1.5 shadow-sm shadow-indigo-500/20 transition-all cursor-pointer active:scale-95"
                       >
-                        <Plus className="w-4 h-4 stroke-[3]" />
+                        <Plus className="w-4 h-4 stroke-[3] text-amber-300" />
                         <span>
                           {isEn
                             ? `Quick Update (+${step} ${item.unit})`
@@ -650,12 +832,12 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                         }}
                         className={`min-h-[42px] px-3 py-2 rounded-xl border text-xs font-bold flex items-center gap-1 transition-all cursor-pointer ${
                           isDirectEditing
-                            ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300'
-                            : 'bg-stone-950 border-stone-800 text-stone-300 hover:border-stone-700'
+                            ? 'bg-indigo-500/20 border-indigo-500 text-indigo-200'
+                            : 'bg-stone-950 border-stone-800 text-stone-200 hover:border-stone-700'
                         }`}
                         title={isEn ? 'Set exact progress value' : 'ثبت عدد دقیق پیشرفت'}
                       >
-                        <SlidersHorizontal className="w-4 h-4" />
+                        <SlidersHorizontal className="w-4 h-4 text-amber-400" />
                         <span className="hidden sm:inline">
                           {isEn ? 'Exact' : 'عدد دقیق'}
                         </span>
@@ -689,7 +871,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                               );
                               setDirectEditId(null);
                             }}
-                            className="px-3.5 py-1.5 rounded-lg bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-black cursor-pointer"
+                            className="btn-brand-submit px-3.5 py-1.5 rounded-lg text-xs font-black cursor-pointer"
                           >
                             {isEn ? 'Apply' : 'ثبت آپدیت'}
                           </button>
@@ -713,7 +895,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
                 {/* Card Footer: Last Updated Timestamp & Smart Inactivity Notification Info */}
                 <div className="pt-2 border-t border-stone-800/80 flex items-center justify-between gap-2 flex-wrap text-[11px] text-stone-400">
                   <div className="flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-indigo-400" />
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
                     <span>
                       {isEn ? 'Updated:' : 'آخرین آپدیت:'}{' '}
                       <strong className="text-stone-200">
@@ -727,17 +909,19 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
 
                   <div className="flex items-center gap-1">
                     {item.inactivityReminderEnabled ? (
-                      <span className="inline-flex items-center gap-1 text-indigo-300 font-semibold">
-                        <Bell className="w-3 h-3" />
+                      <span className="inline-flex items-center gap-1 text-stone-200 font-semibold">
+                        <Bell className="w-3 h-3 text-emerald-400" />
                         <span>
                           {isEn
-                            ? `Every ${item.inactivityDays}d inactive`
-                            : `یادآور عدم فعالیت: ${formatNum(item.inactivityDays)} روز`}
+                            ? `Alert: ${item.inactivityDays || 1}d later${item.notifyTime ? ` at ${item.notifyTime}` : ''}`
+                            : `یادآور: ${formatNum(item.inactivityDays || 1)} روز بعد${
+                                item.notifyTime ? ` • ساعت ${formatNum(item.notifyTime)}` : ''
+                              }`}
                         </span>
                       </span>
                     ) : (
                       <span className="inline-flex items-center gap-1 text-stone-400">
-                        <BellOff className="w-3 h-3" />
+                        <BellOff className="w-3 h-3 text-rose-400" />
                         <span>{isEn ? 'Reminder off' : 'بدون یادآور'}</span>
                       </span>
                     )}

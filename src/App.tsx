@@ -9,6 +9,7 @@ import {
   scheduleInProgressInactivityNotification,
   cancelInProgressInactivityNotification,
   syncAllInProgressNotifications,
+  getInProgressNotificationTimestamp,
 } from './utils/inProgressNotifications';
 import {
   MEDICATION_STORAGE_KEY,
@@ -16,6 +17,8 @@ import {
   cancelMedicationNotifications,
   cancelSingleMedicationDoseNotification,
   syncAllMedicationsNotifications,
+  getLocalDayKey,
+  isMedicationActiveOnDate,
 } from './utils/medicationNotifications';
 import { AlarmModal } from './components/AlarmModal';
 import { StatisticsModal } from './components/StatisticsModal';
@@ -584,13 +587,18 @@ export default function App() {
       editingId?: string
     ) => {
       const now = Date.now();
+      const normalizedData: Omit<InProgressItem, 'id' | 'createdAt' | 'lastUpdatedAt'> = {
+        ...itemData,
+        inactivityDays: itemData.inactivityDays ?? 1,
+        notifyTime: itemData.notifyTime || '10:00',
+      };
       if (editingId) {
         setInProgressItems((prev) =>
           prev.map((item) => {
             if (item.id !== editingId) return item;
             const updated: InProgressItem = {
               ...item,
-              ...itemData,
+              ...normalizedData,
               lastUpdatedAt: now,
             };
             scheduleInProgressInactivityNotification(updated, settings).catch(() => {});
@@ -599,7 +607,7 @@ export default function App() {
         );
       } else {
         const newItem: InProgressItem = {
-          ...itemData,
+          ...normalizedData,
           id: `inprog_${now}_${Math.random().toString(36).slice(2, 7)}`,
           createdAt: now,
           lastUpdatedAt: now,
@@ -1639,6 +1647,78 @@ export default function App() {
           }
         }
       });
+
+      // Also check active Medications for in-app alarm modal (light green highlight) when dose time arrives
+      const nowDate = new Date(now);
+      const todayKey = getLocalDayKey(nowDate);
+      medications.forEach((med) => {
+        if (!med.active || !isMedicationActiveOnDate(med, nowDate)) return;
+        for (const timeStr of med.scheduledTimes) {
+          const [hh, mm] = (timeStr || '08:00').split(':').map((n: string) => parseInt(n, 10));
+          const targetDate = new Date(
+            nowDate.getFullYear(),
+            nowDate.getMonth(),
+            nowDate.getDate(),
+            Number.isFinite(hh) ? hh : 8,
+            Number.isFinite(mm) ? mm : 0,
+            0,
+            0
+          );
+          const doseTs = targetDate.getTime();
+          const elapsed = now - doseTs;
+          const alreadyLogged = med.history.some(
+            (h) => h.dateKey === todayKey && h.scheduledTime === timeStr
+          );
+          if (!alreadyLogged && elapsed >= 0 && elapsed < 60000) {
+            const medAlarmId = `med_alarm::${med.id}::${todayKey}::${timeStr}`;
+            if (!triggeredAlarmsRef.current.has(medAlarmId)) {
+              triggeredAlarmsRef.current.add(medAlarmId);
+              setActiveAlarmReminder({
+                id: medAlarmId,
+                title: `💊 زمان مصرف دارو: ${med.name}`,
+                description: `نوبت ساعت ${timeStr} • ${med.dosageAmount} ${med.dosageUnit}`,
+                category: 'other',
+                priority: 'high',
+                dueTimestamp: doseTs,
+                status: 'pending',
+                createdAt: med.createdAt,
+                postponeCount: 0,
+                ringTune: med.soundId || 'chime',
+                voiceReadAloud: false,
+                featureType: 'medication',
+              });
+            }
+          }
+        }
+      });
+
+      // Also check active In-Progress tasks for in-app alarm modal (warm amber highlight) when reminder time arrives
+      inProgressItems.forEach((item) => {
+        if (item.completed) return;
+        const targetTs = getInProgressNotificationTimestamp(item);
+        if (!targetTs) return;
+        const elapsed = now - targetTs;
+        if (elapsed >= 0 && elapsed < 60000) {
+          const inProgAlarmId = `inprog_alarm::${item.id}::${targetTs}`;
+          if (!triggeredAlarmsRef.current.has(inProgAlarmId)) {
+            triggeredAlarmsRef.current.add(inProgAlarmId);
+            setActiveAlarmReminder({
+              id: inProgAlarmId,
+              title: `⏳ یادآور کار در جریان: ${item.title}`,
+              description: `آخرین وضعیت: ${item.currentProgress} ${item.unit} — ادامه را فراموش نکنید!`,
+              category: 'work',
+              priority: 'medium',
+              dueTimestamp: targetTs,
+              status: 'pending',
+              createdAt: item.createdAt,
+              postponeCount: 0,
+              ringTune: 'work',
+              voiceReadAloud: false,
+              featureType: 'in_progress',
+            });
+          }
+        }
+      });
     };
 
     // Run immediately
@@ -1676,7 +1756,7 @@ export default function App() {
         worker.terminate();
       }
     };
-  }, [reminders]);
+  }, [reminders, medications, inProgressItems, settings]);
 
   // Geofence Evaluation Engine: Monitors user coordinates and evaluates both location-based reminders and saved location geofences
   useEffect(() => {
@@ -2000,7 +2080,7 @@ export default function App() {
     }
     if (!stayOnCurrentTab) {
       setActiveMainTab('reminders');
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+      setRemindersSubPage('timeline');
     }
   };
 
@@ -2022,7 +2102,7 @@ export default function App() {
       showSyncNotification('ایده با موفقیت ذخیره شد.');
     }
     setActiveMainTab('reminders');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setRemindersSubPage('timeline');
   };
 
   const handleDeleteIdea = (id: string) => {
@@ -2072,12 +2152,13 @@ export default function App() {
           ringTune: 'work',
           voiceReadAloud: false,
           imageUrl: newLocData.photoUrl,
+          featureType: 'geofence',
         };
         setReminders((prev) => [reminderPayload, ...prev]);
       }
     }
     setActiveMainTab('reminders');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setRemindersSubPage('timeline');
   };
 
   const handleDeleteLocation = (id: string) => {
@@ -2112,7 +2193,7 @@ export default function App() {
 
       // Automatically create a Reminder with alarm if requested (staying on Occasions tab!)
       if (alsoCreateReminder) {
-        const reminderPayload = createReminderFromOccasion(newOccasion);
+        const reminderPayload = { ...createReminderFromOccasion(newOccasion), featureType: 'occasion' as const };
         handleSaveReminder(reminderPayload, false, true);
       }
     }
@@ -2127,7 +2208,7 @@ export default function App() {
   };
 
   const handleCreateReminderFromOccasion = (occasion: Occasion) => {
-    const reminderPayload = createReminderFromOccasion(occasion);
+    const reminderPayload = { ...createReminderFromOccasion(occasion), featureType: 'occasion' as const };
     handleSaveReminder(reminderPayload);
     showSyncNotification(`آلارم یادآور برای مناسبت «${occasion.title}» تنظیم شد.`);
   };
@@ -2272,6 +2353,17 @@ export default function App() {
     setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
     triggeredAlarmsRef.current.add(id);
     recordNotificationAction(id);
+
+    if (id.startsWith('med_alarm::')) {
+      const parts = id.split('::');
+      if (parts.length >= 4) {
+        handleLogMedicationDose(parts[1], parts[2], parts[3], 'taken');
+      }
+      return;
+    }
+    if (id.startsWith('inprog_alarm::')) {
+      return;
+    }
 
     // Clear continuous out-of-app & Android Local Notification for completed reminder
     clearOutOfAppPersistentNotification(id);
@@ -2759,13 +2851,31 @@ export default function App() {
           appVisible ? 'opacity-100' : 'opacity-0'
         } ${getThemeClass(settings.theme)}`}
       >
-      {/* Toast Notification for Google Sync */}
-      {syncToast && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-2xl bg-indigo-500 text-white font-bold text-xs shadow-2xl flex items-center gap-2 animate-bounce">
-          <Check className="w-4 h-4" />
-          <span>{syncToast}</span>
-        </div>
-      )}
+      {/* Feature-Colored Toast Notification */}
+      {syncToast && (() => {
+        const isMedToast = syncToast.includes('دارو') || syncToast.includes('💊') || syncToast.toLowerCase().includes('medication');
+        const isInProgToast = syncToast.includes('در جریان') || syncToast.includes('⏳') || syncToast.toLowerCase().includes('in-progress');
+        const isOccToast = syncToast.includes('مناسبت') || syncToast.includes('🎂') || syncToast.toLowerCase().includes('occasion');
+        const isLocToast = syncToast.includes('مکان') || syncToast.includes('حصار') || syncToast.includes('📍') || syncToast.toLowerCase().includes('geofence') || syncToast.toLowerCase().includes('location');
+        const toastStyle = isMedToast
+          ? { backgroundColor: '#E6F7EE', borderColor: '#10B981', color: '#064E3B' }
+          : isInProgToast
+          ? { backgroundColor: '#FEF3C7', borderColor: '#F59E0B', color: '#78350F' }
+          : isOccToast
+          ? { backgroundColor: '#FCE7F3', borderColor: '#EC4899', color: '#831843' }
+          : isLocToast
+          ? { backgroundColor: '#E0F2FE', borderColor: '#06B6D4', color: '#0C4A6E' }
+          : { backgroundColor: '#EEF2FF', borderColor: '#6366F1', color: '#1E1B4B' };
+        return (
+          <div
+            style={toastStyle}
+            className="fixed top-20 left-1/2 -translate-x-1/2 z-50 px-4 py-2.5 rounded-2xl border-2 font-black text-xs shadow-2xl flex items-center gap-2 animate-in fade-in slide-in-from-top-3 duration-200"
+          >
+            <Check className="w-4 h-4 shrink-0" />
+            <span>{syncToast}</span>
+          </div>
+        );
+      })()}
 
       {/* 5-SECOND UNDO TOAST NOTIFICATION */}
       {undoToast && (
@@ -2969,13 +3079,17 @@ export default function App() {
           <div className="hidden md:flex items-center text-xs gap-4">
             <button
               type="button"
-              onClick={() => setActiveMainTab('reminders')}
-              className={`main-nav-tab px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
+              onClick={() => {
+                setActiveMainTab('reminders');
+                setRemindersSubPage('timeline');
+              }}
+              className={`main-nav-tab flex items-center gap-1 px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'reminders'
                   ? 'main-nav-tab-active font-black'
                   : 'main-nav-tab-inactive font-semibold text-stone-400 hover:text-stone-200'
               }`}
             >
+              <Bell className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
               <span>{t.tabReminders}</span>
               <span className="opacity-90 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeReminders.length : toPersianDigits(activeReminders.length)})
@@ -2984,14 +3098,17 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setActiveMainTab('occasions')}
+              onClick={() => {
+                setActiveMainTab('occasions');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               className={`main-nav-tab flex items-center gap-1 px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'occasions'
                   ? 'main-nav-tab-active font-black'
                   : 'main-nav-tab-inactive font-semibold text-stone-400 hover:text-stone-200'
               }`}
             >
-              <Cake className="w-3.5 h-3.5 shrink-0" />
+              <Cake className="w-3.5 h-3.5 shrink-0 text-pink-400" />
               <span>{t.tabOccasions}</span>
               <span className="opacity-90 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeOccasions.length : toPersianDigits(activeOccasions.length)})
@@ -3000,14 +3117,17 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setActiveMainTab('locations')}
+              onClick={() => {
+                setActiveMainTab('locations');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               className={`main-nav-tab flex items-center gap-1 px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'locations'
                   ? 'main-nav-tab-active font-black'
                   : 'main-nav-tab-inactive font-semibold text-stone-400 hover:text-stone-200'
               }`}
             >
-              <MapPin className="w-3.5 h-3.5 shrink-0" />
+              <MapPin className="w-3.5 h-3.5 shrink-0 text-cyan-400" />
               <span>{t.tabLocations}</span>
               <span className="opacity-90 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeSavedLocations.length : toPersianDigits(activeSavedLocations.length)})
@@ -3016,14 +3136,17 @@ export default function App() {
 
             <button
               type="button"
-              onClick={() => setActiveMainTab('ideas')}
+              onClick={() => {
+                setActiveMainTab('ideas');
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
               className={`main-nav-tab flex items-center gap-1 px-2 py-1.5 transition-colors duration-200 whitespace-nowrap cursor-pointer ${
                 activeMainTab === 'ideas'
                   ? 'main-nav-tab-active font-black'
                   : 'main-nav-tab-inactive font-semibold text-stone-400 hover:text-stone-200'
               }`}
             >
-              <Lightbulb className="w-3.5 h-3.5 shrink-0" />
+              <Lightbulb className="w-3.5 h-3.5 shrink-0 text-amber-400" />
               <span>{t.tabIdeas}</span>
               <span className="opacity-90 text-xs font-mono mr-1 ml-1">
                 ({settings.language === 'en' ? activeIdeas.length : toPersianDigits(activeIdeas.length)})
@@ -3094,9 +3217,9 @@ export default function App() {
                   setEditingReminder(null);
                   setIsFormOpen(true);
                 }}
-                className="hidden lg:flex min-h-[48px] items-center gap-2 px-4 py-2 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs sm:text-sm font-black shadow-lg shadow-indigo-500/25 transition-all duration-200 active:scale-95 cursor-pointer"
+                className="btn-brand-submit hidden lg:flex min-h-[48px] items-center gap-2 px-4 py-2 rounded-2xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 text-xs sm:text-sm font-black shadow-lg shadow-[#F7941E]/25 transition-all duration-200 active:scale-95 cursor-pointer"
               >
-                <Plus className="w-4 h-4 text-white stroke-[3]" />
+                <Plus className="w-4 h-4 stroke-[3]" />
                 <span>{t.newReminder}</span>
               </button>
             ) : null}
@@ -3347,10 +3470,10 @@ export default function App() {
               <button
                 type="button"
                 onClick={() => setIsIdeaModalOpen(true)}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 !text-white font-bold text-xs shadow-md transition-all self-stretch sm:self-auto justify-center active:scale-95 cursor-pointer"
+                className="btn-brand-submit flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs shadow-md shadow-[#F7941E]/20 transition-all self-stretch sm:self-auto justify-center active:scale-95 cursor-pointer"
               >
-                <Plus className="w-4 h-4 text-white stroke-[3]" />
-                <span className="text-white font-black">
+                <Plus className="w-4 h-4 stroke-[3]" />
+                <span className="font-black">
                   {isEn ? 'Capture New Idea' : 'ثبت فکر یا ایده جدید'}
                 </span>
               </button>
@@ -3392,9 +3515,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsIdeaModalOpen(true)}
-                  className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-indigo-500/25 active:scale-95 cursor-pointer mx-auto"
+                  className="btn-brand-submit min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-[#F7941E]/25 active:scale-95 cursor-pointer mx-auto"
                 >
-                  <Plus className="w-4 h-4 text-white stroke-[3]" />
+                  <Plus className="w-4 h-4 stroke-[3]" />
                   <span>{isEn ? 'Create New Idea' : 'ثبت اولین ایده'}</span>
                 </button>
               </div>
@@ -3446,10 +3569,10 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => setIsLocationModalOpen(true)}
-                    className="flex-1 sm:flex-initial flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs shadow-md shadow-indigo-500/20 transition-all justify-center cursor-pointer active:scale-95"
+                    className="btn-brand-submit flex-1 sm:flex-initial flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs shadow-md shadow-[#F7941E]/20 transition-all justify-center cursor-pointer active:scale-95"
                   >
-                    <Plus className="w-4 h-4 text-white stroke-[3]" />
-                    <span className="text-white font-black">
+                    <Plus className="w-4 h-4 stroke-[3]" />
+                    <span className="font-black">
                       {isEn ? 'Save New Location' : 'ثبت مکان جدید'}
                     </span>
                   </button>
@@ -3615,9 +3738,9 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsLocationModalOpen(true)}
-                  className="min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-indigo-500/25 active:scale-95 cursor-pointer mx-auto"
+                  className="btn-brand-submit min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-[#F7941E] hover:bg-[#FFA940] text-stone-950 font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-[#F7941E]/25 active:scale-95 cursor-pointer mx-auto"
                 >
-                  <Plus className="w-4 h-4 text-white stroke-[3]" />
+                  <Plus className="w-4 h-4 stroke-[3]" />
                   <span>{isEn ? 'Save First Location' : 'ثبت اولین مکان'}</span>
                 </button>
               </div>
@@ -3798,7 +3921,10 @@ export default function App() {
           {/* Tab 1: Reminders (یادآورها) */}
           <button
             type="button"
-            onClick={() => setActiveMainTab('reminders')}
+            onClick={() => {
+              setActiveMainTab('reminders');
+              setRemindersSubPage('timeline');
+            }}
             className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 transition-colors duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'reminders'
                 ? 'main-nav-tab-active font-black'
@@ -3806,7 +3932,7 @@ export default function App() {
             }`}
           >
             <div className="relative">
-              <Bell className={`w-5 h-5 ${activeMainTab === 'reminders' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
+              <Bell className={`w-5 h-5 text-indigo-400 ${activeMainTab === 'reminders' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
               {activeReminders.length > 0 && (
                 <span className={`main-nav-badge absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center font-mono ${
                   activeMainTab === 'reminders'
@@ -3823,7 +3949,10 @@ export default function App() {
           {/* Tab 2: Occasions (مناسبت‌ها) */}
           <button
             type="button"
-            onClick={() => setActiveMainTab('occasions')}
+            onClick={() => {
+              setActiveMainTab('occasions');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 transition-colors duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'occasions'
                 ? 'main-nav-tab-active font-black'
@@ -3831,7 +3960,7 @@ export default function App() {
             }`}
           >
             <div className="relative">
-              <Cake className={`w-5 h-5 ${activeMainTab === 'occasions' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
+              <Cake className={`w-5 h-5 text-pink-400 ${activeMainTab === 'occasions' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
               {activeOccasions.length > 0 && (
                 <span className={`main-nav-badge absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center font-mono ${
                   activeMainTab === 'occasions'
@@ -3848,7 +3977,10 @@ export default function App() {
           {/* Tab 3: Locations (مکان‌ها) */}
           <button
             type="button"
-            onClick={() => setActiveMainTab('locations')}
+            onClick={() => {
+              setActiveMainTab('locations');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 transition-colors duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'locations'
                 ? 'main-nav-tab-active font-black'
@@ -3856,7 +3988,7 @@ export default function App() {
             }`}
           >
             <div className="relative">
-              <MapPin className={`w-5 h-5 ${activeMainTab === 'locations' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
+              <MapPin className={`w-5 h-5 text-cyan-400 ${activeMainTab === 'locations' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
               {activeSavedLocations.length > 0 && (
                 <span className={`main-nav-badge absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center font-mono ${
                   activeMainTab === 'locations'
@@ -3873,7 +4005,10 @@ export default function App() {
           {/* Tab 4: Ideas (ایده‌ها) */}
           <button
             type="button"
-            onClick={() => setActiveMainTab('ideas')}
+            onClick={() => {
+              setActiveMainTab('ideas');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             className={`main-nav-tab min-h-[48px] flex-1 py-1.5 px-1 flex flex-col items-center justify-center gap-1 transition-colors duration-200 active:scale-95 cursor-pointer ${
               activeMainTab === 'ideas'
                 ? 'main-nav-tab-active font-black'
@@ -3881,7 +4016,7 @@ export default function App() {
             }`}
           >
             <div className="relative">
-              <Lightbulb className={`w-5 h-5 ${activeMainTab === 'ideas' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
+              <Lightbulb className={`w-5 h-5 text-amber-400 ${activeMainTab === 'ideas' ? 'stroke-[2.5]' : 'stroke-[1.8]'}`} />
               {activeIdeas.length > 0 && (
                 <span className={`main-nav-badge absolute -top-1.5 -end-2.5 min-w-4 h-4 px-1 rounded-full border text-[10px] font-bold flex items-center justify-center font-mono ${
                   activeMainTab === 'ideas'

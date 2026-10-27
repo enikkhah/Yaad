@@ -585,6 +585,27 @@ export async function scheduleReminderNotification(
 
     const appTheme = appSettings?.theme || 'dark-gold';
     const appLang = appSettings?.language || 'fa';
+    const featureType =
+      reminder.featureType ||
+      (reminder.id.startsWith('med_') || reminder.title?.startsWith('💊')
+        ? 'medication'
+        : reminder.id.startsWith('inprog_') || reminder.title?.startsWith('⏳')
+        ? 'in_progress'
+        : reminder.id.startsWith('occ_') || reminder.title?.startsWith('🎂') || reminder.title?.startsWith('🎉')
+        ? 'occasion'
+        : reminder.id.startsWith('rem_loc_') || reminder.geofence?.enabled
+        ? 'geofence'
+        : 'reminder');
+    const featureColor =
+      featureType === 'medication'
+        ? '#10B981'
+        : featureType === 'in_progress'
+        ? '#F59E0B'
+        : featureType === 'occasion'
+        ? '#EC4899'
+        : featureType === 'geofence'
+        ? '#06B6D4'
+        : '#6366F1';
 
     // Build notification queue: Primary notification + Repeating alarm notifications
     // Configured with ongoing: true, autoCancel: false and priority: 2 (PRIORITY_MAX)
@@ -600,6 +621,7 @@ export async function scheduleReminderNotification(
           allowWhileIdle: true, // Crucial for Android Doze mode / Exact alarms
         },
         sound: soundFile,
+        iconColor: featureColor,
         priority: 2, // Android PRIORITY_MAX: Always prioritized over other app notifications
         ongoing: true, // Keeps notification persistent in notification drawer / lockscreen
         autoCancel: false, // Notification window stays open until user action
@@ -612,6 +634,7 @@ export async function scheduleReminderNotification(
           vibrationEnabled,
           theme: appTheme,
           language: appLang,
+          featureType,
           isRepeat: false,
         },
       },
@@ -627,6 +650,7 @@ export async function scheduleReminderNotification(
           allowWhileIdle: true,
         },
         sound: soundFile,
+        iconColor: featureColor,
         priority: 2, // Highest priority over other notifications
         ongoing: true,
         autoCancel: false,
@@ -638,6 +662,7 @@ export async function scheduleReminderNotification(
           volume,
           theme: appTheme,
           language: appLang,
+          featureType,
           isRepeat: true,
           repeatIndex: index + 1,
         },
@@ -1145,6 +1170,25 @@ export async function fireImmediateLocalNotification(
     const notifId = Math.floor(Math.random() * 100000) + 100000;
     const settings = getSavedAppSettings();
     const channelId = getChannelIdForConfig(settings?.alarmSound, settings?.alarmVolume ?? 0.85);
+    const featureType =
+      extraData?.featureType ||
+      (extraData?.geofence || title.startsWith('📍')
+        ? 'geofence'
+        : extraData?.medicationId || title.startsWith('💊')
+        ? 'medication'
+        : extraData?.inProgressId || title.startsWith('⏳')
+        ? 'in_progress'
+        : 'reminder');
+    const featureColor =
+      featureType === 'medication'
+        ? '#10B981'
+        : featureType === 'in_progress'
+        ? '#F59E0B'
+        : featureType === 'occasion'
+        ? '#EC4899'
+        : featureType === 'geofence'
+        ? '#06B6D4'
+        : '#6366F1';
 
     await LocalNotifications.schedule({
       notifications: [
@@ -1153,6 +1197,7 @@ export async function fireImmediateLocalNotification(
           title,
           body,
           channelId,
+          iconColor: featureColor,
           ongoing: true,
           autoCancel: false,
           actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
@@ -1161,6 +1206,7 @@ export async function fireImmediateLocalNotification(
           extra: {
             theme: settings?.theme || 'dark-gold',
             language: settings?.language || 'fa',
+            featureType,
             ...(extraData || {}),
           },
         },
@@ -1378,6 +1424,27 @@ export async function triggerOutOfAppPersistentNotification(
       const isSilent = volume <= 0.01;
       const targetChannelId = getChannelIdForConfig(soundType, volume, vibrationEnabled);
       const soundFile = isSilent ? undefined : getSoundFileName(soundType);
+      const featureType =
+        reminder.featureType ||
+        (reminder.id.startsWith('med_') || reminder.title?.startsWith('💊')
+          ? 'medication'
+          : reminder.id.startsWith('inprog_') || reminder.title?.startsWith('⏳')
+          ? 'in_progress'
+          : reminder.id.startsWith('occ_') || reminder.title?.startsWith('🎂') || reminder.title?.startsWith('🎉')
+          ? 'occasion'
+          : reminder.id.startsWith('rem_loc_') || reminder.geofence?.enabled
+          ? 'geofence'
+          : 'reminder');
+      const featureColor =
+        featureType === 'medication'
+          ? '#10B981'
+          : featureType === 'in_progress'
+          ? '#F59E0B'
+          : featureType === 'occasion'
+          ? '#EC4899'
+          : featureType === 'geofence'
+          ? '#06B6D4'
+          : '#6366F1';
 
       await LocalNotifications.schedule({
         notifications: [
@@ -1387,6 +1454,7 @@ export async function triggerOutOfAppPersistentNotification(
             body,
             channelId: targetChannelId,
             sound: soundFile,
+            iconColor: featureColor,
             ongoing: true,
             autoCancel: false,
             actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
@@ -1398,6 +1466,7 @@ export async function triggerOutOfAppPersistentNotification(
               vibrationEnabled,
               theme: settings?.theme || 'dark-gold',
               language: settings?.language || 'fa',
+              featureType,
               persistentUntilReaction: true,
             },
           },

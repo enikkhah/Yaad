@@ -616,10 +616,12 @@ html:not(.dark)[data-theme="system"] .fab-add-btn svg {
   color: #FFFFFF !important;
 }
 [data-theme="sketch-contrast"] .bg-indigo-500 span,
-[data-theme="sketch-contrast"] .bg-indigo-500 svg,
-[data-theme="sketch-contrast"] .bg-indigo-600 span,
-[data-theme="sketch-contrast"] .bg-indigo-600 svg {
+[data-theme="sketch-contrast"] .bg-indigo-600 span {
   color: #FFFFFF !important;
+}
+[data-theme="sketch-contrast"] .bg-indigo-500 svg:not([class*="text-"]),
+[data-theme="sketch-contrast"] .bg-indigo-600 svg:not([class*="text-"]) {
+  color: #FDE68A !important;
 }
 [data-theme="sketch-contrast"] .text-indigo-400,
 [data-theme="sketch-contrast"] .text-indigo-500,
@@ -739,9 +741,11 @@ html:not(.dark)[data-theme="system"] .fab-add-btn svg {
   background-color: #168779 !important;
   color: #FFFFFF !important;
 }
-[data-theme="jade_warm_light"] .bg-indigo-500 span,
-[data-theme="jade_warm_light"] .bg-indigo-500 svg {
+[data-theme="jade_warm_light"] .bg-indigo-500 span {
   color: #FFFFFF !important;
+}
+[data-theme="jade_warm_light"] .bg-indigo-500 svg:not([class*="text-"]) {
+  color: #FDE68A !important;
 }
 [data-theme="jade_warm_light"] .text-indigo-400,
 [data-theme="jade_warm_light"] .text-indigo-500,
@@ -890,9 +894,11 @@ html:not(.dark)[data-theme="system"] .fab-add-btn svg {
   background-color: #C5D9EE !important;
   color: #101722 !important;
 }
-[data-theme="midnight_blue_silver"] .bg-indigo-500 span,
-[data-theme="midnight_blue_silver"] .bg-indigo-500 svg {
+[data-theme="midnight_blue_silver"] .bg-indigo-500 span {
   color: #101722 !important;
+}
+[data-theme="midnight_blue_silver"] .bg-indigo-500 svg:not([class*="text-"]) {
+  color: #1E3A8A !important;
 }
 
 [data-theme="midnight_blue_silver"] .text-indigo-400,
@@ -1106,105 +1112,87 @@ html:not(.dark)[data-theme="system"] .fab-add-btn svg {
   box-shadow: none !important;
 }
 
-/* Inactive Tab Text & Icon per Theme */
+/* Inactive Tab Text per Theme (Icons retain their distinct feature color) */
 .main-nav-tab-inactive,
 .main-nav-tab-inactive > span,
-.main-nav-tab-inactive svg,
 [data-theme="dark-gold"] .main-nav-tab-inactive,
-[data-theme="dark-gold"] .main-nav-tab-inactive > span,
-[data-theme="dark-gold"] .main-nav-tab-inactive svg {
+[data-theme="dark-gold"] .main-nav-tab-inactive > span {
   color: #787EAB !important;
 }
 
 [data-theme="dark-slate"] .main-nav-tab-inactive,
-[data-theme="dark-slate"] .main-nav-tab-inactive > span,
-[data-theme="dark-slate"] .main-nav-tab-inactive svg {
+[data-theme="dark-slate"] .main-nav-tab-inactive > span {
   color: #6482A6 !important;
 }
 
 [data-theme="midnight_blue_silver"] .main-nav-tab-inactive,
-[data-theme="midnight_blue_silver"] .main-nav-tab-inactive > span,
-[data-theme="midnight_blue_silver"] .main-nav-tab-inactive svg {
+[data-theme="midnight_blue_silver"] .main-nav-tab-inactive > span {
   color: #708096 !important;
 }
 
 [data-theme="sketch-contrast"] .main-nav-tab-inactive,
-[data-theme="sketch-contrast"] .main-nav-tab-inactive > span,
-[data-theme="sketch-contrast"] .main-nav-tab-inactive svg {
+[data-theme="sketch-contrast"] .main-nav-tab-inactive > span {
   color: #A37EB0 !important;
 }
 
 html.dark[data-theme="system"] .main-nav-tab-inactive,
 html.dark[data-theme="system"] .main-nav-tab-inactive > span,
-html.dark[data-theme="system"] .main-nav-tab-inactive svg,
 html:not(.dark)[data-theme="system"] .main-nav-tab-inactive,
-html:not(.dark)[data-theme="system"] .main-nav-tab-inactive > span,
-html:not(.dark)[data-theme="system"] .main-nav-tab-inactive svg {
+html:not(.dark)[data-theme="system"] .main-nav-tab-inactive > span {
   color: #64748B !important;
 }
 
 [data-theme="light-clean"] .main-nav-tab-inactive,
-[data-theme="light-clean"] .main-nav-tab-inactive > span,
-[data-theme="light-clean"] .main-nav-tab-inactive svg {
+[data-theme="light-clean"] .main-nav-tab-inactive > span {
   color: #78716C !important;
 }
 
 [data-theme="jade_warm_light"] .main-nav-tab-inactive,
-[data-theme="jade_warm_light"] .main-nav-tab-inactive > span,
-[data-theme="jade_warm_light"] .main-nav-tab-inactive svg {
+[data-theme="jade_warm_light"] .main-nav-tab-inactive > span {
   color: #7B8583 !important;
 }
 
-/* Active Tab Text & Icon per Theme (Only text & icon change color according to theme) */
+/* Active Tab Text per Theme (Icons retain their distinct feature color so icon and text are visually differentiated) */
 .main-nav-tab-active,
 .main-nav-tab-active > span,
-.main-nav-tab-active svg,
 [data-theme="dark-gold"] .main-nav-tab-active,
-[data-theme="dark-gold"] .main-nav-tab-active > span,
-[data-theme="dark-gold"] .main-nav-tab-active svg {
-  color: #818CF8 !important;
+[data-theme="dark-gold"] .main-nav-tab-active > span {
+  color: #EEF2FF !important;
 }
 
 [data-theme="dark-slate"] .main-nav-tab-active,
-[data-theme="dark-slate"] .main-nav-tab-active > span,
-[data-theme="dark-slate"] .main-nav-tab-active svg {
-  color: #38BDF8 !important;
+[data-theme="dark-slate"] .main-nav-tab-active > span {
+  color: #F0F9FF !important;
 }
 
 [data-theme="midnight_blue_silver"] .main-nav-tab-active,
-[data-theme="midnight_blue_silver"] .main-nav-tab-active > span,
-[data-theme="midnight_blue_silver"] .main-nav-tab-active svg {
-  color: #9CBCE0 !important;
+[data-theme="midnight_blue_silver"] .main-nav-tab-active > span {
+  color: #F0F3F7 !important;
 }
 
 [data-theme="sketch-contrast"] .main-nav-tab-active,
-[data-theme="sketch-contrast"] .main-nav-tab-active > span,
-[data-theme="sketch-contrast"] .main-nav-tab-active svg {
-  color: #F472B6 !important;
+[data-theme="sketch-contrast"] .main-nav-tab-active > span {
+  color: #FDF2F8 !important;
 }
 
 html.dark[data-theme="system"] .main-nav-tab-active,
-html.dark[data-theme="system"] .main-nav-tab-active > span,
-html.dark[data-theme="system"] .main-nav-tab-active svg {
-  color: #2DD4BF !important;
+html.dark[data-theme="system"] .main-nav-tab-active > span {
+  color: #F1F5F9 !important;
 }
 
 html:not(.dark)[data-theme="system"] .main-nav-tab-active,
-html:not(.dark)[data-theme="system"] .main-nav-tab-active > span,
-html:not(.dark)[data-theme="system"] .main-nav-tab-active svg {
-  color: #0D9488 !important;
+html:not(.dark)[data-theme="system"] .main-nav-tab-active > span {
+  color: #0F172A !important;
 }
 
 [data-theme="light-clean"] .main-nav-tab-active,
-[data-theme="light-clean"] .main-nav-tab-active > span,
-[data-theme="light-clean"] .main-nav-tab-active svg {
-  color: #4F46E5 !important;
+[data-theme="light-clean"] .main-nav-tab-active > span {
+  color: #1C1917 !important;
 }
 
 [data-theme="jade_warm_light"] .main-nav-tab-active,
-[data-theme="jade_warm_light"] .main-nav-tab-active > span,
-[data-theme="jade_warm_light"] .main-nav-tab-active svg {
-  color: #168779 !important;
+[data-theme="jade_warm_light"] .main-nav-tab-active > span {
+  color: #164E46 !important;
 }
 
 /* Active Badge on Main Navigation Tabs per Theme */
@@ -1268,5 +1256,43 @@ textarea,
   html[data-keyboard-open="true"] .fab-add-container {
     display: none !important;
   }
+}
+
+/* ==========================================================================
+   UNIVERSAL BRAND ORANGE (#F7941E) SUBMIT / SAVE BUTTON ACROSS ALL FEATURES
+   ========================================================================== */
+.btn-brand-submit,
+[data-theme="system"] .btn-brand-submit,
+[data-theme="dark-gold"] .btn-brand-submit,
+[data-theme="dark-slate"] .btn-brand-submit,
+[data-theme="light-clean"] .btn-brand-submit,
+[data-theme="sketch-contrast"] .btn-brand-submit,
+[data-theme="jade_warm_light"] .btn-brand-submit,
+[data-theme="midnight_blue_silver"] .btn-brand-submit {
+  background: #F7941E !important;
+  background-color: #F7941E !important;
+  border-color: #F7941E !important;
+  color: #0C0A09 !important;
+  box-shadow: 0 6px 18px -4px rgba(247, 148, 30, 0.45) !important;
+}
+
+.btn-brand-submit:hover:not(:disabled),
+[data-theme] .btn-brand-submit:hover:not(:disabled) {
+  background: #FFA940 !important;
+  background-color: #FFA940 !important;
+  border-color: #FFA940 !important;
+  color: #0C0A09 !important;
+}
+
+.btn-brand-submit span,
+[data-theme] .btn-brand-submit span {
+  color: #0C0A09 !important;
+}
+
+.btn-brand-submit svg,
+[data-theme] .btn-brand-submit svg {
+  color: #FFFFFF !important;
+  stroke: #FFFFFF !important;
+  filter: drop-shadow(0 1px 1.5px rgba(12, 10, 9, 0.55));
 }
 

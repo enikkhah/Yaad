@@ -135,6 +135,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [activeFormTab, setActiveFormTab] = useState<'reminder' | 'in_progress' | 'medication'>(
     initialData ? 'reminder' : initialTab
   );
+  const [formTabVisitTick, setFormTabVisitTick] = useState<number>(0);
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [category, setCategory] = useState<Category>('work');
@@ -144,6 +145,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   useEffect(() => {
     if (isOpen) {
       setActiveFormTab(initialData ? 'reminder' : initialTab);
+      setFormTabVisitTick((prev) => prev + 1);
     }
   }, [isOpen, initialData, initialTab]);
 
@@ -841,10 +843,14 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   className={`min-h-[40px] px-2 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
                     activeFormTab === 'reminder'
                       ? 'bg-indigo-500 text-white shadow-sm'
-                      : 'text-stone-400 hover:text-white'
+                      : 'text-stone-300 hover:text-white'
                   }`}
                 >
-                  <Bell className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <Bell
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
+                      activeFormTab === 'reminder' ? 'text-amber-300' : 'text-indigo-400'
+                    }`}
+                  />
                   <span className="truncate">{isEn ? 'Reminder' : 'یادآور زمانی'}</span>
                 </button>
 
@@ -853,14 +859,19 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   onClick={() => {
                     if (isListening) stopVoiceListening();
                     setActiveFormTab('in_progress');
+                    setFormTabVisitTick((prev) => prev + 1);
                   }}
                   className={`min-h-[40px] px-2 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
                     activeFormTab === 'in_progress'
                       ? 'bg-indigo-500 text-white shadow-sm'
-                      : 'text-stone-400 hover:text-white'
+                      : 'text-stone-300 hover:text-white'
                   }`}
                 >
-                  <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <Layers
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
+                      activeFormTab === 'in_progress' ? 'text-amber-300' : 'text-amber-400'
+                    }`}
+                  />
                   <span className="truncate">{isEn ? 'In-Progress' : 'کار در جریان'}</span>
                   {inProgressItems.filter((i) => !i.deletedAt && !i.completed).length > 0 && (
                     <span
@@ -884,14 +895,19 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   onClick={() => {
                     if (isListening) stopVoiceListening();
                     setActiveFormTab('medication');
+                    setFormTabVisitTick((prev) => prev + 1);
                   }}
                   className={`min-h-[40px] px-2 sm:px-3 py-1.5 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
                     activeFormTab === 'medication'
                       ? 'bg-indigo-500 text-white shadow-sm'
-                      : 'text-stone-400 hover:text-white'
+                      : 'text-stone-300 hover:text-white'
                   }`}
                 >
-                  <Pill className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+                  <Pill
+                    className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
+                      activeFormTab === 'medication' ? 'text-emerald-300' : 'text-emerald-400'
+                    }`}
+                  />
                   <span className="truncate">{isEn ? 'Medication' : 'یادآور دارو'}</span>
                   {medications.filter((m) => !m.deletedAt && isMedicationActiveOnDate(m, new Date())).length > 0 && (
                     <span
@@ -928,6 +944,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 language={language}
                 mode="modal-tab"
                 initialOpenForm={true}
+                visitTrigger={formTabVisitTick}
               />
             </div>
           ) : activeFormTab === 'in_progress' && onSaveInProgressItem && onUpdateInProgressProgress && onToggleInProgressComplete && onDeleteInProgressItem ? (
@@ -941,6 +958,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 language={language}
                 mode="modal-tab"
                 initialOpenForm={true}
+                visitTrigger={formTabVisitTick}
               />
             </div>
           ) : (
@@ -2084,14 +2102,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </button>
               <button
                 type="submit"
-                className={`min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95 ${
-                  !title.trim()
-                    ? 'bg-indigo-500/20 border border-indigo-500/40 text-indigo-300'
-                    : 'bg-indigo-500 hover:bg-indigo-400 text-white font-black shadow-lg shadow-indigo-500/20'
-                }`}
+                className="btn-brand-submit min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
               >
-                <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-indigo-300' : 'text-white'}`} />
-                <span className={!title.trim() ? 'text-indigo-300 font-bold' : 'text-white font-black'}>
+                <Check className="w-4 h-4 stroke-[3]" />
+                <span className="font-black">
                   {initialData ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') : (isEn ? 'Save Reminder' : 'ثبت نهایی یادآور')}
                 </span>
               </button>

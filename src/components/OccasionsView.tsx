@@ -162,11 +162,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
         <button
           type="button"
           onClick={handleAddClick}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-xs shadow-md transition-all justify-center cursor-pointer active:scale-95 self-stretch sm:self-auto shrink-0 ${
-            activeMeta
-              ? activeMeta.primaryBtnClass
-              : 'bg-indigo-500 hover:bg-indigo-400 text-white shadow-indigo-500/20'
-          }`}
+          className="btn-brand-submit flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-xs transition-all justify-center cursor-pointer active:scale-95 self-stretch sm:self-auto shrink-0"
         >
           <Plus className="w-4 h-4 stroke-[3]" />
           <span className="font-black">{addButtonLabel}</span>
@@ -303,11 +299,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
           <button
             type="button"
             onClick={handleAddClick}
-            className={`min-h-[48px] px-6 py-3 rounded-2xl font-black text-xs sm:text-sm shadow-lg cursor-pointer active:scale-95 flex items-center justify-center gap-2 mx-auto transition-all duration-200 ${
-              activeMeta
-                ? activeMeta.primaryBtnClass
-                : 'bg-gradient-to-r from-pink-500 to-rose-500 hover:from-pink-400 hover:to-rose-400 !text-white shadow-pink-500/25'
-            }`}
+            className="btn-brand-submit min-h-[48px] px-6 py-3 rounded-2xl font-black text-xs sm:text-sm cursor-pointer active:scale-95 flex items-center justify-center gap-2 mx-auto transition-all duration-200"
           >
             <Plus className="w-4 h-4 stroke-[3]" />
             <span>{addButtonLabel}</span>

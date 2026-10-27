@@ -1,6 +1,6 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { MedicationItem } from '../types';
+import { AppSettings, MedicationItem } from '../types';
 import { toPersianDigits } from './jalali';
 import { getMedicationInstructionLabel } from './medicationFuzzy';
 import {
@@ -49,12 +49,16 @@ export function getMedicationDoseNotificationId(
 }
 
 /**
- * Checks whether a medication's treatment course is still active on a given timestamp.
+ * Checks whether a medication's treatment course is still active on a given timestamp or Date.
  */
-export function isMedicationActiveOnDate(med: MedicationItem, targetMs: number = Date.now()): boolean {
+export function isMedicationActiveOnDate(
+  med: MedicationItem,
+  targetMsOrDate: number | Date = Date.now()
+): boolean {
   if (!med.active || med.deletedAt) return false;
   if (!med.durationDays || med.durationDays <= 0) return true; // Unlimited / ongoing
 
+  const targetMs = typeof targetMsOrDate === 'number' ? targetMsOrDate : targetMsOrDate.getTime();
   const startDay = new Date(med.startDate);
   startDay.setHours(0, 0, 0, 0);
   const endMs = startDay.getTime() + med.durationDays * 24 * 60 * 60 * 1000;
@@ -127,11 +131,32 @@ export async function cancelSingleMedicationDoseNotification(
 /**
  * Cancels all scheduled notifications across the 7-day rolling window for a medication.
  */
-export async function cancelMedicationNotifications(med: MedicationItem): Promise<void> {
+export async function cancelMedicationNotifications(
+  medOrId: MedicationItem | string
+): Promise<void> {
   if (!isNativeApp()) return;
   try {
     const now = new Date();
     const idsToCancel: { id: number }[] = [];
+
+    let med: MedicationItem | undefined;
+    if (typeof medOrId === 'string') {
+      try {
+        const saved = localStorage.getItem(MEDICATION_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            med = parsed.find((m: any) => m && m.id === medOrId);
+          }
+        }
+      } catch {
+        // Ignore
+      }
+    } else {
+      med = medOrId;
+    }
+
+    if (!med) return;
 
     for (let dayOffset = -1; dayOffset <= ROLLING_WINDOW_DAYS + 1; dayOffset++) {
       const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOffset);
@@ -157,7 +182,7 @@ export async function cancelMedicationNotifications(med: MedicationItem): Promis
  */
 export async function scheduleMedicationNotifications(
   med: MedicationItem,
-  language: 'fa' | 'en' = 'fa'
+  langOrSettings: 'fa' | 'en' | AppSettings = 'fa'
 ): Promise<void> {
   if (!isNativeApp()) return;
 
@@ -168,7 +193,15 @@ export async function scheduleMedicationNotifications(
 
     await initMedicationNotificationChannel();
 
-    const savedSettings = getSavedAppSettings();
+    const savedSettings =
+      typeof langOrSettings === 'object' && langOrSettings !== null
+        ? langOrSettings
+        : getSavedAppSettings();
+    const language: 'fa' | 'en' =
+      typeof langOrSettings === 'string'
+        ? langOrSettings
+        : langOrSettings?.language || savedSettings?.language || 'fa';
+
     const chosenSound = med.soundId || savedSettings?.alarmSound || 'urgent_bell';
     const soundFile = getSoundFileName(chosenSound);
     const channelId = getChannelIdForConfig(
@@ -243,8 +276,12 @@ export async function scheduleMedicationNotifications(
           channelId: channelId || MEDICATION_CHANNEL_ID,
           sound: soundFile,
           smallIcon: 'ic_stat_notify',
+          iconColor: '#10B981',
+          ongoing: true,
+          autoCancel: false,
           extra: {
             type: 'medication_dose',
+            featureType: 'medication',
             medicationId: med.id,
             dateKey,
             scheduledTime: timeStr,
@@ -268,12 +305,12 @@ export async function scheduleMedicationNotifications(
  */
 export async function syncAllMedicationsNotifications(
   medications: MedicationItem[],
-  language: 'fa' | 'en' = 'fa'
+  langOrSettings: 'fa' | 'en' | AppSettings = 'fa'
 ): Promise<void> {
   if (!isNativeApp()) return;
   for (const med of medications) {
     if (!med.deletedAt && med.active) {
-      await scheduleMedicationNotifications(med, language);
+      await scheduleMedicationNotifications(med, langOrSettings);
     } else {
       await cancelMedicationNotifications(med);
     }

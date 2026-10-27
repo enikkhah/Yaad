@@ -899,14 +899,10 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
-              className={`flex-1 sm:flex-initial min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer active:scale-95 ${
-                !title.trim() || latitude === null || longitude === null
-                  ? 'bg-indigo-500/20 border border-indigo-500/40 text-indigo-300'
-                  : 'bg-indigo-500 hover:bg-indigo-400 text-white font-black shadow-lg shadow-indigo-500/25'
-              }`}
+              className="btn-brand-submit flex-1 sm:flex-initial min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer active:scale-95"
             >
-              <Check className={`w-4 h-4 stroke-[3] ${!title.trim() || latitude === null || longitude === null ? 'text-indigo-300' : 'text-white'}`} />
-              <span className={!title.trim() || latitude === null || longitude === null ? 'text-indigo-300 font-bold' : 'text-white font-black'}>
+              <Check className="w-4 h-4 stroke-[3]" />
+              <span className="font-black">
                 {editingLocation 
                   ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
                   : (isEn ? 'Save Place' : 'ثبت مکان')}

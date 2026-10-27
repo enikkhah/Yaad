@@ -1912,14 +1912,10 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             id="save-idea-submit-btn"
             type="button"
             onClick={handleSave}
-            className={`min-h-[48px] flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black shadow-md transition-all active:scale-95 cursor-pointer ${
-              !title.trim()
-                ? 'bg-indigo-500/20 border border-indigo-500/40 text-indigo-300'
-                : 'bg-indigo-500 hover:bg-indigo-400 text-white font-black shadow-lg shadow-indigo-500/25'
-            }`}
+            className="btn-brand-submit min-h-[48px] flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black transition-all active:scale-95 cursor-pointer"
           >
-            <Check className={`w-4 h-4 stroke-[3] ${!title.trim() ? 'text-indigo-300' : 'text-white'}`} />
-            <span className={!title.trim() ? 'text-indigo-300 font-bold' : 'text-white font-black'}>
+            <Check className="w-4 h-4 stroke-[3]" />
+            <span className="font-black">
               {editingIdea 
                 ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
                 : (isEn ? 'Save Idea' : 'ثبت ایده')}

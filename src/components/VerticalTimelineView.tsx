@@ -98,10 +98,12 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
 }) => {
   const isEn = language === 'en';
   const [internalSubPage, setInternalSubPage] = useState<'timeline' | 'in_progress' | 'medication'>('timeline');
+  const [subPageVisitTick, setSubPageVisitTick] = useState<number>(0);
   const activeSubPage = controlledSubPage ?? internalSubPage;
   const setActiveSubPage = (page: 'timeline' | 'in_progress' | 'medication') => {
     setInternalSubPage(page);
     onChangeSubPage?.(page);
+    setSubPageVisitTick((prev) => prev + 1);
   };
   const [nowMs, setNowMs] = useState<number>(Date.now());
   const [selectedReminder, setSelectedReminder] = useState<Reminder | null>(null);
@@ -280,21 +282,39 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     return `${toPersianDigits(hh)}:${toPersianDigits(mm)}:${toPersianDigits(ss)}`;
   };
 
-  // Auto-scroll to 'NOW' marker once mounted and whenever filter changes
+  // Auto-scroll 'NOW' marker (`اکنون`) to the center of the screen every time the Reminders page is opened
+  const centerNowMarker = (behavior: ScrollBehavior = 'smooth') => {
+    if (nowMarkerRef.current) {
+      nowMarkerRef.current.scrollIntoView({ behavior, block: 'center' });
+      hasAutoScrolledRef.current = true;
+    }
+  };
+
   useEffect(() => {
-    const scrollToNow = () => {
-      if (nowMarkerRef.current) {
-        nowMarkerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        hasAutoScrolledRef.current = true;
-      }
-    };
-    const t1 = setTimeout(scrollToNow, 100);
-    const t2 = setTimeout(scrollToNow, 300);
+    if (activeSubPage === 'timeline') {
+      const t1 = window.setTimeout(() => centerNowMarker('smooth'), 60);
+      const t2 = window.setTimeout(() => centerNowMarker('smooth'), 240);
+      const t3 = window.setTimeout(() => centerNowMarker('smooth'), 480);
+      return () => {
+        window.clearTimeout(t1);
+        window.clearTimeout(t2);
+        window.clearTimeout(t3);
+      };
+    }
+
+    // On every visit to 'in_progress' or 'medication', bring the top registration section into user view
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const s1 = window.setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 60);
+    const s2 = window.setTimeout(() => {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }, 180);
     return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
+      window.clearTimeout(s1);
+      window.clearTimeout(s2);
     };
-  }, [categoryFilter]);
+  }, [activeSubPage, categoryFilter, subPageVisitTick]);
 
   // Handle Escape key to close action sheet or filter sheet
   useEffect(() => {
@@ -355,14 +375,21 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
         <div className="grid grid-cols-3 gap-1.5 sm:gap-2 p-1.5 rounded-2xl bg-stone-900 border border-stone-800 max-w-3xl mx-auto">
           <button
             type="button"
-            onClick={() => setActiveSubPage('timeline')}
+            onClick={() => {
+              setActiveSubPage('timeline');
+              window.setTimeout(() => centerNowMarker('smooth'), 80);
+            }}
             className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
               activeSubPage === 'timeline'
                 ? 'bg-indigo-500 text-white shadow-sm'
-                : 'text-stone-400 hover:text-white'
+                : 'text-stone-300 hover:text-white'
             }`}
           >
-            <Bell className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <Bell
+              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
+                activeSubPage === 'timeline' ? 'text-amber-300' : 'text-indigo-400'
+              }`}
+            />
             <span className="truncate">{isEn ? 'Reminders' : 'یادآورهای زمانی'}</span>
             <span
               className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
@@ -377,14 +404,21 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
 
           <button
             type="button"
-            onClick={() => setActiveSubPage('in_progress')}
+            onClick={() => {
+              setActiveSubPage('in_progress');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
               activeSubPage === 'in_progress'
                 ? 'bg-indigo-500 text-white shadow-sm'
-                : 'text-stone-400 hover:text-white'
+                : 'text-stone-300 hover:text-white'
             }`}
           >
-            <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <Layers
+              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
+                activeSubPage === 'in_progress' ? 'text-amber-300' : 'text-amber-400'
+              }`}
+            />
             <span className="truncate">{isEn ? 'In-Progress' : 'کار در جریان'}</span>
             {activeInProgressCount > 0 && (
               <span
@@ -403,14 +437,21 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
 
           <button
             type="button"
-            onClick={() => setActiveSubPage('medication')}
+            onClick={() => {
+              setActiveSubPage('medication');
+              window.scrollTo({ top: 0, behavior: 'smooth' });
+            }}
             className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
               activeSubPage === 'medication'
                 ? 'bg-indigo-500 text-white shadow-sm'
-                : 'text-stone-400 hover:text-white'
+                : 'text-stone-300 hover:text-white'
             }`}
           >
-            <Pill className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0" />
+            <Pill
+              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
+                activeSubPage === 'medication' ? 'text-emerald-300' : 'text-emerald-400'
+              }`}
+            />
             <span className="truncate">{isEn ? 'Medication' : 'یادآور دارو'}</span>
             {activeMedicationCount > 0 && (
               <span
@@ -444,6 +485,8 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             language={language}
             mode="page"
             searchQuery={searchQuery}
+            initialOpenForm={true}
+            visitTrigger={subPageVisitTick}
           />
         </div>
       ) : activeSubPage === 'in_progress' &&
@@ -461,14 +504,16 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             language={language}
             mode="page"
             searchQuery={searchQuery}
+            initialOpenForm={true}
+            visitTrigger={subPageVisitTick}
           />
         </div>
       ) : (
         <>
-      {/* 1. MINIMAL HEADER WITH CATEGORY FILTER BUTTON */}
-      <div className="flex items-center justify-between pb-3 border-b border-stone-800/80 max-w-3xl mx-auto">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl sm:text-2xl font-black text-white">
+      {/* 1. MINIMAL HEADER WITH CATEGORY FILTER & BRAND SUBMIT BUTTON */}
+      <div className="flex items-center justify-between gap-2 pb-3 border-b border-stone-800/80 max-w-3xl mx-auto flex-wrap">
+        <div className="flex items-center gap-2.5">
+          <h2 className="text-lg sm:text-2xl font-black text-white">
             {isEn ? 'Reminders' : 'یادآورها'}
           </h2>
 
@@ -476,14 +521,14 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
           <button
             type="button"
             onClick={() => setIsFilterSheetOpen(true)}
-            className={`min-h-[44px] px-3.5 py-2 rounded-xl border flex items-center gap-2 text-xs font-bold transition-all cursor-pointer ${
+            className={`min-h-[40px] px-3 py-1.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all cursor-pointer ${
               categoryFilter !== 'all'
-                ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-sm shadow-indigo-500/20'
-                : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-white hover:border-stone-700'
+                ? 'bg-indigo-500/20 border-indigo-500 text-indigo-200 shadow-sm shadow-indigo-500/20'
+                : 'bg-stone-900 border-stone-800 text-stone-200 hover:text-white hover:border-stone-700'
             }`}
             title={isEn ? 'Filter by category' : 'فیلتر دسته‌بندی'}
           >
-            <Filter className={`w-3.5 h-3.5 ${categoryFilter !== 'all' ? 'text-indigo-400' : 'text-stone-400'}`} />
+            <Filter className={`w-3.5 h-3.5 ${categoryFilter !== 'all' ? 'text-amber-400' : 'text-amber-400'}`} />
             <span>
               {categoryFilter === 'all'
                 ? (isEn ? 'All Categories' : 'همه دسته‌ها')
@@ -496,18 +541,24 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
           </button>
         </div>
 
-        {/* Count Indicator */}
-        <span className="text-xs font-semibold text-stone-400 bg-stone-900 px-3 py-1.5 rounded-xl border border-stone-800/80">
-          {isEn ? sortedReminders.length : toPersianDigits(sortedReminders.length)} {isEn ? 'items' : 'یادآور'}
-        </span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onCreateNew}
+            className="btn-brand-submit min-h-[38px] px-3.5 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
+          >
+            <Plus className="w-4 h-4 stroke-[3]" />
+            <span>{isEn ? 'Add Reminder' : 'ثبت یادآور جدید'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* 2. SINGLE VERTICAL TIMELINE */}
-      <div className="relative space-y-4 max-w-3xl mx-auto">
+      {/* 2. SINGLE VERTICAL TIMELINE (with vertical padding so NOW sits in the middle of the viewport) */}
+      <div className="relative space-y-4 max-w-3xl mx-auto py-[14vh]">
         {sortedReminders.length === 0 ? (
           <div className="space-y-6">
-            {/* The 'NOW' Line even when empty */}
-            <div ref={nowMarkerRef} className="relative py-4 flex items-center justify-center">
+            {/* The 'NOW' Line centered in viewport */}
+            <div ref={nowMarkerRef} className="relative py-4 flex items-center justify-center scroll-mt-[42vh]">
               <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/70 to-transparent" />
               <div className="relative z-10 px-4 py-1.5 rounded-full bg-indigo-500 text-white font-black text-xs shadow-lg shadow-indigo-500/20 flex items-center gap-2 border border-indigo-400">
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
@@ -517,7 +568,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             </div>
 
             {/* Empty State Card */}
-            <div className="py-14 px-5 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-900/30 space-y-4">
+            <div className="py-10 px-5 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-900/30 space-y-4">
               <div className="w-12 h-12 rounded-2xl bg-stone-800/80 border border-stone-700/60 text-stone-400 flex items-center justify-center mx-auto">
                 {searchQuery.trim() ? <Search className="w-6 h-6 text-indigo-400" /> : <Clock className="w-6 h-6" />}
               </div>
@@ -552,7 +603,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                 <button
                   type="button"
                   onClick={onCreateNew}
-                  className="min-h-[48px] px-6 py-2.5 rounded-2xl bg-indigo-500 hover:bg-indigo-400 text-white font-black text-xs sm:text-sm transition-all shadow-md active:scale-95 cursor-pointer inline-flex items-center gap-2"
+                  className="btn-brand-submit min-h-[48px] px-6 py-2.5 rounded-2xl font-black text-xs sm:text-sm transition-all active:scale-95 cursor-pointer inline-flex items-center gap-2"
                 >
                   <Plus className="w-4 h-4 stroke-[3]" />
                   <span>{isEn ? 'New Reminder' : 'ثبت یادآور جدید'}</span>
@@ -577,7 +628,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                   transition={fastLayoutSpring}
                   key="now-indicator-line"
                   ref={nowMarkerRef}
-                  className="relative py-4 my-2 flex items-center justify-center z-20"
+                  className="relative py-4 my-2 flex items-center justify-center z-20 scroll-mt-[42vh]"
                 >
                   {/* Horizontal line across the container */}
                   <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/80 to-transparent" />

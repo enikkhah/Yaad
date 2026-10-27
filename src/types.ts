@@ -129,6 +129,7 @@ export interface Reminder {
   googleTaskId?: string;
   // Geofencing and location-based reminder fields
   geofence?: LocationGeofenceConfig;
+  featureType?: 'reminder' | 'medication' | 'in_progress' | 'occasion' | 'geofence';
   deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 
@@ -197,7 +198,8 @@ export interface InProgressItem {
   unit: string;                       // واحد اندازه‌گیری (مرحله، صفحه، قسمت، دقیقه، ساعت، جلسه، درصد، واحد و...)
   stepSize: number;                   // گام افزایش/کاهش سریع با دکمه + و - (پیش‌فرض ۱)
   notes?: string;                     // یادداشت آخرین وضعیت یا نقطه توقف
-  inactivityDays: number;             // تعداد روز عدم فعالیت برای ارسال یادآور هوشمند (پیش‌فرض ۳ روز)
+  inactivityDays: number;             // تعداد روز عدم فعالیت برای ارسال یادآور هوشمند (پیش‌فرض ۱ روز)
+  notifyTime?: string;                // ساعت اعلان یادآور کار در جریان (مثلاً "10:00")
   inactivityReminderEnabled: boolean; // فعال بودن یادآور هوشمند عدم فعالیت
   lastUpdatedAt: number;              // زمان آخرین آپدیت پیشرفت (timestamp)
   createdAt: number;                  // زمان ایجاد
@@ -243,6 +245,7 @@ export interface MedicationItem {
   history: MedicationDoseLog[];        // آرایه تاریخچه لاگ مصرف دارو
   active: boolean;                     // فعال بودن یادآور دارو
   createdAt: number;
+  updatedAt?: number;
   deletedAt?: number;
 }
 
