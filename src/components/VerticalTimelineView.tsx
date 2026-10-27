@@ -485,7 +485,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             language={language}
             mode="page"
             searchQuery={searchQuery}
-            initialOpenForm={true}
+            initialOpenForm={false}
             visitTrigger={subPageVisitTick}
           />
         </div>
@@ -504,7 +504,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             language={language}
             mode="page"
             searchQuery={searchQuery}
-            initialOpenForm={true}
+            initialOpenForm={false}
             visitTrigger={subPageVisitTick}
           />
         </div>

@@ -105,7 +105,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
   language = 'fa',
   mode = 'page',
   searchQuery = '',
-  initialOpenForm = true,
+  initialOpenForm = false,
   visitTrigger = 0,
 }) => {
   const isEn = language === 'en';
@@ -123,8 +123,8 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
     [medications]
   );
 
-  // Form visibility & state — always open on every visit to the Medication page
-  const [isFormExpanded, setIsFormExpanded] = useState<boolean>(true);
+  // Form visibility & state — closed on every visit so the Register button is directly in view
+  const [isFormExpanded, setIsFormExpanded] = useState<boolean>(initialOpenForm);
   const [editingMed, setEditingMed] = useState<MedicationItem | null>(null);
 
   const [name, setName] = useState('');
@@ -164,9 +164,11 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
     }
   };
 
-  // Ensure registration section is expanded and placed in user view on every visit to the page
+  // Ensure form is closed and registration button is placed in user view on every visit to the page
   useEffect(() => {
-    setIsFormExpanded(true);
+    setEditingMed(null);
+    setActiveRollerSlotIndex(null);
+    setIsFormExpanded(initialOpenForm);
     scrollRegistrationIntoView('smooth');
     const t1 = window.setTimeout(() => scrollRegistrationIntoView('smooth'), 80);
     const t2 = window.setTimeout(() => scrollRegistrationIntoView('smooth'), 220);
@@ -174,7 +176,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
-  }, [visitTrigger, mode]);
+  }, [visitTrigger, mode, initialOpenForm]);
 
   // Also bring registration section into view whenever user manually expands the form
   useEffect(() => {
@@ -240,6 +242,7 @@ export const MedicationPanel: React.FC<MedicationPanelProps> = ({
     setIsUnlimitedDuration(true);
     setStockCountInput('');
     setNotes('');
+    setIsFormExpanded(false);
   };
 
   const handleStartEdit = (med: MedicationItem) => {

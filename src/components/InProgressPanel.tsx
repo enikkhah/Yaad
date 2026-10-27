@@ -52,7 +52,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
   language = 'fa',
   mode = 'page',
   searchQuery = '',
-  initialOpenForm = true,
+  initialOpenForm = false,
   visitTrigger = 0,
 }) => {
   const isEn = language === 'en';
@@ -65,8 +65,8 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
     return () => window.clearInterval(timer);
   }, []);
 
-  // Form visibility & state — always open on every visit to the In-Progress page
-  const [isFormExpanded, setIsFormExpanded] = useState<boolean>(true);
+  // Form visibility & state — closed on every visit so the Register button is directly in view
+  const [isFormExpanded, setIsFormExpanded] = useState<boolean>(initialOpenForm);
   const [editingItem, setEditingItem] = useState<InProgressItem | null>(null);
 
   const [title, setTitle] = useState('');
@@ -97,9 +97,10 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
     }
   };
 
-  // Ensure registration section is expanded and placed in user view on every visit to the page
+  // Ensure form is closed and registration button is placed in user view on every visit to the page
   useEffect(() => {
-    setIsFormExpanded(true);
+    setEditingItem(null);
+    setIsFormExpanded(initialOpenForm);
     scrollRegistrationIntoView('smooth');
     const t1 = window.setTimeout(() => scrollRegistrationIntoView('smooth'), 80);
     const t2 = window.setTimeout(() => scrollRegistrationIntoView('smooth'), 220);
@@ -107,7 +108,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
       window.clearTimeout(t1);
       window.clearTimeout(t2);
     };
-  }, [visitTrigger, mode]);
+  }, [visitTrigger, mode, initialOpenForm]);
 
   // Also bring registration section into view whenever user manually expands the form
   useEffect(() => {
@@ -139,6 +140,7 @@ export const InProgressPanel: React.FC<InProgressPanelProps> = ({
     setInactivityDaysInput(1);
     setNotifyTimeInput('10:00');
     setFormError(null);
+    setIsFormExpanded(false);
   };
 
   const handleStartEdit = (item: InProgressItem) => {

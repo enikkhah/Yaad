@@ -943,7 +943,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 onRefillStock={onRefillMedicationStock}
                 language={language}
                 mode="modal-tab"
-                initialOpenForm={true}
+                initialOpenForm={false}
                 visitTrigger={formTabVisitTick}
               />
             </div>
@@ -957,7 +957,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 onDeleteItem={onDeleteInProgressItem}
                 language={language}
                 mode="modal-tab"
-                initialOpenForm={true}
+                initialOpenForm={false}
                 visitTrigger={formTabVisitTick}
               />
             </div>

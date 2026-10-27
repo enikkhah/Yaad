@@ -31,7 +31,7 @@ jobs:
       - name: Sync App Version Before Web Build
         id: versioning
         env:
-          VERSION_NAME: ${{ inputs.version_name || github.event.inputs.version_name || '' }}
+          VERSION_NAME: ${{ github.event.inputs.version_name || '' }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
