@@ -26,6 +26,7 @@ interface OccasionsViewProps {
   onCreateReminder: (occasion: Occasion) => void;
   language?: AppLanguage;
   globalSearchQuery?: string;
+  onTriggerNotFoundPopup?: (query: string) => void;
   selectedTypeFilter?: OccasionType | 'all';
   onSelectTypeFilter?: (type: OccasionType | 'all') => void;
 }
@@ -162,7 +163,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
         <button
           type="button"
           onClick={handleAddClick}
-          className="btn-brand-submit flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-xs transition-all justify-center cursor-pointer active:scale-95 self-stretch sm:self-auto shrink-0"
+          className="btn-brand-submit flex items-center gap-2 px-4 py-2.5 rounded-xl font-black text-xs shadow-md transition-all justify-center cursor-pointer active:scale-95 self-stretch sm:self-auto shrink-0 bg-[#FF8C00] hover:bg-[#FF9E1F] text-white shadow-[#FF8C00]/25"
         >
           <Plus className="w-4 h-4 stroke-[3]" />
           <span className="font-black">{addButtonLabel}</span>
@@ -299,7 +300,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
           <button
             type="button"
             onClick={handleAddClick}
-            className="btn-brand-submit min-h-[48px] px-6 py-3 rounded-2xl font-black text-xs sm:text-sm cursor-pointer active:scale-95 flex items-center justify-center gap-2 mx-auto transition-all duration-200"
+            className="btn-brand-submit min-h-[48px] px-6 py-3 rounded-2xl font-black text-xs sm:text-sm shadow-lg cursor-pointer active:scale-95 flex items-center justify-center gap-2 mx-auto transition-all duration-200 bg-[#FF8C00] hover:bg-[#FF9E1F] text-white shadow-[#FF8C00]/25"
           >
             <Plus className="w-4 h-4 stroke-[3]" />
             <span>{addButtonLabel}</span>

@@ -4,12 +4,12 @@
     Canvas: 1024 x 1024
     Framing: 90% vertical height (Y: 51.2 to 972.8 -> 921.6px height, 51.2px / 5% top & bottom padding)
     Horizontal bounds: X: 170 to 854 (684px width, centered at X = 512)
-    Primary Color: Brand Orange (#F7941E)
+    Primary Color: Brand Orange (#FF8C00)
   -->
 
   <!-- Outer Teardrop Location Pin (84px uniform wall thickness, rounded outer tip, sharp inner vertex) -->
   <path
-    fill="#F7941E"
+    fill="#FF8C00"
     fill-rule="evenodd"
     d="M 512 51.2
        C 700.9 51.2, 854 204.3, 854 393.2
@@ -27,7 +27,7 @@
   <!-- Integrated Clock Hands (72px stroke width, rounded caps & rounded elbow join at 12:00 and ~4:00) -->
   <path
     d="M 512 237 L 512 393.2 L 625 458.5"
-    stroke="#F7941E"
+    stroke="#FF8C00"
     stroke-width="72"
     stroke-linecap="round"
     stroke-linejoin="round"

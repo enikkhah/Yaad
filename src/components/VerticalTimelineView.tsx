@@ -1,10 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, LayoutGroup } from 'motion/react';
-import { Reminder, Category, InProgressItem, MedicationItem } from '../types';
-import { InProgressPanel } from './InProgressPanel';
-import { MedicationPanel } from './MedicationPanel';
-import { isInProgressItemOverdue } from '../utils/inProgressNotifications';
-import { isMedicationActiveOnDate, isMedicationLowStock } from '../utils/medicationNotifications';
+import { Reminder, Category } from '../types';
 import { 
   formatJalaliTime, 
   getDayHeaderLabel, 
@@ -28,10 +24,7 @@ import {
   Tag, 
   RotateCcw,
   Sparkles,
-  Search,
-  Layers,
-  Bell,
-  Pill
+  Search
 } from 'lucide-react';
 
 interface VerticalTimelineViewProps {
@@ -46,29 +39,7 @@ interface VerticalTimelineViewProps {
   language?: 'fa' | 'en';
   searchQuery?: string;
   onClearSearch?: () => void;
-  inProgressItems?: InProgressItem[];
-  onSaveInProgressItem?: (
-    itemData: Omit<InProgressItem, 'id' | 'createdAt' | 'lastUpdatedAt'>,
-    editingId?: string
-  ) => void;
-  onUpdateInProgressProgress?: (id: string, newProgress: number, customNote?: string) => void;
-  onToggleInProgressComplete?: (id: string) => void;
-  onDeleteInProgressItem?: (id: string) => void;
-  medications?: MedicationItem[];
-  onSaveMedication?: (
-    medData: Omit<MedicationItem, 'id' | 'createdAt' | 'updatedAt' | 'history'>,
-    editingId?: string
-  ) => void;
-  onLogMedicationDose?: (
-    medicationId: string,
-    dateKey: string,
-    scheduledTime: string,
-    status: 'taken' | 'missed' | 'reset'
-  ) => void;
-  onDeleteMedication?: (id: string) => void;
-  onRefillMedicationStock?: (id: string, addedAmount: number) => void;
-  activeSubPage?: 'timeline' | 'in_progress' | 'medication';
-  onChangeSubPage?: (page: 'timeline' | 'in_progress' | 'medication') => void;
+  scrollToNowTrigger?: number;
 }
 
 export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
@@ -83,28 +54,9 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   language = 'fa',
   searchQuery = '',
   onClearSearch,
-  inProgressItems = [],
-  onSaveInProgressItem,
-  onUpdateInProgressProgress,
-  onToggleInProgressComplete,
-  onDeleteInProgressItem,
-  medications = [],
-  onSaveMedication,
-  onLogMedicationDose,
-  onDeleteMedication,
-  onRefillMedicationStock,
-  activeSubPage: controlledSubPage,
-  onChangeSubPage,
+  scrollToNowTrigger = 0,
 }) => {
   const isEn = language === 'en';
-  const [internalSubPage, setInternalSubPage] = useState<'timeline' | 'in_progress' | 'medication'>('timeline');
-  const [subPageVisitTick, setSubPageVisitTick] = useState<number>(0);
-  const activeSubPage = controlledSubPage ?? internalSubPage;
-  const setActiveSubPage = (page: 'timeline' | 'in_progress' | 'medication') => {
-    setInternalSubPage(page);
-    onChangeSubPage?.(page);
-    setSubPageVisitTick((prev) => prev + 1);
-  };
   const [nowMs, setNowMs] = useState<number>(Date.now());
   const [selectedReminder, setSelectedReminder] = useState<Reminder | null>(null);
   const [isFilterSheetOpen, setIsFilterSheetOpen] = useState<boolean>(false);
@@ -282,39 +234,38 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     return `${toPersianDigits(hh)}:${toPersianDigits(mm)}:${toPersianDigits(ss)}`;
   };
 
-  // Auto-scroll 'NOW' marker (`اکنون`) to the center of the screen every time the Reminders page is opened
-  const centerNowMarker = (behavior: ScrollBehavior = 'smooth') => {
-    if (nowMarkerRef.current) {
-      nowMarkerRef.current.scrollIntoView({ behavior, block: 'center' });
-      hasAutoScrolledRef.current = true;
-    }
-  };
-
+  // Always scroll 'NOW' ("اکنون") marker into center of user's view every time Reminders page loads/opens
   useEffect(() => {
-    if (activeSubPage === 'timeline') {
-      const t1 = window.setTimeout(() => centerNowMarker('smooth'), 60);
-      const t2 = window.setTimeout(() => centerNowMarker('smooth'), 240);
-      const t3 = window.setTimeout(() => centerNowMarker('smooth'), 480);
-      return () => {
-        window.clearTimeout(t1);
-        window.clearTimeout(t2);
-        window.clearTimeout(t3);
-      };
-    }
-
-    // On every visit to 'in_progress' or 'medication', bring the top registration section into user view
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    const s1 = window.setTimeout(() => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }, 60);
-    const s2 = window.setTimeout(() => {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-    }, 180);
-    return () => {
-      window.clearTimeout(s1);
-      window.clearTimeout(s2);
+    const scrollToNow = () => {
+      if (nowMarkerRef.current) {
+        nowMarkerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        hasAutoScrolledRef.current = true;
+      }
     };
-  }, [activeSubPage, categoryFilter, subPageVisitTick]);
+    const t0 = setTimeout(scrollToNow, 40);
+    const t1 = setTimeout(scrollToNow, 180);
+    const t2 = setTimeout(scrollToNow, 420);
+
+    const handleCustomScrollToNow = () => {
+      setTimeout(scrollToNow, 60);
+      setTimeout(scrollToNow, 260);
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        handleCustomScrollToNow();
+      }
+    };
+
+    window.addEventListener('yaad:scroll-to-now', handleCustomScrollToNow);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      clearTimeout(t0);
+      clearTimeout(t1);
+      clearTimeout(t2);
+      window.removeEventListener('yaad:scroll-to-now', handleCustomScrollToNow);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [categoryFilter, scrollToNowTrigger, sortedReminders.length === 0]);
 
   // Handle Escape key to close action sheet or filter sheet
   useEffect(() => {
@@ -359,161 +310,12 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     }
   };
 
-  const activeInProgressCount = inProgressItems.filter((i) => !i.deletedAt && !i.completed).length;
-  const overdueInProgressCount = inProgressItems.filter((i) => isInProgressItemOverdue(i, nowMs)).length;
-  const activeMedicationCount = medications.filter(
-    (m) => !m.deletedAt && isMedicationActiveOnDate(m, new Date(nowMs))
-  ).length;
-  const lowStockMedicationCount = medications.filter(
-    (m) => !m.deletedAt && isMedicationLowStock(m)
-  ).length;
-
   return (
-    <div className="space-y-5 pb-28 select-none" dir={isEn ? 'ltr' : 'rtl'}>
-      {/* TOP SUB-PAGE SWITCHER: FROZEN (STICKY) AT TOP OF PAGE ON SCROLL */}
-      <div className="sticky top-16 sm:top-18 z-25 -mt-4 sm:-mt-6 -mx-3 sm:-mx-6 px-3 sm:px-6 py-2.5 bg-stone-950/95 backdrop-blur-md border-b border-stone-800/80 shadow-md transition-colors duration-200">
-        <div className="grid grid-cols-3 gap-1.5 sm:gap-2 p-1.5 rounded-2xl bg-stone-900 border border-stone-800 max-w-3xl mx-auto">
-          <button
-            type="button"
-            onClick={() => {
-              setActiveSubPage('timeline');
-              window.setTimeout(() => centerNowMarker('smooth'), 80);
-            }}
-            className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
-              activeSubPage === 'timeline'
-                ? 'bg-indigo-500 text-white shadow-sm'
-                : 'text-stone-300 hover:text-white'
-            }`}
-          >
-            <Bell
-              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
-                activeSubPage === 'timeline' ? 'text-amber-300' : 'text-indigo-400'
-              }`}
-            />
-            <span className="truncate">{isEn ? 'Reminders' : 'یادآورهای زمانی'}</span>
-            <span
-              className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
-                activeSubPage === 'timeline'
-                  ? 'bg-white/20 text-white'
-                  : 'bg-stone-800 text-stone-300'
-              }`}
-            >
-              {isEn ? sortedReminders.length : toPersianDigits(sortedReminders.length)}
-            </span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActiveSubPage('in_progress');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
-              activeSubPage === 'in_progress'
-                ? 'bg-indigo-500 text-white shadow-sm'
-                : 'text-stone-300 hover:text-white'
-            }`}
-          >
-            <Layers
-              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
-                activeSubPage === 'in_progress' ? 'text-amber-300' : 'text-amber-400'
-              }`}
-            />
-            <span className="truncate">{isEn ? 'In-Progress' : 'کار در جریان'}</span>
-            {activeInProgressCount > 0 && (
-              <span
-                className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
-                  overdueInProgressCount > 0 && activeSubPage !== 'in_progress'
-                    ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                    : activeSubPage === 'in_progress'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-stone-800 text-stone-300'
-                }`}
-              >
-                {isEn ? activeInProgressCount : toPersianDigits(activeInProgressCount)}
-              </span>
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setActiveSubPage('medication');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`min-h-[44px] px-2 sm:px-3 py-2 rounded-xl text-[11px] sm:text-sm font-black flex items-center justify-center gap-1.5 sm:gap-2 transition-all cursor-pointer ${
-              activeSubPage === 'medication'
-                ? 'bg-indigo-500 text-white shadow-sm'
-                : 'text-stone-300 hover:text-white'
-            }`}
-          >
-            <Pill
-              className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 ${
-                activeSubPage === 'medication' ? 'text-emerald-300' : 'text-emerald-400'
-              }`}
-            />
-            <span className="truncate">{isEn ? 'Medication' : 'یادآور دارو'}</span>
-            {activeMedicationCount > 0 && (
-              <span
-                className={`px-1.5 py-0.5 rounded-md text-[10px] font-mono shrink-0 ${
-                  lowStockMedicationCount > 0 && activeSubPage !== 'medication'
-                    ? 'bg-amber-500/20 border border-amber-500/40 text-amber-300'
-                    : activeSubPage === 'medication'
-                    ? 'bg-white/20 text-white'
-                    : 'bg-stone-800 text-stone-300'
-                }`}
-              >
-                {isEn ? activeMedicationCount : toPersianDigits(activeMedicationCount)}
-              </span>
-            )}
-          </button>
-        </div>
-      </div>
-
-      {activeSubPage === 'medication' &&
-      onSaveMedication &&
-      onLogMedicationDose &&
-      onDeleteMedication &&
-      onRefillMedicationStock ? (
-        <div className="max-w-3xl mx-auto">
-          <MedicationPanel
-            medications={medications}
-            onSaveMedication={onSaveMedication}
-            onLogDose={onLogMedicationDose}
-            onDeleteMedication={onDeleteMedication}
-            onRefillStock={onRefillMedicationStock}
-            language={language}
-            mode="page"
-            searchQuery={searchQuery}
-            initialOpenForm={false}
-            visitTrigger={subPageVisitTick}
-          />
-        </div>
-      ) : activeSubPage === 'in_progress' &&
-      onSaveInProgressItem &&
-      onUpdateInProgressProgress &&
-      onToggleInProgressComplete &&
-      onDeleteInProgressItem ? (
-        <div className="max-w-3xl mx-auto">
-          <InProgressPanel
-            items={inProgressItems}
-            onSaveItem={onSaveInProgressItem}
-            onUpdateProgress={onUpdateInProgressProgress}
-            onToggleComplete={onToggleInProgressComplete}
-            onDeleteItem={onDeleteInProgressItem}
-            language={language}
-            mode="page"
-            searchQuery={searchQuery}
-            initialOpenForm={false}
-            visitTrigger={subPageVisitTick}
-          />
-        </div>
-      ) : (
-        <>
-      {/* 1. MINIMAL HEADER WITH CATEGORY FILTER & BRAND SUBMIT BUTTON */}
-      <div className="flex items-center justify-between gap-2 pb-3 border-b border-stone-800/80 max-w-3xl mx-auto flex-wrap">
-        <div className="flex items-center gap-2.5">
-          <h2 className="text-lg sm:text-2xl font-black text-white">
+    <div className="space-y-6 pb-28 select-none" dir={isEn ? 'ltr' : 'rtl'}>
+      {/* 1. MINIMAL HEADER WITH CATEGORY FILTER BUTTON */}
+      <div className="flex items-center justify-between pb-3 border-b border-stone-800/80">
+        <div className="flex items-center gap-3">
+          <h2 className="text-xl sm:text-2xl font-black text-white">
             {isEn ? 'Reminders' : 'یادآورها'}
           </h2>
 
@@ -521,14 +323,14 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
           <button
             type="button"
             onClick={() => setIsFilterSheetOpen(true)}
-            className={`min-h-[40px] px-3 py-1.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all cursor-pointer ${
+            className={`min-h-[44px] px-3.5 py-2 rounded-xl border flex items-center gap-2 text-xs font-bold transition-all cursor-pointer ${
               categoryFilter !== 'all'
-                ? 'bg-indigo-500/20 border-indigo-500 text-indigo-200 shadow-sm shadow-indigo-500/20'
-                : 'bg-stone-900 border-stone-800 text-stone-200 hover:text-white hover:border-stone-700'
+                ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 shadow-sm shadow-indigo-500/20'
+                : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-white hover:border-stone-700'
             }`}
             title={isEn ? 'Filter by category' : 'فیلتر دسته‌بندی'}
           >
-            <Filter className={`w-3.5 h-3.5 ${categoryFilter !== 'all' ? 'text-amber-400' : 'text-amber-400'}`} />
+            <Filter className={`w-3.5 h-3.5 ${categoryFilter !== 'all' ? 'text-indigo-400' : 'text-stone-400'}`} />
             <span>
               {categoryFilter === 'all'
                 ? (isEn ? 'All Categories' : 'همه دسته‌ها')
@@ -541,24 +343,18 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
           </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onCreateNew}
-            className="btn-brand-submit min-h-[38px] px-3.5 py-1.5 rounded-xl font-black text-xs flex items-center gap-1.5 transition-all cursor-pointer active:scale-95"
-          >
-            <Plus className="w-4 h-4 stroke-[3]" />
-            <span>{isEn ? 'Add Reminder' : 'ثبت یادآور جدید'}</span>
-          </button>
-        </div>
+        {/* Count Indicator */}
+        <span className="text-xs font-semibold text-stone-400 bg-stone-900 px-3 py-1.5 rounded-xl border border-stone-800/80">
+          {isEn ? sortedReminders.length : toPersianDigits(sortedReminders.length)} {isEn ? 'items' : 'یادآور'}
+        </span>
       </div>
 
-      {/* 2. SINGLE VERTICAL TIMELINE (with vertical padding so NOW sits in the middle of the viewport) */}
-      <div className="relative space-y-4 max-w-3xl mx-auto py-[14vh]">
+      {/* 2. SINGLE VERTICAL TIMELINE */}
+      <div className="relative space-y-4 max-w-3xl mx-auto">
         {sortedReminders.length === 0 ? (
           <div className="space-y-6">
-            {/* The 'NOW' Line centered in viewport */}
-            <div ref={nowMarkerRef} className="relative py-4 flex items-center justify-center scroll-mt-[42vh]">
+            {/* The 'NOW' Line even when empty */}
+            <div ref={nowMarkerRef} className="relative py-4 flex items-center justify-center">
               <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/70 to-transparent" />
               <div className="relative z-10 px-4 py-1.5 rounded-full bg-indigo-500 text-white font-black text-xs shadow-lg shadow-indigo-500/20 flex items-center gap-2 border border-indigo-400">
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
@@ -568,7 +364,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             </div>
 
             {/* Empty State Card */}
-            <div className="py-10 px-5 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-900/30 space-y-4">
+            <div className="py-14 px-5 text-center rounded-2xl border border-dashed border-stone-800 bg-stone-900/30 space-y-4">
               <div className="w-12 h-12 rounded-2xl bg-stone-800/80 border border-stone-700/60 text-stone-400 flex items-center justify-center mx-auto">
                 {searchQuery.trim() ? <Search className="w-6 h-6 text-indigo-400" /> : <Clock className="w-6 h-6" />}
               </div>
@@ -603,10 +399,10 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                 <button
                   type="button"
                   onClick={onCreateNew}
-                  className="btn-brand-submit min-h-[48px] px-6 py-2.5 rounded-2xl font-black text-xs sm:text-sm transition-all active:scale-95 cursor-pointer inline-flex items-center gap-2"
+                  className="btn-brand-submit min-h-[48px] px-6 py-2.5 rounded-2xl bg-[#FF8C00] hover:bg-[#FF9E1F] text-white font-black text-xs sm:text-sm transition-all shadow-lg shadow-[#FF8C00]/25 active:scale-95 cursor-pointer inline-flex items-center gap-2"
                 >
-                  <Plus className="w-4 h-4 stroke-[3]" />
-                  <span>{isEn ? 'New Reminder' : 'ثبت یادآور جدید'}</span>
+                  <Plus className="w-4 h-4 stroke-[3] text-white" />
+                  <span className="text-white font-black">{isEn ? 'New Reminder' : 'ثبت یادآور جدید'}</span>
                 </button>
               )}
             </div>
@@ -628,7 +424,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                   transition={fastLayoutSpring}
                   key="now-indicator-line"
                   ref={nowMarkerRef}
-                  className="relative py-4 my-2 flex items-center justify-center z-20 scroll-mt-[42vh]"
+                  className="relative py-4 my-2 flex items-center justify-center z-20"
                 >
                   {/* Horizontal line across the container */}
                   <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/80 to-transparent" />
@@ -1080,8 +876,6 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
             </div>
           </div>
         </div>
-      )}
-        </>
       )}
     </div>
   );

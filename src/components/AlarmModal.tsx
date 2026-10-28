@@ -44,117 +44,126 @@ interface CardThemePalette {
   secondaryBtn: string;
   editBtn: string;
   progressFill: string;
-  featureLabelFa: string;
-  featureLabelEn: string;
 }
 
-function resolveFeatureType(reminder: Reminder): 'medication' | 'in_progress' | 'occasion' | 'geofence' | 'reminder' {
-  if (reminder.featureType) return reminder.featureType;
-  const id = (reminder.id || '').toLowerCase();
-  const title = (reminder.title || '').toLowerCase();
-  if (id.startsWith('med_') || title.includes('💊') || title.includes('زمان مصرف دارو')) {
-    return 'medication';
-  }
-  if (id.startsWith('inprog_') || title.includes('⏳') || title.includes('کار در جریان')) {
-    return 'in_progress';
-  }
-  if (id.startsWith('occ_') || title.includes('🎂') || title.includes('مناسبت') || title.includes('سالگرد') || title.includes('تولد')) {
-    return 'occasion';
-  }
-  if (reminder.geofence?.enabled || id.startsWith('geo_') || title.includes('📍') || title.includes('حصار مکانی')) {
-    return 'geofence';
-  }
-  return 'reminder';
-}
-
-function getAlarmCardPalette(reminder: Reminder, _theme: AppTheme = 'dark-gold'): CardThemePalette {
-  const fType = resolveFeatureType(reminder);
-  switch (fType) {
-    case 'medication':
-      // یادآور دارو — پس‌زمینه هایلایت سبز کم‌رنگ (Soft Light Green Highlight)
+function getAlarmCardPalette(theme: AppTheme = 'dark-gold'): CardThemePalette {
+  switch (theme) {
+    case 'dark-slate':
       return {
-        cardBg: '!bg-[#E6F7EE]',
-        cardBorder: '!border-[#10B981]',
-        titleText: '!text-[#064E3B]',
-        bodyText: '!text-[#065F46]',
-        mutedText: '!text-[#047857]',
-        accentText: '!text-[#059669]',
-        accentBg: '!bg-[#D1FAE5] !border-[#10B981]/50',
-        doneBtn: '!bg-[#059669] hover:!bg-[#047857] !text-white',
-        secondaryBtn: '!bg-[#D1FAE5] hover:!bg-[#A7F3D0] !text-[#064E3B] !border-[#6EE7B7]',
-        editBtn: '!bg-[#ECFDF5] hover:!bg-[#D1FAE5] !text-[#047857] !border-[#10B981]',
-        progressFill: '!bg-[#10B981]',
-        featureLabelFa: '💊 یادآور تخصصی دارو',
-        featureLabelEn: '💊 Medication Reminder',
+        cardBg: 'bg-[#11223D]',
+        cardBorder: 'border-[#FF8C00]/80',
+        titleText: 'text-[#EFF6FF]',
+        bodyText: 'text-[#BAE6FD]',
+        mutedText: 'text-[#7DD3FC]/80',
+        accentText: 'text-[#FF8C00]',
+        accentBg: 'bg-[#FF8C00]/15 border-[#FF8C00]/45',
+        doneBtn: 'btn-brand-submit bg-[#FF8C00] hover:bg-[#FF9E1F] text-white',
+        secondaryBtn: 'bg-[#193154] hover:bg-[#22406B] text-[#EFF6FF] border-[#274875]',
+        editBtn: 'bg-[#0E1F38] hover:bg-[#162D4F] text-[#38BDF8] border-[#0EA5E9]/60',
+        progressFill: 'bg-[#FF8C00]',
       };
-    case 'in_progress':
-      // کار در جریان — پس‌زمینه هایلایت کهربایی ملایم (Soft Warm Amber Highlight)
+    case 'system': {
+      const isLight =
+        typeof document !== 'undefined' && !document.documentElement.classList.contains('dark');
+      if (isLight) {
+        return {
+          cardBg: 'bg-white',
+          cardBorder: 'border-[#FF8C00]/75',
+          titleText: 'text-[#0F172A]',
+          bodyText: 'text-[#334155]',
+          mutedText: 'text-[#64748B]',
+          accentText: 'text-[#FF8C00]',
+          accentBg: 'bg-[#FF8C00]/10 border-[#FF8C00]/35',
+          doneBtn: 'btn-brand-submit bg-[#FF8C00] hover:bg-[#FF9E1F] text-white',
+          secondaryBtn: 'bg-[#F1F5F9] hover:bg-[#E2E8F0] text-[#0F172A] border-[#CBD5E1]',
+          editBtn: 'bg-[#F0FDFA] hover:bg-[#CCFBF1] text-[#0F766E] border-[#0D9488]/50',
+          progressFill: 'bg-[#FF8C00]',
+        };
+      }
       return {
-        cardBg: '!bg-[#FEF3C7]',
-        cardBorder: '!border-[#F59E0B]',
-        titleText: '!text-[#78350F]',
-        bodyText: '!text-[#92400E]',
-        mutedText: '!text-[#B45309]',
-        accentText: '!text-[#D97706]',
-        accentBg: '!bg-[#FDE68A] !border-[#F59E0B]/50',
-        doneBtn: '!bg-[#D97706] hover:!bg-[#B45309] !text-white',
-        secondaryBtn: '!bg-[#FDE68A] hover:!bg-[#FCD34D] !text-[#78350F] !border-[#FBBF24]',
-        editBtn: '!bg-[#FFFBEB] hover:!bg-[#FEF3C7] !text-[#B45309] !border-[#F59E0B]',
-        progressFill: '!bg-[#F59E0B]',
-        featureLabelFa: '⏳ یادآور کار در جریان',
-        featureLabelEn: '⏳ In-Progress Follow-up',
+        cardBg: 'bg-[#1C2126]',
+        cardBorder: 'border-[#FF8C00]/80',
+        titleText: 'text-[#F1F5F9]',
+        bodyText: 'text-[#CBD5E1]',
+        mutedText: 'text-[#94A3B8]',
+        accentText: 'text-[#FF8C00]',
+        accentBg: 'bg-[#FF8C00]/15 border-[#FF8C00]/45',
+        doneBtn: 'btn-brand-submit bg-[#FF8C00] hover:bg-[#FF9E1F] text-white',
+        secondaryBtn: 'bg-[#252C33] hover:bg-[#2F3841] text-[#F1F5F9] border-[#333D47]',
+        editBtn: 'bg-[#191E23] hover:bg-[#232A31] text-[#2DD4BF] border-[#14B8A6]/60',
+        progressFill: 'bg-[#FF8C00]',
       };
-    case 'occasion':
-      // مناسبت‌ها — پس‌زمینه هایلایت صورتی-رز ملایم (Soft Rose Highlight)
+    }
+    case 'light-clean':
       return {
-        cardBg: '!bg-[#FCE7F3]',
-        cardBorder: '!border-[#EC4899]',
-        titleText: '!text-[#831843]',
-        bodyText: '!text-[#9D174D]',
-        mutedText: '!text-[#BE185D]',
-        accentText: '!text-[#DB2777]',
-        accentBg: '!bg-[#FBCFE8] !border-[#EC4899]/50',
-        doneBtn: '!bg-[#DB2777] hover:!bg-[#BE185D] !text-white',
-        secondaryBtn: '!bg-[#FBCFE8] hover:!bg-[#F9A8D4] !text-[#831843] !border-[#F472B6]',
-        editBtn: '!bg-[#FDF2F8] hover:!bg-[#FCE7F3] !text-[#BE185D] !border-[#EC4899]',
-        progressFill: '!bg-[#EC4899]',
-        featureLabelFa: '🎂 یادآور مناسبت',
-        featureLabelEn: '🎂 Occasion Reminder',
+        cardBg: 'bg-white',
+        cardBorder: 'border-[#FF8C00]/75',
+        titleText: 'text-stone-900',
+        bodyText: 'text-stone-700',
+        mutedText: 'text-stone-500',
+        accentText: 'text-[#FF8C00]',
+        accentBg: 'bg-[#FF8C00]/10 border-[#FF8C00]/35',
+        doneBtn: 'btn-brand-submit bg-[#FF8C00] hover:bg-[#FF9E1F] text-white',
+        secondaryBtn: 'bg-stone-100 hover:bg-stone-200 text-stone-900 border-stone-300',
+        editBtn: 'bg-teal-50 hover:bg-teal-100 text-teal-800 border-teal-600/50',
+        progressFill: 'bg-[#FF8C00]',
       };
-    case 'geofence':
-      // حصار مکانی و مکان‌ها — پس‌زمینه هایلایت فیروزه‌ای-آبی ملایم (Soft Sky-Cyan Highlight)
+    case 'jade_warm_light':
       return {
-        cardBg: '!bg-[#E0F2FE]',
-        cardBorder: '!border-[#06B6D4]',
-        titleText: '!text-[#0C4A6E]',
-        bodyText: '!text-[#155E75]',
-        mutedText: '!text-[#0369A1]',
-        accentText: '!text-[#0284C7]',
-        accentBg: '!bg-[#BAE6FD] !border-[#06B6D4]/50',
-        doneBtn: '!bg-[#0284C7] hover:!bg-[#0369A1] !text-white',
-        secondaryBtn: '!bg-[#BAE6FD] hover:!bg-[#7DD3FC] !text-[#0C4A6E] !border-[#38BDF8]',
-        editBtn: '!bg-[#F0F9FF] hover:!bg-[#E0F2FE] !text-[#0369A1] !border-[#06B6D4]',
-        progressFill: '!bg-[#06B6D4]',
-        featureLabelFa: '📍 اعلان حصار مکانی',
-        featureLabelEn: '📍 Geofence Alert',
+        cardBg: 'bg-[#F7F6F0]',
+        cardBorder: 'border-[#FF8C00]/75',
+        titleText: 'text-[#202A29]',
+        bodyText: 'text-[#3D4B49]',
+        mutedText: 'text-[#5C6B68]',
+        accentText: 'text-[#FF8C00]',
+        accentBg: 'bg-[#FF8C00]/10 border-[#FF8C00]/35',
+        doneBtn: 'btn-brand-submit bg-[#FF8C00] hover:bg-[#FF9E1F] text-white',
+        secondaryBtn: 'bg-[#EFEFE8] hover:bg-[#E2E5DC] text-[#202A29] border-[#DDE1DA]',
+        editBtn: 'bg-[#DDEFEA] hover:bg-[#CBE5DF] text-[#168779] border-[#168779]/50',
+        progressFill: 'bg-[#FF8C00]',
       };
-    case 'reminder':
+    case 'midnight_blue_silver':
+      return {
+        cardBg: 'bg-[#202B3A]',
+        cardBorder: 'border-[#FF8C00]/80',
+        titleText: 'text-[#F0F3F7]',
+        bodyText: 'text-[#C5D9EE]',
+        mutedText: 'text-[#9CBCE0]/80',
+        accentText: 'text-[#FF8C00]',
+        accentBg: 'bg-[#293648] border-[#FF8C00]/45',
+        doneBtn: 'btn-brand-submit bg-[#FF8C00] hover:bg-[#FF9E1F] text-white',
+        secondaryBtn: 'bg-[#172130] hover:bg-[#293648] text-[#F0F3F7] border-[#39475A]',
+        editBtn: 'bg-[#293648] hover:bg-[#34445B] text-[#C5D9EE] border-[#9CBCE0]/60',
+        progressFill: 'bg-[#FF8C00]',
+      };
+    case 'sketch-contrast':
+      return {
+        cardBg: 'bg-zinc-950',
+        cardBorder: 'border-[#FF8C00] border-dashed',
+        titleText: 'text-white',
+        bodyText: 'text-zinc-300',
+        mutedText: 'text-zinc-400',
+        accentText: 'text-[#FF8C00]',
+        accentBg: 'bg-zinc-900 border-[#FF8C00]/50 border-dashed',
+        doneBtn: 'btn-brand-submit bg-[#FF8C00] hover:bg-[#FF9E1F] text-white border border-[#FF8C00]',
+        secondaryBtn: 'bg-zinc-900 hover:bg-zinc-800 text-teal-300 border-dashed border-teal-500/60',
+        editBtn: 'bg-zinc-900 hover:bg-zinc-800 text-white border-dashed border-white/70',
+        progressFill: 'bg-[#FF8C00]',
+      };
+    case 'dark-gold':
     default:
-      // یادآورهای زمانی — پس‌زمینه هایلایت یاسی-نیلی ملایم (Soft Indigo Highlight)
       return {
-        cardBg: '!bg-[#EEF2FF]',
-        cardBorder: '!border-[#6366F1]',
-        titleText: '!text-[#1E1B4B]',
-        bodyText: '!text-[#312E81]',
-        mutedText: '!text-[#4338CA]',
-        accentText: '!text-[#4F46E5]',
-        accentBg: '!bg-[#E0E7FF] !border-[#6366F1]/50',
-        doneBtn: '!bg-[#4F46E5] hover:!bg-[#4338CA] !text-white',
-        secondaryBtn: '!bg-[#E0E7FF] hover:!bg-[#C7D2FE] !text-[#1E1B4B] !border-[#A5B4FC]',
-        editBtn: '!bg-[#F5F7FF] hover:!bg-[#EEF2FF] !text-[#4338CA] !border-[#6366F1]',
-        progressFill: '!bg-[#6366F1]',
-        featureLabelFa: '⏰ یادآور هوشمند یاد',
-        featureLabelEn: '⏰ YAAD Reminder',
+        cardBg: 'bg-[#101222]',
+        cardBorder: 'border-[#FF8C00]/80',
+        titleText: 'text-[#F3F4F8]',
+        bodyText: 'text-[#C7CBF0]',
+        mutedText: 'text-[#8A90BD]',
+        accentText: 'text-[#FF8C00]',
+        accentBg: 'bg-[#FF8C00]/15 border-[#FF8C00]/45',
+        doneBtn: 'btn-brand-submit bg-[#FF8C00] hover:bg-[#FF9E1F] text-white',
+        secondaryBtn: 'bg-[#191C33] hover:bg-[#222646] text-[#F3F4F8] border-[#282C4A]',
+        editBtn: 'bg-[#191C33] hover:bg-[#222646] text-[#818CF8] border-[#6366F1]/65',
+        progressFill: 'bg-[#FF8C00]',
       };
   }
 }
@@ -245,7 +254,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
 
   if (!reminder) return null;
 
-  const palette = getAlarmCardPalette(reminder, settings?.theme);
+  const palette = getAlarmCardPalette(settings?.theme);
 
   const getCategoryIcon = () => {
     switch (reminder.category) {
@@ -315,7 +324,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
               >
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-xl opacity-20 bg-current" />
                 <img
-                  src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`}
+                  src={appIcon}
                   alt="YAAD"
                   className="relative z-10 w-full h-full object-cover rounded-[9px]"
                   draggable={false}

@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import zlib from 'zlib';
 
-// Decode a non-interlaced PNG (RGBA, Indexed Palette with PLTE/tRNS, RGB, or Grayscale) into raw { width, height, data: Uint8Array }
+// Decode a non-interlaced 8-bit RGBA PNG into raw { width, height, data: Uint8Array }
 function decodeRgbaPng(buffer) {
   const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   if (!buffer.subarray(0, 8).equals(signature)) {
@@ -14,8 +14,6 @@ function decodeRgbaPng(buffer) {
   let height = 0;
   let bitDepth = 0;
   let colorType = 0;
-  let plte = null;
-  let trns = null;
   const idatChunks = [];
 
   while (offset < buffer.length) {
@@ -28,10 +26,6 @@ function decodeRgbaPng(buffer) {
       height = data.readUInt32BE(4);
       bitDepth = data[8];
       colorType = data[9];
-    } else if (type === 'PLTE') {
-      plte = data;
-    } else if (type === 'tRNS') {
-      trns = data;
     } else if (type === 'IDAT') {
       idatChunks.push(data);
     } else if (type === 'IEND') {
@@ -40,22 +34,14 @@ function decodeRgbaPng(buffer) {
     offset += 12 + length;
   }
 
-  if (bitDepth !== 8 && !(colorType === 3 && (bitDepth === 1 || bitDepth === 2 || bitDepth === 4 || bitDepth === 8))) {
-    throw new Error(`Unsupported PNG bitDepth=${bitDepth}, colorType=${colorType}`);
+  if (bitDepth !== 8 || colorType !== 6) {
+    throw new Error(`Expected 8-bit RGBA PNG (got bitDepth=${bitDepth}, colorType=${colorType})`);
   }
-
-  const channelsMap = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
-  const channels = channelsMap[colorType];
-  if (!channels) {
-    throw new Error(`Unsupported PNG colorType=${colorType}`);
-  }
-
-  const bpp = Math.max(1, Math.ceil((channels * bitDepth) / 8));
-  const rowByteLen = Math.ceil((width * channels * bitDepth) / 8);
 
   const compressed = Buffer.concat(idatChunks);
   const raw = zlib.inflateSync(compressed);
-  const unfiltered = new Uint8Array(rowByteLen * height);
+  const stride = width * 4;
+  const pixels = new Uint8Array(width * height * 4);
 
   function paethPredictor(a, b, c) {
     const p = a + b - c;
@@ -68,15 +54,15 @@ function decodeRgbaPng(buffer) {
   }
 
   for (let y = 0; y < height; y++) {
-    const filterType = raw[y * (rowByteLen + 1)];
-    const rowStart = y * (rowByteLen + 1) + 1;
-    const outRowStart = y * rowByteLen;
+    const filterType = raw[y * (stride + 1)];
+    const rowStart = y * (stride + 1) + 1;
+    const outRowStart = y * stride;
 
-    for (let x = 0; x < rowByteLen; x++) {
+    for (let x = 0; x < stride; x++) {
       const rawByte = raw[rowStart + x];
-      const a = x >= bpp ? unfiltered[outRowStart + x - bpp] : 0;
-      const b = y > 0 ? unfiltered[outRowStart - rowByteLen + x] : 0;
-      const c = x >= bpp && y > 0 ? unfiltered[outRowStart - rowByteLen + x - bpp] : 0;
+      const a = x >= 4 ? pixels[outRowStart + x - 4] : 0;
+      const b = y > 0 ? pixels[outRowStart - stride + x] : 0;
+      const c = x >= 4 && y > 0 ? pixels[outRowStart - stride + x - 4] : 0;
 
       let val = rawByte;
       if (filterType === 1) val = (rawByte + a) & 0xff;
@@ -84,71 +70,7 @@ function decodeRgbaPng(buffer) {
       else if (filterType === 3) val = (rawByte + Math.floor((a + b) / 2)) & 0xff;
       else if (filterType === 4) val = (rawByte + paethPredictor(a, b, c)) & 0xff;
 
-      unfiltered[outRowStart + x] = val;
-    }
-  }
-
-  const pixels = new Uint8Array(width * height * 4);
-
-  if (colorType === 6) {
-    pixels.set(unfiltered);
-  } else if (colorType === 3) {
-    if (!plte) {
-      throw new Error('Indexed PNG (colorType=3) is missing PLTE chunk');
-    }
-    const mask = (1 << bitDepth) - 1;
-    const pixelsPerByte = 8 / bitDepth;
-    for (let y = 0; y < height; y++) {
-      const rowOffset = y * rowByteLen;
-      for (let x = 0; x < width; x++) {
-        let paletteIdx = 0;
-        if (bitDepth === 8) {
-          paletteIdx = unfiltered[rowOffset + x];
-        } else {
-          const byteIdx = rowOffset + Math.floor(x / pixelsPerByte);
-          const shift = (pixelsPerByte - 1 - (x % pixelsPerByte)) * bitDepth;
-          paletteIdx = (unfiltered[byteIdx] >> shift) & mask;
-        }
-        const dstIdx = (y * width + x) * 4;
-        pixels[dstIdx] = plte[paletteIdx * 3] ?? 0;
-        pixels[dstIdx + 1] = plte[paletteIdx * 3 + 1] ?? 0;
-        pixels[dstIdx + 2] = plte[paletteIdx * 3 + 2] ?? 0;
-        pixels[dstIdx + 3] = trns && paletteIdx < trns.length ? trns[paletteIdx] : 255;
-      }
-    }
-  } else if (colorType === 2) {
-    const trnsR = trns && trns.length >= 6 ? trns.readUInt16BE(0) & 0xff : -1;
-    const trnsG = trns && trns.length >= 6 ? trns.readUInt16BE(2) & 0xff : -1;
-    const trnsB = trns && trns.length >= 6 ? trns.readUInt16BE(4) & 0xff : -1;
-    for (let i = 0; i < width * height; i++) {
-      const r = unfiltered[i * 3];
-      const g = unfiltered[i * 3 + 1];
-      const b = unfiltered[i * 3 + 2];
-      const dstIdx = i * 4;
-      pixels[dstIdx] = r;
-      pixels[dstIdx + 1] = g;
-      pixels[dstIdx + 2] = b;
-      pixels[dstIdx + 3] = r === trnsR && g === trnsG && b === trnsB ? 0 : 255;
-    }
-  } else if (colorType === 4) {
-    for (let i = 0; i < width * height; i++) {
-      const gray = unfiltered[i * 2];
-      const alpha = unfiltered[i * 2 + 1];
-      const dstIdx = i * 4;
-      pixels[dstIdx] = gray;
-      pixels[dstIdx + 1] = gray;
-      pixels[dstIdx + 2] = gray;
-      pixels[dstIdx + 3] = alpha;
-    }
-  } else if (colorType === 0) {
-    const trnsGray = trns && trns.length >= 2 ? trns.readUInt16BE(0) & 0xff : -1;
-    for (let i = 0; i < width * height; i++) {
-      const gray = unfiltered[i];
-      const dstIdx = i * 4;
-      pixels[dstIdx] = gray;
-      pixels[dstIdx + 1] = gray;
-      pixels[dstIdx + 2] = gray;
-      pixels[dstIdx + 3] = gray === trnsGray ? 0 : 255;
+      pixels[outRowStart + x] = val;
     }
   }
 
@@ -277,12 +199,23 @@ const srcTransparentPath = path.join(rootDir, 'public', 'logo-transparent.png');
 const srcBuffer = fs.readFileSync(srcTransparentPath);
 const srcImage = decodeRgbaPng(srcBuffer);
 
-// Ensure clean transparent pixels while preserving the source logo's exact brand colors (#F7941E)
+// Recolor all non-transparent icon pixels uniformly to brand color #FF8C00 (R: 255, G: 140, B: 0)
 for (let y = 0; y < srcImage.height; y++) {
+  const targetR = 255;
+  const targetG = 140;
+  const targetB = 0;
+
   for (let x = 0; x < srcImage.width; x++) {
     const idx = (y * srcImage.width + x) * 4;
     const a = srcImage.data[idx + 3];
-    if (a === 0) {
+    if (a > 0) {
+      srcImage.data[idx] = targetR;
+      srcImage.data[idx + 1] = targetG;
+      srcImage.data[idx + 2] = targetB;
+      if (a > 24 && a < 255) {
+        srcImage.data[idx + 3] = Math.min(255, Math.round(Math.pow(a / 255, 0.72) * 255));
+      }
+    } else {
       srcImage.data[idx] = 0;
       srcImage.data[idx + 1] = 0;
       srcImage.data[idx + 2] = 0;

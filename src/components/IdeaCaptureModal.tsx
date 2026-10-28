@@ -5,13 +5,17 @@ import {
   Mic, 
   MicOff, 
   Video, 
+  VideoOff, 
   PenTool, 
   Trash2, 
+  Save, 
   X, 
+  Play, 
   Square, 
   Check, 
   Sparkles, 
   FileText,
+  Clock,
   RotateCcw,
   Smartphone,
   AlertCircle,
@@ -21,10 +25,12 @@ import {
   Heart,
   Tag
 } from 'lucide-react';
+import { formatJalaliFull } from '../utils/jalali';
 import { syncToGoogleTasks } from '../utils/googleSync';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { AppLanguage } from '../utils/i18n';
 import {
+  requestMicrophonePermission,
   openAndroidSettings,
   ensureNativeAndroidCameraPermission,
   markPermissionGranted,
@@ -58,16 +64,14 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   const [validationError, setValidationError] = useState<string | null>(null);
   const [showValidationModal, setShowValidationModal] = useState(false);
 
-  // Virtual keyboard tracking: keeps modal & active input pinned directly above virtual keyboard
+  // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
-  const [viewportOffsetTop, setViewportOffsetTop] = useState<number>(0);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.visualViewport) return;
     const handleViewportChange = () => {
       if (window.visualViewport) {
         setViewportHeight(window.visualViewport.height);
-        setViewportOffsetTop(window.visualViewport.offsetTop || 0);
       }
     };
     window.visualViewport.addEventListener('resize', handleViewportChange);
@@ -1232,11 +1236,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   return (
     <div 
       className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in overflow-hidden"
-      style={{
-        height: viewportHeight ? `${viewportHeight}px` : '100dvh',
-        top: viewportOffsetTop ? `${viewportOffsetTop}px` : 0,
-        bottom: 'auto',
-      }}
+      style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
     >
       <div 
         id="idea-capture-modal-panel"
@@ -1245,7 +1245,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         dir={isEn ? 'ltr' : 'rtl'}
       >
         {/* Header */}
-        <div className="shrink-0 px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/95">
+        <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
           <div className="flex items-center gap-2.5 sm:gap-3">
             <div className="p-2 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
               <Lightbulb className="w-5 h-5" />
@@ -1267,7 +1267,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         </div>
 
         {/* Content body */}
-        <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-2.5 py-4 sm:p-5 space-y-4">
+        <div className="flex-1 overflow-y-auto px-2.5 py-4 sm:p-5 space-y-4">
           {/* Required Field Validation Alert Banner */}
           {validationError && (
             <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-2">
@@ -1280,9 +1280,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-indigo-950/55 via-stone-900/95 to-stone-950 border-2 border-indigo-500/55 shadow-lg shadow-indigo-500/10 space-y-2.5">
             <div className="flex items-center justify-between flex-wrap gap-1.5">
               <label className="text-sm sm:text-base font-black text-white tracking-tight flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#F7941E] shadow-[0_0_8px_rgba(247,148,30,0.85)] shrink-0" />
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] shrink-0" />
                 <span>{isEn ? 'Idea Title' : 'عنوان ایده یا فکر'}</span>
-                <span className="text-[#F7941E] font-black text-base">*</span>
+                <span className="text-amber-400 font-black text-base">*</span>
               </label>
               {isTitleVoiceTyping && (
                 <span className="text-[11px] font-bold text-indigo-300">
@@ -1296,7 +1296,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 placeholder={isEn ? 'e.g. Marketing campaign, Redesign idea...' : 'مثلاً: ایده راه‌اندازی کمپین بازاریابی، طراحی مجدد...'}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className={`w-full ${isEn ? 'pr-13 pl-4' : 'pl-13 pr-4'} py-3.5 rounded-2xl bg-stone-950 border-2 border-indigo-400/70 focus:border-[#F7941E] ring-2 ring-indigo-500/15 focus:ring-[#F7941E]/25 text-white placeholder-stone-400 text-base sm:text-lg font-extrabold outline-none transition-all shadow-inner`}
+                className={`w-full ${isEn ? 'pr-13 pl-4' : 'pl-13 pr-4'} py-3.5 rounded-2xl bg-stone-950 border-2 border-indigo-400/70 focus:border-amber-400 ring-2 ring-indigo-500/15 focus:ring-amber-400/25 text-white placeholder-stone-400 text-base sm:text-lg font-extrabold outline-none transition-all shadow-inner`}
               />
               <button
                 type="button"
@@ -1912,10 +1912,10 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             id="save-idea-submit-btn"
             type="button"
             onClick={handleSave}
-            className="btn-brand-submit min-h-[48px] flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black transition-all active:scale-95 cursor-pointer"
+            className="btn-brand-submit min-h-[48px] flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black shadow-lg shadow-[#FF8C00]/25 transition-all active:scale-95 cursor-pointer bg-[#FF8C00] hover:bg-[#FF9E1F] text-white"
           >
-            <Check className="w-4 h-4 stroke-[3]" />
-            <span className="font-black">
+            <Check className="w-4 h-4 stroke-[3] text-white" />
+            <span className="text-white font-black">
               {editingIdea 
                 ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
                 : (isEn ? 'Save Idea' : 'ثبت ایده')}

@@ -11,15 +11,21 @@ import {
   Compass, 
   RefreshCw, 
   AlertTriangle,
+  FileText,
+  Clock,
+  Share2,
   Radio,
   Volume2,
+  VolumeX,
   Sliders,
+  Bell,
   ChevronDown
 } from 'lucide-react';
 import { SavedLocation, GeofenceTriggerType, LocationCheckpointConfig } from '../types';
 import { toPersianDigits } from '../utils/jalali';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { ValidationAlertModal } from './ValidationAlertModal';
+import { LocationReminderModal } from './LocationReminderModal';
 import { openAndroidSettings } from '../utils/nativePermissions';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
@@ -30,6 +36,7 @@ interface LocationCaptureModalProps {
   onSave: (location: Omit<SavedLocation, 'id' | 'createdAt'>, createReminder?: boolean) => void;
   onUpdateLocation?: (id: string, location: Partial<SavedLocation>) => void;
   editingLocation?: SavedLocation | null;
+  googleMapsApiKey?: string;
   language?: AppLanguage;
 }
 
@@ -39,6 +46,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   onSave,
   onUpdateLocation,
   editingLocation,
+  googleMapsApiKey,
   language = 'fa',
 }) => {
   const isEn = language === 'en';
@@ -66,16 +74,14 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [geofencePlayAudio, setGeofencePlayAudio] = useState<boolean>(true);
   const [showCollapsibleMediaAndGeofence, setShowCollapsibleMediaAndGeofence] = useState(false);
 
-  // Virtual keyboard tracking: keeps modal & active input pinned directly above virtual keyboard
+  // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
-  const [viewportOffsetTop, setViewportOffsetTop] = useState<number>(0);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.visualViewport) return;
     const handleViewportChange = () => {
       if (window.visualViewport) {
         setViewportHeight(window.visualViewport.height);
-        setViewportOffsetTop(window.visualViewport.offsetTop || 0);
       }
     };
     window.visualViewport.addEventListener('resize', handleViewportChange);
@@ -322,11 +328,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
     <>
       <div 
         className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
-        style={{
-          height: viewportHeight ? `${viewportHeight}px` : '100dvh',
-          top: viewportOffsetTop ? `${viewportOffsetTop}px` : 0,
-          bottom: 'auto',
-        }}
+        style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
         dir={isEn ? 'ltr' : 'rtl'}
       >
         <div 
@@ -375,9 +377,9 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-emerald-500/15 via-stone-900/95 to-stone-950 border-2 border-emerald-500/60 shadow-lg shadow-emerald-500/10 space-y-2.5">
               <div className="flex items-center justify-between gap-2">
                 <label className="text-sm sm:text-base font-black text-emerald-300 flex items-center gap-2 tracking-tight">
-                  <span className="w-2.5 h-2.5 rounded-full bg-[#F7941E] shadow-[0_0_8px_rgba(247,148,30,0.85)] shrink-0" />
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400" />
                   <span>{isEn ? 'Location Title & Name' : 'عنوان و نام مکان'}</span>
-                  <span className="text-[#F7941E] font-black text-base">*</span>
+                  <span className="text-amber-400 font-black text-base">*</span>
                 </label>
               </div>
               <input
@@ -385,7 +387,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={isEn ? 'e.g. Parking spot, Doctor office, New warehouse...' : 'مثلاً: محل پارک خودرو، انبار جدید، مطب دکتر...'}
-                className="w-full px-4 py-3.5 rounded-xl bg-stone-950 border-2 border-emerald-400/70 focus:border-[#F7941E] text-white placeholder-stone-400 text-sm sm:text-base font-bold focus:outline-none focus:ring-4 focus:ring-[#F7941E]/25 shadow-inner transition-all"
+                className="w-full px-4 py-3.5 rounded-xl bg-stone-950 border-2 border-emerald-400/70 focus:border-emerald-400 text-white placeholder-stone-400 text-sm sm:text-base font-bold focus:outline-none focus:ring-4 focus:ring-emerald-500/20 shadow-inner transition-all"
               />
             </div>
 
@@ -899,10 +901,10 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
-              className="btn-brand-submit flex-1 sm:flex-initial min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer active:scale-95"
+              className="btn-brand-submit flex-1 sm:flex-initial min-h-[48px] px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all duration-200 cursor-pointer active:scale-95 bg-[#FF8C00] hover:bg-[#FF9E1F] text-white shadow-lg shadow-[#FF8C00]/25"
             >
-              <Check className="w-4 h-4 stroke-[3]" />
-              <span className="font-black">
+              <Check className="w-4 h-4 stroke-[3] text-white" />
+              <span className="text-white font-black">
                 {editingLocation 
                   ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
                   : (isEn ? 'Save Place' : 'ثبت مکان')}

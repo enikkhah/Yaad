@@ -84,14 +84,12 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
 
   // Keyboard viewport
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
-  const [viewportOffsetTop, setViewportOffsetTop] = useState<number>(0);
 
   useEffect(() => {
     if (typeof window === 'undefined' || !window.visualViewport) return;
     const handleViewportChange = () => {
       if (window.visualViewport) {
         setViewportHeight(window.visualViewport.height);
-        setViewportOffsetTop(window.visualViewport.offsetTop || 0);
       }
     };
     window.visualViewport.addEventListener('resize', handleViewportChange);
@@ -270,7 +268,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
         return <Briefcase className={`${cls} text-sky-400`} />;
       case 'CalendarHeart':
       default:
-        return <CalendarHeart className={`${cls} text-[#F7941E]`} />;
+        return <CalendarHeart className={`${cls} text-amber-400`} />;
     }
   };
 
@@ -294,11 +292,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
     <>
       <div 
         className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
-        style={{
-          height: viewportHeight ? `${viewportHeight}px` : '100dvh',
-          top: viewportOffsetTop ? `${viewportOffsetTop}px` : 0,
-          bottom: 'auto',
-        }}
+        style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
         dir={isEn ? 'ltr' : 'rtl'}
       >
         <div 
@@ -333,7 +327,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
           </div>
 
           {/* Body */}
-          <div className="p-4 sm:p-5 space-y-4 sm:space-y-5 overflow-y-auto overscroll-contain flex-1 min-h-0 text-right rtl:text-right ltr:text-left">
+          <div className="p-4 sm:p-5 space-y-4 sm:space-y-5 overflow-y-auto flex-1 text-right rtl:text-right ltr:text-left">
             {/* 1. Occasion Types - MOVED ABOVE TITLE per user request */}
             <div className="p-3 rounded-2xl bg-stone-950/75 border border-stone-800/90 space-y-2">
               <div className="flex items-center justify-between gap-2">
@@ -374,16 +368,16 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
             {/* 2. Primary Title Field — Distinct & Adapted to Selected Occasion Type */}
             <div className={`p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br ${activeMeta.headerBgClass} border-2 shadow-lg space-y-2.5 transition-all duration-300`}>
               <label className="text-sm sm:text-base font-black text-white tracking-tight flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-[#F7941E] shadow-[0_0_8px_rgba(247,148,30,0.85)] shrink-0" />
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shadow-[0_0_8px_rgba(251,191,36,0.8)] shrink-0" />
                 <span>{isEn ? 'Occasion Title' : 'عنوان مناسبت'}</span>
-                <span className="text-[#F7941E] font-black text-base">*</span>
+                <span className="text-amber-400 font-black text-base">*</span>
               </label>
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder={isEn ? activeMeta.titlePlaceholderEn : activeMeta.titlePlaceholderFa}
-                className={`w-full bg-stone-950 border-2 ${activeMeta.borderCol} focus:border-[#F7941E] ring-2 ring-black/20 focus:ring-[#F7941E]/25 rounded-2xl px-4 py-3.5 text-base sm:text-lg font-extrabold text-white placeholder-stone-400 focus:outline-none transition-all shadow-inner`}
+                className={`w-full bg-stone-950 border-2 ${activeMeta.borderCol} focus:border-amber-400 ring-2 ring-black/20 focus:ring-amber-400/25 rounded-2xl px-4 py-3.5 text-base sm:text-lg font-extrabold text-white placeholder-stone-400 focus:outline-none transition-all shadow-inner`}
               />
             </div>
 
@@ -398,7 +392,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                 value={personName}
                 onChange={(e) => handlePersonNameChange(e.target.value)}
                 placeholder={isEn ? activeMeta.personPlaceholderEn : activeMeta.personPlaceholderFa}
-                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-[#F7941E] transition-colors"
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-amber-400 transition-colors"
               />
             </div>
 
@@ -673,7 +667,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                         }
                       }}
                       placeholder={isEn ? 'Type year (e.g. 1990)' : 'تایپ سال مبدأ (مثلاً ۱۳۶۵)...'}
-                      className="flex-1 bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-[#F7941E] font-mono"
+                      className="flex-1 bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-amber-400 font-mono"
                     />
                     <button
                       type="button"
@@ -707,7 +701,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                         setDateActiveTab('year');
                       }
                     }}
-                    className="w-4 h-4 rounded accent-[#F7941E] cursor-pointer"
+                    className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
                   />
                   <span className="text-stone-300 font-bold">
                     {isEn ? activeMeta.yearToggleLabelEn : activeMeta.yearToggleLabelFa}
@@ -801,7 +795,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                 onChange={(e) => setCustomNote(e.target.value)}
                 placeholder={isEn ? activeMeta.notePlaceholderEn : activeMeta.notePlaceholderFa}
                 rows={2}
-                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-[#F7941E] transition-colors resize-none"
+                className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-amber-400 transition-colors resize-none"
               />
             </div>
 
@@ -834,7 +828,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
                   type="checkbox"
                   checked={alsoCreateReminder}
                   onChange={(e) => setAlsoCreateReminder(e.target.checked)}
-                  className="w-4 h-4 rounded accent-[#F7941E] cursor-pointer"
+                  className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
                 />
                 <div className="flex-1">
                   <span className="text-xs font-bold text-white block">
@@ -863,10 +857,10 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
             <button
               type="button"
               onClick={handleSave}
-              className="btn-brand-submit min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95"
+              className="btn-brand-submit min-h-[48px] flex-1 sm:flex-initial px-6 py-2.5 rounded-xl text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer active:scale-95 shadow-lg bg-[#FF8C00] hover:bg-[#FF9E1F] text-white shadow-[#FF8C00]/25"
             >
-              <Check className="w-4 h-4 stroke-[3]" />
-              <span className="font-black">
+              <Check className="w-4 h-4 stroke-[3] text-white" />
+              <span className="font-black text-white">
                 {editingOccasion 
                   ? (isEn ? 'Save Changes' : 'ذخیره تغییرات') 
                   : (isEn ? `Save ${activeMeta.labelEn}` : `ثبت ${activeMeta.labelFa}`)}

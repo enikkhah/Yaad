@@ -15,7 +15,7 @@ const config = {
   },
   plugins: {
     LocalNotifications: {
-      iconColor: '#8b5cf6',
+      iconColor: '#FF8C00',
       sound: 'beep.wav',
     },
     GoogleAuth: {
