@@ -422,9 +422,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Header */}
         <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden border border-[#F7941E]/35 flex-shrink-0 bg-stone-950 shadow-sm p-0.5">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden border border-[#FF8C00]/35 flex-shrink-0 bg-stone-950 shadow-sm p-0.5">
               <img
-                src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`}
+                src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=ff8c00`}
                 alt="YAAD"
                 className="w-full h-full object-cover rounded-[10px]"
                 draggable={false}
@@ -1013,7 +1013,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div
                     onClick={() => openAndroidSettings('all_files')}
                     dir={isFa ? 'rtl' : 'ltr'}
-                    className="p-3 rounded-xl bg-[#F7941E]/15 border border-[#F7941E]/40 text-[#F7941E] text-xs flex items-start justify-between gap-2.5 cursor-pointer leading-relaxed"
+                    className="p-3 rounded-xl bg-[#FF8C00]/15 border border-[#FF8C00]/40 text-[#FF8C00] text-xs flex items-start justify-between gap-2.5 cursor-pointer leading-relaxed"
                   >
                     <div className="space-y-1.5">
                       <p className="font-bold text-stone-100">
@@ -1021,7 +1021,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           ? 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:'
                           : 'To create the backup folder, please grant the required permission from the following path:'}
                       </p>
-                      <p className="font-black text-[#F7941E]">
+                      <p className="font-black text-[#FF8C00]">
                         {isFa
                           ? 'تنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
                           : 'Setting → Apps → 3-point menu → Special access → All files access → Yaad slide key'}
@@ -1033,7 +1033,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         e.stopPropagation();
                         setShowStoragePermNotice(false);
                       }}
-                      className="p-1 rounded-lg hover:bg-[#F7941E]/20 text-[#F7941E] shrink-0 cursor-pointer"
+                      className="p-1 rounded-lg hover:bg-[#FF8C00]/20 text-[#FF8C00] shrink-0 cursor-pointer"
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
@@ -1651,7 +1651,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               {/* Row 1: App Version */}
               <div className="flex items-center justify-between pb-2.5 border-b border-stone-800/80">
                 <div className="flex items-center gap-2">
-                  <img src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`} alt="YAAD" className="w-5 h-5 rounded-md object-cover" />
+                  <img src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=ff8c00`} alt="YAAD" className="w-5 h-5 rounded-md object-cover" />
                   <span className="text-xs font-bold text-stone-300">
                     {isFa ? 'ورژن اپ' : 'App Version'}
                   </span>

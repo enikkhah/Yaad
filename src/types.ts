@@ -129,7 +129,6 @@ export interface Reminder {
   googleTaskId?: string;
   // Geofencing and location-based reminder fields
   geofence?: LocationGeofenceConfig;
-  featureType?: 'reminder' | 'medication' | 'in_progress' | 'occasion' | 'geofence';
   deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 
@@ -188,65 +187,3 @@ export interface RecycleBinItem {
   deletedAt: number;
   originalItem: Reminder | SavedLocation | Occasion | IdeaNote;
 }
-
-export interface InProgressItem {
-  id: string;
-  title: string;                      // عنوان کار یا فرآیند در جریان
-  categoryLabel?: string;             // دسته‌بندی یا برچسب عمومی (کاری، شخصی، پروژه، آموزشی و...)
-  currentProgress: number;            // میزان پیشرفت فعلی
-  totalProgress?: number;             // پیشرفت کل / هدف نهایی (اختیاری)
-  unit: string;                       // واحد اندازه‌گیری (مرحله، صفحه، قسمت، دقیقه، ساعت، جلسه، درصد، واحد و...)
-  stepSize: number;                   // گام افزایش/کاهش سریع با دکمه + و - (پیش‌فرض ۱)
-  notes?: string;                     // یادداشت آخرین وضعیت یا نقطه توقف
-  inactivityDays: number;             // تعداد روز عدم فعالیت برای ارسال یادآور هوشمند (پیش‌فرض ۱ روز)
-  notifyTime?: string;                // ساعت اعلان یادآور کار در جریان (مثلاً "10:00")
-  inactivityReminderEnabled: boolean; // فعال بودن یادآور هوشمند عدم فعالیت
-  lastUpdatedAt: number;              // زمان آخرین آپدیت پیشرفت (timestamp)
-  createdAt: number;                  // زمان ایجاد
-  completed?: boolean;                // وضعیت تکمیل نهایی
-  deletedAt?: number;
-}
-
-export type MedicationInstruction =
-  | 'after_food'     // بعد از غذا
-  | 'before_food'    // قبل از غذا
-  | 'with_food'      // همراه با غذا
-  | 'empty_stomach'  // ناشتا / معده خالی
-  | 'anytime';       // در هر زمان (آزاد)
-
-export type MedicationScheduleType = 'interval_hours' | 'custom_times';
-
-export type MedicationDoseStatus = 'taken' | 'missed';
-
-export interface MedicationDoseLog {
-  id: string;
-  dateKey: string;              // کلید تاریخ روز به فرمت YYYY-MM-DD
-  scheduledTime: string;        // ساعت نوبت برنامه‌ریزی‌شده به فرمت "HH:mm"
-  status: MedicationDoseStatus; // وضعیت: مصرف‌شده ('taken') یا فراموش‌شده ('missed')
-  actionTimestamp: number;      // زمان دقیق ثبت وضعیت (Unix ms)
-}
-
-export interface MedicationItem {
-  id: string;
-  name: string;                        // نام دارو (مثلاً آموکسی‌سیلین ۵۰۰ یا شربت دیفن‌هیدرامین)
-  categoryLabel?: string;              // دسته‌بندی تشخیص داده‌شده با منطق فازی
-  dosageAmount: number;                // دوز مصرفی در هر نوبت (مثلاً ۱ یا ۵)
-  dosageUnit: string;                  // واحد دوز (قرص، کپسول، سی‌سی، پاف، قطره، واحد و...)
-  instruction: MedicationInstruction;  // دستور مصرف (قبل/بعد از غذا و...)
-  scheduleType: MedicationScheduleType;// نوع زمان‌بندی (هر X ساعت یا ساعت‌های مشخص)
-  intervalHours?: number;              // بازه تکرار ساعتی (مثلاً ۶، ۸، ۱۲، ۲۴)
-  scheduledTimes: string[];            // آرایه ساعت‌های مصرف در شبانه‌روز ["08:00", "16:00", "00:00"]
-  startDate: number;                   // تاریخ شروع دوره درمان (Unix ms)
-  durationDays?: number;               // طول دوره درمان به روز (اختیاری؛ undefined یعنی نامحدود)
-  stockCount?: number;                 // موجودی فعلی دارو (اختیاری)
-  initialStockCount?: number;          // موجودی اولیه دارو
-  soundId?: PhoneAlarmSound;           // صدای اختصاصی نوتیفیکیشن از پوشه raw
-  notes?: string;                      // یادداشت تکمیلی (اختیاری)
-  history: MedicationDoseLog[];        // آرایه تاریخچه لاگ مصرف دارو
-  active: boolean;                     // فعال بودن یادآور دارو
-  createdAt: number;
-  updatedAt?: number;
-  deletedAt?: number;
-}
-
-

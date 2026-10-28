@@ -25,7 +25,6 @@ import { SavedLocation, GeofenceTriggerType, LocationCheckpointConfig } from '..
 import { toPersianDigits } from '../utils/jalali';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { ValidationAlertModal } from './ValidationAlertModal';
-import { LocationReminderModal } from './LocationReminderModal';
 import { openAndroidSettings } from '../utils/nativePermissions';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';

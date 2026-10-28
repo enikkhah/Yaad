@@ -106,8 +106,8 @@ export const InstallModal: React.FC<InstallModalProps> = ({
         {/* Header */}
         <div className="px-5 py-4 border-b border-stone-800 flex items-center justify-between bg-stone-950/60">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl overflow-hidden border border-[#F7941E]/40 p-0.5 bg-black shadow-inner flex-shrink-0">
-              <img src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=f7941e`} alt="YAAD" className="w-full h-full object-cover rounded-lg sm:rounded-xl" />
+            <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl sm:rounded-2xl overflow-hidden border border-[#FF8C00]/40 p-0.5 bg-black shadow-inner flex-shrink-0">
+              <img src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=ff8c00`} alt="YAAD" className="w-full h-full object-cover rounded-lg sm:rounded-xl" />
             </div>
             <div>
               <h3 className="font-black text-white text-base">

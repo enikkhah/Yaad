@@ -22,7 +22,6 @@ import {
   HOURLY_INTERVALS 
 } from '../utils/recurrence';
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
-import { parseSmsOrText } from '../utils/smsParser';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { requestMicrophonePermission, requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
@@ -486,20 +485,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     if (updatedTitle !== currentTitle) {
                       titleRef.current = updatedTitle;
                       setTitle(updatedTitle);
-
-                      const parsed = parseSmsOrText(updatedTitle);
-                      if (parsed.suggestedTimestamp) {
-                        const j = getJalaliComponents(parsed.suggestedTimestamp);
-                        setSelectedHour(j.hour);
-                        setSelectedMinute(j.minute);
-                        setSelectedDay(j.day);
-                        setSelectedMonth(j.month);
-                        setSelectedYear(j.year);
-                      }
-                      if (parsed.category) {
-                        setCategory(parsed.category);
-                        setRingTune(parsed.category);
-                      }
                     }
                   }
                 }

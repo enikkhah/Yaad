@@ -3,9 +3,7 @@ import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, Ap
 import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
 import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
-import { TimelineWidget } from './components/TimelineWidget';
 import { ReminderForm } from './components/ReminderForm';
-import { ReminderCard } from './components/ReminderCard';
 import { AlarmModal } from './components/AlarmModal';
 import { StatisticsModal } from './components/StatisticsModal';
 import { SettingsModal } from './components/SettingsModal';
@@ -13,7 +11,6 @@ import { IdeaCaptureModal } from './components/IdeaCaptureModal';
 import { IdeaCard } from './components/IdeaCard';
 import { LocationCaptureModal } from './components/LocationCaptureModal';
 import { SavedLocationCard } from './components/SavedLocationCard';
-import { LocationReminderModal } from './components/LocationReminderModal';
 import { OccasionsView } from './components/OccasionsView';
 import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
@@ -537,8 +534,6 @@ export default function App() {
   const [editingIdea, setEditingIdea] = useState<IdeaNote | null>(null);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<SavedLocation | null>(null);
-  const [isLocationReminderModalOpen, setIsLocationReminderModalOpen] = useState(false);
-  const [targetLocationForReminder, setTargetLocationForReminder] = useState<SavedLocation | null>(null);
   const [isOccasionModalOpen, setIsOccasionModalOpen] = useState(false);
   const [editingOccasion, setEditingOccasion] = useState<Occasion | null>(null);
   const [selectedOccasionTypeFilter, setSelectedOccasionTypeFilter] = useState<OccasionType | 'all'>('all');
@@ -625,7 +620,7 @@ export default function App() {
   // 2. HARDWARE & BROWSER BACK BUTTON HANDLER (بسته شدن پنجره‌ها با دکمه بازگشت گوشی، به جز آلارم فعال که نیازمند واکنش قطعی کاربر است)
   const isAnyModalCurrentlyOpen = Boolean(
     isFormOpen || isStatsOpen || isSettingsOpen || isIdeaModalOpen ||
-    isLocationModalOpen || isLocationReminderModalOpen || isOccasionModalOpen ||
+    isLocationModalOpen || isOccasionModalOpen ||
     isCreateChoiceOpen || viewingImageUrl || isInstallModalOpen
   );
 
@@ -637,7 +632,6 @@ export default function App() {
     if (viewingImageUrl) { setViewingImageUrl(null); return true; }
     if (isCreateChoiceOpen) { setIsCreateChoiceOpen(false); return true; }
     if (isInstallModalOpen) { setIsInstallModalOpen(false); return true; }
-    if (isLocationReminderModalOpen) { setIsLocationReminderModalOpen(false); return true; }
     if (isLocationModalOpen) { setIsLocationModalOpen(false); setEditingLocation(null); return true; }
     if (isIdeaModalOpen) { setIsIdeaModalOpen(false); setEditingIdea(null); return true; }
     if (isOccasionModalOpen) { setIsOccasionModalOpen(false); setEditingOccasion(null); return true; }
@@ -647,7 +641,7 @@ export default function App() {
     return false;
   }, [
     viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
-    isLocationReminderModalOpen, isLocationModalOpen, isIdeaModalOpen,
+    isLocationModalOpen, isIdeaModalOpen,
     isOccasionModalOpen, isFormOpen, isSettingsOpen, isStatsOpen,
     activeAlarmReminder
   ]);
@@ -1109,7 +1103,6 @@ export default function App() {
       setIsStatsOpen(false);
       setIsIdeaModalOpen(false);
       setIsLocationModalOpen(false);
-      setIsLocationReminderModalOpen(false);
       setIsOccasionModalOpen(false);
       setCategoryFilter('all');
       setActiveMainTab('reminders');
@@ -3415,10 +3408,6 @@ export default function App() {
                           setEditingLocation(item);
                           setIsLocationModalOpen(true);
                         }}
-                        onCreateReminderFromLocation={(targetLoc) => {
-                          setTargetLocationForReminder(targetLoc);
-                          setIsLocationReminderModalOpen(true);
-                        }}
                         onCreateIdeaFromLocation={(targetLoc) => {
                           setEditingIdea({
                             id: 'temp_idea',
@@ -3434,7 +3423,6 @@ export default function App() {
                         userPosition={currentUserPosition}
                         onToggleCheckpoint={handleToggleLocationCheckpoint}
                         onSimulateCheckpointTrigger={handleSimulateLocationCheckpointTrigger}
-                        isGeofenceServiceActive={isGeofenceActive}
                       />
                     ))}
                 </div>
@@ -3761,22 +3749,6 @@ export default function App() {
         language={settings.language}
       />
 
-      {/* GEOFENCE LOCATION-BASED REMINDER MODAL */}
-      <LocationReminderModal
-        isOpen={isLocationReminderModalOpen}
-        onClose={() => {
-          setIsLocationReminderModalOpen(false);
-          setTargetLocationForReminder(null);
-        }}
-        onSave={(newRem) => {
-          handleSaveReminder(newRem);
-          showSyncNotification('یادآور ورود/خروج به محدوده مکانی فعال شد.');
-        }}
-        savedLocations={savedLocations}
-        initialLocation={targetLocationForReminder}
-        language={settings.language}
-      />
-
       {/* OCCASION CREATION & EDIT MODAL (مناسبت جدید) */}
       <OccasionFormModal
         isOpen={isOccasionModalOpen}
@@ -3806,9 +3778,6 @@ export default function App() {
         savedLocations={savedLocations}
         occasions={occasions}
         onRestoreData={handleRestoreData}
-        onTestHeadsUpBanner={(testRem) => {
-          setActiveAlarmReminder(testRem);
-        }}
         isGeofenceActive={isGeofenceActive}
         onToggleGeofenceActive={handleToggleGeofenceService}
         onRestoreItem={handleRestoreItem}
