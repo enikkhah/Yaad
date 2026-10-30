@@ -38,6 +38,7 @@ import {
 import { getT } from '../utils/i18n';
 import { APP_VERSION } from '../utils/version';
 import { toPersianDigits, formatJalaliFull } from '../utils/jalali';
+import { openReviewDialogDirectly } from '../utils/reviewFlow';
 import { 
   setGeofenceTrackingEnabled
 } from '../utils/geofenceManager';
@@ -1698,6 +1699,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <span className="truncate">{isFa ? 'پشتیبانی' : 'Support'}</span>
                 </a>
               </div>
+
+              {/* Row 2.5: Direct User Feedback & Rating Dialog Trigger */}
+              <button
+                type="button"
+                onClick={() => openReviewDialogDirectly()}
+                className="w-full py-2 px-3 rounded-xl bg-emerald-500/12 hover:bg-emerald-500/20 border border-emerald-500/35 text-emerald-300 font-bold text-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+              >
+                <span>★</span>
+                <span>
+                  {isFa ? (
+                    <>
+                      ثبت بازخورد و امتیاز به{' '}
+                      <span
+                        data-keep-color="true"
+                        style={{ color: '#FF8C00', fontWeight: 900 }}
+                      >
+                        یاد
+                      </span>
+                    </>
+                  ) : (
+                    'Rate & Send Feedback for YAAD'
+                  )}
+                </span>
+              </button>
 
               {/* Expandable Minimal Info Content for Privacy or About */}
               {activeInfoDialog === 'privacy' && (

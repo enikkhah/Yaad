@@ -8,9 +8,12 @@ on:
   workflow_dispatch:
     inputs:
       version_name:
-        description: 'نام نسخه نمایشی در اپ (مثلاً 1.68.4)'
+        description: 'نام نسخه نمایشی در اپ (مثلاً 1.68.5)'
         required: false
-        default: '1.68.4'
+        default: '1.68.5'
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 permissions:
   contents: write
@@ -48,7 +51,7 @@ jobs:
 
           pkg_path = Path("package.json")
           pkg_data = json.loads(pkg_path.read_text(encoding="utf-8")) if pkg_path.exists() else {}
-          default_ver = pkg_data.get("version", "1.68.4")
+          default_ver = pkg_data.get("version", "1.68.5")
 
           raw_name = to_ascii_digits(os.environ.get("VERSION_NAME", "")) or default_ver
           raw_name = re.sub(r'^[vV]\s*', '', raw_name).strip() or default_ver
@@ -60,7 +63,7 @@ jobs:
           ver_ts_path = Path("src/utils/version.ts")
           if ver_ts_path.exists():
               ver_text = ver_ts_path.read_text(encoding="utf-8")
-              ver_text = re.sub(r"'1\.68\.4'", f"'{raw_name}'", ver_text)
+              ver_text = re.sub(r"'1\.\d+\.\d+'", f"'{raw_name}'", ver_text)
               ver_ts_path.write_text(ver_text, encoding="utf-8")
 
           gh_out = os.environ.get("GITHUB_OUTPUT")
@@ -222,12 +225,21 @@ jobs:
               gradle_file.write_text(content)
           PY
 
-      - name: Build Release APK
+      - name: Build Release AAB and APK
         working-directory: android
         run: |
-          ./gradlew assembleRelease --no-daemon
-          mkdir -p ../dist-apk
+          ./gradlew bundleRelease assembleRelease --no-daemon
+          mkdir -p ../dist-apk ../dist-aab
           cp app/build/outputs/apk/release/*.apk ../dist-apk/yaad-release.apk
+          cp app/build/outputs/bundle/release/*.aab ../dist-aab/yaad-release.aab
+
+      - name: Upload Release AAB Artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: Yaad-Release-AAB
+          path: dist-aab/yaad-release.aab
+          if-no-files-found: error
+          overwrite: true
 
       - name: Upload Release APK Artifact
         uses: actions/upload-artifact@v6
@@ -243,4 +255,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v${{ github.run_number }}"
-          gh release create "$TAG" dist-apk/yaad-release.apk --title "Yaad Release $TAG" --notes "Automated Android APK build ($TAG)" || gh release upload "$TAG" dist-apk/yaad-release.apk --clobber
+          gh release create "$TAG" dist-apk/yaad-release.apk dist-aab/yaad-release.aab --title "Yaad Release $TAG" --notes "Automated Android Release AAB & APK build ($TAG)" || gh release upload "$TAG" dist-apk/yaad-release.apk dist-aab/yaad-release.aab --clobber

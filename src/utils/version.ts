@@ -23,8 +23,8 @@ function resolveAppVersion(): string {
       ? String(__APP_VERSION__).trim()
       : '';
 
-  const raw = normalizeDigits(envVersion || definedVersion || '1.68.4');
-  return raw.replace(/^v/i, '') || '1.68.4';
+  const raw = normalizeDigits(envVersion || definedVersion || '1.68.5');
+  return raw.replace(/^v/i, '') || '1.68.5';
 }
 
 export const APP_VERSION = resolveAppVersion();

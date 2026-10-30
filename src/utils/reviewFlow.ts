@@ -326,7 +326,7 @@ function renderReviewDialog(options: TriggerReviewFlowOptions = {}): void {
     }, 260);
   };
 
-  // ۱. دیالوگ اولیه با پالت سبز
+  // ۱. دیالوگ اولیه با پالت سبز و کلمه «یاد» با رنگ برند (#FF8C00)
   overlay.innerHTML = `
     <div class="yaad-review-card" role="dialog" aria-modal="true">
       <div class="yaad-review-icon" id="yaad-review-icon">
@@ -337,7 +337,7 @@ function renderReviewDialog(options: TriggerReviewFlowOptions = {}): void {
       </div>
 
       <div id="yaad-review-body">
-        <p class="yaad-review-title">آیا <span style="color: #FF8C00; font-weight: 900;">یاد</span> تونسته در مدیریت کارهاتون بهتون کمک کنه؟</p>
+        <p class="yaad-review-title">آیا <span data-keep-color="true" style="color: #FF8C00 !important; font-weight: 900;">یاد</span> تونسته در مدیریت کارهاتون بهتون کمک کنه؟</p>
         <div class="yaad-review-actions">
           <button type="button" class="yaad-btn yaad-btn-primary" id="yaad-btn-yes">بله، عالی بود</button>
           <button type="button" class="yaad-btn yaad-btn-secondary" id="yaad-btn-no">نه، پیشنهاداتی دارم</button>
@@ -379,7 +379,7 @@ function renderReviewDialog(options: TriggerReviewFlowOptions = {}): void {
     bodyContainer.innerHTML = `
       <div class="yaad-review-stars" aria-hidden="true">${starsHtml}</div>
       <p class="yaad-review-title">
-        خوشحالیم که یادآور روزهای مهم شما هستیم. ثبت امتیاز ۵ ستاره شما، به تیم ناروَن کمک می‌کنه امکانات بهتری را توسعه بده.
+        خوشحالیم که <span data-keep-color="true" style="color: #FF8C00 !important; font-weight: 900;">یاد</span> یادآور روزهای مهم شماست. ثبت امتیاز ۵ ستاره شما، به تیم ناروَن کمک می‌کنه امکانات بهتری را توسعه بده.
       </p>
       <div class="yaad-review-actions">
         <button type="button" class="yaad-btn yaad-btn-primary" id="yaad-btn-rate">ثبت امتیاز</button>
@@ -398,7 +398,7 @@ function renderReviewDialog(options: TriggerReviewFlowOptions = {}): void {
   noBtn.addEventListener('click', () => {
     bodyContainer.innerHTML = `
       <p class="yaad-review-title" style="margin-bottom: 12px;">
-        لطفاً پیشنهاد یا مشکلتون رو بنویسید تا در تیم ناروَن بررسی و برطرفش کنیم:
+        لطفاً پیشنهاد یا مشکلتون درباره <span data-keep-color="true" style="color: #FF8C00 !important; font-weight: 900;">یاد</span> رو بنویسید تا در تیم ناروَن بررسی و برطرفش کنیم:
       </p>
       <textarea
         id="yaad-feedback-input"
@@ -446,7 +446,7 @@ function renderReviewDialog(options: TriggerReviewFlowOptions = {}): void {
       laterBtn.style.display = 'none';
       bodyContainer.innerHTML = `
         <p class="yaad-review-title" style="margin-bottom: 6px; color: #059669;">
-          سپاس از همراهی شما!
+          سپاس از همراهی شما با <span data-keep-color="true" style="color: #FF8C00 !important; font-weight: 900;">یاد</span>!
         </p>
         <p style="font-size: 13.5px; color: #4b5563; line-height: 1.7; margin: 0 0 14px;">
           بازخورد ارزشمند شما با موفقیت ثبت شد و توسط تیم ناروَن بررسی خواهد شد.
@@ -464,8 +464,15 @@ function renderReviewDialog(options: TriggerReviewFlowOptions = {}): void {
 }
 
 /**
+ * نمایش مستقیم دیالوگ بازخورد (حتی اگر قبلاً بسته شده باشد)
+ */
+export function openReviewDialogDirectly(options: TriggerReviewFlowOptions = {}): void {
+  renderReviewDialog(options);
+}
+
+/**
  * ۴. تابع مستقل زمان‌بندی (Timing)
- * فقط زمانی که این تابع پس از رویدادهای موفق (تیک خوردن تسک یا اجرای موفق جئوفنس)
+ * فقط زمانی که این تابع پس از رویدادهای موفق (تیک خوردن تسک، ثبت هوشمند یا اجرای موفق جئوفنس)
  * فراخوانی شود و کاربر قبلاً وضعیت را ثبت نکرده باشد، دیالوگ نمایش داده می‌شود.
  */
 export async function triggerReviewFlow(options: TriggerReviewFlowOptions = {}): Promise<boolean> {

@@ -3893,18 +3893,22 @@ export default function App() {
           handleSaveReminder(remData, syncGoogle, stayOnTab);
           setActiveMainTab('reminders');
           triggerScrollToNow();
+          triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
         }}
         onSaveOccasion={(occData, alsoReminder) => {
           handleSaveOccasion(occData, alsoReminder);
           setActiveMainTab('occasions');
+          triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
         }}
         onSaveLocation={(locData, alsoReminder) => {
           handleSaveLocation(locData, alsoReminder);
           setActiveMainTab('locations');
+          triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
         }}
         onSaveIdea={(ideaData) => {
           handleSaveIdea(ideaData);
           setActiveMainTab('ideas');
+          triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
         }}
         language={settings.language}
       />
