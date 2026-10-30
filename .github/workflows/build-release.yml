@@ -99,6 +99,8 @@ jobs:
       - name: Build web app with synced version
         env:
           VITE_APP_VERSION: ${{ steps.versioning.outputs.v_name }}
+          VITE_BAZAAR_RSA_PUBLIC_KEY: ${{ secrets.BAZAAR_RSA_PUBLIC_KEY || '' }}
+          VITE_BAZAAR_PRO_PRODUCT_ID: ${{ secrets.BAZAAR_PRO_PRODUCT_ID || 'yaad_pro_lifetime' }}
         run: npm run build
 
       - name: Remove old Android folder
@@ -179,6 +181,9 @@ jobs:
 
       - name: Sync Capacitor
         run: npx cap sync android
+
+      - name: Setup Cafe Bazaar Poolakey Billing Plugin
+        run: node scripts/setup-bazaar-poolakey.mjs
 
       - name: Setup Java
         uses: actions/setup-java@v5

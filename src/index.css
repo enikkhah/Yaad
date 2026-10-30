@@ -1201,3 +1201,11 @@ html:not(.dark)[data-theme="system"] .main-nav-tab-inactive svg {
   color: #78828B !important;
 }
 
+@keyframes yaadFabHoldRing {
+  from {
+    stroke-dashoffset: 182;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}

@@ -19,6 +19,7 @@ import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occas
 import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, requestLocalFolderPermission, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
+import { SmartVoiceCaptureModal } from './components/SmartVoiceCaptureModal';
 import { useFabVisibility } from './hooks/useFabVisibility';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
@@ -61,6 +62,7 @@ import {
 } from './utils/geofenceManager';
 import { getT, formatSavedLocationTitle } from './utils/i18n';
 import { APP_VERSION } from './utils/version';
+import { triggerReviewFlow } from './utils/reviewFlow';
 import { 
   Plus, 
   BarChart3, 
@@ -542,6 +544,10 @@ export default function App() {
   const [currentUserPosition, setCurrentUserPosition] = useState<UserPosition | null>(() => getLastKnownPosition());
   const [isGeofenceActive, setIsGeofenceActive] = useState<boolean>(() => isGeofenceTrackingEnabled());
   const [isCreateChoiceOpen, setIsCreateChoiceOpen] = useState(false);
+  const [isSmartCaptureOpen, setIsSmartCaptureOpen] = useState(false);
+  const [isHoldingFab, setIsHoldingFab] = useState(false);
+  const fabHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fabLongPressTriggeredRef = useRef(false);
   const [locationFilter, setLocationFilter] = useState<'all' | 'checkpoints'>('all');
   const [activeAlarmReminder, setActiveAlarmReminder] = useState<Reminder | null>(null);
   const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
@@ -620,7 +626,7 @@ export default function App() {
   // 2. HARDWARE & BROWSER BACK BUTTON HANDLER (بسته شدن پنجره‌ها با دکمه بازگشت گوشی، به جز آلارم فعال که نیازمند واکنش قطعی کاربر است)
   const isAnyModalCurrentlyOpen = Boolean(
     isFormOpen || isStatsOpen || isSettingsOpen || isIdeaModalOpen ||
-    isLocationModalOpen || isOccasionModalOpen ||
+    isLocationModalOpen || isOccasionModalOpen || isSmartCaptureOpen ||
     isCreateChoiceOpen || viewingImageUrl || isInstallModalOpen
   );
 
@@ -630,6 +636,7 @@ export default function App() {
       return true;
     }
     if (viewingImageUrl) { setViewingImageUrl(null); return true; }
+    if (isSmartCaptureOpen) { setIsSmartCaptureOpen(false); return true; }
     if (isCreateChoiceOpen) { setIsCreateChoiceOpen(false); return true; }
     if (isInstallModalOpen) { setIsInstallModalOpen(false); return true; }
     if (isLocationModalOpen) { setIsLocationModalOpen(false); setEditingLocation(null); return true; }
@@ -640,7 +647,7 @@ export default function App() {
     if (isStatsOpen) { setIsStatsOpen(false); return true; }
     return false;
   }, [
-    viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
+    viewingImageUrl, isSmartCaptureOpen, isCreateChoiceOpen, isInstallModalOpen,
     isLocationModalOpen, isIdeaModalOpen,
     isOccasionModalOpen, isFormOpen, isSettingsOpen, isStatsOpen,
     activeAlarmReminder
@@ -733,33 +740,15 @@ export default function App() {
 
   const openedFromNotificationEditRef = useRef<boolean>(isInitialNotificationLaunch);
 
-  // App startup splash screen (fade in & fade out in <= 1.5s, then immediately open + menu unless opened from a notification or an alarm/edit modal is active)
+  // App startup splash screen (fade in & fade out in <= 1.5s; keep + menu closed by default)
   const [showSplash, setShowSplash] = useState<boolean>(() => !isInitialNotificationLaunch);
   const [appVisible, setAppVisible] = useState<boolean>(() => isInitialNotificationLaunch);
   const handleStartExitSplash = useCallback(() => {
     setAppVisible(true);
-    setActiveAlarmReminder((currAlarm) => {
-      const openedFromNotif =
-        openedFromNotificationEditRef.current ||
-        (typeof window !== 'undefined' && (window as any).__yaadOpenedFromNotification === true);
-      if (!currAlarm && !openedFromNotif) {
-        setIsCreateChoiceOpen(true);
-      }
-      return currAlarm;
-    });
   }, []);
   const handleFinishSplash = useCallback(() => {
     setAppVisible(true);
     setShowSplash(false);
-    setActiveAlarmReminder((currAlarm) => {
-      const openedFromNotif =
-        openedFromNotificationEditRef.current ||
-        (typeof window !== 'undefined' && (window as any).__yaadOpenedFromNotification === true);
-      if (!currAlarm && !openedFromNotif) {
-        setIsCreateChoiceOpen(true);
-      }
-      return currAlarm;
-    });
     // Request ONLY Notification permission on initial app entry/install (most important permission)
     requestNotificationPermission().catch(() => {});
     window.dispatchEvent(new Event('yaad:scroll-to-now'));
@@ -1505,6 +1494,9 @@ export default function App() {
                     : loc
                 )
               );
+
+              // Trigger two-step review flow after successful geofence execution
+              triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
             });
           }
 
@@ -1532,6 +1524,9 @@ export default function App() {
                     : item
                 )
               );
+
+              // Trigger two-step review flow after successful reminder geofence execution
+              triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
             });
           }
 
@@ -2137,6 +2132,9 @@ export default function App() {
       }
       return updated;
     });
+
+    // Trigger two-step review flow after task completion
+    triggerReviewFlow({ delayMs: 700 }).catch(() => {});
   };
 
   handleCompleteReminderRef.current = handleCompleteReminder;
@@ -2196,6 +2194,7 @@ export default function App() {
         try {
           localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(nextList));
         } catch {}
+        triggerReviewFlow({ delayMs: 700 }).catch(() => {});
         return nextList;
       }
 
@@ -3510,8 +3509,41 @@ export default function App() {
             <div
               ref={fabMenuRef}
               onClick={(e) => e.stopPropagation()}
-              className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/98 border border-stone-800 rounded-2xl p-2 sm:p-2.5 shadow-2xl backdrop-blur-2xl w-56 sm:w-60 space-y-1 animate-fab-menu"
+              className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/98 border border-stone-800 rounded-2xl p-2 sm:p-2.5 shadow-2xl backdrop-blur-2xl w-60 sm:w-64 space-y-1 animate-fab-menu"
             >
+              {/* Featured Option 0: Smart Voice Capture (AI) */}
+              <button
+                type="button"
+                onClick={() => {
+                  unlockAudio();
+                  try {
+                    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                      window.speechSynthesis.cancel();
+                    }
+                  } catch {
+                    // ignore
+                  }
+                  setIsCreateChoiceOpen(false);
+                  setIsSmartCaptureOpen(true);
+                }}
+                className="w-full min-h-[50px] flex items-center gap-3 px-3 py-2.5 rounded-xl bg-[#FF8C00]/12 hover:bg-[#FF8C00]/20 text-white transition-all duration-200 cursor-pointer group active:scale-95 border border-[#FF8C00]/40 hover:border-[#FF8C00] mb-1"
+              >
+                <div
+                  data-keep-color="true"
+                  className="w-9 h-9 rounded-xl bg-[#FF8C00] text-white flex items-center justify-center shrink-0 shadow-md shadow-[#FF8C00]/30 group-hover:scale-110 transition-transform duration-200"
+                >
+                  <Sparkles className="w-4.5 h-4.5 text-white" />
+                </div>
+                <div className="flex flex-col items-start text-start min-w-0">
+                  <span className="text-xs sm:text-sm font-black text-white group-hover:text-[#FF8C00] transition-colors">
+                    {isEn ? 'Smart Voice Capture' : 'ثبت هوشمند صوتی (AI)'}
+                  </span>
+                  <span className="text-[10px] text-stone-400">
+                    {isEn ? 'Or hold + for 1.5s' : 'یا نگه داشتن + به مدت ۱.۵ ثانیه'}
+                  </span>
+                </div>
+              </button>
+
               {/* Option 1: Reminder */}
               <button
                 type="button"
@@ -3584,23 +3616,114 @@ export default function App() {
             </div>
           )}
 
-          {/* Circular FAB (+) — Always Brand Orange (#FF8C00) across ALL themes */}
+          {/* Hold-for-1.5-seconds hint pill while pressing (+) */}
+          {isHoldingFab && (
+            <div
+              dir={isEn ? 'ltr' : 'rtl'}
+              className="absolute bottom-16 right-0 whitespace-nowrap px-3 py-1.5 rounded-xl bg-stone-950/95 border border-[#FF8C00] text-white text-[11px] font-bold shadow-xl flex items-center gap-2 pointer-events-none animate-in fade-in duration-150"
+            >
+              <span className="w-2 h-2 rounded-full bg-[#FF8C00] animate-ping" />
+              <span>
+                {isEn
+                  ? 'Keep holding (1.5s) for Smart Voice Capture...'
+                  : 'نگه دارید (۱.۵ ثانیه) برای ثبت هوشمند صوتی...'}
+              </span>
+            </div>
+          )}
+
+          {/* Circular FAB (+) — Always Brand Orange (#FF8C00) across ALL themes. Hold 1.5s for Smart Voice Capture */}
           <button
             ref={fabBtnRef}
             id="fab-create-btn"
             data-keep-color="true"
             type="button"
-            style={{ width: '56px', height: '56px' }}
+            style={{ width: '56px', height: '56px', touchAction: 'manipulation' }}
+            onContextMenu={(e) => e.preventDefault()}
+            onPointerDown={() => {
+              // Unlock browser & WebView audio/TTS pipeline synchronously on user gesture
+              // so that 1.5s later when SmartVoiceCaptureModal opens, voice playback is never blocked
+              unlockAudio();
+              try {
+                if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+                  window.speechSynthesis.cancel();
+                }
+              } catch {
+                // ignore
+              }
+              fabLongPressTriggeredRef.current = false;
+              setIsHoldingFab(true);
+              if (fabHoldTimerRef.current) {
+                clearTimeout(fabHoldTimerRef.current);
+              }
+              fabHoldTimerRef.current = setTimeout(() => {
+                fabLongPressTriggeredRef.current = true;
+                setIsHoldingFab(false);
+                setIsCreateChoiceOpen(false);
+                resetFabPosition();
+                try {
+                  navigator.vibrate?.([40, 30, 70]);
+                } catch {
+                  // ignore
+                }
+                setIsSmartCaptureOpen(true);
+              }, 1500);
+            }}
+            onPointerUp={() => {
+              if (fabHoldTimerRef.current) {
+                clearTimeout(fabHoldTimerRef.current);
+                fabHoldTimerRef.current = null;
+              }
+              setIsHoldingFab(false);
+            }}
+            onPointerLeave={() => {
+              if (fabHoldTimerRef.current) {
+                clearTimeout(fabHoldTimerRef.current);
+                fabHoldTimerRef.current = null;
+              }
+              setIsHoldingFab(false);
+            }}
+            onPointerCancel={() => {
+              if (fabHoldTimerRef.current) {
+                clearTimeout(fabHoldTimerRef.current);
+                fabHoldTimerRef.current = null;
+              }
+              setIsHoldingFab(false);
+            }}
             onClick={() => {
+              if (fabLongPressTriggeredRef.current) {
+                fabLongPressTriggeredRef.current = false;
+                return;
+              }
               resetFabPosition();
               setIsCreateChoiceOpen(!isCreateChoiceOpen);
             }}
-            className={`fab-add-btn rounded-full flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] border flex-shrink-0 cursor-pointer bg-[#FF8C00] hover:bg-[#FF9E1F] text-white border-[#FF8C00] shadow-[#FF8C00]/45 ${
+            className={`relative fab-add-btn rounded-full flex items-center justify-center shadow-lg hover:scale-105 active:scale-95 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] border flex-shrink-0 cursor-pointer bg-[#FF8C00] hover:bg-[#FF9E1F] text-white border-[#FF8C00] shadow-[#FF8C00]/45 select-none ${
               isCreateChoiceOpen ? 'rotate-45' : 'rotate-0'
-            }`}
-            title={isEn ? 'Add New' : 'ثبت جدید'}
+            } ${isHoldingFab ? 'scale-110 ring-4 ring-[#FF8C00]/40' : ''}`}
+            title={isEn ? 'Tap: Menu | Hold 1.5s: Smart Voice Capture' : 'لمس کوتاه: منو | نگه داشتن ۱.۵ ثانیه: ثبت هوشمند صوتی'}
             aria-label={isEn ? 'Add New' : 'ثبت جدید'}
           >
+            {isHoldingFab && (
+              <svg
+                className="absolute -inset-1.5 w-[66px] h-[66px] -rotate-90 pointer-events-none"
+                viewBox="0 0 66 66"
+              >
+                <circle
+                  cx="33"
+                  cy="33"
+                  r="29"
+                  fill="none"
+                  stroke="#ffffff"
+                  strokeWidth="3.5"
+                  strokeLinecap="round"
+                  strokeDasharray="182"
+                  strokeDashoffset="182"
+                  style={{
+                    animation: 'yaadFabHoldRing 1.5s linear forwards',
+                  }}
+                />
+              </svg>
+            )}
             <Plus style={{ width: '30px', height: '30px' }} className="w-7 h-7 stroke-[3] text-white transition-transform duration-300" />
           </button>
         </div>
@@ -3759,6 +3882,30 @@ export default function App() {
         onSave={handleSaveOccasion}
         editingOccasion={editingOccasion}
         defaultType={selectedOccasionTypeFilter !== 'all' ? selectedOccasionTypeFilter : defaultOccasionType}
+        language={settings.language}
+      />
+
+      {/* SMART VOICE & CONVERSATIONAL CAPTURE MODAL (با نگه داشتن ۱.۵ ثانیه‌ای دکمه +) */}
+      <SmartVoiceCaptureModal
+        isOpen={isSmartCaptureOpen}
+        onClose={() => setIsSmartCaptureOpen(false)}
+        onSaveReminder={(remData, syncGoogle, stayOnTab) => {
+          handleSaveReminder(remData, syncGoogle, stayOnTab);
+          setActiveMainTab('reminders');
+          triggerScrollToNow();
+        }}
+        onSaveOccasion={(occData, alsoReminder) => {
+          handleSaveOccasion(occData, alsoReminder);
+          setActiveMainTab('occasions');
+        }}
+        onSaveLocation={(locData, alsoReminder) => {
+          handleSaveLocation(locData, alsoReminder);
+          setActiveMainTab('locations');
+        }}
+        onSaveIdea={(ideaData) => {
+          handleSaveIdea(ideaData);
+          setActiveMainTab('ideas');
+        }}
         language={settings.language}
       />
 

@@ -26,6 +26,7 @@ import { toPersianDigits } from '../utils/jalali';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { openAndroidSettings } from '../utils/nativePermissions';
+import { saveLastKnownPosition } from '../utils/geofenceManager';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 
@@ -50,6 +51,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
 }) => {
   const isEn = language === 'en';
   const [title, setTitle] = useState('');
+  const titleRef = useRef('');
   const [description, setDescription] = useState('');
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
@@ -64,6 +66,10 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [showValidationModal, setShowValidationModal] = useState(false);
   const [validationFieldName, setValidationFieldName] = useState(isEn ? 'Location Name' : 'نام / عنوان مکان');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    titleRef.current = title;
+  }, [title]);
 
   // Checkpoint & Geofence Sub-Feature State (زیرمجموعه ثبت مکان برای اعلام ورود/خروج)
   const [enableGeofence, setEnableGeofence] = useState<boolean>(false);
@@ -92,7 +98,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
     };
   }, []);
 
-  // Fetch GPS coordinates
+  // Fetch live current GPS coordinates
   const fetchCurrentLocation = () => {
     if (!navigator.geolocation) {
       setLocationError(
@@ -117,14 +123,25 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         setAccuracy(acc);
         setIsLocating(false);
 
-        // Set default title if empty
-        if (!title.trim()) {
+        saveLastKnownPosition({
+          latitude: lat,
+          longitude: lng,
+          accuracy: acc,
+          timestamp: Date.now(),
+        });
+
+        // Set default title only if user hasn't entered a custom title yet
+        if (!titleRef.current.trim()) {
           if (isEn) {
             const nowStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-            setTitle(`Saved Location (${nowStr})`);
+            const nextTitle = `Saved Location (${nowStr})`;
+            titleRef.current = nextTitle;
+            setTitle(nextTitle);
           } else {
             const nowStr = new Date().toLocaleTimeString('fa-IR', { hour: '2-digit', minute: '2-digit' });
-            setTitle(`موقعیت ثبت‌شده (${toPersianDigits(nowStr)})`);
+            const nextTitle = `موقعیت ثبت‌شده (${toPersianDigits(nowStr)})`;
+            titleRef.current = nextTitle;
+            setTitle(nextTitle);
           }
         }
 
@@ -197,7 +214,9 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       if (editingLocation) {
-        setTitle(formatSavedLocationTitle(editingLocation.title || '', language));
+        const formattedTitle = formatSavedLocationTitle(editingLocation.title || '', language);
+        titleRef.current = formattedTitle;
+        setTitle(formattedTitle);
         setDescription(editingLocation.description || '');
         setLatitude(editingLocation.latitude ?? null);
         setLongitude(editingLocation.longitude ?? null);
@@ -219,8 +238,13 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         }
         setShowCollapsibleMediaAndGeofence(!!(editingLocation.photoUrl || editingLocation.geofence?.enabled));
       } else {
+        // همیشه هنگام ثبت مکان جدید، مقادیر قبلی را پاک کن و موقعیت فعلی را از GPS دریافت کن
+        titleRef.current = '';
         setTitle('');
         setDescription('');
+        setLatitude(null);
+        setLongitude(null);
+        setAccuracy(null);
         setPhotoUrl(null);
         setAddress('');
         setEnableGeofence(false);
@@ -229,9 +253,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         setGeofenceCustomMessage('');
         setGeofencePlayAudio(true);
         setShowCollapsibleMediaAndGeofence(false);
-        if (latitude === null) {
-          fetchCurrentLocation();
-        }
+        fetchCurrentLocation();
       }
       setLocationError(null);
       setValidationError(null);

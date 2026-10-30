@@ -693,12 +693,17 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
             : 'خطا در دریافت موقعیت. لطفاً GPS دستگاه را روشن فرمایید.'
         );
       },
-      { enableHighAccuracy: true, timeout: 10000 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
   };
 
   const handleSelectSavedLocation = (locId: string) => {
     setGeofenceSavedLocId(locId);
+    if (!locId) {
+      setGeofenceLocationName('');
+      handleGetQuickGps();
+      return;
+    }
     const found = savedLocations?.find((l) => l.id === locId);
     if (found) {
       setGeofenceLocationName(formatSavedLocationTitle(found.title, language));
@@ -1740,6 +1745,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     const willEnable = !enableGeofence;
                     setEnableGeofence(willEnable);
                     if (willEnable) {
+                      if (!geofenceSavedLocId) {
+                        handleGetQuickGps();
+                      }
                       scrollAccordionHeaderIntoView(e.currentTarget.closest('.rounded-2xl') as HTMLElement, 38);
                     }
                   }}
