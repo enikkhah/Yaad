@@ -13,14 +13,19 @@ import {
   VolumeX,
   Navigation,
 } from 'lucide-react';
-import { IdeaNote, Occasion, Reminder, SavedLocation } from '../types';
+import { AiVoicePersona, IdeaNote, Occasion, Reminder, SavedLocation } from '../types';
 import {
   PERSIAN_MONTHS,
   formatJalaliFull,
   getJalaliComponents,
   toPersianDigits,
 } from '../utils/jalali';
-import { getSharedTtsAudioElement, unlockAudio } from '../utils/audio';
+import {
+  prewarmAiAssistantPrompt,
+  speakAiAssistantPrompt,
+  stopAiAssistantPrompt,
+  unlockAudio,
+} from '../utils/audio';
 import { requestLocationPermission, markPermissionGranted } from '../utils/nativePermissions';
 import { saveLastKnownPosition } from '../utils/geofenceManager';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
@@ -45,6 +50,11 @@ interface SmartVoiceCaptureModalProps {
   onSaveLocation: (data: Omit<SavedLocation, 'id' | 'createdAt'>, alsoCreateReminder?: boolean) => void;
   onSaveIdea: (data: Omit<IdeaNote, 'id' | 'createdAt'>) => void;
   language?: 'fa' | 'en';
+  aiVoicePersona?: AiVoicePersona;
+  aiVoiceVolume?: number;
+  ttsVoiceRate?: number;
+  micSensitivity?: number;
+  micBaseFrequencyHz?: number;
 }
 
 export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
@@ -55,6 +65,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   onSaveLocation,
   onSaveIdea,
   language = 'fa',
+  aiVoicePersona = 'zephyr_warm',
+  aiVoiceVolume = 1.0,
+  ttsVoiceRate = 0.95,
+  micSensitivity = 75,
+  micBaseFrequencyHz = 165,
 }) => {
   const isEn = language === 'en';
 
@@ -84,6 +99,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   const lastFinalChunkRef = useRef<string>('');
   const processedFinalIndicesRef = useRef<Set<number>>(new Set());
 
+  // Silent Web Audio VAD refs (keeps microphone active without Android system beeps)
+  const vadStreamRef = useRef<MediaStream | null>(null);
+  const vadAudioCtxRef = useRef<AudioContext | null>(null);
+  const vadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const handleUserUtteranceRef = useRef<(text: string) => void>(() => {});
   const isOpenRef = useRef(isOpen);
@@ -91,12 +111,15 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   const isCompleteRef = useRef(isComplete);
   const voiceEnabledRef = useRef(voiceFeedbackEnabled);
   const gpsCoordsRef = useRef<{ lat: number; lng: number; accuracy?: number } | null>(null);
+  const micSensitivityRef = useRef<number>(micSensitivity);
+  const micBaseFreqRef = useRef<number>(micBaseFrequencyHz);
+  const aiVoicePersonaRef = useRef<AiVoicePersona>(aiVoicePersona);
+  const aiVoiceVolumeRef = useRef<number>(aiVoiceVolume);
+  const ttsVoiceRateRef = useRef<number>(ttsVoiceRate);
 
   const speechDoneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ttsWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const activeTtsAudioRef = useRef<HTMLAudioElement | null>(null);
-  const ttsClientCacheRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     isOpenRef.current = isOpen;
@@ -118,33 +141,61 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     gpsCoordsRef.current = gpsCoords;
   }, [gpsCoords]);
 
+  useEffect(() => {
+    micSensitivityRef.current = micSensitivity;
+  }, [micSensitivity]);
+
+  useEffect(() => {
+    micBaseFreqRef.current = micBaseFrequencyHz;
+  }, [micBaseFrequencyHz]);
+
+  useEffect(() => {
+    aiVoicePersonaRef.current = aiVoicePersona;
+  }, [aiVoicePersona]);
+
+  useEffect(() => {
+    aiVoiceVolumeRef.current = aiVoiceVolume;
+  }, [aiVoiceVolume]);
+
+  useEffect(() => {
+    ttsVoiceRateRef.current = ttsVoiceRate;
+  }, [ttsVoiceRate]);
+
+  const stopSilentVadMonitor = useCallback(() => {
+    if (vadIntervalRef.current) {
+      clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
+    }
+    if (vadStreamRef.current) {
+      try {
+        vadStreamRef.current.getTracks().forEach((track) => track.stop());
+      } catch {
+        // ignore
+      }
+      vadStreamRef.current = null;
+    }
+    if (vadAudioCtxRef.current) {
+      try {
+        vadAudioCtxRef.current.close().catch(() => {});
+      } catch {
+        // ignore
+      }
+      vadAudioCtxRef.current = null;
+    }
+  }, []);
+
   const stopSpeaking = useCallback(() => {
     setIsAssistantSpeaking(false);
     if (ttsWaitTimerRef.current) {
       clearTimeout(ttsWaitTimerRef.current);
       ttsWaitTimerRef.current = null;
     }
-    if (activeTtsAudioRef.current) {
-      try {
-        activeTtsAudioRef.current.onended = null;
-        activeTtsAudioRef.current.onerror = null;
-        activeTtsAudioRef.current.pause();
-      } catch {
-        // ignore
-      }
-      activeTtsAudioRef.current = null;
-    }
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // ignore
-      }
-    }
+    stopAiAssistantPrompt();
   }, []);
 
   const stopListening = useCallback(() => {
     shouldKeepListeningRef.current = false;
+    stopSilentVadMonitor();
     if (speechDoneTimerRef.current) {
       clearTimeout(speechDoneTimerRef.current);
       speechDoneTimerRef.current = null;
@@ -154,13 +205,21 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       reconnectTimerRef.current = null;
     }
     if (recognitionRef.current) {
-      safeAbortSpeechRecognition(recognitionRef.current);
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch {
+        safeAbortSpeechRecognition(recognitionRef.current);
+      }
       recognitionRef.current = null;
     }
     setIsListening(false);
     setIsSpeechActive(false);
     setVoiceLevel(0);
-  }, []);
+  }, [stopSilentVadMonitor]);
 
   /**
    * دریافت موقعیت مکانی زنده و واقعی از سنسور GPS دستگاه (maximumAge: 0)
@@ -207,7 +266,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
               resolve(liveFix);
             },
             () => {
-              // Retry once with standard high-accuracy timeout if initial satellite lock took longer
               navigator.geolocation.getCurrentPosition(
                 (pos2) => {
                   const liveFix = {
@@ -252,47 +310,19 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     });
   }, [isEn]);
 
-  // Pre-warm voices list and server TTS cache if available
+  // Pre-warm voices list and server TTS cache for the initial greeting
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if ('speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.getVoices();
-      } catch {
-        // ignore
-      }
-    }
-
-    const isStaticHost =
-      window.location.protocol === 'capacitor:' ||
-      window.location.protocol === 'file:' ||
-      window.location.hostname.includes('github.io');
-    if (isStaticHost) return;
-
     const welcomeText = isEn
       ? 'Hello! Please tell me what reminder, occasion, location, or idea you would like to save?'
       : 'سلام، وقت بخیر. لطفاً بفرمایید چه یادآور، مناسبت، مکان یا ایده‌ای را می‌خواهید ثبت کنید؟';
-    const langKey = isEn ? 'en' : 'fa';
-    const cacheKey = `${langKey}:${welcomeText}`;
-    if (ttsClientCacheRef.current.has(cacheKey)) return;
-
-    fetch('/api/smart-tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: welcomeText, language: langKey }),
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .then((data) => {
-        if (data?.ok && data?.audioBase64) {
-          ttsClientCacheRef.current.set(cacheKey, data.audioBase64);
-        }
-      })
-      .catch(() => {});
-  }, [isEn]);
+    prewarmAiAssistantPrompt(welcomeText, isEn ? 'en' : 'fa', aiVoicePersona);
+  }, [isEn, aiVoicePersona]);
 
   /**
    * بیان صوتی صمیمانه و محترمانه بدون هیچ افکت صوتی اضافی:
-   * پس از اتمام کامل صحبت گوینده و آزاد شدن فوکوس صوتی اندروید، میکروفون فعال می‌شود.
+   * از موتور چندلایه speakAiAssistantPrompt استفاده می‌کند (WAV استاندارد + فال‌بک جریان آنلاین فارسی/انگلیسی + سنتز بومی)
+   * و پس از اتمام کامل صحبت گوینده و آزاد شدن فوکوس صوتی اندروید، میکروفون فعال می‌شود.
    */
   const speakPromptWithCallback = useCallback(
     (rawText: string, onDone?: () => void) => {
@@ -306,194 +336,25 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       stopSpeaking();
       setIsAssistantSpeaking(true);
 
-      const wordsCount = cleanText.split(/\s+/).filter(Boolean).length;
-      const minExpectedSpeechMs = Math.min(6500, Math.max(2200, wordsCount * 340));
-
-      let finished = false;
-      const completeAndContinue = () => {
-        if (finished) return;
-        finished = true;
-        if (ttsWaitTimerRef.current) {
-          clearTimeout(ttsWaitTimerRef.current);
-          ttsWaitTimerRef.current = null;
-        }
-
-        let pollAttempts = 0;
-        const waitForAudioFocusRelease = () => {
+      speakAiAssistantPrompt({
+        text: cleanText,
+        language: isEn ? 'en' : 'fa',
+        voicePersona: aiVoicePersonaRef.current,
+        volume: aiVoiceVolumeRef.current,
+        onDone: () => {
           if (!isOpenRef.current) {
             setIsAssistantSpeaking(false);
             return;
           }
-          const stillSpeaking =
-            typeof window !== 'undefined' &&
-            'speechSynthesis' in window &&
-            Boolean(window.speechSynthesis.speaking);
-
-          if (stillSpeaking && pollAttempts < 18) {
-            pollAttempts += 1;
-            ttsWaitTimerRef.current = setTimeout(waitForAudioFocusRelease, 180);
-            return;
-          }
-
           setIsAssistantSpeaking(false);
+          // مکث کوتاه برای آزادسازی کامل کانال صوتی اندروید پیش از روشن شدن میکروفون
           ttsWaitTimerRef.current = setTimeout(() => {
             if (isOpenRef.current) {
               onDone?.();
             }
-          }, 420);
-        };
-
-        waitForAudioFocusRelease();
-      };
-
-      const playAudioSrc = (srcUrl: string, onFallback: () => void) => {
-        try {
-          const audio = getSharedTtsAudioElement() || new Audio();
-          audio.pause();
-          audio.volume = 1.0;
-          audio.src = srcUrl;
-          activeTtsAudioRef.current = audio;
-
-          const startAt = Date.now();
-          const safetyTimer = setTimeout(completeAndContinue, 12000);
-
-          audio.onended = () => {
-            clearTimeout(safetyTimer);
-            const elapsed = Date.now() - startAt;
-            if (elapsed < 300) {
-              onFallback();
-              return;
-            }
-            completeAndContinue();
-          };
-
-          audio.onerror = () => {
-            clearTimeout(safetyTimer);
-            onFallback();
-          };
-
-          const playPromise = audio.play();
-          if (playPromise) {
-            playPromise.catch(() => {
-              clearTimeout(safetyTimer);
-              onFallback();
-            });
-          }
-        } catch {
-          onFallback();
-        }
-      };
-
-      const playGoogleStreamFallback = (onFail: () => void) => {
-        const tl = isEn ? 'en' : 'fa';
-        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=tw-ob&q=${encodeURIComponent(
-          cleanText
-        )}`;
-        playAudioSrc(ttsUrl, onFail);
-      };
-
-      const playNativeSpeechSynthesis = () => {
-        if (!('speechSynthesis' in window)) {
-          playGoogleStreamFallback(completeAndContinue);
-          return;
-        }
-
-        try {
-          window.speechSynthesis.cancel();
-          window.speechSynthesis.resume();
-
-          const utterance = new SpeechSynthesisUtterance(cleanText);
-          utterance.lang = isEn ? 'en-US' : 'fa-IR';
-          utterance.volume = 1.0;
-          utterance.rate = isEn ? 1.0 : 0.95;
-          utterance.pitch = 1.0;
-
-          const voices = window.speechSynthesis.getVoices();
-          const exactLangVoice = voices.find((v) =>
-            isEn
-              ? v.lang.toLowerCase().startsWith('en')
-              : v.lang.toLowerCase().startsWith('fa') || v.name.toLowerCase().includes('persian')
-          );
-          const fallbackRtlVoice = !isEn
-            ? voices.find((v) => v.lang.toLowerCase().startsWith('ar'))
-            : undefined;
-
-          if (exactLangVoice) {
-            utterance.voice = exactLangVoice;
-          } else if (fallbackRtlVoice) {
-            utterance.voice = fallbackRtlVoice;
-          }
-
-          const speakStartedAt = Date.now();
-          const maxSafetyMs = Math.max(7800, minExpectedSpeechMs + 2800);
-          const safetyTimer = setTimeout(completeAndContinue, maxSafetyMs);
-
-          utterance.onend = () => {
-            clearTimeout(safetyTimer);
-            const elapsed = Date.now() - speakStartedAt;
-            const remainingWait = minExpectedSpeechMs - elapsed;
-            if (remainingWait > 250) {
-              ttsWaitTimerRef.current = setTimeout(completeAndContinue, remainingWait);
-            } else {
-              completeAndContinue();
-            }
-          };
-
-          utterance.onerror = () => {
-            clearTimeout(safetyTimer);
-            playGoogleStreamFallback(completeAndContinue);
-          };
-
-          window.speechSynthesis.speak(utterance);
-        } catch {
-          playGoogleStreamFallback(completeAndContinue);
-        }
-      };
-
-      const langKey = isEn ? 'en' : 'fa';
-      const cacheKey = `${langKey}:${cleanText}`;
-      const cachedBase64 = ttsClientCacheRef.current.get(cacheKey);
-
-      if (cachedBase64) {
-        playAudioSrc(`data:audio/wav;base64,${cachedBase64}`, playNativeSpeechSynthesis);
-        return;
-      }
-
-      const isStaticOrNative =
-        window.location.protocol === 'capacitor:' ||
-        window.location.protocol === 'file:' ||
-        window.location.hostname.includes('github.io');
-
-      if (isStaticOrNative) {
-        playNativeSpeechSynthesis();
-        return;
-      }
-
-      const controller = new AbortController();
-      const fetchTimeout = setTimeout(() => controller.abort(), 2200);
-
-      fetch('/api/smart-tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text: cleanText,
-          language: langKey,
-        }),
-        signal: controller.signal,
-      })
-        .then(async (res) => {
-          clearTimeout(fetchTimeout);
-          if (!res.ok) throw new Error('TTS HTTP error');
-          const data = await res.json();
-          if (!data?.ok || !data?.audioBase64) throw new Error('No audioBase64');
-
-          ttsClientCacheRef.current.set(cacheKey, data.audioBase64);
-          playAudioSrc(`data:audio/wav;base64,${data.audioBase64}`, playNativeSpeechSynthesis);
-        })
-        .catch(() => {
-          clearTimeout(fetchTimeout);
-          playNativeSpeechSynthesis();
-        });
+          }, 480);
+        },
+      });
     },
     [isEn, stopListening, stopSpeaking]
   );
@@ -504,7 +365,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   }, [messages, liveTranscript, isAnalyzing]);
 
   /**
-   * میکروفون پایدار که بلافاصله پس از پرسش گوینده روشن می‌شود و حداقل ۳۰ تا ۴۵ ثانیه منتظر شنیدن پاسخ کاربر باقی می‌ماند.
+   * میکروفون پایدار و بدون بوق مکرر:
+   * ۱. پس از پایان صدای گوینده فعال می‌شود.
+   * ۲. به‌جای فراخوانی مکرر rec.start() در حلقه onend (که در اندروید هر ۴ ثانیه صدای بوق سیستم ایجاد می‌کرد)،
+   *    در صورت سکوت اولیه کاربر، به پایشگر کاملاً بی‌صدای فرکانس پایه (Web Audio AnalyserNode) سوئیچ می‌کند
+   *    تا میکروفون بدون هیچ بوقی روشن و آماده شنیدن صدای کاربر بر اساس «فرکانس مبنا» و «حساسیت میکروفون» باقی بماند.
    */
   const startListening = useCallback(() => {
     if (!isOpenRef.current || typeof window === 'undefined') return;
@@ -518,6 +383,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     }
 
     stopSpeaking();
+    stopSilentVadMonitor();
 
     if (speechDoneTimerRef.current) {
       clearTimeout(speechDoneTimerRef.current);
@@ -528,7 +394,15 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       reconnectTimerRef.current = null;
     }
     if (recognitionRef.current) {
-      safeAbortSpeechRecognition(recognitionRef.current);
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch {
+        safeAbortSpeechRecognition(recognitionRef.current);
+      }
       recognitionRef.current = null;
     }
 
@@ -543,7 +417,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     setIsListening(true);
 
     let hasCommitted = false;
-    let quickFailCount = 0;
+    let initialFocusRetryDone = false;
 
     const commitCapturedSpeech = () => {
       if (hasCommitted) return;
@@ -555,6 +429,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       if (!combined) return;
       hasCommitted = true;
       shouldKeepListeningRef.current = false;
+      stopSilentVadMonitor();
 
       if (speechDoneTimerRef.current) {
         clearTimeout(speechDoneTimerRef.current);
@@ -565,7 +440,15 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         reconnectTimerRef.current = null;
       }
       if (recognitionRef.current) {
-        safeAbortSpeechRecognition(recognitionRef.current);
+        try {
+          recognitionRef.current.onstart = null;
+          recognitionRef.current.onresult = null;
+          recognitionRef.current.onerror = null;
+          recognitionRef.current.onend = null;
+          recognitionRef.current.stop();
+        } catch {
+          safeAbortSpeechRecognition(recognitionRef.current);
+        }
         recognitionRef.current = null;
       }
 
@@ -577,17 +460,176 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       handleUserUtteranceRef.current(combined);
     };
 
-    const schedulePostSpeechCommit = (delayMs = 1950) => {
+    const schedulePostSpeechCommit = (baseDelayMs = 1950) => {
       if (speechDoneTimerRef.current) {
         clearTimeout(speechDoneTimerRef.current);
       }
+      // حساسیت بالاتر میکروفون، فرصت مکث بین کلمات را کمی بیشتر می‌کند تا جمله کاربر کامل شنیده شود
+      const sens = micSensitivityRef.current ?? 75;
+      const sensitivityBonusMs = Math.round((sens - 50) * 6);
+      const effectiveDelayMs = Math.max(1150, baseDelayMs + sensitivityBonusMs);
+
       speechDoneTimerRef.current = setTimeout(() => {
         commitCapturedSpeech();
-      }, delayMs);
+      }, effectiveDelayMs);
+    };
+
+    /**
+     * پایشگر کاملاً بی‌صدای فرکانس صدای کاربر (Web Audio API با کالیبراسیون تطبیقی نویز محیط):
+     * بدون ایجاد هیچ بوق سیستمی در اندروید، میکروفون را تا ۶۰ ثانیه روشن و آماده نگه می‌دارد.
+     * ابتدا سطح نویز پایه محیط (Noise Floor) را کالیبره می‌کند تا در سکوت هرگز به‌اشتباه فعال نشود
+     * و فقط با شروع واقعی صحبت کاربر در محدوده «فرکانس مبنا» و «حساسیت میکروفون»، تشخیص گفتار را فعال می‌کند.
+     */
+    const startSilentFrequencyMonitor = () => {
+      if (!shouldKeepListeningRef.current || !isOpenRef.current || hasCommitted) return;
+      stopSilentVadMonitor();
+
+      if (
+        typeof navigator === 'undefined' ||
+        !navigator.mediaDevices ||
+        !navigator.mediaDevices.getUserMedia
+      ) {
+        setIsListening(true);
+        setIsSpeechActive(false);
+        return;
+      }
+
+      setIsListening(true);
+      setIsSpeechActive(false);
+
+      navigator.mediaDevices
+        .getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        })
+        .then((stream) => {
+          if (!shouldKeepListeningRef.current || !isOpenRef.current || hasCommitted) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+
+          vadStreamRef.current = stream;
+          const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+          const audioCtx: AudioContext = new AudioCtx();
+          vadAudioCtxRef.current = audioCtx;
+
+          const source = audioCtx.createMediaStreamSource(stream);
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 2048;
+          analyser.minDecibels = -85;
+          analyser.maxDecibels = -10;
+          analyser.smoothingTimeConstant = 0.5;
+          source.connect(analyser);
+
+          const freqBins = new Uint8Array(analyser.frequencyBinCount);
+          const timeData = new Uint8Array(analyser.fftSize);
+          let consecutiveVoiceFrames = 0;
+          let calibrationFrames = 0;
+          let baselineBandEnergy = 0;
+          let baselineRms = 0;
+
+          vadIntervalRef.current = setInterval(() => {
+            if (!shouldKeepListeningRef.current || !isOpenRef.current || hasCommitted) {
+              stopSilentVadMonitor();
+              return;
+            }
+
+            if (Date.now() - sessionStartTimeRef.current > 60000) {
+              stopListening();
+              return;
+            }
+
+            analyser.getByteFrequencyData(freqBins);
+            analyser.getByteTimeDomainData(timeData);
+
+            // ۱. محاسبه دامنه واقعی موج صوتی (Time-Domain RMS) برای تمایز قطعی سکوت از صدای واقعی
+            let sumSq = 0;
+            for (let i = 0; i < timeData.length; i++) {
+              const centered = (timeData[i] - 128) / 128;
+              sumSq += centered * centered;
+            }
+            const currentRms = Math.sqrt(sumSq / timeData.length) * 100;
+
+            // ۲. محاسبه انرژی در باند فرکانس پایه و هارمونیک اول صدای انسان حول فرکانس مبنای انتخابی کاربر
+            const sampleRate = audioCtx.sampleRate || 44100;
+            const binHz = sampleRate / analyser.fftSize;
+            const baseHz = Math.max(80, Math.min(350, micBaseFreqRef.current || 165));
+            const sens = Math.max(10, Math.min(100, micSensitivityRef.current || 75));
+
+            const minFreq = Math.max(75, baseHz * 0.75);
+            const maxFreq = Math.min(950, baseHz * 2.8);
+            const startBin = Math.max(1, Math.floor(minFreq / binHz));
+            const endBin = Math.min(freqBins.length - 1, Math.ceil(maxFreq / binHz));
+
+            let sumEnergy = 0;
+            let peakEnergy = 0;
+            let count = 0;
+            for (let b = startBin; b <= endBin; b++) {
+              const val = freqBins[b];
+              sumEnergy += val;
+              if (val > peakEnergy) peakEnergy = val;
+              count++;
+            }
+
+            const avgBandEnergy = count > 0 ? sumEnergy / count : 0;
+            const weightedBandEnergy = avgBandEnergy * 0.7 + peakEnergy * 0.3;
+
+            // ۳. کالیبراسیون اولیه نویز محیط در ۸ فریم اول (~۶۴۰ میلی‌ثانیه) تا هیچ بوق یا نویز ثابتی باعث تحریک کاذب نشود
+            if (calibrationFrames < 8) {
+              calibrationFrames += 1;
+              baselineBandEnergy =
+                calibrationFrames === 1
+                  ? weightedBandEnergy
+                  : baselineBandEnergy * 0.75 + weightedBandEnergy * 0.25;
+              baselineRms =
+                calibrationFrames === 1 ? currentRms : baselineRms * 0.75 + currentRms * 0.25;
+              setVoiceLevel(0);
+              return;
+            }
+
+            const energyRise = Math.max(0, weightedBandEnergy - baselineBandEnergy);
+            const rmsRise = Math.max(0, currentRms - baselineRms);
+
+            // آستانه افزایش انرژی نسبت به نویز محیط بر اساس اسلایدر حساسیت میکروفون (۱۰٪ تا ۱۰۰٪)
+            const requiredEnergyRise = Math.max(16, Math.round(48 - sens * 0.3));
+            const requiredRmsRise = Math.max(2.0, (115 - sens) * 0.055);
+
+            const normalizedLevel = Math.min(
+              100,
+              Math.round((energyRise / Math.max(16, requiredEnergyRise)) * 45)
+            );
+            setVoiceLevel(normalizedLevel > 8 ? normalizedLevel : 0);
+
+            if (energyRise >= requiredEnergyRise && rmsRise >= requiredRmsRise) {
+              consecutiveVoiceFrames += 1;
+              if (consecutiveVoiceFrames >= 3) {
+                // شروع واقعی صحبت کاربر تشخیص داده شد -> آزادسازی استریم پایش و شروع تشخیص گفتار
+                stopSilentVadMonitor();
+                setIsSpeechActive(true);
+                setVoiceLevel(75);
+                createAndRunRecognition();
+              }
+            } else {
+              consecutiveVoiceFrames = Math.max(0, consecutiveVoiceFrames - 1);
+              // به‌روزرسانی آرام سطح نویز پایه محیط در حالت سکوت
+              baselineBandEnergy = baselineBandEnergy * 0.94 + weightedBandEnergy * 0.06;
+              baselineRms = baselineRms * 0.94 + currentRms * 0.06;
+            }
+          }, 80);
+        })
+        .catch(() => {
+          setIsListening(false);
+          setIsSpeechActive(false);
+        });
     };
 
     const createAndRunRecognition = () => {
       if (!shouldKeepListeningRef.current || !isOpenRef.current || hasCommitted) return;
+
+      stopSilentVadMonitor();
 
       try {
         const rec = new SpeechRecognition();
@@ -613,7 +655,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
         rec.onspeechstart = () => {
           instanceHeardSpeech = true;
-          quickFailCount = 0;
           setIsSpeechActive(true);
           setVoiceLevel(80);
         };
@@ -622,7 +663,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           if (hasCommitted) return;
 
           instanceHeardSpeech = true;
-          quickFailCount = 0;
           setIsSpeechActive(true);
           setVoiceLevel(55 + Math.floor(Math.random() * 40));
 
@@ -664,9 +704,8 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           if (currentConvertedText) {
             setLiveTranscript(currentConvertedText);
             setInputText(currentConvertedText);
-            // اگر کاربر در مرحله تایید نهایی کلماتی مثل «اوکی / بله / ثبت کن» بگوید، سریع‌تر ثبت شود
             const isShortConfirm = isConfirmationUtterance(currentConvertedText);
-            schedulePostSpeechCommit(isShortConfirm ? 1100 : 1950);
+            schedulePostSpeechCommit(isShortConfirm ? 1050 : 1850);
           }
         };
 
@@ -700,38 +739,27 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           const now = Date.now();
           const instanceDuration = now - instanceStartAt;
 
-          if (
-            hasSpokenAnything &&
-            (lastSpeechTimeRef.current === 0 || now - lastSpeechTimeRef.current >= 1650)
-          ) {
+          // اگر کاربر صحبتی کرده باشد، بلافاصله جمله او ثبت و پردازش شود
+          if (hasSpokenAnything) {
             commitCapturedSpeech();
             return;
           }
 
-          if (!instanceHeardSpeech && instanceDuration < 700) {
-            quickFailCount += 1;
-            if (quickFailCount >= 4) {
-              shouldKeepListeningRef.current = false;
-              setIsListening(false);
-              setIsSpeechActive(false);
-              setVoiceLevel(0);
-              return;
-            }
-          } else {
-            quickFailCount = 0;
-          }
-
-          const reconnectDelay = quickFailCount > 0 ? 550 * quickFailCount : 380;
-
-          // حداقل ۴۵ ثانیه (بیش از ۳۰ ثانیه درخواستی) منتظر شنیدن صحبت کاربر باقی بماند
-          if (now - sessionStartTimeRef.current < 45000) {
+          // اگر بلافاصله پس از آزادسازی کانال صوتی (< 350ms) بسته شد، فقط یک‌بار پس از ۶۰۰ میلی‌ثانیه باز شود
+          if (!instanceHeardSpeech && instanceDuration < 350 && !initialFocusRetryDone) {
+            initialFocusRetryDone = true;
             reconnectTimerRef.current = setTimeout(() => {
               if (shouldKeepListeningRef.current && isOpenRef.current && !hasCommitted) {
                 createAndRunRecognition();
               }
-            }, reconnectDelay);
-          } else if (hasSpokenAnything) {
-            commitCapturedSpeech();
+            }, 600);
+            return;
+          }
+
+          // جلوگیری کامل از حلقه بوق‌های مکرر اندروید:
+          // در صورت سکوت کاربر، پایشگر بی‌صدای کالیبره‌شده فعال می‌شود و تا زمانی که کاربر واقعاً صحبت نکند rec.start() صدا زده نمی‌شود
+          if (now - sessionStartTimeRef.current < 60000) {
+            startSilentFrequencyMonitor();
           } else {
             stopListening();
           }
@@ -740,14 +768,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         recognitionRef.current = rec;
         rec.start();
       } catch {
-        setIsListening(false);
-        setIsSpeechActive(false);
-        setVoiceLevel(0);
+        startSilentFrequencyMonitor();
       }
     };
 
     createAndRunRecognition();
-  }, [isEn, stopListening, stopSpeaking]);
+  }, [isEn, stopListening, stopSilentVadMonitor, stopSpeaking]);
 
   const executeFinalSave = useCallback(
     async (finalDraft: SmartCaptureDraft) => {

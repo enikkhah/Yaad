@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AppSettings, AppTheme, PhoneAlarmSound, Reminder, IdeaNote, SavedLocation, Occasion } from '../types';
+import { AppSettings, AppTheme, PhoneAlarmSound, AiVoicePersona, Reminder, IdeaNote, SavedLocation, Occasion } from '../types';
 import { 
   X, 
   Palette, 
@@ -64,7 +64,17 @@ import {
   openGoogleCalendarAccount
 } from '../utils/googleSync';
 import { App as CapacitorApp } from '@capacitor/app';
-import { PHONE_ALARM_SOUNDS, playPhoneAlarmSound, stopAlarmRinging, setGlobalVolume, setGlobalVibration } from '../utils/audio';
+import {
+  PHONE_ALARM_SOUNDS,
+  AI_VOICE_PERSONAS,
+  playPhoneAlarmSound,
+  stopAlarmRinging,
+  setGlobalVolume,
+  setGlobalVibration,
+  speakAiAssistantPrompt,
+  stopAiAssistantPrompt,
+  unlockAudio,
+} from '../utils/audio';
 import { syncNotificationSoundAndVolume, syncAllRemindersWithLocalNotifications } from '../utils/nativeLocalNotifications';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 import { User } from 'firebase/auth';
@@ -131,6 +141,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   } | null>(null);
 
   const [playingSoundId, setPlayingSoundId] = useState<PhoneAlarmSound | null>(null);
+  const [isTestingAiVoice, setIsTestingAiVoice] = useState<boolean>(false);
   const soundTimeoutRef = useRef<number | null>(null);
 
   // Recycle Bin state
@@ -810,6 +821,248 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         </div>
                       );
                     })}
+                  </div>
+                </div>
+
+                {/* ========================================================= */}
+                {/* 2.3 تنظیمات گوینده هوش مصنوعی و میکروفون (ثبت هوشمند) */}
+                {/* ========================================================= */}
+                <div className="pt-3 border-t border-stone-800/90 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-[#FF8C00]/15 border border-[#FF8C00]/35 flex items-center justify-center text-[#FF8C00]">
+                        <Mic className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h5 className="text-xs sm:text-sm font-black text-white">
+                          {isFa
+                            ? 'تنظیمات گوینده هوش مصنوعی و میکروفون'
+                            : 'AI Speaker Voice & Microphone Settings'}
+                        </h5>
+                        <p className="text-[10px] text-stone-400">
+                          {isFa
+                            ? 'انتخاب صدای گوینده، حساسیت میکروفون و فرکانس مبنا در ثبت هوشمند'
+                            : 'Select AI speaker voice, mic sensitivity, and base frequency'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        unlockAudio();
+                        if (isTestingAiVoice) {
+                          stopAiAssistantPrompt();
+                          setIsTestingAiVoice(false);
+                          return;
+                        }
+                        setIsTestingAiVoice(true);
+                        const sampleText = isFa
+                          ? 'سلام، وقت بخیر. لطفاً بفرمایید چه یادآور، مناسبت، مکان یا ایده‌ای را می‌خواهید ثبت کنید؟'
+                          : 'Hello! Please tell me what reminder, occasion, location, or idea you would like to save?';
+                        speakAiAssistantPrompt({
+                          text: sampleText,
+                          language: isFa ? 'fa' : 'en',
+                          voicePersona: settings.aiVoicePersona || 'zephyr_warm',
+                          volume: 1.0,
+                          onDone: () => setIsTestingAiVoice(false),
+                        });
+                      }}
+                      className={`min-h-[38px] px-3 py-1.5 rounded-xl text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer active:scale-95 shrink-0 ${
+                        isTestingAiVoice
+                          ? 'bg-rose-500 text-white animate-pulse'
+                          : 'bg-[#FF8C00] hover:bg-[#FF9E1F] text-white shadow-md shadow-[#FF8C00]/25'
+                      }`}
+                    >
+                      {isTestingAiVoice ? (
+                        <>
+                          <Square className="w-3.5 h-3.5 fill-current" />
+                          <span>{isFa ? 'توقف تست' : 'Stop Test'}</span>
+                        </>
+                      ) : (
+                        <>
+                          <Volume2 className="w-3.5 h-3.5" />
+                          <span>{isFa ? 'تست صدای گوینده' : 'Test AI Voice'}</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {/* ۱. انتخاب صدای گوینده هوش مصنوعی */}
+                  <div className="p-3 rounded-xl bg-stone-900/70 border border-stone-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-stone-200">
+                        {isFa ? 'انتخاب صدای گوینده هوش مصنوعی:' : 'Select AI Speaker Voice:'}
+                      </span>
+                      <span className="text-[10px] text-stone-400">
+                        {isFa ? 'با انتخاب هر گزینه نمونه صدای آن پخش می‌شود' : 'Tap any voice to preview'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {AI_VOICE_PERSONAS.map((persona) => {
+                        const isSelected =
+                          (settings.aiVoicePersona || 'zephyr_warm') === persona.id;
+                        return (
+                          <button
+                            key={persona.id}
+                            type="button"
+                            onClick={() => {
+                              unlockAudio();
+                              onUpdateSettings({ aiVoicePersona: persona.id as AiVoicePersona });
+                              setIsTestingAiVoice(true);
+                              const previewText = isFa
+                                ? 'سلام، وقت بخیر. لطفاً بفرمایید چه یادآور، مناسبت، مکان یا ایده‌ای را می‌خواهید ثبت کنید؟'
+                                : 'Hello! Please tell me what reminder, occasion, location, or idea you would like to save?';
+                              speakAiAssistantPrompt({
+                                text: previewText,
+                                language: isFa ? 'fa' : 'en',
+                                voicePersona: persona.id,
+                                volume: 1.0,
+                                onDone: () => setIsTestingAiVoice(false),
+                              });
+                            }}
+                            className={`p-2.5 rounded-xl border text-start transition-all flex items-center justify-between gap-2 cursor-pointer ${
+                              isSelected
+                                ? 'border-[#FF8C00] bg-[#FF8C00]/15 ring-1 ring-[#FF8C00]/40'
+                                : 'border-stone-800 bg-stone-950/70 hover:border-stone-700'
+                            }`}
+                          >
+                            <div className="min-w-0">
+                              <p
+                                className={`text-xs font-bold truncate ${
+                                  isSelected ? 'text-[#FF8C00]' : 'text-stone-200'
+                                }`}
+                              >
+                                {isFa ? persona.label : persona.labelEn}
+                              </p>
+                              <p className="text-[10px] text-stone-400 truncate mt-0.5">
+                                {isFa ? persona.desc : persona.descEn}
+                              </p>
+                            </div>
+                            <div
+                              className={`w-4 h-4 rounded-full border flex items-center justify-center shrink-0 ${
+                                isSelected
+                                  ? 'border-[#FF8C00] bg-[#FF8C00]'
+                                  : 'border-stone-600 bg-transparent'
+                              }`}
+                            >
+                              {isSelected && <div className="w-1.5 h-1.5 rounded-full bg-white" />}
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* ۲. اسلایدر حساسیت میکروفون */}
+                  <div className="p-3 rounded-xl bg-stone-900/70 border border-stone-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-stone-200 block">
+                          {isFa ? 'حساسیت میکروفون (تشخیص شروع کلام):' : 'Microphone Sensitivity:'}
+                        </span>
+                        <span className="text-[10px] text-stone-400 block">
+                          {isFa
+                            ? 'حساسیت بالاتر صداهای آرام‌تر را بدون نیاز به تکرار تشخیص می‌دهد'
+                            : 'Higher sensitivity detects softer voice without repeating'}
+                        </span>
+                      </div>
+                      <span className="text-xs font-black text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-md border border-emerald-500/30 shrink-0">
+                        {isFa
+                          ? `${toPersianDigits(settings.micSensitivity ?? 75)}٪`
+                          : `${settings.micSensitivity ?? 75}%`}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="10"
+                      max="100"
+                      step="5"
+                      value={settings.micSensitivity ?? 75}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        onUpdateSettings({ micSensitivity: val });
+                      }}
+                      className="w-full h-2 bg-stone-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                    />
+                    <div className="flex items-center justify-between text-[10px] text-stone-500">
+                      <span>{isFa ? 'کم (محیط پرسر‌و‌صدا)' : 'Low (Noisy area)'}</span>
+                      <span>{isFa ? 'متعادل (۷۵٪)' : 'Balanced (75%)'}</span>
+                      <span>{isFa ? 'حداکثر حساسیت (۱۰۰٪)' : 'Max (100%)'}</span>
+                    </div>
+                  </div>
+
+                  {/* ۴. تنظیم فرکانس مبنا (هرتز) */}
+                  <div className="p-3 rounded-xl bg-stone-900/70 border border-stone-800 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <span className="text-xs font-bold text-stone-200 block">
+                          {isFa
+                            ? 'فرکانس مبنای صدای شما (فیلتر هوشمند نویز):'
+                            : 'Voice Base Frequency (Hz):'}
+                        </span>
+                        <span className="text-[10px] text-stone-400 block">
+                          {isFa
+                            ? 'تنظیم روی فرکانس پایه صدای شما باعث می‌شود میکروفون بدون بوق و فقط با صدای شما فعال بماند'
+                            : 'Tunes voice detector to your fundamental vocal frequency'}
+                        </span>
+                      </div>
+                      <span className="text-xs font-black text-sky-400 bg-sky-500/10 px-2 py-0.5 rounded-md border border-sky-500/30 shrink-0">
+                        {isFa
+                          ? `${toPersianDigits(settings.micBaseFrequencyHz ?? 165)} هرتز`
+                          : `${settings.micBaseFrequencyHz ?? 165} Hz`}
+                      </span>
+                    </div>
+
+                    <input
+                      type="range"
+                      min="80"
+                      max="350"
+                      step="5"
+                      value={settings.micBaseFrequencyHz ?? 165}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        onUpdateSettings({ micBaseFrequencyHz: val });
+                      }}
+                      className="w-full h-2 bg-stone-800 rounded-lg appearance-none cursor-pointer accent-sky-400"
+                    />
+
+                    <div className="grid grid-cols-3 gap-1.5 pt-1">
+                      {[
+                        {
+                          hz: 120,
+                          labelFa: '۱۲۰ هرتز (صدای بم)',
+                          labelEn: '120 Hz (Deep)',
+                        },
+                        {
+                          hz: 165,
+                          labelFa: '۱۶۵ هرتز (استاندارد)',
+                          labelEn: '165 Hz (Standard)',
+                        },
+                        {
+                          hz: 220,
+                          labelFa: '۲۲۰ هرتز (صدای زیر)',
+                          labelEn: '220 Hz (High)',
+                        },
+                      ].map((preset) => {
+                        const isActivePreset = (settings.micBaseFrequencyHz ?? 165) === preset.hz;
+                        return (
+                          <button
+                            key={preset.hz}
+                            type="button"
+                            onClick={() => onUpdateSettings({ micBaseFrequencyHz: preset.hz })}
+                            className={`py-1.5 px-2 rounded-lg text-[10px] font-bold border transition-all cursor-pointer ${
+                              isActivePreset
+                                ? 'bg-sky-500/20 border-sky-400 text-sky-300'
+                                : 'bg-stone-950 border-stone-800 text-stone-400 hover:border-stone-700'
+                            }`}
+                          >
+                            {isFa ? preset.labelFa : preset.labelEn}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               </div>

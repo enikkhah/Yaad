@@ -156,6 +156,10 @@ export default function App() {
       alarmVolume: 0.85,
       vibrationEnabled: true,
       autoVoiceInput: false,
+      aiVoicePersona: 'zephyr_warm',
+      aiVoiceVolume: 1.0,
+      micSensitivity: 75,
+      micBaseFrequencyHz: 165,
     };
   });
 
@@ -3911,6 +3915,11 @@ export default function App() {
           triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
         }}
         language={settings.language}
+        aiVoicePersona={settings.aiVoicePersona}
+        aiVoiceVolume={settings.aiVoiceVolume}
+        ttsVoiceRate={settings.ttsVoiceRate}
+        micSensitivity={settings.micSensitivity}
+        micBaseFrequencyHz={settings.micBaseFrequencyHz}
       />
 
       {/* SETTINGS MODAL */}

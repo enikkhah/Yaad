@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import crypto from 'crypto';
 import { GoogleGenAI, Type } from '@google/genai';
 
 const app = express();
@@ -199,82 +200,376 @@ ${JSON.stringify(currentDraft || {})}
   }
 });
 
-// In-memory cache for synthesized TTS prompts so greetings and common questions play instantaneously
-const ttsMemoryCache = new Map<string, string>();
+const TTS_CACHE_DIR = path.resolve(process.cwd(), 'public', 'tts-cache');
+try {
+  if (!fs.existsSync(TTS_CACHE_DIR)) {
+    fs.mkdirSync(TTS_CACHE_DIR, { recursive: true });
+  }
+} catch {
+  // ignore
+}
 
-// Server-side Gemini TTS endpoint for warm, conversational Persian ('fa') & English ('en') spoken questions
-app.post('/api/smart-tts', async (req: Request, res: Response) => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-    res.status(503).json({ ok: false, error: 'GEMINI_API_KEY not configured on server' });
-    return;
+// Helper: Wraps raw 16-bit mono PCM (24000 Hz) from Gemini TTS in a standard 16000 Hz 16-bit WAV container
+function ensureWavBufferFromGeminiInlineData(base64Data: string, mimeType = ''): Buffer {
+  const rawBuf = Buffer.from(base64Data, 'base64');
+  if (rawBuf.length > 44 && rawBuf.subarray(0, 4).toString('ascii') === 'RIFF') {
+    return rawBuf;
   }
 
+  const rateMatch = mimeType.match(/rate=(\d+)/i);
+  const inRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
+  const outRate = 16000;
+  const inSamples = Math.floor(rawBuf.length / 2);
+  const ratio = inRate / outRate;
+  const outSamples = Math.max(1, Math.floor(inSamples / ratio));
+  const outPcm = Buffer.alloc(outSamples * 2);
+
+  for (let i = 0; i < outSamples; i++) {
+    const srcPos = i * ratio;
+    const idx0 = Math.floor(srcPos);
+    const idx1 = Math.min(inSamples - 1, idx0 + 1);
+    const frac = srcPos - idx0;
+    const s0 = rawBuf.readInt16LE(idx0 * 2);
+    const s1 = rawBuf.readInt16LE(idx1 * 2);
+    const sample = Math.max(-32768, Math.min(32767, Math.round(s0 + (s1 - s0) * frac)));
+    outPcm.writeInt16LE(sample, i * 2);
+  }
+
+  const dataSize = outPcm.length;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(outRate, 24);
+  header.writeUInt32LE(outRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, outPcm]);
+}
+
+/**
+ * Applies real-time 16-bit PCM resampling and formant EQ filtering to a WAV buffer
+ * so all 5 voice personas sound genuinely distinct on every browser and mobile WebView.
+ */
+function applyPersonaToWavBuffer(wavBuf: Buffer, voicePersona = 'zephyr_warm'): Buffer {
+  if (wavBuf.length <= 44 || wavBuf.subarray(0, 4).toString('ascii') !== 'RIFF') {
+    return wavBuf;
+  }
+
+  const personaConfig: Record<
+    string,
+    { step: number; filterMode: 'warm' | 'calm' | 'bright' | 'deep' | 'formal'; gain: number }
+  > = {
+    zephyr_warm: { step: 1.0, filterMode: 'warm', gain: 1.05 },
+    kore_calm: { step: 0.9, filterMode: 'calm', gain: 1.04 },
+    puck_energetic: { step: 1.13, filterMode: 'bright', gain: 1.08 },
+    fenrir_deep: { step: 0.81, filterMode: 'deep', gain: 1.12 },
+    charon_formal: { step: 0.93, filterMode: 'formal', gain: 1.08 },
+  };
+
+  const cfg = personaConfig[voicePersona] || personaConfig.zephyr_warm;
+  const sampleRate = wavBuf.readUInt32LE(24) || 16000;
+  const pcmOffset = 44;
+  const inSamples = Math.floor((wavBuf.length - pcmOffset) / 2);
+  if (inSamples < 10) return wavBuf;
+
+  const outSamples = Math.max(1, Math.floor(inSamples / cfg.step));
+  const outPcm = Buffer.alloc(outSamples * 2);
+
+  let prevOut = 0;
+  let prevIn = 0;
+
+  for (let i = 0; i < outSamples; i++) {
+    const srcPos = i * cfg.step;
+    const idx0 = Math.min(inSamples - 1, Math.floor(srcPos));
+    const idx1 = Math.min(inSamples - 1, idx0 + 1);
+    const frac = srcPos - idx0;
+    const s0 = wavBuf.readInt16LE(pcmOffset + idx0 * 2);
+    const s1 = wavBuf.readInt16LE(pcmOffset + idx1 * 2);
+    const rawSample = s0 + (s1 - s0) * frac;
+
+    let shaped = rawSample;
+    if (cfg.filterMode === 'deep') {
+      // Resonant low-pass boost for deep baritone voice
+      prevOut = 0.62 * rawSample + 0.38 * prevOut;
+      shaped = prevOut * 0.75 + rawSample * 0.35;
+    } else if (cfg.filterMode === 'calm') {
+      // Gentle warm smoothing for calm soothing voice
+      prevOut = 0.74 * rawSample + 0.26 * prevOut;
+      shaped = prevOut;
+    } else if (cfg.filterMode === 'bright') {
+      // Crisp high-shelf presence for energetic voice
+      const high = rawSample - prevIn;
+      shaped = rawSample + high * 0.38;
+    } else if (cfg.filterMode === 'formal') {
+      // Studio broadcast mid-presence
+      const high = rawSample - prevIn;
+      prevOut = 0.82 * rawSample + 0.18 * prevOut;
+      shaped = prevOut + high * 0.22;
+    } else {
+      // Warm balanced presence
+      prevOut = 0.88 * rawSample + 0.12 * prevOut;
+      shaped = prevOut;
+    }
+    prevIn = rawSample;
+
+    const clamped = Math.max(-32768, Math.min(32767, Math.round(shaped * cfg.gain)));
+    outPcm.writeInt16LE(clamped, i * 2);
+  }
+
+  const dataSize = outPcm.length;
+  const header = Buffer.alloc(44);
+  header.write('RIFF', 0);
+  header.writeUInt32LE(36 + dataSize, 4);
+  header.write('WAVE', 8);
+  header.write('fmt ', 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write('data', 36);
+  header.writeUInt32LE(dataSize, 40);
+
+  return Buffer.concat([header, outPcm]);
+}
+
+function normalizePersianForArabicTtsFallback(text: string): string {
+  return text
+    .replace(/گ/g, 'ك')
+    .replace(/چ/g, 'ج')
+    .replace(/پ/g, 'ب')
+    .replace(/ژ/g, 'ز')
+    .replace(/ک/g, 'ك')
+    .replace(/ی/g, 'ي')
+    .replace(/هٔ/g, 'ه')
+    .replace(/\u200c/g, ' ');
+}
+
+async function fetchGoogleTranslateTtsBase64(
+  text: string,
+  lang: string
+): Promise<{ audioBase64: string; mimeType: string } | null> {
+  const isEn = lang === 'en';
+  // Note: Google Translate TTS returns HTTP 400 for tl=fa, so we use tl=ar with phonetic Persian letter mapping as fallback
+  const tl = isEn ? 'en' : 'ar';
+  const queryText = isEn ? text : normalizePersianForArabicTtsFallback(text);
+
+  // 1. Try Google Translate batchexecute RPC (jQ1olc)
   try {
-    const { text, language = 'fa' } = req.body || {};
+    const rpcPayload = JSON.stringify([
+      [['jQ1olc', JSON.stringify([queryText, tl, null, 'null']), null, 'generic']],
+    ]);
+    const body = 'f.req=' + encodeURIComponent(rpcPayload) + '&';
+    const rpcResp = await fetch(
+      'https://translate.google.com/_/TranslateWebserverUi/data/batchexecute?rpcids=jQ1olc&hl=en&soc-app=1&soc-platform=1&soc-device=1',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+        body,
+      }
+    );
+    if (rpcResp.ok) {
+      const txt = await rpcResp.text();
+      const match = txt.match(/jQ1olc","\[\\"(.*?)\\"\]/);
+      if (match && match[1] && match[1].length > 200) {
+        return {
+          audioBase64: match[1],
+          mimeType: 'audio/mpeg',
+        };
+      }
+    }
+  } catch {
+    // fall through to direct stream endpoints
+  }
+
+  // 2. Try Google Translate direct audio endpoints
+  const endpoints = [
+    `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=tw-ob&q=${encodeURIComponent(queryText)}`,
+    `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=gtx&q=${encodeURIComponent(queryText)}`,
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const resp = await fetch(url, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        },
+      });
+      if (!resp.ok) continue;
+      const arrBuf = await resp.arrayBuffer();
+      if (!arrBuf || arrBuf.byteLength < 100) continue;
+      return {
+        audioBase64: Buffer.from(arrBuf).toString('base64'),
+        mimeType: 'audio/mpeg',
+      };
+    } catch {
+      // try next endpoint
+    }
+  }
+  return null;
+}
+
+// In-memory cache of base audio buffers (keyed by `${language}:${cleanText}`)
+const ttsBaseBufferCache = new Map<string, { buffer: Buffer; mimeType: string }>();
+
+function getPresetWavPath(cleanText: string, language: string): string | null {
+  const norm = cleanText.replace(/\s+/g, ' ').trim();
+  if (
+    language !== 'en' &&
+    (norm.includes('چه یادآور، مناسبت، مکان یا ایده‌ای') ||
+      norm.includes('لطفاً بفرمایید چه موردی را ثبت کنم'))
+  ) {
+    const p = path.join(TTS_CACHE_DIR, 'welcome_fa.wav');
+    if (fs.existsSync(p)) return p;
+  }
+  if (
+    language === 'en' &&
+    (norm.toLowerCase().includes('what reminder, occasion, location, or idea') ||
+      norm.toLowerCase().includes('what would you like to save'))
+  ) {
+    const p = path.join(TTS_CACHE_DIR, 'welcome_en.wav');
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+// Server-side TTS endpoint for Persian ('fa') & English ('en') spoken questions across all 5 voice personas
+app.post('/api/smart-tts', async (req: Request, res: Response) => {
+  try {
+    const { text, language = 'fa', voicePersona = 'zephyr_warm' } = req.body || {};
     if (!text || typeof text !== 'string' || !text.trim()) {
       res.status(400).json({ ok: false, error: 'text is required' });
       return;
     }
 
-    const cleanText = text.trim();
-    const cacheKey = `${language}:${cleanText}`;
-    const cachedAudio = ttsMemoryCache.get(cacheKey);
-    if (cachedAudio) {
-      res.json({ ok: true, audioBase64: cachedAudio, cached: true });
+    const cleanText = text.replace(/\s+/g, ' ').trim();
+    const baseCacheKey = `${language}:${cleanText}`;
+    const hashKey = crypto.createHash('sha1').update(baseCacheKey).digest('hex');
+    const diskWavPath = path.join(TTS_CACHE_DIR, `dyn_${hashKey}.wav`);
+
+    // 1. Check bundled preset WAV files (welcome_fa.wav / welcome_en.wav)
+    const presetPath = getPresetWavPath(cleanText, language);
+    if (presetPath) {
+      const rawWav = fs.readFileSync(presetPath);
+      const personaWav = applyPersonaToWavBuffer(rawWav, voicePersona);
+      res.json({
+        ok: true,
+        audioBase64: personaWav.toString('base64'),
+        mimeType: 'audio/wav',
+        voicePersona,
+        cached: true,
+      });
       return;
     }
 
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
+    // 2. Check in-memory base cache
+    let baseEntry = ttsBaseBufferCache.get(baseCacheKey);
 
-    const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash-lite-tts',
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            {
-              text: cleanText,
-              speechMetadata: {
-                style:
-                  language === 'en'
-                    ? 'Warm, friendly, cheerful, conversational personal assistant asking a natural question'
-                    : 'دستیار صوتی بسیار صمیمی، گرم، مهربان و محاوره‌ای به زبان فارسی روان با لحن طبیعی و دوستانه',
-              },
-            },
-          ],
-        },
-      ],
-      config: {
-        responseModalities: ['AUDIO'],
-        speechConfig: {
-          voiceConfig: {
-            prebuiltVoiceConfig: { voiceName: 'Zephyr' },
+    // 3. Check persistent disk WAV cache
+    if (!baseEntry && fs.existsSync(diskWavPath)) {
+      try {
+        const diskBuf = fs.readFileSync(diskWavPath);
+        if (diskBuf.length > 100) {
+          baseEntry = { buffer: diskBuf, mimeType: 'audio/wav' };
+          ttsBaseBufferCache.set(baseCacheKey, baseEntry);
+        }
+      } catch {
+        // ignore disk read errors
+      }
+    }
+
+    // 4. Synthesize via Gemini TTS (`gemini-2.5-flash-preview-tts`) if not cached yet
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!baseEntry && apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
           },
         },
-      },
-    });
+      });
 
-    const audioBase64 = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-    if (!audioBase64) {
-      res.status(500).json({ ok: false, error: 'No audio returned from TTS model' });
+      const ttsPrompt =
+        language === 'en'
+          ? `Say the following English sentence aloud in a warm, friendly tone: ${cleanText}`
+          : `Say the following Persian sentence aloud in a warm, friendly tone: ${cleanText}`;
+
+      try {
+        const ttsResp = await ai.models.generateContent({
+          model: 'gemini-2.5-flash-preview-tts',
+          contents: [{ parts: [{ text: ttsPrompt }] }],
+          config: {
+            responseModalities: ['AUDIO'],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: 'Zephyr',
+                },
+              },
+            },
+          },
+        });
+
+        const inlinePart = ttsResp.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+        if (inlinePart?.data) {
+          const wavBuf = ensureWavBufferFromGeminiInlineData(
+            inlinePart.data,
+            inlinePart.mimeType || 'audio/L16;codec=pcm;rate=24000'
+          );
+          baseEntry = { buffer: wavBuf, mimeType: 'audio/wav' };
+          ttsBaseBufferCache.set(baseCacheKey, baseEntry);
+          try {
+            fs.writeFileSync(diskWavPath, wavBuf);
+          } catch {
+            // ignore disk write errors
+          }
+        }
+      } catch {
+        // Silent fallback to Google Translate RPC/stream without logging raw ApiError
+      }
+    }
+
+    // 5. If baseEntry is WAV, apply the selected voicePersona DSP and return
+    if (baseEntry && baseEntry.mimeType === 'audio/wav') {
+      const personaWav = applyPersonaToWavBuffer(baseEntry.buffer, voicePersona);
+      res.json({
+        ok: true,
+        audioBase64: personaWav.toString('base64'),
+        mimeType: 'audio/wav',
+        voicePersona,
+      });
       return;
     }
 
-    if (ttsMemoryCache.size > 60) {
-      const firstKey = ttsMemoryCache.keys().next().value;
-      if (firstKey) ttsMemoryCache.delete(firstKey);
+    // 6. Fallback to Google Translate TTS (batchexecute jQ1olc + direct stream)
+    const fallbackAudio = await fetchGoogleTranslateTtsBase64(cleanText, language);
+    if (fallbackAudio) {
+      res.json({
+        ok: true,
+        audioBase64: fallbackAudio.audioBase64,
+        mimeType: fallbackAudio.mimeType,
+        voicePersona,
+      });
+      return;
     }
-    ttsMemoryCache.set(cacheKey, audioBase64);
 
-    res.json({ ok: true, audioBase64 });
+    res.status(500).json({ ok: false, error: 'TTS generation unavailable' });
   } catch (err: any) {
     res.status(500).json({ ok: false, error: err?.message || 'TTS generation failed' });
   }

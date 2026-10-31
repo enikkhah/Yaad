@@ -37,6 +37,13 @@ export interface IdeaNote {
   deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 
+export type AiVoicePersona =
+  | 'zephyr_warm'
+  | 'kore_calm'
+  | 'puck_energetic'
+  | 'fenrir_deep'
+  | 'charon_formal';
+
 export interface AppSettings {
   language?: 'fa' | 'en';
   theme: AppTheme;
@@ -45,6 +52,10 @@ export interface AppSettings {
   fontSize?: 'small' | 'normal' | 'large' | 'xlarge' | number; // Number for slider (e.g. 13 to 24px) or legacy string
   systemNotificationsEnabled?: boolean;
   ttsVoiceRate: number; // 0.8 - 1.2
+  aiVoicePersona?: AiVoicePersona; // انتخاب صدای گوینده هوش مصنوعی
+  aiVoiceVolume?: number; // 0.0 - 1.0 حجم صدای گوینده هوش مصنوعی
+  micSensitivity?: number; // 10 - 100 حساسیت میکروفون
+  micBaseFrequencyHz?: number; // 80 - 350 هرتز فرکانس مبنای تشخیص گفتار
   defaultRingTune: Category;
   alarmSound: PhoneAlarmSound;
   alarmVolume: number; // 0.0 - 1.0

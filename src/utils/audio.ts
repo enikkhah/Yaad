@@ -67,6 +67,7 @@ const getAudioContext = (): AudioContext => {
 
 let sharedTtsAudio: HTMLAudioElement | null = null;
 let hasUnlockedSpeechSynthesis = false;
+let hasUnlockedHtmlAudio = false;
 
 export const getSharedTtsAudioElement = (): HTMLAudioElement | null => {
   if (typeof window === 'undefined') return null;
@@ -97,8 +98,8 @@ export const playSoftPromptChime = () => {
 };
 
 /**
- * Unlocks Web Audio API, shared HTMLAudioElement, and SpeechSynthesis on user touch/click
- * so timers (like the 1.5s hold on +) can play voice & sound reliably.
+ * Unlocks Web Audio API, shared HTMLAudioElement (once), and SpeechSynthesis on user touch/click
+ * without interrupting or pausing active TTS playback.
  */
 export const unlockAudio = () => {
   try {
@@ -106,7 +107,6 @@ export const unlockAudio = () => {
     if (ctx.state === 'suspended') {
       ctx.resume().catch(() => {});
     }
-    // Play silent 1ms buffer to unlock iOS/Android WebView WebAudio
     const buffer = ctx.createBuffer(1, 1, 22050);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
@@ -117,15 +117,16 @@ export const unlockAudio = () => {
   }
 
   try {
-    const el = getSharedTtsAudioElement();
-    if (el && (el.paused || !el.src)) {
-      el.volume = 0.01;
-      el.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
-      const p = el.play();
+    if (!hasUnlockedHtmlAudio) {
+      hasUnlockedHtmlAudio = true;
+      const unlockEl = new Audio(
+        'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
+      );
+      unlockEl.volume = 0.01;
+      const p = unlockEl.play();
       if (p) {
         p.then(() => {
-          el.pause();
-          el.volume = 1.0;
+          unlockEl.pause();
         }).catch(() => {});
       }
     }
@@ -139,10 +140,6 @@ export const unlockAudio = () => {
       if (!hasUnlockedSpeechSynthesis) {
         hasUnlockedSpeechSynthesis = true;
         window.speechSynthesis.getVoices();
-        const silentUtterance = new SpeechSynthesisUtterance(' ');
-        silentUtterance.volume = 0.01;
-        silentUtterance.rate = 2.0;
-        window.speechSynthesis.speak(silentUtterance);
       }
     }
   } catch {
@@ -668,3 +665,782 @@ export const speakReminderText = (
     console.warn('Speech synthesis failed:', e);
   }
 };
+
+export interface AiVoicePersonaMeta {
+  id: 'zephyr_warm' | 'kore_calm' | 'puck_energetic' | 'fenrir_deep' | 'charon_formal';
+  label: string;
+  labelEn: string;
+  desc: string;
+  descEn: string;
+  pitch: number;
+  rate: number;
+  detuneCents: number;
+  filterType: BiquadFilterType;
+  filterFreq: number;
+  filterGainDb: number;
+}
+
+export const AI_VOICE_PERSONAS: AiVoicePersonaMeta[] = [
+  {
+    id: 'zephyr_warm',
+    label: 'صمیمی و گرم (پیشنهادی)',
+    labelEn: 'Warm & Friendly (Default)',
+    desc: 'لحن دلنشین و طبیعی مناسب دستیار هوشمند',
+    descEn: 'Natural, welcoming conversational tone',
+    pitch: 1.0,
+    rate: 1.0,
+    detuneCents: 0,
+    filterType: 'lowshelf',
+    filterFreq: 230,
+    filterGainDb: 3,
+  },
+  {
+    id: 'kore_calm',
+    label: 'آرام و ملایم',
+    labelEn: 'Calm & Gentle',
+    desc: 'صدای نرم و آرامش‌بخش با سرعت متعادل',
+    descEn: 'Soft, soothing voice at a relaxed pace',
+    pitch: 1.18,
+    rate: 0.93,
+    detuneCents: 210,
+    filterType: 'peaking',
+    filterFreq: 1850,
+    filterGainDb: 3.5,
+  },
+  {
+    id: 'puck_energetic',
+    label: 'پرانرژی و شفاف',
+    labelEn: 'Clear & Energetic',
+    desc: 'بیان شفاف و پرانرژی برای ثبت سریع',
+    descEn: 'Crisp, lively delivery for quick capture',
+    pitch: 1.12,
+    rate: 1.09,
+    detuneCents: 135,
+    filterType: 'highshelf',
+    filterFreq: 2500,
+    filterGainDb: 4.5,
+  },
+  {
+    id: 'fenrir_deep',
+    label: 'رسا و بم',
+    labelEn: 'Deep & Resonant',
+    desc: 'صدای بم، عمیق و بسیار واضح',
+    descEn: 'Deep, authoritative and clear voice',
+    pitch: 0.78,
+    rate: 0.95,
+    detuneCents: -310,
+    filterType: 'lowshelf',
+    filterFreq: 170,
+    filterGainDb: 6,
+  },
+  {
+    id: 'charon_formal',
+    label: 'رسمی و شمرده',
+    labelEn: 'Formal & Articulate',
+    desc: 'بیان شمرده، دقیق و محترمانه',
+    descEn: 'Measured, articulate and polite tone',
+    pitch: 0.86,
+    rate: 0.89,
+    detuneCents: -165,
+    filterType: 'peaking',
+    filterFreq: 950,
+    filterGainDb: 3.5,
+  },
+];
+
+const ttsRawBytesCache = new Map<
+  string,
+  { bytes: Uint8Array; mimeType: string; alreadyPersonaTransformed: boolean }
+>();
+let activeAssistantTimer: ReturnType<typeof setTimeout> | null = null;
+let activeAssistantAbort: AbortController | null = null;
+let activeWebAudioSource: AudioBufferSourceNode | null = null;
+let activeObjectUrl: string | null = null;
+
+function revokeActiveObjectUrl() {
+  if (activeObjectUrl) {
+    try {
+      URL.revokeObjectURL(activeObjectUrl);
+    } catch {
+      // ignore
+    }
+    activeObjectUrl = null;
+  }
+}
+
+export const stopAiAssistantPrompt = () => {
+  if (activeAssistantTimer) {
+    clearTimeout(activeAssistantTimer);
+    activeAssistantTimer = null;
+  }
+  if (activeAssistantAbort) {
+    try {
+      activeAssistantAbort.abort();
+    } catch {
+      // ignore
+    }
+    activeAssistantAbort = null;
+  }
+  if (activeWebAudioSource) {
+    try {
+      activeWebAudioSource.onended = null;
+      activeWebAudioSource.stop();
+      activeWebAudioSource.disconnect();
+    } catch {
+      // ignore
+    }
+    activeWebAudioSource = null;
+  }
+  if (sharedTtsAudio) {
+    try {
+      sharedTtsAudio.onended = null;
+      sharedTtsAudio.onerror = null;
+      sharedTtsAudio.pause();
+    } catch {
+      // ignore
+    }
+  }
+  revokeActiveObjectUrl();
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+};
+
+function getPresetWavUrl(cleanText: string, language: 'fa' | 'en'): string | null {
+  const norm = cleanText.replace(/\s+/g, ' ').trim();
+  const baseUrl = ((import.meta as any).env?.BASE_URL || '/').replace(/\/?$/, '/');
+  if (
+    language !== 'en' &&
+    (norm.includes('چه یادآور، مناسبت، مکان یا ایده‌ای') ||
+      norm.includes('لطفاً بفرمایید چه موردی را ثبت کنم'))
+  ) {
+    return `${baseUrl}tts-cache/welcome_fa.wav`;
+  }
+  if (
+    language === 'en' &&
+    (norm.toLowerCase().includes('what reminder, occasion, location, or idea') ||
+      norm.toLowerCase().includes('what would you like to save'))
+  ) {
+    return `${baseUrl}tts-cache/welcome_en.wav`;
+  }
+  return null;
+}
+
+/**
+ * پردازش مستقیم نمونه‌های 16-bit PCM در فایل WAV برای اعمال دقیق هر ۵ شخصیت صوتی
+ * (مستقل از محدودیت‌های مرورگر، اندروید یا WebView)
+ */
+function applyPersonaToWavBytes(wavBytes: Uint8Array, voicePersona = 'zephyr_warm'): Uint8Array {
+  if (
+    wavBytes.byteLength <= 44 ||
+    wavBytes[0] !== 0x52 || // 'R'
+    wavBytes[1] !== 0x49 || // 'I'
+    wavBytes[2] !== 0x46 || // 'F'
+    wavBytes[3] !== 0x46 // 'F'
+  ) {
+    return wavBytes;
+  }
+
+  const personaConfig: Record<
+    string,
+    { step: number; filterMode: 'warm' | 'calm' | 'bright' | 'deep' | 'formal'; gain: number }
+  > = {
+    zephyr_warm: { step: 1.0, filterMode: 'warm', gain: 1.05 },
+    kore_calm: { step: 0.9, filterMode: 'calm', gain: 1.04 },
+    puck_energetic: { step: 1.13, filterMode: 'bright', gain: 1.08 },
+    fenrir_deep: { step: 0.81, filterMode: 'deep', gain: 1.12 },
+    charon_formal: { step: 0.93, filterMode: 'formal', gain: 1.08 },
+  };
+
+  const cfg = personaConfig[voicePersona] || personaConfig.zephyr_warm;
+  const inView = new DataView(wavBytes.buffer, wavBytes.byteOffset, wavBytes.byteLength);
+  const sampleRate = inView.getUint32(24, true) || 16000;
+  const pcmOffset = 44;
+  const inSamples = Math.floor((wavBytes.byteLength - pcmOffset) / 2);
+  if (inSamples < 10) return wavBytes;
+
+  const outSamples = Math.max(1, Math.floor(inSamples / cfg.step));
+  const dataSize = outSamples * 2;
+  const outBytes = new Uint8Array(44 + dataSize);
+  const outView = new DataView(outBytes.buffer);
+
+  // Copy 44-byte WAV header and update sizes
+  outBytes.set(wavBytes.subarray(0, 44), 0);
+  outView.setUint32(4, 36 + dataSize, true);
+  outView.setUint32(24, sampleRate, true);
+  outView.setUint32(28, sampleRate * 2, true);
+  outView.setUint32(40, dataSize, true);
+
+  let prevOut = 0;
+  let prevIn = 0;
+
+  for (let i = 0; i < outSamples; i++) {
+    const srcPos = i * cfg.step;
+    const idx0 = Math.min(inSamples - 1, Math.floor(srcPos));
+    const idx1 = Math.min(inSamples - 1, idx0 + 1);
+    const frac = srcPos - idx0;
+    const s0 = inView.getInt16(pcmOffset + idx0 * 2, true);
+    const s1 = inView.getInt16(pcmOffset + idx1 * 2, true);
+    const rawSample = s0 + (s1 - s0) * frac;
+
+    let shaped = rawSample;
+    if (cfg.filterMode === 'deep') {
+      prevOut = 0.62 * rawSample + 0.38 * prevOut;
+      shaped = prevOut * 0.75 + rawSample * 0.35;
+    } else if (cfg.filterMode === 'calm') {
+      prevOut = 0.74 * rawSample + 0.26 * prevOut;
+      shaped = prevOut;
+    } else if (cfg.filterMode === 'bright') {
+      const high = rawSample - prevIn;
+      shaped = rawSample + high * 0.38;
+    } else if (cfg.filterMode === 'formal') {
+      const high = rawSample - prevIn;
+      prevOut = 0.82 * rawSample + 0.18 * prevOut;
+      shaped = prevOut + high * 0.22;
+    } else {
+      prevOut = 0.88 * rawSample + 0.12 * prevOut;
+      shaped = prevOut;
+    }
+    prevIn = rawSample;
+
+    const clamped = Math.max(-32768, Math.min(32767, Math.round(shaped * cfg.gain)));
+    outView.setInt16(44 + i * 2, clamped, true);
+  }
+
+  return outBytes;
+}
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binaryString = window.atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function normalizePersianForArabicStream(text: string): string {
+  return text
+    .replace(/گ/g, 'ك')
+    .replace(/چ/g, 'ج')
+    .replace(/پ/g, 'ب')
+    .replace(/ژ/g, 'ز')
+    .replace(/ک/g, 'ك')
+    .replace(/ی/g, 'ي')
+    .replace(/هٔ/g, 'ه')
+    .replace(/\u200c/g, ' ');
+}
+
+export const prewarmAiAssistantPrompt = (
+  text: string,
+  language: 'fa' | 'en' = 'fa',
+  voicePersona = 'zephyr_warm'
+) => {
+  if (typeof window === 'undefined') return;
+  const cleanText = text.replace(/\s+/g, ' ').trim();
+  if (!cleanText) return;
+
+  const baseCacheKey = `${language}:raw:${cleanText}`;
+  if (ttsRawBytesCache.has(baseCacheKey)) return;
+
+  const presetUrl = getPresetWavUrl(cleanText, language);
+  if (presetUrl) {
+    fetch(presetUrl)
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then((buf) => {
+        if (buf && buf.byteLength > 100) {
+          ttsRawBytesCache.set(baseCacheKey, {
+            bytes: new Uint8Array(buf),
+            mimeType: 'audio/wav',
+            alreadyPersonaTransformed: false,
+          });
+        }
+      })
+      .catch(() => {});
+    return;
+  }
+
+  const isStaticHost =
+    window.location.protocol === 'capacitor:' ||
+    window.location.protocol === 'file:' ||
+    window.location.hostname.includes('github.io');
+  if (isStaticHost) return;
+
+  const personaCacheKey = `${language}:${voicePersona}:${cleanText}`;
+  if (ttsRawBytesCache.has(personaCacheKey)) return;
+
+  fetch('/api/smart-tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: cleanText, language, voicePersona }),
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (data?.ok && data?.audioBase64) {
+        const mimeType = data.mimeType || 'audio/wav';
+        const bytes = base64ToUint8Array(data.audioBase64);
+        ttsRawBytesCache.set(personaCacheKey, {
+          bytes,
+          mimeType,
+          alreadyPersonaTransformed: true,
+        });
+      }
+    })
+    .catch(() => {});
+};
+
+/**
+ * پخش تضمین‌شده، پایدار و بدون قطعی صدای گوینده هوش مصنوعی با پشتیبانی کامل از هر ۵ کاراکتر صوتی:
+ * ۱. فایل‌های صوتی پیش‌ساخته (welcome_fa.wav / welcome_en.wav) با پردازش مستقیم PCM برای هر ۵ صدای گوینده (بدون نیاز به کوئوتا و بدون تاخیر)
+ * ۲. سنتز سمت سرور (/api/smart-tts) با کش دیسک دائمی و پردازش موج WAV برای هر ۵ کاراکتر صوتی
+ * ۳. پخش از طریق Blob URL روی المان صوتی آنلاک‌شده + پشتیبان Web Audio API با تایم‌اوت ضدقفل
+ * ۴. استریم آنلاین و موتور بومی دستگاه برای محیط‌های آفلاین/استاتیک
+ */
+export const speakAiAssistantPrompt = (options: {
+  text: string;
+  language?: 'fa' | 'en';
+  voicePersona?: string;
+  volume?: number;
+  onStart?: () => void;
+  onDone?: () => void;
+}) => {
+  const {
+    text,
+    language = 'fa',
+    voicePersona = 'zephyr_warm',
+    volume = 1.0,
+    onStart,
+    onDone,
+  } = options;
+
+  const cleanText = (text || '').replace(/\s+/g, ' ').trim();
+  const clampedVol = Math.max(0.1, Math.min(1, volume));
+
+  if (!cleanText || typeof window === 'undefined') {
+    onDone?.();
+    return;
+  }
+
+  stopAiAssistantPrompt();
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+  } catch {
+    // ignore
+  }
+  onStart?.();
+
+  const personaMeta =
+    AI_VOICE_PERSONAS.find((p) => p.id === voicePersona) || AI_VOICE_PERSONAS[0];
+  const isEn = language === 'en';
+  const wordsCount = cleanText.split(/\s+/).filter(Boolean).length;
+  const minExpectedSpeechMs = Math.min(6200, Math.max(1900, wordsCount * 330));
+
+  let finished = false;
+  const finishAndReleaseAudioFocus = () => {
+    if (finished) return;
+    finished = true;
+    revokeActiveObjectUrl();
+    if (activeAssistantTimer) {
+      clearTimeout(activeAssistantTimer);
+      activeAssistantTimer = null;
+    }
+    activeAssistantTimer = setTimeout(() => {
+      onDone?.();
+    }, 320);
+  };
+
+  const playHtmlAudioUrl = (
+    url: string,
+    applyPlaybackRatePersona: boolean,
+    onFail: () => void
+  ) => {
+    try {
+      const audio = getSharedTtsAudioElement() || new Audio();
+      audio.onended = null;
+      audio.onerror = null;
+      audio.onloadedmetadata = null;
+      audio.pause();
+      audio.volume = clampedVol;
+      audio.src = url;
+
+      const targetRate = applyPlaybackRatePersona
+        ? Math.max(0.76, Math.min(1.28, personaMeta.rate * (personaMeta.pitch * 0.45 + 0.55)))
+        : 1.0;
+
+      const applyRateSettings = () => {
+        try {
+          (audio as any).preservesPitch = !applyPlaybackRatePersona;
+          (audio as any).mozPreservesPitch = !applyPlaybackRatePersona;
+          (audio as any).webkitPreservesPitch = !applyPlaybackRatePersona;
+          audio.defaultPlaybackRate = targetRate;
+          audio.playbackRate = targetRate;
+        } catch {
+          // ignore
+        }
+      };
+
+      applyRateSettings();
+      audio.onloadedmetadata = applyRateSettings;
+
+      const startedAt = Date.now();
+      const safetyId = setTimeout(finishAndReleaseAudioFocus, 15000);
+
+      audio.onended = () => {
+        clearTimeout(safetyId);
+        if (Date.now() - startedAt < 180) {
+          onFail();
+          return;
+        }
+        finishAndReleaseAudioFocus();
+      };
+
+      audio.onerror = () => {
+        clearTimeout(safetyId);
+        onFail();
+      };
+
+      const p = audio.play();
+      if (p) {
+        p.then(() => {
+          applyRateSettings();
+        }).catch(() => {
+          clearTimeout(safetyId);
+          onFail();
+        });
+      }
+    } catch {
+      onFail();
+    }
+  };
+
+  const playBytesViaWebAudioBackup = async (
+    audioBytes: Uint8Array,
+    applyWebAudioPersona: boolean,
+    onFail: () => void
+  ) => {
+    try {
+      const ctx = getAudioContext();
+      if (ctx.state === 'suspended') {
+        await Promise.race([
+          ctx.resume(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('resume timeout')), 350)),
+        ]);
+      }
+      if (ctx.state !== 'running') {
+        onFail();
+        return;
+      }
+
+      const copyBuf = audioBytes.buffer.slice(
+        audioBytes.byteOffset,
+        audioBytes.byteOffset + audioBytes.byteLength
+      ) as ArrayBuffer;
+      const decodedBuffer = await ctx.decodeAudioData(copyBuf);
+      if (finished) return;
+
+      const source = ctx.createBufferSource();
+      source.buffer = decodedBuffer;
+      if (applyWebAudioPersona) {
+        source.playbackRate.value = personaMeta.rate;
+        if (source.detune) {
+          source.detune.value = personaMeta.detuneCents;
+        }
+      }
+
+      const gainNode = ctx.createGain();
+      gainNode.gain.value = clampedVol;
+
+      if (applyWebAudioPersona) {
+        const filter = ctx.createBiquadFilter();
+        filter.type = personaMeta.filterType;
+        filter.frequency.value = personaMeta.filterFreq;
+        filter.gain.value = personaMeta.filterGainDb;
+        source.connect(filter);
+        filter.connect(gainNode);
+      } else {
+        source.connect(gainNode);
+      }
+      gainNode.connect(ctx.destination);
+
+      activeWebAudioSource = source;
+      const safetyId = setTimeout(finishAndReleaseAudioFocus, 15000);
+
+      source.onended = () => {
+        clearTimeout(safetyId);
+        if (activeWebAudioSource === source) {
+          activeWebAudioSource = null;
+        }
+        finishAndReleaseAudioFocus();
+      };
+
+      source.start(0);
+    } catch {
+      onFail();
+    }
+  };
+
+  /**
+   * پخش بافر صوتی با اعمال دقیق کاراکتر صوتی انتخاب‌شده:
+   * برای فایل‌های WAV، تغییر زیر و بمی و سرعت و فیلتر مستقیماً روی نمونه‌های 16-bit PCM اعمال می‌شود
+   * و از طریق Blob URL روی المان صوتی پخش می‌گردد تا در همه مرورگرها و اندروید ۱۰۰٪ بدون قطعی کار کند.
+   */
+  const playAudioBytesWithPersona = (
+    rawBytes: Uint8Array,
+    mimeType: string,
+    alreadyPersonaTransformed: boolean,
+    onFail: () => void
+  ) => {
+    const isWav =
+      mimeType.includes('wav') ||
+      (rawBytes.byteLength > 44 &&
+        rawBytes[0] === 0x52 &&
+        rawBytes[1] === 0x49 &&
+        rawBytes[2] === 0x46 &&
+        rawBytes[3] === 0x46);
+
+    const finalBytes =
+      isWav && !alreadyPersonaTransformed
+        ? applyPersonaToWavBytes(rawBytes, personaMeta.id)
+        : rawBytes;
+    const finalMime = isWav ? 'audio/wav' : mimeType || 'audio/mpeg';
+    const needsRateShiftOnElement = !isWav && !alreadyPersonaTransformed;
+
+    try {
+      revokeActiveObjectUrl();
+      const copyArrayBuffer = finalBytes.buffer.slice(
+        finalBytes.byteOffset,
+        finalBytes.byteOffset + finalBytes.byteLength
+      ) as ArrayBuffer;
+      const blob = new Blob([copyArrayBuffer], { type: finalMime });
+      const blobUrl = URL.createObjectURL(blob);
+      activeObjectUrl = blobUrl;
+
+      playHtmlAudioUrl(blobUrl, needsRateShiftOnElement, () => {
+        playBytesViaWebAudioBackup(finalBytes, needsRateShiftOnElement, onFail);
+      });
+    } catch {
+      playBytesViaWebAudioBackup(finalBytes, needsRateShiftOnElement, onFail);
+    }
+  };
+
+  const playOnlineStreamFallback = (onFail: () => void) => {
+    // Google Translate TTS returns 400 for tl=fa; use tl=ar with phonetic Persian letter mapping as emergency fallback
+    const tl = isEn ? 'en' : 'ar';
+    const queryText = isEn ? cleanText : normalizePersianForArabicStream(cleanText);
+    const primaryUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=tw-ob&q=${encodeURIComponent(
+      queryText
+    )}`;
+    const secondaryUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=gtx&q=${encodeURIComponent(
+      queryText
+    )}`;
+    playHtmlAudioUrl(primaryUrl, true, () => {
+      playHtmlAudioUrl(secondaryUrl, true, onFail);
+    });
+  };
+
+  const playNativeSpeechWithVerification = () => {
+    if (!('speechSynthesis' in window)) {
+      playOnlineStreamFallback(finishAndReleaseAudioFocus);
+      return;
+    }
+
+    try {
+      const voices = window.speechSynthesis.getVoices() || [];
+      const matchingVoices = voices.filter((v) => {
+        const l = (v.lang || '').toLowerCase();
+        const n = (v.name || '').toLowerCase();
+        if (isEn) return l.startsWith('en');
+        return l.startsWith('fa') || n.includes('persian') || n.includes('farsi');
+      });
+      const rtlFallbackVoice = !isEn
+        ? voices.find((v) => (v.lang || '').toLowerCase().startsWith('ar'))
+        : undefined;
+
+      const personaIndex = Math.max(
+        0,
+        AI_VOICE_PERSONAS.findIndex((p) => p.id === personaMeta.id)
+      );
+      const selectedVoice =
+        matchingVoices.length > 0
+          ? matchingVoices[personaIndex % matchingVoices.length]
+          : rtlFallbackVoice;
+
+      // اگر صدای فارسی روی مرورگر یا گوشی نصب نباشد، ابتدا از استریم آنلاین استفاده شود تا سکوت رخ ندهد
+      if (!isEn && !selectedVoice) {
+        playOnlineStreamFallback(() => {
+          try {
+            const u = new SpeechSynthesisUtterance(cleanText);
+            u.lang = 'fa-IR';
+            u.volume = clampedVol;
+            u.rate = personaMeta.rate;
+            u.pitch = personaMeta.pitch;
+            u.onend = () => finishAndReleaseAudioFocus();
+            u.onerror = () => finishAndReleaseAudioFocus();
+            window.speechSynthesis.speak(u);
+            activeAssistantTimer = setTimeout(finishAndReleaseAudioFocus, minExpectedSpeechMs);
+          } catch {
+            finishAndReleaseAudioFocus();
+          }
+        });
+        return;
+      }
+
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.resume();
+
+      const utterance = new SpeechSynthesisUtterance(cleanText);
+      utterance.lang = isEn ? 'en-US' : 'fa-IR';
+      utterance.volume = clampedVol;
+      utterance.rate = personaMeta.rate;
+      utterance.pitch = personaMeta.pitch;
+      if (selectedVoice) {
+        utterance.voice = selectedVoice;
+      }
+
+      const startAt = Date.now();
+      let didActuallySpeak = false;
+      const maxSafety = setTimeout(
+        finishAndReleaseAudioFocus,
+        Math.max(8500, minExpectedSpeechMs + 2800)
+      );
+
+      const watchdog = setTimeout(() => {
+        if (!didActuallySpeak && !window.speechSynthesis.speaking && !finished) {
+          clearTimeout(maxSafety);
+          window.speechSynthesis.cancel();
+          playOnlineStreamFallback(finishAndReleaseAudioFocus);
+        }
+      }, 650);
+
+      utterance.onstart = () => {
+        didActuallySpeak = true;
+      };
+
+      utterance.onend = () => {
+        clearTimeout(watchdog);
+        clearTimeout(maxSafety);
+        const elapsed = Date.now() - startAt;
+        if (elapsed < 180 && !didActuallySpeak) {
+          playOnlineStreamFallback(finishAndReleaseAudioFocus);
+          return;
+        }
+        finishAndReleaseAudioFocus();
+      };
+
+      utterance.onerror = () => {
+        clearTimeout(watchdog);
+        clearTimeout(maxSafety);
+        playOnlineStreamFallback(finishAndReleaseAudioFocus);
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      playOnlineStreamFallback(finishAndReleaseAudioFocus);
+    }
+  };
+
+  // ۱. بررسی کش حافظه (خام یا پردازش‌شده برای کاراکتر صوتی)
+  const rawCacheKey = `${language}:raw:${cleanText}`;
+  const personaCacheKey = `${language}:${voicePersona}:${cleanText}`;
+  const cachedRaw = ttsRawBytesCache.get(rawCacheKey);
+  if (cachedRaw) {
+    playAudioBytesWithPersona(
+      cachedRaw.bytes,
+      cachedRaw.mimeType,
+      cachedRaw.alreadyPersonaTransformed,
+      playNativeSpeechWithVerification
+    );
+    return;
+  }
+
+  const cachedPersona = ttsRawBytesCache.get(personaCacheKey);
+  if (cachedPersona) {
+    playAudioBytesWithPersona(
+      cachedPersona.bytes,
+      cachedPersona.mimeType,
+      cachedPersona.alreadyPersonaTransformed,
+      playNativeSpeechWithVerification
+    );
+    return;
+  }
+
+  // ۲. اگر جمله مربوط به خوش‌آمدگویی یا تست گوینده است، مستقیماً از فایل WAV پیش‌ساخته داخل باندل استفاده کن
+  const presetUrl = getPresetWavUrl(cleanText, language);
+  if (presetUrl) {
+    fetch(presetUrl)
+      .then(async (res) => {
+        if (!res.ok) throw new Error('Preset fetch failed');
+        const arrBuf = await res.arrayBuffer();
+        if (!arrBuf || arrBuf.byteLength < 100) throw new Error('Empty preset');
+        const rawBytes = new Uint8Array(arrBuf);
+        ttsRawBytesCache.set(rawCacheKey, {
+          bytes: rawBytes,
+          mimeType: 'audio/wav',
+          alreadyPersonaTransformed: false,
+        });
+        if (finished) return;
+        playAudioBytesWithPersona(rawBytes, 'audio/wav', false, playNativeSpeechWithVerification);
+      })
+      .catch(() => {
+        playNativeSpeechWithVerification();
+      });
+    return;
+  }
+
+  const isStaticOrNative =
+    window.location.protocol === 'capacitor:' ||
+    window.location.protocol === 'file:' ||
+    window.location.hostname.includes('github.io');
+
+  if (isStaticOrNative) {
+    playNativeSpeechWithVerification();
+    return;
+  }
+
+  // ۳. درخواست به سرور (/api/smart-tts) برای جملات پویا در طول گفتگو
+  const controller = new AbortController();
+  activeAssistantAbort = controller;
+  const fetchTimeout = setTimeout(() => controller.abort(), 4500);
+
+  fetch('/api/smart-tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      text: cleanText,
+      language,
+      voicePersona,
+    }),
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      clearTimeout(fetchTimeout);
+      if (!res.ok) throw new Error('TTS HTTP error');
+      const data = await res.json();
+      if (!data?.ok || !data?.audioBase64) throw new Error('No audioBase64');
+      const mimeType = data.mimeType || 'audio/wav';
+      const bytes = base64ToUint8Array(data.audioBase64);
+      ttsRawBytesCache.set(personaCacheKey, {
+        bytes,
+        mimeType,
+        alreadyPersonaTransformed: true,
+      });
+      if (finished) return;
+      playAudioBytesWithPersona(bytes, mimeType, true, playNativeSpeechWithVerification);
+    })
+    .catch(() => {
+      clearTimeout(fetchTimeout);
+      if (!finished) {
+        playNativeSpeechWithVerification();
+      }
+    });
+};
+
+
