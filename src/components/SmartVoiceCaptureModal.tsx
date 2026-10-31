@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Mic,
-  MicOff,
   Send,
   X,
   Bell,
@@ -20,6 +19,11 @@ import {
   getJalaliComponents,
   toPersianDigits,
 } from '../utils/jalali';
+import {
+  getSharedTtsAudioElement,
+  playSoftPromptChime,
+  unlockAudio,
+} from '../utils/audio';
 import { requestLocationPermission, markPermissionGranted } from '../utils/nativePermissions';
 import { getLastKnownPosition, saveLastKnownPosition } from '../utils/geofenceManager';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
@@ -59,7 +63,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   const [messages, setMessages] = useState<SmartChatMessage[]>([]);
   const [draft, setDraft] = useState<SmartCaptureDraft>({ intentType: 'unknown' });
   const [isComplete, setIsComplete] = useState(false);
-  const [quickSuggestions, setQuickSuggestions] = useState<string[]>([]);
   const [inputText, setInputText] = useState('');
   const [liveTranscript, setLiveTranscript] = useState('');
   const [isListening, setIsListening] = useState(false);
@@ -73,7 +76,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
   const recognitionRef = useRef<any>(null);
   const shouldKeepListeningRef = useRef<boolean>(false);
-  const speechStartTimeRef = useRef<number>(0);
+  const sessionStartTimeRef = useRef<number>(0);
   const lastSpeechTimeRef = useRef<number>(0);
   const accumulatedFinalRef = useRef<string>('');
   const latestInterimRef = useRef<string>('');
@@ -82,16 +85,18 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const handleUserUtteranceRef = useRef<(text: string) => void>(() => {});
-  const handleSilenceOnIncompleteRef = useRef<() => void>(() => {});
   const isOpenRef = useRef(isOpen);
   const draftRef = useRef(draft);
   const isCompleteRef = useRef(isComplete);
   const voiceEnabledRef = useRef(voiceFeedbackEnabled);
+
   const autoSaveIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const speechDoneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const silencePromptTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ttsWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeTtsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsClientCacheRef = useRef<Map<string, string>>(new Map());
 
   useEffect(() => {
     isOpenRef.current = isOpen;
@@ -121,17 +126,17 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     setAutoSaveCountdown(null);
   }, []);
 
-  const activeTtsAudioRef = useRef<HTMLAudioElement | null>(null);
-  const ttsClientCacheRef = useRef<Map<string, string>>(new Map());
-
   const stopSpeaking = useCallback(() => {
     setIsAssistantSpeaking(false);
+    if (ttsWaitTimerRef.current) {
+      clearTimeout(ttsWaitTimerRef.current);
+      ttsWaitTimerRef.current = null;
+    }
     if (activeTtsAudioRef.current) {
       try {
         activeTtsAudioRef.current.onended = null;
         activeTtsAudioRef.current.onerror = null;
         activeTtsAudioRef.current.pause();
-        activeTtsAudioRef.current.src = '';
       } catch {
         // ignore
       }
@@ -146,12 +151,45 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     }
   }, []);
 
-  // Pre-warm the conversational welcome voice in the background so it plays immediately when the modal opens
+  const stopListening = useCallback(() => {
+    shouldKeepListeningRef.current = false;
+    if (speechDoneTimerRef.current) {
+      clearTimeout(speechDoneTimerRef.current);
+      speechDoneTimerRef.current = null;
+    }
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (recognitionRef.current) {
+      safeAbortSpeechRecognition(recognitionRef.current);
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+    setIsSpeechActive(false);
+    setVoiceLevel(0);
+  }, []);
+
+  // Pre-warm voices list and server TTS cache if available
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if ('speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.getVoices();
+      } catch {
+        // ignore
+      }
+    }
+
+    const isStaticHost =
+      window.location.protocol === 'capacitor:' ||
+      window.location.protocol === 'file:' ||
+      window.location.hostname.includes('github.io');
+    if (isStaticHost) return;
+
     const welcomeText = isEn
-      ? "Hi there! I'm ready. Tell me, what reminder, occasion, location, or idea would you like me to save for you?"
-      : 'سلام! من آماده‌ام؛ بگو چه یادآور، مناسبت، مکان یا ایده‌ای رو می‌خوای برات ثبت کنم؟';
+      ? "Hi there! I'm ready. Tell me what you'd like me to save for you?"
+      : 'سلام! من آماده‌ام؛ بگو چه یادآور، مناسبت، مکان یا ایده‌ای رو برات ثبت کنم؟';
     const langKey = isEn ? 'en' : 'fa';
     const cacheKey = `${langKey}:${welcomeText}`;
     if (ttsClientCacheRef.current.has(cacheKey)) return;
@@ -171,8 +209,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   }, [isEn]);
 
   /**
-   * بیان صوتی کامل سوال با لحن صمیمی و محاوره‌ای (فارسی در تنظیم فارسی و انگلیسی در تنظیم انگلیسی)
-   * ابتدا سوال به صورت کامل خوانده می‌شود و پس از اتمام آن، میکروفون فعال شده و منتظر پاسخ کاربر می‌ماند.
+   * بیان صوتی کامل سوال و تاییدیه ثبت با صدای واضح:
+   * ۱. قبل از شروع صحبت گوینده، میکروفون کاملاً متوقف می‌شود تا اندروید کانال اسپیکر را قطع نکند.
+   * ۲. در اندروید WebView که گاهی رویداد utterance.onend زودتر از پایان واقعی صدا اجرا می‌شود،
+   *    زمان طبیعی خوانش جمله محاسبه می‌شود تا میکروفون وسط صحبت گوینده روشن نشود و صدا را قطع نکند.
+   * ۳. پس از پایان کامل جمله گوینده، میکروفون روشن شده و منتظر جمله کامل کاربر می‌ماند.
    */
   const speakPromptWithCallback = useCallback(
     (rawText: string, onDone?: () => void) => {
@@ -182,57 +223,114 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         return;
       }
 
+      // بسیار مهم: توقف کامل میکروفون قبل از پخش صدای گوینده تا اندروید صدای اسپیکر را خفه نکند
+      stopListening();
       stopSpeaking();
       setIsAssistantSpeaking(true);
+      playSoftPromptChime();
+
+      const wordsCount = cleanText.split(/\s+/).filter(Boolean).length;
+      const minExpectedSpeechMs = Math.min(6200, Math.max(2200, wordsCount * 340));
 
       let finished = false;
       const completeAndContinue = () => {
         if (finished) return;
         finished = true;
-        setIsAssistantSpeaking(false);
-        // مکث کوتاه پس از اتمام کامل سوال صوتی تا میکروفون بلافاصله آماده دریافت پاسخ کاربر شود
-        setTimeout(() => {
-          onDone?.();
-        }, 220);
+        if (ttsWaitTimerRef.current) {
+          clearTimeout(ttsWaitTimerRef.current);
+          ttsWaitTimerRef.current = null;
+        }
+
+        // Wait until native speechSynthesis has completely stopped speaking and Android releases audio focus
+        let pollAttempts = 0;
+        const waitForAudioFocusRelease = () => {
+          if (!isOpenRef.current) {
+            setIsAssistantSpeaking(false);
+            return;
+          }
+          const stillSpeaking =
+            typeof window !== 'undefined' &&
+            'speechSynthesis' in window &&
+            Boolean(window.speechSynthesis.speaking);
+
+          if (stillSpeaking && pollAttempts < 16) {
+            pollAttempts += 1;
+            ttsWaitTimerRef.current = setTimeout(waitForAudioFocusRelease, 180);
+            return;
+          }
+
+          setIsAssistantSpeaking(false);
+          ttsWaitTimerRef.current = setTimeout(() => {
+            if (isOpenRef.current) {
+              onDone?.();
+            }
+          }, 420);
+        };
+
+        waitForAudioFocusRelease();
       };
 
-      const playBase64Wav = (audioBase64: string, onFallback: () => void) => {
+      const playAudioSrc = (srcUrl: string, onFallback: () => void) => {
         try {
-          const audio = new Audio(`data:audio/wav;base64,${audioBase64}`);
+          const audio = getSharedTtsAudioElement() || new Audio();
+          audio.pause();
+          audio.volume = 1.0;
+          audio.src = srcUrl;
           activeTtsAudioRef.current = audio;
-          const maxAudioWait = setTimeout(completeAndContinue, 15000);
+
+          const startAt = Date.now();
+          const safetyTimer = setTimeout(completeAndContinue, 12000);
 
           audio.onended = () => {
-            clearTimeout(maxAudioWait);
+            clearTimeout(safetyTimer);
+            const elapsed = Date.now() - startAt;
+            if (elapsed < 300) {
+              onFallback();
+              return;
+            }
             completeAndContinue();
           };
+
           audio.onerror = () => {
-            clearTimeout(maxAudioWait);
+            clearTimeout(safetyTimer);
             onFallback();
           };
 
-          audio.play().catch(() => {
-            clearTimeout(maxAudioWait);
-            onFallback();
-          });
+          const playPromise = audio.play();
+          if (playPromise) {
+            playPromise.catch(() => {
+              clearTimeout(safetyTimer);
+              onFallback();
+            });
+          }
         } catch {
           onFallback();
         }
       };
 
-      const playViaBrowserSpeechSynthesis = () => {
+      const playGoogleStreamFallback = (onFail: () => void) => {
+        const tl = isEn ? 'en' : 'fa';
+        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=tw-ob&q=${encodeURIComponent(
+          cleanText
+        )}`;
+        playAudioSrc(ttsUrl, onFail);
+      };
+
+      const playNativeSpeechSynthesis = () => {
         if (!('speechSynthesis' in window)) {
-          completeAndContinue();
+          playGoogleStreamFallback(completeAndContinue);
           return;
         }
 
         try {
           window.speechSynthesis.cancel();
+          window.speechSynthesis.resume();
+
           const utterance = new SpeechSynthesisUtterance(cleanText);
           utterance.lang = isEn ? 'en-US' : 'fa-IR';
-          // کمی گرم‌تر و طبیعی‌تر برای لحن صمیمی و محاوره‌ای
-          utterance.rate = isEn ? 1.0 : 0.98;
-          utterance.pitch = 1.05;
+          utterance.volume = 1.0;
+          utterance.rate = isEn ? 1.0 : 0.95;
+          utterance.pitch = 1.02;
 
           const voices = window.speechSynthesis.getVoices();
           const exactLangVoice = voices.find((v) =>
@@ -250,59 +348,57 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             utterance.voice = fallbackRtlVoice;
           }
 
-          const maxSafetyMs = Math.max(7000, cleanText.length * 125);
+          const speakStartedAt = Date.now();
+          const maxSafetyMs = Math.max(7500, minExpectedSpeechMs + 2800);
           const safetyTimer = setTimeout(completeAndContinue, maxSafetyMs);
 
           utterance.onend = () => {
             clearTimeout(safetyTimer);
-            completeAndContinue();
-          };
-          utterance.onerror = () => {
-            clearTimeout(safetyTimer);
-            completeAndContinue();
+            const elapsed = Date.now() - speakStartedAt;
+            // در اندروید WebView گاهی onend بلافاصله صدا زده می‌شود در حالی که موتور TTS اندروید در حال خواندن است.
+            // صبر می‌کنیم تا زمان طبیعی خواندن جمله تمام شود و میکروفون وسط صدای گوینده روشن نشود.
+            const remainingWait = minExpectedSpeechMs - elapsed;
+            if (remainingWait > 250) {
+              ttsWaitTimerRef.current = setTimeout(completeAndContinue, remainingWait);
+            } else {
+              completeAndContinue();
+            }
           };
 
-          // If Persian is active and device WebView has no Persian voice at all, try online Google TTS audio stream first
-          if (!isEn && !exactLangVoice) {
-            try {
-              const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=fa&client=tw-ob&q=${encodeURIComponent(
-                cleanText
-              )}`;
-              const audio = new Audio(ttsUrl);
-              activeTtsAudioRef.current = audio;
-              audio.onended = () => {
-                clearTimeout(safetyTimer);
-                completeAndContinue();
-              };
-              audio.onerror = () => {
-                window.speechSynthesis.speak(utterance);
-              };
-              audio.play().catch(() => {
-                window.speechSynthesis.speak(utterance);
-              });
-              return;
-            } catch {
-              // continue to speechSynthesis below
-            }
-          }
+          utterance.onerror = () => {
+            clearTimeout(safetyTimer);
+            playGoogleStreamFallback(completeAndContinue);
+          };
 
           window.speechSynthesis.speak(utterance);
         } catch {
-          completeAndContinue();
+          playGoogleStreamFallback(completeAndContinue);
         }
       };
 
       const langKey = isEn ? 'en' : 'fa';
       const cacheKey = `${langKey}:${cleanText}`;
-      const cached = ttsClientCacheRef.current.get(cacheKey);
-      if (cached) {
-        playBase64Wav(cached, playViaBrowserSpeechSynthesis);
+      const cachedBase64 = ttsClientCacheRef.current.get(cacheKey);
+
+      if (cachedBase64) {
+        playAudioSrc(`data:audio/wav;base64,${cachedBase64}`, playNativeSpeechSynthesis);
         return;
       }
 
-      // Tier 1: Server-side Gemini TTS (/api/smart-tts) with warm, friendly, conversational persona
+      const isStaticOrNative =
+        window.location.protocol === 'capacitor:' ||
+        window.location.protocol === 'file:' ||
+        window.location.hostname.includes('github.io');
+
+      if (isStaticOrNative) {
+        // در نسخه APK اندروید و GitHub Pages، بدون معطلی شبکه مستقیماً با موتور صوتی گوینده پخش کن
+        playNativeSpeechSynthesis();
+        return;
+      }
+
+      // در محیط سرور، حداکثر ۲ ثانیه منتظر صدای Gemini TTS بمان و در صورت عدم پاسخ فوری با موتور صوتی مرورگر/گوگل بخوان
       const controller = new AbortController();
-      const fetchTimeout = setTimeout(() => controller.abort(), 7500);
+      const fetchTimeout = setTimeout(() => controller.abort(), 2200);
 
       fetch('/api/smart-tts', {
         method: 'POST',
@@ -320,14 +416,14 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           if (!data?.ok || !data?.audioBase64) throw new Error('No audioBase64');
 
           ttsClientCacheRef.current.set(cacheKey, data.audioBase64);
-          playBase64Wav(data.audioBase64, playViaBrowserSpeechSynthesis);
+          playAudioSrc(`data:audio/wav;base64,${data.audioBase64}`, playNativeSpeechSynthesis);
         })
         .catch(() => {
           clearTimeout(fetchTimeout);
-          playViaBrowserSpeechSynthesis();
+          playNativeSpeechSynthesis();
         });
     },
-    [isEn, stopSpeaking]
+    [isEn, stopListening, stopSpeaking]
   );
 
   // Auto-scroll conversation
@@ -335,33 +431,10 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, liveTranscript, isAnalyzing, autoSaveCountdown]);
 
-  const stopListening = useCallback(() => {
-    shouldKeepListeningRef.current = false;
-    if (speechDoneTimerRef.current) {
-      clearTimeout(speechDoneTimerRef.current);
-      speechDoneTimerRef.current = null;
-    }
-    if (silencePromptTimerRef.current) {
-      clearTimeout(silencePromptTimerRef.current);
-      silencePromptTimerRef.current = null;
-    }
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
-    }
-    if (recognitionRef.current) {
-      safeAbortSpeechRecognition(recognitionRef.current);
-      recognitionRef.current = null;
-    }
-    setIsListening(false);
-    setIsSpeechActive(false);
-    setVoiceLevel(0);
-  }, []);
-
   /**
-   * فعال‌سازی میکروفون در حالت «منتظر دستور» بدون تداخل getUserMedia:
-   * - در حالت منتظر دستور، میکروفون فعال می‌ماند و به محض شروع صحبت کاربر، گفتار را زنده به متن تبدیل می‌کند.
-   * - پس از اتمام جمله کاربر (۱.۳۵ ثانیه مکث پس از آخرین کلمه)، متن تبدیل‌شده بلافاصله وارد فرآیند تحلیل و ثبت هوشمند می‌شود.
+   * میکروفون پایدار و بدون حلقه خاموش/روشن:
+   * - پس از آزاد شدن کامل فوکوس صوتی گوینده فعال می‌شود.
+   * - از بازگشایی‌های ۵۰ میلی‌ثانیه‌ای که در اندروید باعث چشمک زدن و خاموش/روشن شدن مکرر میکروفون در دور دوم می‌شود جلوگیری می‌کند.
    */
   const startListening = useCallback(() => {
     if (!isOpenRef.current || typeof window === 'undefined') return;
@@ -374,11 +447,23 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       return;
     }
 
-    // پاکسازی نشست قبلی بدون فراخوانی getUserMedia که در اندروید میکروفون را قفل می‌کند
-    stopListening();
+    stopSpeaking();
+
+    if (speechDoneTimerRef.current) {
+      clearTimeout(speechDoneTimerRef.current);
+      speechDoneTimerRef.current = null;
+    }
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (recognitionRef.current) {
+      safeAbortSpeechRecognition(recognitionRef.current);
+      recognitionRef.current = null;
+    }
 
     shouldKeepListeningRef.current = true;
-    speechStartTimeRef.current = Date.now();
+    sessionStartTimeRef.current = Date.now();
     lastSpeechTimeRef.current = 0;
     accumulatedFinalRef.current = '';
     latestInterimRef.current = '';
@@ -388,6 +473,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     setIsListening(true);
 
     let hasCommitted = false;
+    let quickFailCount = 0;
 
     const commitCapturedSpeech = () => {
       if (hasCommitted) return;
@@ -403,10 +489,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       if (speechDoneTimerRef.current) {
         clearTimeout(speechDoneTimerRef.current);
         speechDoneTimerRef.current = null;
-      }
-      if (silencePromptTimerRef.current) {
-        clearTimeout(silencePromptTimerRef.current);
-        silencePromptTimerRef.current = null;
       }
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
@@ -425,33 +507,28 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       handleUserUtteranceRef.current(combined);
     };
 
-    // اگر کاربر تا ۹ ثانیه هیچ صحبتی را شروع نکرد، سیستم سوال راهنما را می‌پرسد
-    silencePromptTimerRef.current = setTimeout(() => {
-      const hasAnyText = Boolean(
-        accumulatedFinalRef.current.trim() || latestInterimRef.current.trim()
-      );
-      if (!hasAnyText && isOpenRef.current && shouldKeepListeningRef.current) {
-        stopListening();
-        if (!isCompleteRef.current) {
-          handleSilenceOnIncompleteRef.current();
-        }
+    const schedulePostSpeechCommit = (delayMs = 2200) => {
+      if (speechDoneTimerRef.current) {
+        clearTimeout(speechDoneTimerRef.current);
       }
-    }, 9000);
+      speechDoneTimerRef.current = setTimeout(() => {
+        commitCapturedSpeech();
+      }, delayMs);
+    };
 
     const createAndRunRecognition = () => {
       if (!shouldKeepListeningRef.current || !isOpenRef.current || hasCommitted) return;
 
       try {
-        if (recognitionRef.current) {
-          safeAbortSpeechRecognition(recognitionRef.current);
-          recognitionRef.current = null;
-        }
-
         const rec = new SpeechRecognition();
         rec.lang = isEn ? 'en-US' : 'fa-IR';
         rec.continuous = true;
         rec.interimResults = true;
+        rec.maxAlternatives = 3;
         processedFinalIndicesRef.current.clear();
+
+        const instanceStartAt = Date.now();
+        let instanceHeardSpeech = false;
 
         rec.onstart = () => {
           if (!shouldKeepListeningRef.current) return;
@@ -460,49 +537,47 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         };
 
         rec.onsoundstart = () => {
-          clearAutoSaveTimers();
           setIsSpeechActive(true);
-          setVoiceLevel(55);
+          setVoiceLevel(60);
         };
 
         rec.onspeechstart = () => {
-          clearAutoSaveTimers();
+          instanceHeardSpeech = true;
+          quickFailCount = 0;
           setIsSpeechActive(true);
-          setVoiceLevel(75);
+          setVoiceLevel(80);
         };
 
         rec.onresult = (event: any) => {
           if (hasCommitted) return;
 
-          // به محض شروع صحبت کاربر، تایمر ۳ ثانیه‌ای ثبت خودکار و تایمر سکوت متوقف می‌شود
+          instanceHeardSpeech = true;
+          quickFailCount = 0;
           clearAutoSaveTimers();
-          if (silencePromptTimerRef.current) {
-            clearTimeout(silencePromptTimerRef.current);
-            silencePromptTimerRef.current = null;
-          }
-
           setIsSpeechActive(true);
-          setVoiceLevel(45 + Math.floor(Math.random() * 45));
+          setVoiceLevel(55 + Math.floor(Math.random() * 40));
 
           let interimText = '';
 
           for (let i = event.resultIndex; i < event.results.length; ++i) {
             const res = event.results[i];
+            const bestTranscript = (res[0]?.transcript || '').trim();
+            if (!bestTranscript) continue;
+
             if (res.isFinal) {
               if (!processedFinalIndicesRef.current.has(i)) {
                 processedFinalIndicesRef.current.add(i);
-                const finalChunk = res[0]?.transcript?.trim();
-                if (finalChunk && finalChunk !== lastFinalChunkRef.current) {
-                  lastFinalChunkRef.current = finalChunk;
+                if (bestTranscript !== lastFinalChunkRef.current) {
+                  lastFinalChunkRef.current = bestTranscript;
                   lastSpeechTimeRef.current = Date.now();
                   accumulatedFinalRef.current = appendWithoutDuplicate(
                     accumulatedFinalRef.current,
-                    finalChunk
+                    bestTranscript
                   );
                 }
               }
             } else {
-              interimText += (res[0]?.transcript || '') + ' ';
+              interimText += bestTranscript + ' ';
             }
           }
 
@@ -518,25 +593,14 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           ).trim();
 
           if (currentConvertedText) {
-            // نمایش زنده متن تبدیل‌شده در لحظه صحبت کاربر
             setLiveTranscript(currentConvertedText);
             setInputText(currentConvertedText);
-
-            // پس از ۱.۳۵ ثانیه مکث بعد از پایان صحبت کاربر، فرآیند تحلیل و ثبت آغاز می‌شود
-            if (speechDoneTimerRef.current) {
-              clearTimeout(speechDoneTimerRef.current);
-            }
-            speechDoneTimerRef.current = setTimeout(() => {
-              commitCapturedSpeech();
-            }, 1350);
+            // به کاربر فرصت کافی (۲.۲ ثانیه مکث پس از آخرین کلمه) می‌دهیم تا کل جمله (عنوان + زمان) را کامل بگوید
+            schedulePostSpeechCommit(2200);
           }
         };
 
         rec.onerror = (e: any) => {
-          if (e?.error === 'no-speech') {
-            // در حالت منتظر دستور، اگر هنوز کاربر شروع به صحبت نکرده، اجازه بده در onend دوباره فعال شود
-            return;
-          }
           if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
             stopListening();
             return;
@@ -544,17 +608,16 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         };
 
         rec.onend = () => {
+          recognitionRef.current = null;
           if (hasCommitted) return;
 
-          // اگر کاربر صحبتی کرده و متن تبدیل شده آماده است، بلافاصله فرآیند را آغاز کن
-          const capturedSoFar = appendWithoutDuplicate(
-            accumulatedFinalRef.current,
-            latestInterimRef.current
-          ).trim();
-
-          if (capturedSoFar) {
-            commitCapturedSpeech();
-            return;
+          // اگر قطعه موقت (interim) هنوز نهایی نشده بود، آن را به متن انباشته اضافه کن تا هیچ کلمه‌ای حذف نشود
+          if (latestInterimRef.current.trim()) {
+            accumulatedFinalRef.current = appendWithoutDuplicate(
+              accumulatedFinalRef.current,
+              latestInterimRef.current.trim()
+            );
+            latestInterimRef.current = '';
           }
 
           if (!shouldKeepListeningRef.current || !isOpenRef.current) {
@@ -564,19 +627,45 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             return;
           }
 
-          // اگر هنوز در بازه انتظار دستور (۹ ثانیه) هستیم، میکروفون را بدون قطعی روشن نگه دار
-          const elapsedWaiting = Date.now() - speechStartTimeRef.current;
-          if (elapsedWaiting < 8600) {
+          const hasSpokenAnything = Boolean(accumulatedFinalRef.current.trim());
+          const now = Date.now();
+          const instanceDuration = now - instanceStartAt;
+
+          // اگر کاربر صحبتش را کرده و بیش از ۱.۸ ثانیه از آخرین کلمه‌اش گذشته است، جمله را ثبت و تحلیل کن
+          if (
+            hasSpokenAnything &&
+            (lastSpeechTimeRef.current === 0 || now - lastSpeechTimeRef.current >= 1800)
+          ) {
+            commitCapturedSpeech();
+            return;
+          }
+
+          // جلوگیری از حلقه خاموش و روشن شدن سریع در اندروید در صورتی که سرویس صوتی بلافاصله بسته شود
+          if (!instanceHeardSpeech && instanceDuration < 700) {
+            quickFailCount += 1;
+            if (quickFailCount >= 3) {
+              shouldKeepListeningRef.current = false;
+              setIsListening(false);
+              setIsSpeechActive(false);
+              setVoiceLevel(0);
+              return;
+            }
+          } else {
+            quickFailCount = 0;
+          }
+
+          const reconnectDelay = quickFailCount > 0 ? 550 * quickFailCount : 380;
+
+          if (now - sessionStartTimeRef.current < 40000) {
             reconnectTimerRef.current = setTimeout(() => {
               if (shouldKeepListeningRef.current && isOpenRef.current && !hasCommitted) {
                 createAndRunRecognition();
               }
-            }, 150);
+            }, reconnectDelay);
+          } else if (hasSpokenAnything) {
+            commitCapturedSpeech();
           } else {
             stopListening();
-            if (!isCompleteRef.current) {
-              handleSilenceOnIncompleteRef.current();
-            }
           }
         };
 
@@ -590,7 +679,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     };
 
     createAndRunRecognition();
-  }, [clearAutoSaveTimers, isEn, stopListening]);
+  }, [clearAutoSaveTimers, isEn, stopListening, stopSpeaking]);
 
   const executeFinalSave = useCallback(
     (finalDraft: SmartCaptureDraft) => {
@@ -665,7 +754,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         return;
       }
 
-      // Default / 'idea'
       onSaveIdea({
         title: cleanTitle,
         content: finalDraft.description || cleanTitle,
@@ -674,12 +762,22 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       });
       onClose();
     },
-    [clearAutoSaveTimers, gpsCoords, isEn, onClose, onSaveIdea, onSaveLocation, onSaveOccasion, onSaveReminder, stopListening, stopSpeaking]
+    [
+      clearAutoSaveTimers,
+      gpsCoords,
+      isEn,
+      onClose,
+      onSaveIdea,
+      onSaveLocation,
+      onSaveOccasion,
+      onSaveReminder,
+      stopListening,
+      stopSpeaking,
+    ]
   );
 
   /**
-   * شروع شمارش معکوس ۳ ثانیه‌ای پس از پایان پرسش صوتی/متنی «آیا ثبت نهایی انجام شود؟»
-   * در صورت عدم پاسخ کاربر پس از ۳ ثانیه، ثبت خودکار در بخش مربوطه انجام می‌شود.
+   * شروع شمارش معکوس ۳ ثانیه‌ای پس از پایان بیان صوتی/متنی درخواست ثبت نهایی
    */
   const startThreeSecondAutoSave = useCallback(
     (completedDraft: SmartCaptureDraft) => {
@@ -706,56 +804,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     [clearAutoSaveTimers, executeFinalSave]
   );
 
-  // If the microphone stops without user input while a mandatory field is missing, prompt them by voice & text with a warm conversational question
-  const hasPromptedSilenceRef = useRef(false);
-  useEffect(() => {
-    handleSilenceOnIncompleteRef.current = () => {
-      if (!isOpenRef.current || isCompleteRef.current) return;
-      if (hasPromptedSilenceRef.current) return;
-      hasPromptedSilenceRef.current = true;
-
-      const cur = draftRef.current;
-      let missingPrompt = isEn
-        ? "I didn't catch your voice! Tell me, what reminder, occasion, location, or idea would you like me to save for you?"
-        : 'صدات رو نشنیدم؛ بگو چه یادآور، مناسبت، مکان یا ایده‌ای رو می‌خوای برات ثبت کنم؟';
-
-      if (cur.intentType === 'reminder' && cur.title && (cur.hour === undefined || cur.hour === null || cur.hour < 0)) {
-        missingPrompt = isEn
-          ? `What day and what time should I remind you about "${cur.title}"?`
-          : `برای یادآورِ «${cur.title}»، نگفتی چه روزی و ساعت چند بهت خبر بدم؟`;
-      } else if (cur.intentType === 'reminder' && !cur.title) {
-        missingPrompt = isEn
-          ? 'What is the subject of this reminder so I can save it for you?'
-          : 'موضوع یادآور رو نگفتی؛ بگو عنوانش چیه تا برات ثبتش کنم؟';
-      } else if (cur.intentType === 'occasion' && cur.title && (!cur.solarDay || !cur.solarMonth)) {
-        missingPrompt = isEn
-          ? `What day and what month is "${cur.title}"?`
-          : `نگفتی «${cur.title}» دقیقاً چه روزی و چه ماهیه؟`;
-      } else if (cur.intentType === 'location' && !cur.title) {
-        missingPrompt = isEn
-          ? 'What name would you like me to save this place under?'
-          : 'دوست داری این مکان رو با چه اسمی برات ذخیره کنم؟';
-      }
-
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: 'silence_' + Date.now(),
-          role: 'assistant',
-          text: missingPrompt,
-          timestamp: Date.now(),
-        },
-      ]);
-
-      speakPromptWithCallback(missingPrompt, () => {
-        if (isOpenRef.current && !isCompleteRef.current) {
-          startListening();
-        }
-      });
-    };
-  }, [isEn, speakPromptWithCallback, startListening]);
-
-  // Reset, speak initial conversational question aloud FIRST, and THEN activate microphone to wait for user's answer
+  // Reset, speak initial conversational question aloud FIRST, and THEN keep microphone ON to wait for user's sentence
   useEffect(() => {
     if (!isOpen) {
       clearAutoSaveTimers();
@@ -764,11 +813,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       return;
     }
 
-    hasPromptedSilenceRef.current = false;
+    unlockAudio();
 
     const initialQuestion = isEn
-      ? "Hi there! I'm ready. Tell me, what reminder, occasion, location, or idea would you like me to save for you?"
-      : 'سلام! من آماده‌ام؛ بگو چه یادآور، مناسبت، مکان یا ایده‌ای رو می‌خوای برات ثبت کنم؟';
+      ? "Hi there! I'm ready. Tell me what you'd like me to save for you?"
+      : 'سلام! من آماده‌ام؛ بگو چه یادآور، مناسبت، مکان یا ایده‌ای رو برات ثبت کنم؟';
 
     const initialGreeting: SmartChatMessage = {
       id: 'welcome_' + Date.now(),
@@ -782,30 +831,19 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     setIsComplete(false);
     setInputText('');
     setLiveTranscript('');
-    setQuickSuggestions(
-      isEn
-        ? ['Remind me tomorrow at 9 AM to call Ali', 'Birthday of Sara on 15 Ordibehesht', 'Save my parked car location', 'New startup idea']
-        : [
-            'فردا ساعت ۱۰ صبح جلسه کاری',
-            'تولد مریم ۱۵ اردیبهشت',
-            'ذخیره مکان پارک خودرو',
-            'ایده جدید برای پروژه',
-          ]
-    );
 
     const lastPos = getLastKnownPosition();
     if (lastPos) {
       setGpsCoords({ lat: lastPos.latitude, lng: lastPos.longitude });
     }
 
-    // ابتدا هوش مصنوعی سوال را به صورت صوتی و با لحن صمیمی بیان می‌کند و پس از اتمام سوال، میکروفون فعال و منتظر پاسخ می‌شود
     const timer = setTimeout(() => {
       speakPromptWithCallback(initialQuestion, () => {
         if (isOpenRef.current) {
           startListening();
         }
       });
-    }, 120);
+    }, 100);
 
     return () => {
       clearTimeout(timer);
@@ -848,12 +886,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       stopListening();
       setInputText('');
       setLiveTranscript('');
-      hasPromptedSilenceRef.current = false;
 
-      // If already complete and user says "بله" / "ثبت کن" -> save immediately
+      const wasAlreadyComplete = isCompleteRef.current && Boolean(draftRef.current.title);
+
+      // If already complete and user confirms ("بله" / "ثبت کن") -> save immediately
       if (
-        isCompleteRef.current &&
-        draftRef.current.title &&
+        wasAlreadyComplete &&
         /^(بله|بله ثبت کن|آره|ثبت|ثبت کن|ذخیره|ذخیره کن|تایید|انجام بده|حله|باشه|yes|ok|save)$/i.test(
           trimmed.replace(/[!.،؟?]/g, '').trim()
         )
@@ -864,7 +902,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
       // If already complete and user says "نه" / "ویرایش" / "صبر کن" -> cancel auto-save and ask what to change
       if (
-        isCompleteRef.current &&
+        wasAlreadyComplete &&
         /^(نه|خیر|صبر کن|دست نگه دار|ویرایش|تغییر|تغییر ساعت|تغییر تاریخ|تغییر نام مکان|ویرایش متن|no|wait|edit)$/i.test(
           trimmed.replace(/[!.،؟?]/g, '').trim()
         )
@@ -900,7 +938,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
         setDraft(analysis.draft);
         setIsComplete(analysis.isComplete);
-        setQuickSuggestions(analysis.quickSuggestions || []);
 
         const assistantMsg: SmartChatMessage = {
           id: 'a_' + Date.now(),
@@ -910,24 +947,17 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         };
         setMessages((prev) => [...prev, assistantMsg]);
 
-        // If user explicitly commanded immediate save and draft is complete
-        if (analysis.isComplete && analysis.shouldAutoSubmit && analysis.draft.title) {
-          executeFinalSave(analysis.draft);
-          return;
-        }
-
         if (!analysis.isComplete) {
-          // Mandatory input is missing -> ask the exact missing question by voice & text, then activate mic
+          // اطلاعات اجباری ناقص است -> سوال را به صورت صوتی و متنی بپرس و سپس میکروفون را روشن کن
           speakPromptWithCallback(analysis.clarifyingQuestion, () => {
             if (isOpenRef.current) {
               startListening();
             }
           });
         } else if (analysis.draft.title) {
-          // All required inputs are complete -> ask final confirmation by voice & text, then start 3-second auto-save timer
+          // اطلاعات کامل شده است -> درخواست ثبت نهایی را علاوه بر نوشتاری، به صورت صوتی نیز بیان کن و سپس شمارش معکوس ۳ ثانیه را آغاز کن (بدون روشن کردن مجدد میکروفون در حین شمارش معکوس تا خاموش و روشن نشود)
           speakPromptWithCallback(analysis.clarifyingQuestion, () => {
             if (isOpenRef.current) {
-              startListening();
               startThreeSecondAutoSave(analysis.draft);
             }
           });
@@ -940,7 +970,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       clearAutoSaveTimers,
       draft,
       executeFinalSave,
-       isEn,
+      isEn,
       language,
       messages,
       speakPromptWithCallback,
@@ -981,7 +1011,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/40',
     },
     unknown: {
-      label: isEn ? 'Auto-Detecting...' : 'تشخیص هوشمند بخش...',
+      label: isEn ? 'Reminder' : 'یادآور',
       icon: <Sparkles className="w-4 h-4" />,
       badgeClass: 'bg-stone-800 text-stone-300 border-stone-700',
     },
@@ -996,28 +1026,24 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       onClick={onClose}
     >
       <div
-        onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-lg bg-stone-950 border-t sm:border border-stone-800 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
+        onClick={(e) => {
+          e.stopPropagation();
+          unlockAudio();
+        }}
+        className="w-full max-w-lg bg-stone-950 border-t sm:border border-stone-800 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
       >
-        {/* Header */}
-        <div className="px-4 py-3.5 border-b border-stone-800/90 flex items-center justify-between bg-stone-900/70">
+        {/* Minimal Clean Header: Only "ثبت هوشمند" */}
+        <div className="px-4 py-3 border-b border-stone-800/90 flex items-center justify-between bg-stone-900/70">
           <div className="flex items-center gap-2.5">
             <div
               data-keep-color="true"
-              className="w-9 h-9 rounded-xl bg-[#FF8C00] text-white flex items-center justify-center shadow-md shadow-[#FF8C00]/30"
+              className="w-8 h-8 rounded-xl bg-[#FF8C00] text-white flex items-center justify-center shadow-md shadow-[#FF8C00]/30"
             >
-              <Sparkles className="w-5 h-5 text-white" />
+              <Sparkles className="w-4 h-4 text-white" />
             </div>
-            <div>
-              <h3 className="text-sm sm:text-base font-black text-white flex items-center gap-2">
-                <span>{isEn ? 'Smart Voice Capture' : 'ثبت هوشمند صوتی و گفتگویی'}</span>
-              </h3>
-              <p className="text-[11px] text-stone-400">
-                {isEn
-                  ? 'Auto-routes to Reminders, Occasions, Locations, or Ideas'
-                  : 'پرسش صوتی و متنی برای تکمیل اطلاعات و ثبت خودکار'}
-              </p>
-            </div>
+            <h3 className="text-sm sm:text-base font-black text-white">
+              {isEn ? 'Smart Capture' : 'ثبت هوشمند'}
+            </h3>
           </div>
 
           <div className="flex items-center gap-1.5">
@@ -1025,7 +1051,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
               type="button"
               onClick={() => setVoiceFeedbackEnabled((v) => !v)}
               className="p-2 rounded-xl bg-stone-800/80 hover:bg-stone-800 text-stone-300 transition-colors cursor-pointer"
-              title={isEn ? 'Voice Readback' : 'خوانش صوتی سوالات'}
+              title={isEn ? 'Voice Readback' : 'صدای گوینده'}
             >
               {voiceFeedbackEnabled ? (
                 <Volume2 className="w-4 h-4 text-[#FF8C00]" />
@@ -1043,53 +1069,15 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           </div>
         </div>
 
-        {/* Target Section Selector Bar (4 Tabs) */}
-        <div className="px-4 py-2.5 bg-stone-900/40 border-b border-stone-800/70 flex items-center justify-between gap-1.5 overflow-x-auto">
-          {(['reminder', 'occasion', 'location', 'idea'] as SmartIntentType[]).map((type) => {
-            const meta = sectionMeta[type];
-            const isSelected = draft.intentType === type;
-            return (
-              <button
-                key={type}
-                type="button"
-                onClick={() => {
-                  clearAutoSaveTimers();
-                  const nextDraft = { ...draft, intentType: type };
-                  setDraft(nextDraft);
-                  if (nextDraft.title) {
-                    const nowReady =
-                      type === 'idea' ||
-                      type === 'location' ||
-                      (type === 'reminder' && typeof nextDraft.hour === 'number' && nextDraft.hour >= 0) ||
-                      (type === 'occasion' &&
-                        typeof nextDraft.solarDay === 'number' &&
-                        typeof nextDraft.solarMonth === 'number');
-                    setIsComplete(nowReady);
-                  }
-                }}
-                data-keep-color={isSelected ? 'true' : undefined}
-                className={`flex-1 min-w-[72px] py-1.5 px-2.5 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 border transition-all cursor-pointer ${
-                  isSelected
-                    ? 'bg-[#FF8C00] text-white border-[#FF8C00] shadow-sm shadow-[#FF8C00]/30'
-                    : 'bg-stone-900/90 text-stone-400 border-stone-800 hover:text-stone-200'
-                }`}
-              >
-                {meta.icon}
-                <span>{meta.label}</span>
-              </button>
-            );
-          })}
-        </div>
-
         {/* Conversation Area */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[210px] max-h-[340px]">
+        <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[180px] max-h-[320px]">
           {messages.map((msg) => (
             <div
               key={msg.id}
               className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}
             >
               <div
-                className={`max-w-[86%] rounded-2xl px-3.5 py-2.5 text-xs sm:text-sm leading-relaxed ${
+                className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 text-xs sm:text-sm leading-relaxed ${
                   msg.role === 'user'
                     ? 'bg-[#FF8C00]/15 border border-[#FF8C00]/35 text-white rounded-br-sm'
                     : 'bg-stone-900 border border-stone-800 text-stone-200 rounded-bl-sm'
@@ -1102,7 +1090,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
           {liveTranscript && (
             <div className="flex justify-start">
-              <div className="max-w-[86%] rounded-2xl px-3.5 py-2 text-xs sm:text-sm bg-[#FF8C00]/10 border border-dashed border-[#FF8C00]/50 text-stone-200 italic">
+              <div className="max-w-[88%] rounded-2xl px-3.5 py-2 text-xs sm:text-sm bg-[#FF8C00]/10 border border-dashed border-[#FF8C00]/50 text-stone-200">
                 {liveTranscript}...
               </div>
             </div>
@@ -1112,7 +1100,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             <div className="flex justify-end">
               <div className="rounded-2xl px-3.5 py-2 text-xs bg-stone-900 border border-stone-800 text-stone-400 flex items-center gap-2">
                 <span className="w-2 h-2 rounded-full bg-[#FF8C00] animate-ping" />
-                <span>{isEn ? 'Analyzing...' : 'در حال تحلیل هوشمند...'}</span>
+                <span>{isEn ? 'Analyzing...' : 'در حال استخراج اطلاعات...'}</span>
               </div>
             </div>
           )}
@@ -1157,7 +1145,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           <div ref={chatEndRef} />
         </div>
 
-        {/* Live Structured Draft Card */}
+        {/* Live Extracted Fields Card */}
         {(draft.title || draft.intentType !== 'unknown') && (
           <div className="mx-4 mb-2 p-3 rounded-2xl bg-stone-900/90 border border-stone-800 space-y-2">
             <div className="flex items-center justify-between gap-2">
@@ -1165,19 +1153,17 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                 className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[11px] font-bold border ${currentSection.badgeClass}`}
               >
                 {currentSection.icon}
-                <span>
-                  {isEn ? 'Target Section:' : 'بخش مقصد:'} {currentSection.label}
-                </span>
+                <span>{currentSection.label}</span>
               </span>
 
               {isComplete ? (
                 <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
                   <Check className="w-3.5 h-3.5" />
-                  <span>{isEn ? 'Complete & Ready' : 'اطلاعات کامل شد'}</span>
+                  <span>{isEn ? 'Ready to Save' : 'تکمیل شد'}</span>
                 </span>
               ) : (
                 <span className="text-[11px] font-bold text-amber-400">
-                  {isEn ? 'Awaiting mandatory input...' : 'در انتظار ورودی اجباری...'}
+                  {isEn ? 'Awaiting details...' : 'در انتظار تکمیل...'}
                 </span>
               )}
             </div>
@@ -1185,7 +1171,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
               <div>
                 <label className="block text-[10px] text-stone-400 mb-0.5">
-                  {isEn ? 'Title / Subject' : 'عنوان استخراج‌شده'}
+                  {isEn ? 'Title' : 'عنوان'}
                 </label>
                 <input
                   type="text"
@@ -1200,43 +1186,64 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                 />
               </div>
 
-              {draft.intentType === 'reminder' && (
+              {(draft.intentType === 'reminder' || draft.intentType === 'unknown') && (
                 <div>
                   <div className="flex items-center justify-between mb-0.5">
                     <label className="block text-[10px] text-stone-400">
-                      {isEn ? 'Scheduled Time (Editable)' : 'زمان یادآور (قابل ویرایش)'}
+                      {isEn ? 'Date & Time' : 'تاریخ و زمان'}
                     </label>
-                    {typeof draft.hour === 'number' && draft.hour >= 0 && (
-                      <span className="text-[10px] text-[#FF8C00] font-bold truncate max-w-[140px]">
+                    {(typeof draft.hour === 'number' && draft.hour >= 0) ||
+                    (draft.solarDay && draft.solarMonth) ? (
+                      <span className="text-[10px] text-[#FF8C00] font-bold truncate max-w-[155px]">
                         {formatJalaliFull(computeReminderTimestampFromDraft(draft), language)}
                       </span>
-                    )}
+                    ) : null}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <select
-                      value={typeof draft.offsetDays === 'number' ? draft.offsetDays : 0}
+                      value={
+                        draft.solarDay && draft.solarMonth
+                          ? 'solar'
+                          : String(typeof draft.offsetDays === 'number' ? draft.offsetDays : 0)
+                      }
                       onChange={(e) => {
                         clearAutoSaveTimers();
-                        const nextOffset = Number(e.target.value);
+                        const val = e.target.value;
+                        if (val === 'solar') return;
+                        const nextOffset = Number(val);
                         const nextHour = typeof draft.hour === 'number' && draft.hour >= 0 ? draft.hour : 9;
                         const nextMinute = typeof draft.minute === 'number' && draft.minute >= 0 ? draft.minute : 0;
-                        const nextDraft = {
+                        const nextDraft: SmartCaptureDraft = {
                           ...draft,
+                          intentType: draft.intentType === 'unknown' ? 'reminder' : draft.intentType,
                           offsetDays: nextOffset,
+                          solarDay: undefined,
+                          solarMonth: undefined,
+                          solarYear: undefined,
                           hour: nextHour,
                           minute: nextMinute,
-                          targetTimestamp: undefined,
                         };
                         setDraft(nextDraft);
                         if (nextDraft.title) setIsComplete(true);
                       }}
                       className="px-2 py-1.5 rounded-xl bg-stone-950 border border-stone-800 text-xs text-stone-200 focus:outline-none focus:border-[#FF8C00] cursor-pointer"
                     >
-                      <option value={0}>{isEn ? 'Today' : 'امروز'}</option>
-                      <option value={1}>{isEn ? 'Tomorrow' : 'فردا'}</option>
-                      <option value={2}>{isEn ? 'In 2 days' : 'پس‌فردا'}</option>
-                      <option value={3}>{isEn ? 'In 3 days' : '۳ روز دیگر'}</option>
-                      <option value={7}>{isEn ? 'Next week' : 'هفته آینده'}</option>
+                      {draft.solarDay && draft.solarMonth && (
+                        <option value="solar">
+                          {isEn
+                            ? `${draft.solarDay} ${PERSIAN_MONTHS[draft.solarMonth - 1]}${
+                                draft.solarYear ? ` ${draft.solarYear}` : ''
+                              }`
+                            : `${toPersianDigits(draft.solarDay)} ${PERSIAN_MONTHS[draft.solarMonth - 1]}${
+                                draft.solarYear ? ` ${toPersianDigits(draft.solarYear)}` : ''
+                              }`}
+                        </option>
+                      )}
+                      <option value="0">{isEn ? 'Today' : 'امروز'}</option>
+                      <option value="1">{isEn ? 'Tomorrow' : 'فردا'}</option>
+                      <option value="2">{isEn ? 'In 2 days' : 'پس‌فردا'}</option>
+                      <option value="3">{isEn ? 'In 3 days' : '۳ روز دیگر'}</option>
+                      <option value="7">{isEn ? 'Next week' : 'هفته آینده'}</option>
                     </select>
                     <input
                       type="time"
@@ -1254,12 +1261,17 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                         const h = Number(hStr);
                         const m = Number(mStr);
                         if (!Number.isNaN(h) && !Number.isNaN(m)) {
-                          const nextDraft = {
+                          const hasSolar = Boolean(draft.solarDay && draft.solarMonth);
+                          const nextDraft: SmartCaptureDraft = {
                             ...draft,
+                            intentType: draft.intentType === 'unknown' ? 'reminder' : draft.intentType,
                             hour: h,
                             minute: m,
-                            offsetDays: typeof draft.offsetDays === 'number' ? draft.offsetDays : 0,
-                            targetTimestamp: undefined,
+                            offsetDays: hasSolar
+                              ? undefined
+                              : typeof draft.offsetDays === 'number'
+                              ? draft.offsetDays
+                              : 0,
                           };
                           setDraft(nextDraft);
                           if (nextDraft.title) setIsComplete(true);
@@ -1274,7 +1286,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
               {draft.intentType === 'occasion' && (
                 <div>
                   <label className="block text-[10px] text-stone-400 mb-0.5">
-                    {isEn ? 'Occasion Date (Shamsi - Editable)' : 'تاریخ مناسبت شمسی (قابل ویرایش)'}
+                    {isEn ? 'Date (Shamsi)' : 'تاریخ شمسی'}
                   </label>
                   <div className="flex items-center gap-1.5">
                     <select
@@ -1334,7 +1346,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
               {draft.intentType === 'location' && (
                 <div>
                   <label className="block text-[10px] text-stone-400 mb-0.5">
-                    {isEn ? 'GPS Coordinates' : 'موقعیت ماهواره‌ای GPS'}
+                    {isEn ? 'GPS Coordinates' : 'موقعیت GPS'}
                   </label>
                   <div className="px-2.5 py-1.5 rounded-xl bg-stone-950 border border-stone-800 text-xs text-emerald-400 font-mono truncate">
                     {gpsCoords
@@ -1349,27 +1361,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           </div>
         )}
 
-        {/* Quick Reply Chips */}
-        {quickSuggestions.length > 0 && (
-          <div className="px-4 pb-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-            {quickSuggestions.map((chip, idx) => (
-              <button
-                key={`${chip}_${idx}`}
-                type="button"
-                onClick={() => handleUserUtterance(chip)}
-                className="px-3 py-1.5 rounded-xl bg-stone-900 hover:bg-stone-800 border border-stone-700/80 text-stone-200 text-xs font-bold whitespace-nowrap transition-all active:scale-95 cursor-pointer shrink-0"
-              >
-                {chip}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {/* Bottom Controls: Prominent High-Sensitivity Microphone Bar + Text Input + Final Submit Button */}
+        {/* Bottom Controls: Prominent Continuous Microphone Bar + Text Input + Final Submit Button */}
         <div className="p-3.5 bg-stone-900/95 border-t border-stone-800 space-y-2.5">
           {/* Prominent Microphone Hero Box */}
           <div
             onClick={() => {
+              unlockAudio();
               clearAutoSaveTimers();
               stopSpeaking();
               const pendingText = (liveTranscript || inputText).trim();
@@ -1396,6 +1393,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                 data-keep-color="true"
                 onClick={(e) => {
                   e.stopPropagation();
+                  unlockAudio();
                   clearAutoSaveTimers();
                   stopSpeaking();
                   const pendingText = (liveTranscript || inputText).trim();
@@ -1417,19 +1415,10 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                     ? 'bg-[#FF8C00] text-white shadow-xl shadow-[#FF8C00]/50 ring-4 ring-[#FF8C00]/30'
                     : 'bg-[#FF8C00] hover:bg-[#FF9E1F] text-white shadow-lg shadow-[#FF8C00]/35 ring-2 ring-white/25'
                 }`}
-                title={
-                  isListening
-                    ? isEn
-                      ? 'Microphone Active'
-                      : 'میکروفون فعال (منتظر دستور)'
-                    : isEn
-                    ? 'Tap to Speak'
-                    : 'لمس برای شروع صحبت'
-                }
               >
                 {isListening && (
                   <>
-                    <span className="absolute inset-0 rounded-2xl bg-[#FF8C00] animate-ping opacity-40 pointer-events-none" />
+                    <span className="absolute inset-0 rounded-2xl bg-[#FF8C00] animate-ping opacity-35 pointer-events-none" />
                     <span
                       className="absolute -inset-1.5 rounded-3xl border-2 border-[#FF8C00]/60 pointer-events-none transition-transform duration-150"
                       style={{
@@ -1440,7 +1429,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                 )}
                 <Mic className="w-7 h-7 sm:w-8 sm:h-8 text-white stroke-[2.4] drop-shadow" />
                 <span className="text-[9px] font-black text-white/95 mt-0.5 leading-none">
-                  {isListening ? (isEn ? 'ON' : 'فعال') : isEn ? 'MIC' : 'میکروفون'}
+                  {isListening ? (isEn ? 'ON' : 'روشن') : isEn ? 'MIC' : 'میکروفون'}
                 </span>
               </button>
 
@@ -1461,19 +1450,19 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                   <p className="text-xs sm:text-sm font-black text-white truncate">
                     {isSpeechActive
                       ? isEn
-                        ? 'Converting speech to text...'
-                        : 'در حال تبدیل گفتار شما به متن...'
+                        ? 'Listening to your sentence...'
+                        : 'در حال شنیدن و تبدیل جمله شما...'
                       : isListening
                       ? isEn
-                        ? 'Waiting for your command — Speak now'
-                        : 'منتظر دستور صوتی شما... بفرمایید'
+                        ? 'Microphone is ON — Speak your full sentence'
+                        : 'میکروفون روشن است — جمله خود را کامل بگویید'
                       : isAssistantSpeaking
                       ? isEn
-                        ? 'Assistant asking question...'
-                        : 'در حال بیان سوال... (پس از آن بفرمایید)'
+                        ? 'Speaking...'
+                        : 'در حال بیان صوتی...'
                       : isEn
                       ? 'Tap Microphone to Speak'
-                      : 'برای صحبت روی دکمه میکروفون بزنید'}
+                      : 'برای صحبت روی میکروفون بزنید'}
                   </p>
                 </div>
                 <p className="text-[11px] text-stone-300 mt-0.5 truncate">
@@ -1481,11 +1470,15 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                     ? liveTranscript
                     : isListening
                     ? isEn
-                      ? 'Start speaking to convert to text & begin'
-                      : 'به‌محض شروع صحبت، به متن تبدیل شده و فرآیند آغاز می‌شود'
+                      ? 'Say title and time together (e.g., Tomorrow 10 AM meeting)'
+                      : 'عنوان و زمان را بگویید (مثلاً: فردا ساعت ۱۰ صبح جلسه کاری)'
+                    : isAssistantSpeaking
+                    ? isEn
+                      ? 'Microphone activates right after voice prompt'
+                      : 'بلافاصله پس از پایان صدای گوینده، میکروفون فعال می‌شود'
                     : isEn
-                    ? 'Tap the orange microphone button to activate'
-                    : 'برای فعال‌سازی مجدد میکروفون، دکمه نارنجی را لمس کنید'}
+                    ? 'Tap the orange button to start voice capture'
+                    : 'دکمه نارنجی میکروفون را لمس کنید'}
                 </p>
               </div>
             </div>
@@ -1499,7 +1492,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                       Math.min(
                         34,
                         Math.round(
-                          (isSpeechActive ? Math.max(28, voiceLevel) : Math.max(14, voiceLevel)) *
+                          (isSpeechActive ? Math.max(30, voiceLevel) : Math.max(16, voiceLevel)) *
                             0.34 *
                             multiplier
                         )
@@ -1524,10 +1517,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             </div>
           </div>
 
-          {/* Secondary Text Input for manual answer/clarification */}
+          {/* Secondary Text Input */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
+              unlockAudio();
               if (inputText.trim()) {
                 handleUserUtterance(inputText);
               }
@@ -1542,13 +1536,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                 setInputText(e.target.value);
               }}
               placeholder={
-                isListening
-                  ? isEn
-                    ? 'Or type your answer here...'
-                    : 'یا پاسخ خود را اینجا تایپ کنید...'
-                  : isEn
-                  ? 'Speak with the mic above or type here...'
-                  : 'با میکروفون بالا بگویید یا اینجا بنویسید...'
+                isEn ? 'Or type here...' : 'یا متن خود را اینجا بنویسید...'
               }
               className="w-full bg-transparent border-0 text-xs sm:text-sm text-white placeholder-stone-500 focus:outline-none py-1.5"
             />

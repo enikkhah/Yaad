@@ -78,10 +78,16 @@ export function safeAbortSpeechRecognition(rec: any): void {
     rec.onend = null;
     rec.onstart = null;
     rec.onaudioend = null;
+    rec.onsoundstart = null;
     rec.onsoundend = null;
+    rec.onspeechstart = null;
     rec.onspeechend = null;
-    rec.abort();
+    try {
+      rec.stop();
+    } catch {
+      rec.abort();
+    }
   } catch {
-    // Ignore browser abort errors
+    // Ignore browser stop/abort errors
   }
 }

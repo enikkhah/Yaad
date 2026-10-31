@@ -65,8 +65,40 @@ const getAudioContext = (): AudioContext => {
   return audioCtx;
 };
 
+let sharedTtsAudio: HTMLAudioElement | null = null;
+let hasUnlockedSpeechSynthesis = false;
+
+export const getSharedTtsAudioElement = (): HTMLAudioElement | null => {
+  if (typeof window === 'undefined') return null;
+  if (!sharedTtsAudio) {
+    try {
+      sharedTtsAudio = new Audio();
+      sharedTtsAudio.preload = 'auto';
+      sharedTtsAudio.setAttribute('referrerpolicy', 'no-referrer');
+    } catch {
+      return null;
+    }
+  }
+  return sharedTtsAudio;
+};
+
 /**
- * Unlocks Web Audio API on first user touch/click so background timers can play sound reliably.
+ * Plays a gentle two-note voice-assistant prompt chime via Web Audio API
+ */
+export const playSoftPromptChime = () => {
+  try {
+    const ctx = getAudioContext();
+    const now = ctx.currentTime;
+    playSoftTone(ctx, 523.25, now, 0.02, 0.16, 'sine', 0.14, 0.8);
+    playSoftTone(ctx, 659.25, now + 0.09, 0.02, 0.22, 'sine', 0.16, 0.8);
+  } catch {
+    // Ignore
+  }
+};
+
+/**
+ * Unlocks Web Audio API, shared HTMLAudioElement, and SpeechSynthesis on user touch/click
+ * so timers (like the 1.5s hold on +) can play voice & sound reliably.
  */
 export const unlockAudio = () => {
   try {
@@ -74,12 +106,45 @@ export const unlockAudio = () => {
     if (ctx.state === 'suspended') {
       ctx.resume().catch(() => {});
     }
-    // Play silent 1ms buffer to unlock iOS/Android WebView audio
+    // Play silent 1ms buffer to unlock iOS/Android WebView WebAudio
     const buffer = ctx.createBuffer(1, 1, 22050);
     const source = ctx.createBufferSource();
     source.buffer = buffer;
     source.connect(ctx.destination);
     source.start(0);
+  } catch {
+    // Ignore
+  }
+
+  try {
+    const el = getSharedTtsAudioElement();
+    if (el && (el.paused || !el.src)) {
+      el.volume = 0.01;
+      el.src = 'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+      const p = el.play();
+      if (p) {
+        p.then(() => {
+          el.pause();
+          el.volume = 1.0;
+        }).catch(() => {});
+      }
+    }
+  } catch {
+    // Ignore
+  }
+
+  try {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.resume();
+      if (!hasUnlockedSpeechSynthesis) {
+        hasUnlockedSpeechSynthesis = true;
+        window.speechSynthesis.getVoices();
+        const silentUtterance = new SpeechSynthesisUtterance(' ');
+        silentUtterance.volume = 0.01;
+        silentUtterance.rate = 2.0;
+        window.speechSynthesis.speak(silentUtterance);
+      }
+    }
   } catch {
     // Ignore
   }

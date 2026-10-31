@@ -48,6 +48,7 @@ const PERSIAN_WORD_NUMBERS: Record<string, number> = {
   یک: 1,
   یه: 1,
   اول: 1,
+  یکم: 1,
   دو: 2,
   دوم: 2,
   سه: 3,
@@ -68,29 +69,55 @@ const PERSIAN_WORD_NUMBERS: Record<string, number> = {
   ده: 10,
   دهم: 10,
   یازده: 11,
+  یازدهم: 11,
   دوازده: 12,
+  دوازدهم: 12,
   سیزده: 13,
+  سیزدهم: 13,
   چهارده: 14,
+  چهاردهم: 14,
   پانزده: 15,
+  پانزدهم: 15,
   پونزده: 15,
+  پونزدهم: 15,
   شانزده: 16,
+  شانزدهم: 16,
   شونزده: 16,
+  شونزدهم: 16,
   هفده: 17,
+  هفدهم: 17,
   هجده: 18,
+  هجدهم: 18,
   هژده: 18,
+  هژدهم: 18,
   نوزده: 19,
+  نوزدهم: 19,
   بیست: 20,
+  بیستم: 20,
   'بیست و یک': 21,
+  'بیست و یکم': 21,
   'بیست و دو': 22,
+  'بیست و دوم': 22,
   'بیست و سه': 23,
+  'بیست و سوم': 23,
   'بیست و چهار': 24,
+  'بیست و چهارم': 24,
   'بیست و پنج': 25,
+  'بیست و پنجم': 25,
   'بیست و شش': 26,
+  'بیست و ششم': 26,
+  'بیست و شیش': 26,
   'بیست و هفت': 27,
+  'بیست و هفتم': 27,
   'بیست و هشت': 28,
+  'بیست و هشتم': 28,
   'بیست و نه': 29,
+  'بیست و نهم': 29,
   سی: 30,
+  'سی ام': 30,
+  سی‌ام: 30,
   'سی و یک': 31,
+  'سی و یکم': 31,
   'سی و پنج': 35,
   چهل: 40,
   'چهل و پنج': 45,
@@ -121,7 +148,7 @@ function normalizePersianSpeech(raw: string): string {
   const sortedKeys = Object.keys(PERSIAN_WORD_NUMBERS).sort((a, b) => b.length - a.length);
   for (const word of sortedKeys) {
     const val = PERSIAN_WORD_NUMBERS[word];
-    const reg = new RegExp(`(?<=^|\\s)(${word})(?=\\s|$)`, 'g');
+    const reg = new RegExp(`(?<=^|\\s)(${word})(?=\\s|$|[.،,/:٫-])`, 'g');
     s = s.replace(reg, String(val));
   }
   return s;
@@ -177,6 +204,17 @@ function detectIntentFromText(text: string, prevIntent: SmartIntentType): SmartI
   }
 
   return 'unknown';
+}
+
+function normalizeTwoOrFourDigitYear(rawYearStr?: string): number | null {
+  if (!rawYearStr) return null;
+  const y = parseInt(rawYearStr, 10);
+  if (Number.isNaN(y)) return null;
+  if (y >= 1300 && y <= 1500) return y;
+  if (y >= 0 && y <= 99) {
+    return y < 50 ? 1400 + y : 1300 + y;
+  }
+  return null;
 }
 
 function extractTimeAndDate(rawText: string): {
@@ -267,87 +305,156 @@ function extractTimeAndDate(rawText: string): {
     };
   }
 
-  // Relative day cues
-  if (/پس\s*فردا/i.test(norm)) {
-    offsetDays = 2;
-  } else if (/فردا/i.test(norm)) {
-    offsetDays = 1;
-  } else if (/(امروز|امشب)/i.test(norm)) {
-    offsetDays = 0;
-  } else if (/هفته\s*(آینده|بعد|دیگه)/i.test(norm)) {
-    offsetDays = 7;
-  } else {
-    // Check Persian weekday names (شنبه تا جمعه) using rawCleaned before number word replacement turns "یک شنبه" into "1 شنبه"
-    for (const item of PERSIAN_WEEKDAY_JS_INDEX) {
-      if (item.pattern.test(rawCleaned)) {
-        const todayJs = now.getDay();
-        let diff = (item.jsDay - todayJs + 7) % 7;
-        if (diff === 0) diff = 7; // next occurrence of that weekday
-        offsetDays = diff;
-        break;
-      }
-    }
-  }
+  // Track text with date removed so date numbers are never mistaken for hours
+  let normWithoutDate = norm;
 
-  // Jalali Month & Day detection (e.g. "15 اردیبهشت 1405" or "20 خرداد")
+  // 1. Jalali Month Name & Day detection (e.g. "15 اردیبهشت 1405", "روز 10 آبان ماه سال 1405", "20 خرداد")
   for (let i = 0; i < PERSIAN_MONTHS.length; i++) {
     const mName = PERSIAN_MONTHS[i];
-    const mRegex = new RegExp(`(\\d{1,2})\\s*${mName}(?:\\s*(\\d{2,4}))?`, 'i');
+    const mRegex = new RegExp(
+      `(?:(?:روز|تاریخ|مورخ|در\\s*تاریخ|برای\\s*روز|برای\\s*تاریخ)\\s*)?(\\d{1,2})(?:\\s*(?:ام|م))?\\s*${mName}(?:\\s*ماه)?(?:\\s*(?:سال\\s*)?(1[34]\\d{2}|\\d{2}))?`,
+      'i'
+    );
     const match = norm.match(mRegex);
     if (match) {
       const d = parseInt(match[1], 10);
       if (d >= 1 && d <= 31) {
         solarDay = d;
         solarMonth = i + 1;
-      }
-      if (match[2]) {
-        let y = parseInt(match[2], 10);
-        if (y < 100) y += 1300;
-        solarYear = y;
+        solarYear = normalizeTwoOrFourDigitYear(match[2]);
+        normWithoutDate = normWithoutDate.replace(match[0], ' ');
       }
       break;
     }
   }
 
-  // Numeric slash date e.g. 1404/02/15 or 02/15
-  const slashMatch = norm.match(/(?:(\d{4})\/)?(\d{1,2})\/(\d{1,2})/);
-  if (slashMatch && !solarMonth) {
-    if (slashMatch[1]) solarYear = parseInt(slashMatch[1], 10);
-    const m = parseInt(slashMatch[2], 10);
-    const d = parseInt(slashMatch[3], 10);
-    if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
-      solarMonth = m;
-      solarDay = d;
+  // 2. Numeric Jalali Date: Day - Month - Year (e.g. "روز 10 8 1405", "10.8.1405", "10٫8٫1405", "10/8/1405", "روز 10 ماه 8 سال 1405")
+  if (!solarMonth) {
+    const dmyRegex =
+      /(?:(?:روز|تاریخ|مورخ|در\s*تاریخ|برای\s*روز|برای\s*تاریخ)\s*)?\b(\d{1,2})(?:\s*(?:ام|م))?(?:\s*(?:\/|\.|٫|-|ماه\s*|برج\s*|\s+)\s*)(\d{1,2})(?:\s*(?:\/|\.|٫|-|سال\s*|\s+)\s*)(1[34]\d{2}|0[4-9]\b)/i;
+    const dmyMatch = normWithoutDate.match(dmyRegex);
+    if (dmyMatch) {
+      const d = parseInt(dmyMatch[1], 10);
+      const m = parseInt(dmyMatch[2], 10);
+      const y = normalizeTwoOrFourDigitYear(dmyMatch[3]);
+      if (d >= 1 && d <= 31 && m >= 1 && m <= 12 && y) {
+        solarDay = d;
+        solarMonth = m;
+        solarYear = y;
+        normWithoutDate = normWithoutDate.replace(dmyMatch[0], ' ');
+      }
     }
   }
 
-  // Explicit time patterns:
-  // 1) HH:MM (e.g. 18:30 or 9:15)
-  const colonTime = norm.match(/(\d{1,2}):(\d{2})/);
+  // 3. Numeric Jalali Date: Year - Month - Day (e.g. "1405/8/10", "1405.8.10", "1405 8 10", "سال 1405 ماه 8 روز 10")
+  if (!solarMonth) {
+    const ymdRegex =
+      /(?:(?:در\s*تاریخ|تاریخ|مورخ|سال)\s*)?\b(1[34]\d{2})(?:\s*(?:\/|\.|٫|-|ماه\s*|برج\s*|\s+)\s*)(\d{1,2})(?:\s*(?:\/|\.|٫|-|روز\s*|\s+)\s*)(\d{1,2})\b/i;
+    const ymdMatch = normWithoutDate.match(ymdRegex);
+    if (ymdMatch) {
+      const y = parseInt(ymdMatch[1], 10);
+      const m = parseInt(ymdMatch[2], 10);
+      const d = parseInt(ymdMatch[3], 10);
+      if (d >= 1 && d <= 31 && m >= 1 && m <= 12) {
+        solarYear = y;
+        solarMonth = m;
+        solarDay = d;
+        normWithoutDate = normWithoutDate.replace(ymdMatch[0], ' ');
+      }
+    }
+  }
+
+  // 4. Numeric Jalali Date without Year: Day & Month (e.g. "روز 10 8", "روز 10 ماه 8", "10 برج 8", "10/8", "10.8", "10٫8")
+  if (!solarMonth) {
+    const dmExplicitRegex =
+      /(?:(?:روز|تاریخ|مورخ|در\s*تاریخ)\s+)(\d{1,2})(?:\s*(?:ام|م))?(?:\s*(?:\/|\.|٫|-|ماه\s*|برج\s*|\s+)\s*)(\d{1,2})\b(?!\s*(?:\/|\.|٫|-|:)\s*\d)/i;
+    const dmSeparatorRegex =
+      /\b(\d{1,2})\s*(?:\/|\.|٫|ماه|برج)\s*(\d{1,2})\b(?!\s*(?:\/|\.|٫)\s*\d)/i;
+    const dmMatch = normWithoutDate.match(dmExplicitRegex) || normWithoutDate.match(dmSeparatorRegex);
+    if (dmMatch) {
+      const first = parseInt(dmMatch[1], 10);
+      const second = parseInt(dmMatch[2], 10);
+      if (first >= 1 && first <= 31 && second >= 1 && second <= 12) {
+        solarDay = first;
+        solarMonth = second;
+        normWithoutDate = normWithoutDate.replace(dmMatch[0], ' ');
+      }
+    }
+  }
+
+  // 5. Single Day of Month (e.g. "روز 25م", "روز 10 ام")
+  if (!solarMonth && !solarDay) {
+    const singleDayMatch = normWithoutDate.match(/(?:روز|تاریخ)\s+(\d{1,2})\s*(?:ام|م)?\b(?!\s*(?:صبح|ظهر|عصر|شب|ساعت|دقیقه))/i);
+    if (singleDayMatch) {
+      const d = parseInt(singleDayMatch[1], 10);
+      if (d >= 1 && d <= 31) {
+        const nowJalali = getJalaliComponents(now.getTime());
+        solarDay = d;
+        solarMonth = d >= nowJalali.day ? nowJalali.month : (nowJalali.month % 12) + 1;
+        normWithoutDate = normWithoutDate.replace(singleDayMatch[0], ' ');
+      }
+    }
+  }
+
+  // Relative day cues (only if explicit solar date wasn't given, or alongside it)
+  if (/پس\s*فردا/i.test(normWithoutDate)) {
+    offsetDays = 2;
+  } else if (/فردا/i.test(normWithoutDate)) {
+    offsetDays = 1;
+  } else if (/(امروز|امشب)/i.test(normWithoutDate)) {
+    offsetDays = 0;
+  } else if (/هفته\s*(آینده|بعد|دیگه)/i.test(normWithoutDate)) {
+    offsetDays = 7;
+  } else if (!solarMonth) {
+    // Check Persian weekday names (شنبه تا جمعه)
+    for (const item of PERSIAN_WEEKDAY_JS_INDEX) {
+      if (item.pattern.test(rawCleaned)) {
+        const todayJs = now.getDay();
+        let diff = (item.jsDay - todayJs + 7) % 7;
+        if (diff === 0) diff = 7;
+        offsetDays = diff;
+        break;
+      }
+    }
+  }
+
+  // Explicit time patterns (evaluated on normWithoutDate so date digits are never confused with hours):
+  // 1) HH:MM (e.g. 18:30 or 15:00 or 9:15)
+  const colonTime = normWithoutDate.match(/(?:ساعت\s*)?(\d{1,2}):(\d{2})(?:\s*(صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد))?/i);
   if (colonTime) {
     let h = parseInt(colonTime[1], 10);
     const m = parseInt(colonTime[2], 10);
-    if (/(عصر|شب|بعد\s*از\s*ظهر|غروب)/i.test(norm) && h < 12) h += 12;
+    const period = colonTime[3] || '';
+    if (/(عصر|شب|بعد\s*از\s*ظهر|غروب)/i.test(period || normWithoutDate) && h < 12) h += 12;
     if (h >= 0 && h <= 23 && m >= 0 && m <= 59) {
       hour = h;
       minute = m;
     }
   } else {
-    // 2) "ساعت 9 و نیم صبح", "ساعت 6 و ربع عصر", "ساعت 8 شب", "9 صبح", "6 عصر"
-    const spokenTime = norm.match(
-      /(?:ساعت\s*)?(\d{1,2})(?:\s*و\s*(نیم|ربع|\d{1,2})\s*(?:دقیقه)?)?\s*(صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)?/i
+    // 2a) Priority match when the word "ساعت" is explicitly spoken: "ساعت 15", "ساعت 9 و نیم صبح", "ساعت 6 عصر"
+    const explicitSaatMatch = normWithoutDate.match(
+      /ساعت\s*(\d{1,2})(?:\s*و\s*(نیم|ربع|\d{1,2})\s*(?:دقیقه)?)?\s*(صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)?/i
     );
-    const hasExplicitHourKeyword =
-      /ساعت\s*\d{1,2}/i.test(norm) ||
-      /\d{1,2}\s*(?:و\s*(?:نیم|ربع|\d{1,2})(?:\s*دقیقه)?\s*)?(صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)/i.test(
-        norm
-      );
+    // 2b) Match without the word "ساعت" when accompanied by period/minutes/day cue: "9 و نیم صبح", "6 عصر", "ده و نیم", "فردا 10"
+    const implicitTimeMatch =
+      normWithoutDate.match(
+        /\b(\d{1,2})\s*و\s*(نیم|ربع|\d{1,2})\s*(?:دقیقه)?\s*(صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)?/i
+      ) ||
+      normWithoutDate.match(
+        /\b(\d{1,2})\s*()?(صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)/i
+      ) ||
+      normWithoutDate.match(
+        /(?:امروز|فردا|پس\s*فردا|امشب)\s+(\d{1,2})()()\b/i
+      ) ||
+      normWithoutDate.match(/^\s*(\d{1,2})()()\s*$/);
 
-    if (spokenTime && hasExplicitHourKeyword) {
-      let h = parseInt(spokenTime[1], 10);
+    const chosenTimeMatch = explicitSaatMatch || implicitTimeMatch;
+
+    if (chosenTimeMatch) {
+      let h = parseInt(chosenTimeMatch[1], 10);
       let m = 0;
-      const minPart = spokenTime[2];
-      const period = spokenTime[3] || '';
+      const minPart = chosenTimeMatch[2];
+      const period = chosenTimeMatch[3] || '';
 
       if (minPart === 'نیم') m = 30;
       else if (minPart === 'ربع') m = 15;
@@ -359,7 +466,7 @@ function extractTimeAndDate(rawText: string): {
         h += 12;
       } else if (/بامداد/i.test(period) && h === 12) {
         h = 0;
-      } else if (!period && /(امشب|عصر|غروب|بعد\s*از\s*ظهر)/i.test(norm) && h < 12) {
+      } else if (!period && /(امشب|عصر|غروب|بعد\s*از\s*ظهر)/i.test(normWithoutDate) && h < 12) {
         h += 12;
       }
 
@@ -389,38 +496,61 @@ function extractTimeAndDate(rawText: string): {
 }
 
 function cleanExtractedTitle(rawText: string, intent: SmartIntentType): string {
-  let t = fromPersianDigits(rawText)
-    .replace(/ي/g, 'ی')
-    .replace(/ك/g, 'ک')
+  // First normalize spoken number words in a working copy so spoken dates/times are also stripped cleanly
+  let t = normalizePersianSpeech(rawText)
     .replace(
       /^(لطفاً|لطفا|بیزحمت|دیگه|من|میخوام|می‌خوام|میخواهم|می‌خواهم|ثبت کن|ذخیره کن|اضافه کن|بنویس|یادآوری کن|یادم بنداز|یادم بیار|یه یادآور|یک یادآور|یادآور|یه ایده دارم|ایده دارم|یه ایده|یک ایده|ایده جدید|مکان جدید|لوکیشن جدید|مناسبت جدید|عنوانش رو بکن|عنوانش بشه|تغییر عنوان به)\s*/gi,
       ''
     )
     .replace(/\b(که|رو|را|باشه|حله|برام|برایم)\b\s*$/gi, '');
 
-  if (intent === 'reminder') {
+  // Strip Jalali month dates (e.g. "روز 10 آبان 1405", "15 اردیبهشت ماه سال 1405") for BOTH reminders and occasions
+  for (const mName of PERSIAN_MONTHS) {
+    const reg = new RegExp(
+      `(?:در\\s*تاریخ\\s*| برای\\s*تاریخ\\s*|برای\\s*روز\\s*|تاریخ\\s*|روز\\s*|مورخ\\s*)?(\\d{1,2})(?:\\s*(?:ام|م))?\\s*${mName}(?:\\s*ماه)?(?:\\s*(?:سال\\s*)?(?:1[34]\\d{2}|\\d{2}))?`,
+      'gi'
+    );
+    t = t.replace(reg, ' ');
+  }
+
+  // Strip numeric dates (DD MM YYYY, DD.MM.YYYY, DD/MM/YYYY, YYYY/MM/DD, روز 10 8 1405, روز 10 ماه 8 سال 1405, روز 10/8)
+  t = t
+    .replace(
+      /(?:در\s*تاریخ\s*|برای\s*تاریخ\s*|برای\s*روز\s*|تاریخ\s*|روز\s*|مورخ\s*)?\b\d{1,2}(?:\s*(?:ام|م))?(?:\s*(?:\/|\.|٫|-|ماه\s*|برج\s*|\s+)\s*)\d{1,2}(?:\s*(?:\/|\.|٫|-|سال\s*|\s+)\s*)(?:1[34]\d{2}|0[4-9]\b)/gi,
+      ' '
+    )
+    .replace(
+      /(?:در\s*تاریخ\s*|تاریخ\s*|مورخ\s*|سال\s*)?\b1[34]\d{2}(?:\s*(?:\/|\.|٫|-|ماه\s*|برج\s*|\s+)\s*)\d{1,2}(?:\s*(?:\/|\.|٫|-|روز\s*|\s+)\s*)\d{1,2}\b/gi,
+      ' '
+    )
+    .replace(
+      /(?:در\s*تاریخ\s*|تاریخ\s*|روز\s*|مورخ\s+)\d{1,2}(?:\s*(?:ام|م))?(?:\s*(?:\/|\.|٫|-|ماه\s*|برج\s*|\s+)\s*)\d{1,2}\b/gi,
+      ' '
+    )
+    .replace(/\b\d{1,2}\s*(?:\/|\.|٫|ماه|برج)\s*\d{1,2}\b/gi, ' ')
+    .replace(/(?:روز|تاریخ)\s+\d{1,2}\s*(?:ام|م)?\b/gi, ' ');
+
+  if (intent === 'reminder' || intent === 'unknown') {
     t = t
-      .replace(/(امروز|فردا|پس\s*فردا|امشب|هفته\s*آینده|هفته\s*بعد)/gi, '')
-      .replace(/\b(یک\s*شنبه|دو\s*شنبه|سه\s*شنبه|چهار\s*شنبه|پنج\s*شنبه|شنبه|جمعه)\b/gi, '')
-      .replace(/ساعت\s*\d{1,2}(?::\d{2})?(?:\s*و\s*(?:نیم|ربع|\d{1,2})\s*(?:دقیقه)?)?\s*(?:صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)?/gi, '')
-      .replace(/\b\d{1,2}(?::\d{2})\s*(?:صبح|ظهر|عصر|غروب|شب)?/gi, '')
-      .replace(/\b(نیم|یک|یه|سه|\d+)\s*(ربع|ساعت|دقیقه)\s*(دیگه|دیگر|بعد)/gi, '')
-      .replace(/\b(اول\s*صبح|سر\s*ظهر|آخر\s*شب|غروب)\b/gi, '')
-      .replace(/\b(یادم\s*بنداز|یادم\s*بیار|بهم\s*خبر\s*بده|خبر\s*بده|یادآوری\s*کن|باشه)\b/gi, '');
+      .replace(/(امروز|فردا|پس\s*فردا|امشب|هفته\s*آینده|هفته\s*بعد)/gi, ' ')
+      .replace(/\b(یک\s*شنبه|دو\s*شنبه|سه\s*شنبه|چهار\s*شنبه|پنج\s*شنبه|شنبه|جمعه)\b/gi, ' ')
+      .replace(/ساعت\s*\d{1,2}(?::\d{2})?(?:\s*و\s*(?:نیم|ربع|\d{1,2})\s*(?:دقیقه)?)?\s*(?:صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)?/gi, ' ')
+      .replace(/\b\d{1,2}\s*و\s*(?:نیم|ربع|\d{1,2})(?:\s*دقیقه)?\s*(?:صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)?/gi, ' ')
+      .replace(/\b\d{1,2}(?::\d{2})\s*(?:صبح|ظهر|عصر|غروب|شب)?/gi, ' ')
+      .replace(/\b\d{1,2}\s*(?:صبح|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)\b/gi, ' ')
+      .replace(/\b(نیم|یک|یه|سه|\d+)\s*(ربع|ساعت|دقیقه)\s*(دیگه|دیگر|بعد)/gi, ' ')
+      .replace(/\b(اول\s*صبح|سر\s*ظهر|آخر\s*شب|غروب)\b/gi, ' ')
+      .replace(/\b(یادم\s*بنداز|یادم\s*بیار|بهم\s*خبر\s*بده|خبر\s*بده|یادآوری\s*کن|باشه|در\s*ساعت|برای\s*ساعت|در\s*روز|برای\s*روز)\b/gi, ' ');
   } else if (intent === 'occasion') {
-    for (const mName of PERSIAN_MONTHS) {
-      const reg = new RegExp(`(?:در\\s*تاریخ\\s*|تاریخ\\s*)?(\\d{1,2}|[آ-ی]+)\\s*${mName}(?:\\s*\\d{2,4})?`, 'gi');
-      t = t.replace(reg, '');
-    }
-    t = t.replace(/\b(باشه|حله|ثبتش کن|ثبت کن)\b/gi, '');
+    t = t.replace(/\b(باشه|حله|ثبتش کن|ثبت کن)\b/gi, ' ');
   } else if (intent === 'location') {
-    t = t.replace(/(اینجا رو|این مکان رو|لوکیشن فعلی رو|با نام|به اسم|به نام|با اسم)/gi, '');
+    t = t.replace(/(اینجا رو|این مکان رو|لوکیشن فعلی رو|با نام|به اسم|به نام|با اسم)/gi, ' ');
   }
 
   t = t
-    .replace(/^[\s،,:-]+|[\s،,:-]+$/g, '')
-    .replace(/^(که|رو|را|در|برای)\s+/i, '')
-    .replace(/\s+(رو|را|برام|برایم)\s*(ثبت کن|ذخیره کن|بذار|بگذار|باشه)?$/i, '')
+    .replace(/^[\s،,.:٫-]+|[\s،,.:٫-]+$/g, '')
+    .replace(/^(که|رو|را|در|برای|روز|تاریخ|ساعت)\s+/i, '')
+    .replace(/\s+(رو|را|برام|برایم|در|روز|تاریخ|ساعت)\s*(ثبت کن|ذخیره کن|بذار|بگذار|باشه)?$/i, '')
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -461,10 +591,24 @@ export function analyzeSmartCaptureLocally(
   // Merge time/date into draft
   if (timeInfo.hour !== null) nextDraft.hour = timeInfo.hour;
   if (timeInfo.minute !== null) nextDraft.minute = timeInfo.minute;
-  if (timeInfo.offsetDays !== null) nextDraft.offsetDays = timeInfo.offsetDays;
-  if (timeInfo.solarDay !== null) nextDraft.solarDay = timeInfo.solarDay;
-  if (timeInfo.solarMonth !== null) nextDraft.solarMonth = timeInfo.solarMonth;
-  if (timeInfo.solarYear !== null) nextDraft.solarYear = timeInfo.solarYear;
+  if (timeInfo.solarDay !== null) {
+    nextDraft.solarDay = timeInfo.solarDay;
+    nextDraft.offsetDays = undefined;
+  }
+  if (timeInfo.solarMonth !== null) {
+    nextDraft.solarMonth = timeInfo.solarMonth;
+    nextDraft.offsetDays = undefined;
+  }
+  if (timeInfo.solarYear !== null) {
+    nextDraft.solarYear = timeInfo.solarYear;
+    nextDraft.offsetDays = undefined;
+  }
+  if (timeInfo.offsetDays !== null && timeInfo.solarDay === null && timeInfo.solarMonth === null) {
+    nextDraft.offsetDays = timeInfo.offsetDays;
+    nextDraft.solarDay = undefined;
+    nextDraft.solarMonth = undefined;
+    nextDraft.solarYear = undefined;
+  }
 
   // Detect Category & Priority
   if (/(کاری|شرکت|جلسه|پروژه|اداره|مدیر|چک|بانک|فاکتور)/i.test(normLast)) {
@@ -516,40 +660,41 @@ export function analyzeSmartCaptureLocally(
   }
 
   // Evaluate completeness and generate clarifying questions per section
-  // CASE 0: Intent is still unknown
+  // CASE 0: If intent is still unknown, default to 'reminder' when user has spoken a subject or time
   if (nextDraft.intentType === 'unknown') {
-    if (candidateTitle.length >= 2 && !isPureCategoryWord) {
-      nextDraft.title = candidateTitle;
+    if (
+      (candidateTitle.length >= 2 && !isPureCategoryWord) ||
+      timeInfo.hour !== null ||
+      timeInfo.offsetDays !== null ||
+      timeInfo.solarDay !== null ||
+      timeInfo.solarMonth !== null
+    ) {
+      nextDraft.intentType = 'reminder';
+      if (candidateTitle.length >= 2 && !isPureCategoryWord && !isPureTimePhrase && !nextDraft.title) {
+        nextDraft.title = candidateTitle;
+      }
+    } else {
       return {
         intentType: 'unknown',
         isComplete: false,
         clarifyingQuestion: isEn
-          ? `Got "${candidateTitle}"! Which section should I save it in for you: Reminder, Occasion, Location, or Idea?`
-          : `«${candidateTitle}» رو گرفتم! می‌خوای توی کدوم بخش برات ثبتش کنم: یادآور، مناسبت، مکان یا ایده؟`,
-        quickSuggestions: isEn
-          ? ['Reminder', 'Idea', 'Occasion', 'Location']
-          : ['یادآور', 'ایده', 'مناسبت', 'مکان'],
+          ? 'Tell me, what reminder, occasion, location, or idea would you like me to save for you?'
+          : 'بگو چه یادآور، مناسبت، مکان یا ایده‌ای رو می‌خوای برات ثبت کنم؟',
+        quickSuggestions: [],
         draft: nextDraft,
       };
     }
-
-    return {
-      intentType: 'unknown',
-      isComplete: false,
-      clarifyingQuestion: isEn
-        ? 'Tell me, what would you like me to save for you today: a Reminder, an Occasion, a Location, or an Idea?'
-        : 'بگو ببینم چه موردی رو می‌خوای برات ثبت کنم: یادآور، مناسبت، مکان یا ایده؟',
-      quickSuggestions: isEn
-        ? ['New Reminder', 'New Idea', 'Save Location', 'Add Occasion']
-        : ['ثبت یادآور', 'ثبت ایده', 'ثبت مکان', 'ثبت مناسبت'],
-      draft: nextDraft,
-    };
   }
 
   // CASE 1: REMINDER (یادآور)
   if (nextDraft.intentType === 'reminder') {
     const hasTitle = Boolean(nextDraft.title && nextDraft.title.trim().length >= 2);
     const hasTime = typeof nextDraft.hour === 'number' && nextDraft.hour >= 0;
+    const hasSolarDate =
+      typeof nextDraft.solarDay === 'number' &&
+      nextDraft.solarDay >= 1 &&
+      typeof nextDraft.solarMonth === 'number' &&
+      nextDraft.solarMonth >= 1;
 
     if (!hasTitle && !hasTime) {
       return {
@@ -580,11 +725,18 @@ export function analyzeSmartCaptureLocally(
     }
 
     if (!hasTime) {
+      const solarDateStr = hasSolarDate
+        ? `${toPersianDigits(nextDraft.solarDay!)} ${PERSIAN_MONTHS[nextDraft.solarMonth! - 1]}${
+            nextDraft.solarYear ? ` ${toPersianDigits(nextDraft.solarYear)}` : ''
+          }`
+        : '';
       return {
         intentType: 'reminder',
         isComplete: false,
         clarifyingQuestion: isEn
-          ? `Got it! What day and what time should I remind you about "${nextDraft.title}"?`
+          ? `Got it! What time should I remind you about "${nextDraft.title}"?`
+          : hasSolarDate
+          ? `خب، برای یادآورِ «${nextDraft.title}» در تاریخ ${solarDateStr}، ساعت چند بهت خبر بدم؟`
           : `خب، برای یادآورِ «${nextDraft.title}»، می‌خوای چه روزی و ساعت چند بهت خبر بدم؟`,
         quickSuggestions: isEn
           ? ['In 1 hour', 'Today at 18:00', 'Tonight at 21:00', 'Tomorrow at 9 AM']
@@ -593,7 +745,7 @@ export function analyzeSmartCaptureLocally(
       };
     }
 
-    if (nextDraft.offsetDays === undefined || nextDraft.offsetDays === null) {
+    if (!hasSolarDate && (nextDraft.offsetDays === undefined || nextDraft.offsetDays === null)) {
       nextDraft.offsetDays = 0;
     }
     if (nextDraft.minute === undefined || nextDraft.minute === null || nextDraft.minute < 0) {
@@ -601,13 +753,19 @@ export function analyzeSmartCaptureLocally(
     }
 
     const dayLabel = isEn
-      ? nextDraft.offsetDays === 1
+      ? hasSolarDate
+        ? `${nextDraft.solarDay} ${PERSIAN_MONTHS[nextDraft.solarMonth! - 1]}${
+            nextDraft.solarYear ? ` ${nextDraft.solarYear}` : ''
+          }`
+        : nextDraft.offsetDays === 1
         ? 'tomorrow'
         : nextDraft.offsetDays === 2
         ? 'in 2 days'
         : 'today'
-      : nextDraft.solarDay && nextDraft.solarMonth
-      ? `${toPersianDigits(nextDraft.solarDay)} ${PERSIAN_MONTHS[nextDraft.solarMonth - 1]}`
+      : hasSolarDate
+      ? `${toPersianDigits(nextDraft.solarDay!)} ${PERSIAN_MONTHS[nextDraft.solarMonth! - 1]}${
+          nextDraft.solarYear ? ` ${toPersianDigits(nextDraft.solarYear)}` : ''
+        }`
       : nextDraft.offsetDays === 1
       ? 'فردا'
       : nextDraft.offsetDays === 2
@@ -778,11 +936,21 @@ export async function analyzeSmartCaptureTurn(
           ? (rawIntent as SmartIntentType)
           : localResult.intentType;
 
+        const cleanedServerTitle = aiRes.draft?.title
+          ? cleanExtractedTitle(String(aiRes.draft.title), validIntent)
+          : '';
+        const localHasSolarDate = Boolean(
+          localResult.draft.solarDay && localResult.draft.solarMonth
+        );
+
         const mergedDraft: SmartCaptureDraft = {
           ...currentDraft,
           ...localResult.draft,
           intentType: validIntent,
-          title: aiRes.draft?.title || localResult.draft.title,
+          title:
+            localHasSolarDate && localResult.draft.title
+              ? localResult.draft.title
+              : cleanedServerTitle || localResult.draft.title,
           description: aiRes.draft?.description || localResult.draft.description,
           category: (['work', 'family', 'other'].includes(aiRes.draft?.category)
             ? aiRes.draft.category
@@ -790,32 +958,47 @@ export async function analyzeSmartCaptureTurn(
           priority: (['high', 'medium', 'low'].includes(aiRes.draft?.priority)
             ? aiRes.draft.priority
             : localResult.draft.priority || 'medium') as Priority,
-          offsetDays:
-            typeof aiRes.draft?.offsetDays === 'number' && aiRes.draft.offsetDays >= 0
-              ? aiRes.draft.offsetDays
-              : localResult.draft.offsetDays,
+          offsetDays: localHasSolarDate
+            ? undefined
+            : typeof aiRes.draft?.offsetDays === 'number' && aiRes.draft.offsetDays >= 0
+            ? aiRes.draft.offsetDays
+            : localResult.draft.offsetDays,
           hour:
-            typeof aiRes.draft?.hour === 'number' && aiRes.draft.hour >= 0
+            typeof localResult.draft.hour === 'number' && localResult.draft.hour >= 0
+              ? localResult.draft.hour
+              : typeof aiRes.draft?.hour === 'number' && aiRes.draft.hour >= 0
               ? aiRes.draft.hour
               : localResult.draft.hour,
           minute:
-            typeof aiRes.draft?.minute === 'number' && aiRes.draft.minute >= 0
+            typeof localResult.draft.minute === 'number' && localResult.draft.minute >= 0
+              ? localResult.draft.minute
+              : typeof aiRes.draft?.minute === 'number' && aiRes.draft.minute >= 0
               ? aiRes.draft.minute
               : localResult.draft.minute ?? 0,
           solarYear:
-            typeof aiRes.draft?.solarYear === 'number' && aiRes.draft.solarYear > 1300
+            typeof localResult.draft.solarYear === 'number' && localResult.draft.solarYear > 1300
+              ? localResult.draft.solarYear
+              : typeof aiRes.draft?.solarYear === 'number' && aiRes.draft.solarYear > 1300
               ? aiRes.draft.solarYear
               : localResult.draft.solarYear,
           solarMonth:
-            typeof aiRes.draft?.solarMonth === 'number' &&
-            aiRes.draft.solarMonth >= 1 &&
-            aiRes.draft.solarMonth <= 12
+            typeof localResult.draft.solarMonth === 'number' &&
+            localResult.draft.solarMonth >= 1 &&
+            localResult.draft.solarMonth <= 12
+              ? localResult.draft.solarMonth
+              : typeof aiRes.draft?.solarMonth === 'number' &&
+                aiRes.draft.solarMonth >= 1 &&
+                aiRes.draft.solarMonth <= 12
               ? aiRes.draft.solarMonth
               : localResult.draft.solarMonth,
           solarDay:
-            typeof aiRes.draft?.solarDay === 'number' &&
-            aiRes.draft.solarDay >= 1 &&
-            aiRes.draft.solarDay <= 31
+            typeof localResult.draft.solarDay === 'number' &&
+            localResult.draft.solarDay >= 1 &&
+            localResult.draft.solarDay <= 31
+              ? localResult.draft.solarDay
+              : typeof aiRes.draft?.solarDay === 'number' &&
+                aiRes.draft.solarDay >= 1 &&
+                aiRes.draft.solarDay <= 31
               ? aiRes.draft.solarDay
               : localResult.draft.solarDay,
           occasionType: (aiRes.draft?.occasionType ||
@@ -828,9 +1011,11 @@ export async function analyzeSmartCaptureTurn(
 
         return {
           intentType: validIntent,
-          isComplete: Boolean(aiRes.isComplete),
-          shouldAutoSubmit: Boolean(aiRes.shouldAutoSubmit),
-          clarifyingQuestion: aiRes.clarifyingQuestion || localResult.clarifyingQuestion,
+          isComplete: Boolean(localResult.isComplete || aiRes.isComplete),
+          shouldAutoSubmit: Boolean(localResult.shouldAutoSubmit || aiRes.shouldAutoSubmit),
+          clarifyingQuestion: localHasSolarDate
+            ? localResult.clarifyingQuestion
+            : aiRes.clarifyingQuestion || localResult.clarifyingQuestion,
           quickSuggestions:
             Array.isArray(aiRes.quickSuggestions) && aiRes.quickSuggestions.length > 0
               ? aiRes.quickSuggestions
