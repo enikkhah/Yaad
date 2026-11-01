@@ -816,23 +816,56 @@ function getPresetWavUrl(cleanText: string, language: 'fa' | 'en'): string | nul
   const baseUrl = ((import.meta as any).env?.BASE_URL || '/').replace(/\/?$/, '/');
 
   if (language !== 'en') {
+    if (norm.includes('بفرمایید ثبت کنم')) {
+      return `${baseUrl}tts-cache/welcome_1_fa.wav`;
+    }
+    if (norm.includes('بفرمایید، منتظرم') || norm.includes('بفرمایید منتظرم')) {
+      return `${baseUrl}tts-cache/welcome_2_fa.wav`;
+    }
+    if (norm.includes('در خدمتم، بفرمایید') || norm.includes('در خدمتم بفرمایید')) {
+      return `${baseUrl}tts-cache/welcome_3_fa.wav`;
+    }
     if (
       norm.includes('چه یادآور، مناسبت، مکان یا ایده‌ای') ||
       norm.includes('لطفاً بفرمایید چه موردی را ثبت کنم')
     ) {
-      return `${baseUrl}tts-cache/welcome_fa.wav`;
+      return `${baseUrl}tts-cache/welcome_1_fa.wav`;
+    }
+    if (norm.includes('همین پایین تایپ کنید') || norm.includes('لطفا تایپ کنید')) {
+      return `${baseUrl}tts-cache/retry_max_fa.wav`;
+    }
+    if (norm.includes('صداتون واضح نبود') || norm.includes('دوباره بفرمایید')) {
+      return `${baseUrl}tts-cache/retry_2_fa.wav`;
+    }
+    if (norm.includes('متوجه نشدم') || norm.includes('یه بار دیگه بگید')) {
+      return `${baseUrl}tts-cache/retry_1_fa.wav`;
     }
     if (norm.includes('کدام بخش') && norm.includes('تغییر دهید')) {
       return `${baseUrl}tts-cache/ask_edit_fa.wav`;
     }
-    if (norm.includes('در چه روز و چه ماهی است')) {
+    if (norm.includes('در چه روز و چه ماهی است') || norm.includes('چه روز و چه ماهیه')) {
       return `${baseUrl}tts-cache/ask_occasion_date_fa.wav`;
     }
-    if (norm.includes('در چه روزی به شما یادآوری شود')) {
-      return `${baseUrl}tts-cache/ask_day_fa.wav`;
+    if (norm.includes('برای کدوم روز تنظیمش کنم')) {
+      return `${baseUrl}tts-cache/ask_day_2_fa.wav`;
     }
-    if (norm.includes('چه ساعتی برای آلارم')) {
-      return `${baseUrl}tts-cache/ask_time_fa.wav`;
+    if (norm.includes('کی بهتون یادآوری کنم')) {
+      return `${baseUrl}tts-cache/ask_day_3_fa.wav`;
+    }
+    if (
+      norm.includes('چه روزی یادتون بندازم') ||
+      norm.includes('در چه روزی به شما یادآوری شود')
+    ) {
+      return `${baseUrl}tts-cache/ask_day_1_fa.wav`;
+    }
+    if (norm.includes('آلارمش روی چه ساعتی باشه')) {
+      return `${baseUrl}tts-cache/ask_time_2_fa.wav`;
+    }
+    if (norm.includes('چه ساعتی بهتون خبر بدم')) {
+      return `${baseUrl}tts-cache/ask_time_3_fa.wav`;
+    }
+    if (norm.includes('ساعت چند یادآوری کنم') || norm.includes('چه ساعتی برای آلارم')) {
+      return `${baseUrl}tts-cache/ask_time_1_fa.wav`;
     }
     if (norm.includes('با موقعیت زنده GPS آماده است') || norm.includes('هشدار ورود فعال شود')) {
       return `${baseUrl}tts-cache/ask_location_details_fa.wav`;
@@ -840,11 +873,15 @@ function getPresetWavUrl(cleanText: string, language: 'fa' | 'en'): string | nul
     if (norm.includes('توضیح تکمیلی برای این ایده دارید')) {
       return `${baseUrl}tts-cache/ask_idea_details_fa.wav`;
     }
+    if (norm.includes('مورد تاییده که ثبت بشه')) {
+      return `${baseUrl}tts-cache/ask_confirm_2_fa.wav`;
+    }
     if (
+      norm.includes('ثبتش کنم؟') ||
       norm.includes('آیا مورد تایید است تا ثبت شود') ||
       norm.includes('آماده ذخیره است. آیا مورد تایید است')
     ) {
-      return `${baseUrl}tts-cache/ask_confirm_fa.wav`;
+      return `${baseUrl}tts-cache/ask_confirm_1_fa.wav`;
     }
     if (
       norm.includes('موضوع یا عنوان یادآور') ||
@@ -854,11 +891,13 @@ function getPresetWavUrl(cleanText: string, language: 'fa' | 'en'): string | nul
     ) {
       return `${baseUrl}tts-cache/ask_subject_fa.wav`;
     }
-    return `${baseUrl}tts-cache/welcome_fa.wav`;
+    return null;
   }
 
   // English ('en') preset WAVs
   if (
+    lower.includes('go ahead, i am ready') ||
+    lower.includes('go ahead, i am listening') ||
     lower.includes('what reminder, occasion, location, or idea') ||
     lower.includes('what would you like to save')
   ) {
@@ -870,10 +909,17 @@ function getPresetWavUrl(cleanText: string, language: 'fa' | 'en'): string | nul
   if (lower.includes('on what day and month is')) {
     return `${baseUrl}tts-cache/ask_occasion_date_en.wav`;
   }
-  if (lower.includes('on which day or date would you like me to remind you')) {
+  if (
+    lower.includes('on which day or date') ||
+    lower.includes('which day should i remind you') ||
+    lower.includes('for which day should i set')
+  ) {
     return `${baseUrl}tts-cache/ask_day_en.wav`;
   }
-  if (lower.includes('what time should i set the alarm')) {
+  if (
+    lower.includes('what time should i set the alarm') ||
+    lower.includes('what time should i remind you')
+  ) {
     return `${baseUrl}tts-cache/ask_time_en.wav`;
   }
   if (lower.includes('would you like to add a note or enable arrival alert')) {
@@ -882,7 +928,11 @@ function getPresetWavUrl(cleanText: string, language: 'fa' | 'en'): string | nul
   if (lower.includes('if you have any additional details, please share them now')) {
     return `${baseUrl}tts-cache/ask_idea_details_en.wav`;
   }
-  if (lower.includes('do you confirm saving it') || lower.includes('do you confirm?')) {
+  if (
+    lower.includes('do you confirm saving it') ||
+    lower.includes('do you confirm?') ||
+    lower.includes('should i save it?')
+  ) {
     return `${baseUrl}tts-cache/ask_confirm_en.wav`;
   }
   if (
@@ -893,7 +943,7 @@ function getPresetWavUrl(cleanText: string, language: 'fa' | 'en'): string | nul
   ) {
     return `${baseUrl}tts-cache/ask_subject_en.wav`;
   }
-  return `${baseUrl}tts-cache/welcome_en.wav`;
+  return null;
 }
 
 /**
@@ -990,18 +1040,6 @@ function base64ToUint8Array(base64: string): Uint8Array {
   return bytes;
 }
 
-function normalizePersianForArabicStream(text: string): string {
-  return text
-    .replace(/گ/g, 'ك')
-    .replace(/چ/g, 'ج')
-    .replace(/پ/g, 'ب')
-    .replace(/ژ/g, 'ز')
-    .replace(/ک/g, 'ك')
-    .replace(/ی/g, 'ي')
-    .replace(/هٔ/g, 'ه')
-    .replace(/\u200c/g, ' ');
-}
-
 export const prewarmAiAssistantPrompt = (
   text: string,
   language: 'fa' | 'en' = 'fa',
@@ -1012,61 +1050,54 @@ export const prewarmAiAssistantPrompt = (
   if (!cleanText) return;
 
   const baseUrl = ((import.meta as any).env?.BASE_URL || '/').replace(/\/?$/, '/');
-  const stepPrompts =
+  const filesToWarm =
     language === 'en'
       ? [
-          { key: cleanText, file: 'welcome_en.wav' },
-          {
-            key: 'Please tell me the subject or title of your reminder?',
-            file: 'ask_subject_en.wav',
-          },
-          {
-            key: 'On which day or date would you like me to remind you',
-            file: 'ask_day_en.wav',
-          },
-          { key: 'What time should I set the alarm', file: 'ask_time_en.wav' },
-          { key: 'Do you confirm saving it?', file: 'ask_confirm_en.wav' },
-          { key: 'On what day and month is', file: 'ask_occasion_date_en.wav' },
-          {
-            key: 'Would you like to add a note or enable arrival alert',
-            file: 'ask_location_details_en.wav',
-          },
-          {
-            key: 'If you have any additional details, please share them now',
-            file: 'ask_idea_details_en.wav',
-          },
-          { key: 'which part you would like to change', file: 'ask_edit_en.wav' },
+          'welcome_en.wav',
+          'ask_subject_en.wav',
+          'ask_day_en.wav',
+          'ask_time_en.wav',
+          'ask_confirm_en.wav',
+          'ask_occasion_date_en.wav',
+          'ask_location_details_en.wav',
+          'ask_idea_details_en.wav',
+          'ask_edit_en.wav',
         ]
       : [
-          { key: cleanText, file: 'welcome_fa.wav' },
-          {
-            key: 'لطفاً موضوع یا عنوان یادآور مورد نظر خود را بفرمایید؟',
-            file: 'ask_subject_fa.wav',
-          },
-          { key: 'می‌خواهید در چه روزی به شما یادآوری شود؟', file: 'ask_day_fa.wav' },
-          { key: 'چه ساعتی برای آلارم', file: 'ask_time_fa.wav' },
-          { key: 'آیا مورد تایید است تا ثبت شود؟', file: 'ask_confirm_fa.wav' },
-          { key: 'در چه روز و چه ماهی است؟', file: 'ask_occasion_date_fa.wav' },
-          { key: 'با موقعیت زنده GPS آماده است', file: 'ask_location_details_fa.wav' },
-          { key: 'توضیح تکمیلی برای این ایده دارید', file: 'ask_idea_details_fa.wav' },
-          { key: 'کدام بخش (عنوان، روز یا ساعت) را می‌خواهید تغییر دهید؟', file: 'ask_edit_fa.wav' },
+          'welcome_1_fa.wav',
+          'welcome_2_fa.wav',
+          'welcome_3_fa.wav',
+          'ask_day_1_fa.wav',
+          'ask_day_2_fa.wav',
+          'ask_day_3_fa.wav',
+          'ask_time_1_fa.wav',
+          'ask_time_2_fa.wav',
+          'ask_time_3_fa.wav',
+          'ask_confirm_1_fa.wav',
+          'ask_confirm_2_fa.wav',
+          'retry_1_fa.wav',
+          'retry_2_fa.wav',
+          'retry_max_fa.wav',
+          'ask_subject_fa.wav',
+          'ask_occasion_date_fa.wav',
+          'ask_location_details_fa.wav',
+          'ask_idea_details_fa.wav',
+          'ask_edit_fa.wav',
         ];
 
-  for (const item of stepPrompts) {
-    const url = `${baseUrl}tts-cache/${item.file}`;
+  for (const file of filesToWarm) {
+    const url = `${baseUrl}tts-cache/${file}`;
     const urlCacheKey = `preset_url:${url}`;
     if (ttsRawBytesCache.has(urlCacheKey)) continue;
     fetch(url)
       .then((r) => (r.ok ? r.arrayBuffer() : null))
       .then((buf) => {
         if (buf && buf.byteLength > 100) {
-          const entry = {
+          ttsRawBytesCache.set(urlCacheKey, {
             bytes: new Uint8Array(buf),
             mimeType: 'audio/wav',
             alreadyPersonaTransformed: false,
-          };
-          ttsRawBytesCache.set(urlCacheKey, entry);
-          ttsRawBytesCache.set(`${language}:raw:${item.key}`, entry);
+          });
         }
       })
       .catch(() => {});
