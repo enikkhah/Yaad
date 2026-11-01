@@ -201,16 +201,16 @@ const GREGORIAN_MONTH_PATTERNS: Array<{ month: number; regex: RegExp }> = [
 
 // Map JS getDay() (0=Sunday .. 6=Saturday) for Persian & English weekdays
 const WEEKDAY_JS_INDEX: Array<{ pattern: RegExp; jsDay: number }> = [
-  { pattern: /\b(پنج\s*شنبه|thursday)\b/i, jsDay: 4 },
-  { pattern: /\b(چهار\s*شنبه|wednesday)\b/i, jsDay: 3 },
-  { pattern: /\b(سه\s*شنبه|tuesday)\b/i, jsDay: 2 },
-  { pattern: /\b(دو\s*شنبه|monday)\b/i, jsDay: 1 },
-  { pattern: /\b(یک\s*شنبه|sunday)\b/i, jsDay: 0 },
-  { pattern: /(?<!یک\s*|دو\s*|سه\s*|چهار\s*|پنج\s*)\b(شنبه|saturday)\b/i, jsDay: 6 },
-  { pattern: /\b(جمعه|friday)\b/i, jsDay: 5 },
+  { pattern: /(?:^|\s|[،,.:؛!?-])(پنج\s*شنبه|\bthursday\b)(?=\s|$|[،,.:؛!?-])/i, jsDay: 4 },
+  { pattern: /(?:^|\s|[،,.:؛!?-])(چهار\s*شنبه|\bwednesday\b)(?=\s|$|[،,.:؛!?-])/i, jsDay: 3 },
+  { pattern: /(?:^|\s|[،,.:؛!?-])(سه\s*شنبه|\btuesday\b)(?=\s|$|[،,.:؛!?-])/i, jsDay: 2 },
+  { pattern: /(?:^|\s|[،,.:؛!?-])(دو\s*شنبه|\bmonday\b)(?=\s|$|[،,.:؛!?-])/i, jsDay: 1 },
+  { pattern: /(?:^|\s|[،,.:؛!?-])(یک\s*شنبه|\bsunday\b)(?=\s|$|[،,.:؛!?-])/i, jsDay: 0 },
+  { pattern: /(?<!یک\s*|دو\s*|سه\s*|چهار\s*|پنج\s*)(?:^|\s|[،,.:؛!?-])(شنبه|\bsaturday\b)(?=\s|$|[،,.:؛!?-])/i, jsDay: 6 },
+  { pattern: /(?:^|\s|[،,.:؛!?-])(جمعه|\bfriday\b)(?=\s|$|[،,.:؛!?-])/i, jsDay: 5 },
 ];
 
-function normalizePersianSpeech(raw: string): string {
+function normalizePersianSpeech(raw: string, expectTimeOrDay = false): string {
   let s = fromPersianDigits(raw || '')
     .replace(/ي/g, 'ی')
     .replace(/ك/g, 'ک')
@@ -218,18 +218,25 @@ function normalizePersianSpeech(raw: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 
-  // Protect negative "نه" at the very start of an utterance ("نه ساعتش رو عوض کن") from turning into number 9
+  // Protect negative "نه" at the very start of an utterance ("نه ساعتش رو عوض کن") unless followed by time/day words or standalone in time/day step
   const sortedKeys = Object.keys(PERSIAN_WORD_NUMBERS).sort((a, b) => b.length - a.length);
   for (const word of sortedKeys) {
     const val = PERSIAN_WORD_NUMBERS[word];
     if (word === 'نه') {
       s = s.replace(
-        /(?<=\b(?:ساعت|روز|ماه|برج|تا|و|برای)\s+)نه(?=\s|$|[.،,/:٫-])/g,
+        /(?<=(?:^|\s)(?:ساعت|روز|ماه|برج|تا|و|برای)\s+)نه(?=\s|$|[.،,/:٫-])/g,
         '9'
       );
+      s = s.replace(
+        /(?<=^|\s)نه(?=\s+(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|دقیقه|و\s*نیم|و\s*ربع|روز\s*دیگه|روز\s*دیگر|هفته\s*دیگه))/g,
+        '9'
+      );
+      if (expectTimeOrDay && /^نه(\s+(باشه|خوبه))?$/.test(s)) {
+        s = s.replace(/^نه/, '9');
+      }
       continue;
     }
-    const reg = new RegExp(`(?<=^|\\s)(${word})(?=\\s|$|[.،,/:٫-])`, 'g');
+    const reg = new RegExp(`(?<=^|\\s|[/:٫.-])(${word})(?=\\s|$|[.،,/:٫-])`, 'g');
     s = s.replace(reg, String(val));
   }
 
@@ -488,18 +495,42 @@ export function isConfirmationUtterance(rawText: string): boolean {
 
   if (!cleaned) return false;
 
-  // Must not contain a negative or edit command
+  // Allow explicit "نه توضیحی ندارم ثبت کن" / "بدون توضیح ثبت کن" before checking negative words
   if (
-    /\b(نه|خیر|نخیر|ویرایش|تغییر|عوض|غلط|اشتباه|صبر|دست نگه دار|ساعت\s*\d|روز\s*\d|no|nope|wait|edit|change|wrong)\b/i.test(
+    /^(نه\s+)?(توضیحی\s+ندارم|بدون\s+توضیح|نیازی\s+نیست|همین\s+خوبه|فقط\s+ثبت\s+کن|ثبت\s+کن|ذخیره\s+کن)/i.test(
+      cleaned
+    )
+  ) {
+    return true;
+  }
+
+  // Must not contain a negative or edit command or a new time/date change
+  if (
+    /(^|\s)(نه|خیر|نخیر|ویرایش|تغییر|عوض|غلط|اشتباه|صبر|دست نگه دار|اصلاح|ساعت\s*\d|روز\s*\d|فردا|پس فردا|امروز|no|nope|wait|edit|change|wrong|modify)(\s|$)/i.test(
       cleaned
     )
   ) {
     return false;
   }
 
-  return /^(اوکی|اوکیه|خوبه|بسیار خوب|خیلی خوب|عالی|عالیه|بله|بلی|آره|اره|باشه|حتما|ثبت|ثبت کن|ثبتش کن|ثبت بشه|ثبت شود|ذخیره|ذخیره کن|ذخیره شود|ادامه|ادامه بده|تایید|تاییده|مورد تایید است|تائید|درسته|کاملا درسته|حله|انجام بده|فقط ثبت کن|همین خوبه|همین ثبت بشه|بدون توضیح ثبت کن|توضیحی ندارم|ok|okay|good|sounds good|great|yes|yeah|yep|sure|save|save it|confirm|confirmed|continue|go ahead|do it|correct|right|fine)(\s+(بله|لطفا|لطفاً|ممنون|مرسی|ثبت کن|ذخیره کن|انجام بده|please|thanks|thank you))*$/i.test(
-    cleaned
-  );
+  // Direct match for standard single/compound confirmation phrases
+  if (
+    /^(اوکی|اوکیه|اکی|خوب|خوبه|بسیار خوب|خیلی خوب|عالی|عالیه|بله|بلی|بلع|بلا|آره|اره|آری|اری|باشه|باش|حتما|حتماً|ثبت|ثبتش|ثبت کن|ثبت کنید|ثبتش کن|ثبت بشه|ثبت شود|ثبت نهایی|ذخیره|ذخیره کن|ذخیره شود|ذخیره ش کن|ادامه|ادامه بده|تایید|تاییده|تایید کن|تایید میکنم|مورد تایید است|تائید|درست|درسته|کاملا درسته|حله|انجام بده|انجامش بده|فقط ثبت کن|همینه|همین خوبه|همین ثبت بشه|بدون توضیح ثبت کن|توضیحی ندارم|موافقم|قبوله|ردیفه|ok|okay|good|sounds good|great|yes|yeah|yep|sure|save|save it|confirm|confirmed|continue|go ahead|do it|correct|right|fine)(\s+(بله|آره|اره|درسته|خوبه|لطفا|لطفاً|ممنون|مرسی|دستت درد نکنه|ثبت|ثبت کن|ثبتش کن|ثبت بشه|ثبت شود|ذخیره کن|انجام بده|نهایی|please|thanks|thank you|save|save it|confirm))*$/i.test(
+      cleaned
+    )
+  ) {
+    return true;
+  }
+
+  // For short utterances (up to 6 words) in the final confirmation step, check if any core confirmation keyword is present
+  const words = cleaned.split(' ').filter(Boolean);
+  if (words.length <= 6 && !/\d/.test(cleaned)) {
+    return /(^|\s)(بله|بلی|بلع|آره|اره|آری|اوکی|اوکیه|اکی|باشه|باش|خوبه|عالیه|تایید|تائید|تاییده|درسته|حله|موافقم|ثبت کن|ثبتش کن|ثبت بشه|ثبت شود|ثبت نهایی|ذخیره کن|ذخیره شود|انجام بده|ادامه بده|yes|yeah|yep|ok|okay|confirm|confirmed|save it|go ahead)(\s|$)/i.test(
+      cleaned
+    );
+  }
+
+  return false;
 }
 
 /**
@@ -533,7 +564,8 @@ function normalizeTwoOrFourDigitYear(rawYearStr?: string): number | null {
 
 export function extractTimeAndDate(
   rawText: string,
-  expectTimeOnly = false
+  expectTimeOnly = false,
+  expectDayOnly = false
 ): {
   hour: number | null;
   minute: number | null;
@@ -549,7 +581,7 @@ export function extractTimeAndDate(
     .replace(/\u200c/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  const norm = normalizePersianSpeech(rawText);
+  const norm = normalizePersianSpeech(rawText, expectTimeOnly || expectDayOnly);
   const now = new Date();
   let hour: number | null = null;
   let minute: number | null = null;
@@ -760,11 +792,17 @@ export function extractTimeAndDate(
     }
   }
 
-  // 7. Single Day of Month (e.g. "روز 25م", "روز 10 ام")
+  // 7. Single Day of Month (e.g. "روز 25م", "روز 10 ام", or standalone "15 ام" / "20" when expectDayOnly is true)
   if (!solarMonth && !solarDay) {
-    const singleDayMatch = normWithoutDate.match(
-      /(?:روز|تاریخ)\s+(\d{1,2})\s*(?:ام|م)?\b(?!\s*(?:صبح|ظهر|عصر|شب|ساعت|دقیقه|روز|دیگه|دیگر|بعد))/i
-    );
+    const singleDayMatch =
+      normWithoutDate.match(
+        /(?:روز|تاریخ)\s+(\d{1,2})\s*(?:ام|م)?(?=\s|$|[.،,/:؛!?-])(?!\s*(?:صبح|ظهر|عصر|شب|ساعت|دقیقه|روز|دیگه|دیگر|بعد))/i
+      ) ||
+      (expectDayOnly
+        ? normWithoutDate.match(
+            /^\s*(?:روز\s*|تاریخ\s*)?(\d{1,2})\s*(?:ام|م)?(?:\s*(?:همین\s*ماه|ماه\s*جاری|باشه|خوبه))?\s*$/i
+          )
+        : null);
     if (singleDayMatch) {
       const d = parseInt(singleDayMatch[1], 10);
       if (d >= 1 && d <= 31) {
@@ -778,12 +816,12 @@ export function extractTimeAndDate(
 
   // 8. Relative day expressions ("امروز", "فردا", "پس فردا", "چهار روز دیگه", "3 روز دیگر", "هفته آینده", "in 4 days")
   const nDaysLaterMatch =
-    normWithoutDate.match(/\b(\d{1,3})\s*روز\s*(دیگه|دیگر|بعد|آینده)\b/i) ||
+    normWithoutDate.match(/(?:^|\s)(\d{1,3})\s*روز\s*(دیگه|دیگر|بعد|آینده)(?=\s|$|[.،,/:؛!?-])/i) ||
     normWithoutDate.match(/\bin\s+(\d{1,3})\s*days?\b/i) ||
     normWithoutDate.match(/\b(\d{1,3})\s*days?\s*(later|from\s+now)\b/i);
 
   const nWeeksLaterMatch =
-    normWithoutDate.match(/\b(\d{1,2})\s*هفته\s*(دیگه|دیگر|بعد|آینده)\b/i) ||
+    normWithoutDate.match(/(?:^|\s)(\d{1,2})\s*هفته\s*(دیگه|دیگر|بعد|آینده)(?=\s|$|[.،,/:؛!?-])/i) ||
     normWithoutDate.match(/\bin\s+(\d{1,2})\s*weeks?\b/i);
 
   if (nDaysLaterMatch) {
@@ -827,7 +865,7 @@ export function extractTimeAndDate(
     targetHour = applyTimePeriod(targetHour, period || normWithoutDate);
     hour = (targetHour + 23) % 24;
     minute = 45;
-  } else {
+  } else if (!expectDayOnly || /(?:ساعت|صبح|ظهر|عصر|غروب|شب|بامداد|am|pm|:)/i.test(normWithoutDate)) {
     // HH:MM format (e.g. 18:30, 08:15, 4:30 pm, 4:30 بعد از ظهر)
     const colonTime = normWithoutDate.match(
       /(?:ساعت\s*|at\s*)?(\d{1,2}):(\d{2})(?:\s*(صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|بعد\s*از\s*نصفه\s*شب|نصفه\s*شب|نیمه\s*شب|am|pm|a\.m\.|p\.m\.))?/i
@@ -855,15 +893,17 @@ export function extractTimeAndDate(
       const implicitTimeMatch =
         normWithoutDate.match(
           new RegExp(
-            `\\b(\\d{1,2})\\s*و\\s*(نیم|ربع|\\d{1,2})\\s*(?:دقیقه)?\\s*(${periodPattern})?`,
+            `(?:^|\\s)(\\d{1,2})\\s*و\\s*(نیم|ربع|\\d{1,2})\\s*(?:دقیقه)?\\s*(${periodPattern})?`,
             'i'
           )
         ) ||
         normWithoutDate.match(
-          new RegExp(`\\b(\\d{1,2})\\s*()(${periodPattern})`, 'i')
+          new RegExp(`(?:^|\\s)(\\d{1,2})\\s*()(${periodPattern})(?=\\s|$|[.،,/:؛!?-])`, 'i')
         ) ||
         (expectTimeOnly
-          ? normWithoutDate.match(/^\s*(\d{1,2})(?:\s*(?:و)?\s*(\d{1,2}|نیم|ربع))?()\s*$/)
+          ? normWithoutDate.match(
+              /^\s*(?:ساعت\s*|برای\s*ساعت\s*)?(\d{1,2})(?:\s*(?:و)?\s*(\d{1,2}|نیم|ربع))?(?:\s*دقیقه)?\s*(صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد)?(?:\s*(?:باشه|خوبه|بذار|تنظیم\s*کن|ثبت\s*کن))?\s*$/i
+            )
           : null);
 
       const chosenTimeMatch = explicitSaatMatch || implicitTimeMatch;
@@ -1009,24 +1049,24 @@ export function cleanExtractedTitle(rawText: string, intent: SmartIntentType): s
       ' '
     )
     .replace(/\b\d{1,2}\s*(?:\/|\.|٫|ماه|برج)\s*\d{1,2}\b/gi, ' ')
-    .replace(/(?:روز|تاریخ)\s+\d{1,2}\s*(?:ام|م)?\b(?!\s*(?:دیگه|دیگر|بعد))/gi, ' ');
+    .replace(/(?:روز|تاریخ)\s+\d{1,2}\s*(?:ام|م)?(?=\s|$|[.،,/:؛!?-])(?!\s*(?:دیگه|دیگر|بعد))/gi, ' ');
 
   if (intent === 'reminder' || intent === 'unknown') {
     t = t
-      .replace(/\b\d{1,3}\s*(?:روز|هفته)\s*(?:دیگه|دیگر|بعد|آینده)\b/gi, ' ')
+      .replace(/(?:^|\s)\d{1,3}\s*(?:روز|هفته)\s*(?:دیگه|دیگر|بعد|آینده)(?=\s|$|[.،,/:؛!?-])/gi, ' ')
       .replace(/\bin\s+\d{1,3}\s*(?:days?|weeks?|hours?|minutes?)\b/gi, ' ')
       .replace(/(?:امروز|فردا|پس\s*فردا|امشب|هفته\s*آینده|هفته\s*بعد|ماه\s*آینده|ماه\s*بعد|today|tomorrow|tonight|day\s+after\s+tomorrow|next\s+week|next\s+month)/gi, ' ')
-      .replace(/\b(یک\s*شنبه|دو\s*شنبه|سه\s*شنبه|چهار\s*شنبه|پنج\s*شنبه|شنبه|جمعه|saturday|sunday|monday|tuesday|wednesday|thursday|friday)\b/gi, ' ')
+      .replace(/(?:^|\s)(یک\s*شنبه|دو\s*شنبه|سه\s*شنبه|چهار\s*شنبه|پنج\s*شنبه|شنبه|جمعه|saturday|sunday|monday|tuesday|wednesday|thursday|friday)(?=\s|$|[.،,/:؛!?-])/gi, ' ')
       .replace(/(?:یک|یه|1)?\s*ربع\s+به\s+\d{1,2}\s*(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|بعد\s*از\s*نصفه\s*شب|نصفه\s*شب|نیمه\s*شب)?/gi, ' ')
       .replace(/(?:ساعت|at)\s*\d{1,2}(?::\d{2})?(?:\s*و\s*(?:نیم|ربع|\d{1,2})\s*(?:دقیقه)?)?\s*(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|بعد\s*از\s*نصفه\s*شب|نصفه\s*شب|نیمه\s*شب|am|pm)?/gi, ' ')
-      .replace(/\b\d{1,2}\s*و\s*(?:نیم|ربع|\d{1,2})(?:\s*دقیقه)?\s*(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|بعد\s*از\s*نصفه\s*شب|نصفه\s*شب|نیمه\s*شب)?/gi, ' ')
-      .replace(/\b\d{1,2}(?::\d{2})\s*(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|am|pm)?/gi, ' ')
-      .replace(/\b\d{1,2}\s*(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|بعد\s*از\s*نصفه\s*شب|نصفه\s*شب|نیمه\s*شب|am|pm)\b/gi, ' ')
-      .replace(/\b(نیم|یک|یه|سه|\d+)\s*(ربع|ساعت|دقیقه)\s*(دیگه|دیگر|بعد)/gi, ' ')
-      .replace(/\b(اول\s*صبح|سر\s*ظهر|آخر\s*شب|نصفه\s*شب|نیمه\s*شب|غروب|midnight|noon)\b/gi, ' ')
-      .replace(/\b(یادم\s*بنداز|یادم\s*بیار|بهم\s*خبر\s*بده|خبر\s*بده|یادآوری\s*کن|باشه|در\s*ساعت|برای\s*ساعت|در\s*روز|برای\s*روز)\b/gi, ' ');
+      .replace(/(?:^|\s)\d{1,2}\s*و\s*(?:نیم|ربع|\d{1,2})(?:\s*دقیقه)?\s*(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|بعد\s*از\s*نصفه\s*شب|نصفه\s*شب|نیمه\s*شب)?/gi, ' ')
+      .replace(/(?:^|\s)\d{1,2}(?::\d{2})\s*(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|am|pm)?/gi, ' ')
+      .replace(/(?:^|\s)\d{1,2}\s*(?:صبح|قبل\s*از\s*ظهر|ظهر|بعد\s*از\s*ظهر|عصر|غروب|شب|بامداد|بعد\s*از\s*نصفه\s*شب|نصفه\s*شب|نیمه\s*شب|am|pm)(?=\s|$|[.،,/:؛!?-])/gi, ' ')
+      .replace(/(?:^|\s)(نیم|یک|یه|سه|\d+)\s*(ربع|ساعت|دقیقه)\s*(دیگه|دیگر|بعد)/gi, ' ')
+      .replace(/(?:^|\s)(اول\s*صبح|سر\s*ظهر|آخر\s*شب|نصفه\s*شب|نیمه\s*شب|غروب|midnight|noon)(?=\s|$|[.،,/:؛!?-])/gi, ' ')
+      .replace(/(?:^|\s)(یادم\s*بنداز|یادم\s*بیار|بهم\s*خبر\s*بده|خبر\s*بده|یادآوری\s*کن|باشه|در\s*ساعت|برای\s*ساعت|در\s*روز|برای\s*روز)(?=\s|$|[.،,/:؛!?-])/gi, ' ');
   } else if (intent === 'occasion') {
-    t = t.replace(/\b(باشه|حله|ثبتش کن|ثبت کن)\b/gi, ' ');
+    t = t.replace(/(?:^|\s)(باشه|حله|ثبتش کن|ثبت کن)(?=\s|$|[.،,/:؛!?-])/gi, ' ');
   } else if (intent === 'location') {
     t = t.replace(/(اینجا رو|این مکان رو|لوکیشن فعلی رو|با نام|به اسم|به نام|با اسم)/gi, ' ');
   }
@@ -1104,7 +1144,8 @@ export function analyzeSmartCaptureLocally(
   }
 
   const expectTimeOnly = currentDraft.wizardStep === 'ask_time';
-  const timeInfo = extractTimeAndDate(lastUserMsg, expectTimeOnly);
+  const expectDayOnly = currentDraft.wizardStep === 'ask_day';
+  const timeInfo = extractTimeAndDate(lastUserMsg, expectTimeOnly, expectDayOnly);
   const candidateTitle = cleanExtractedTitle(lastUserMsg, intent);
 
   const nextDraft: SmartCaptureDraft = {
@@ -1174,9 +1215,25 @@ export function analyzeSmartCaptureLocally(
     };
   }
 
+  // Handle user answering "عنوان / موضوع" or "روز / تاریخ" or "ساعت / زمان" after asking what to edit
+  if (/^(عنوان|موضوع|اسم|نام|title|subject|name)$/i.test(lastUserMsg.trim())) {
+    nextDraft.title = undefined;
+    nextDraft.wizardStep = 'ask_subject';
+  } else if (/^(روز|تاریخ|day|date)$/i.test(lastUserMsg.trim())) {
+    nextDraft.daySpecified = false;
+    nextDraft.offsetDays = undefined;
+    nextDraft.solarDay = undefined;
+    nextDraft.solarMonth = undefined;
+    nextDraft.wizardStep = 'ask_day';
+  } else if (/^(ساعت|زمان|آلارم|time|alarm)$/i.test(lastUserMsg.trim())) {
+    nextDraft.hour = undefined;
+    nextDraft.minute = undefined;
+    nextDraft.wizardStep = 'ask_time';
+  }
+
   // Smart Title Locking:
-  // Only set or update title in Step 1 (when no title exists yet) or when the user explicitly requests a title edit
-  const isPureCategoryWord = /^(یادآور|مناسبت|مکان|ایده|بله|تایید|ثبت کن|امروز|فردا|پس فردا|شنبه|یکشنبه|دوشنبه|سه شنبه|چهارشنبه|پنجشنبه|جمعه|reminder|occasion|location|idea|today|tomorrow|yes|ok|confirm)$/i.test(
+  // Only set or update title in Step 1 (when no title exists yet or wizardStep === 'ask_subject') or when the user explicitly requests a title edit
+  const isPureCategoryWord = /^(یادآور|مناسبت|مکان|ایده|عنوان|موضوع|روز|تاریخ|ساعت|زمان|بله|تایید|ثبت کن|امروز|فردا|پس فردا|شنبه|یکشنبه|دوشنبه|سه شنبه|چهارشنبه|پنجشنبه|جمعه|reminder|occasion|location|idea|title|day|date|time|today|tomorrow|yes|ok|confirm)$/i.test(
     lastUserMsg.replace(/\u200c/g, ' ').trim()
   );
   const isPureTimeOrDatePhrase =
@@ -1189,16 +1246,20 @@ export function analyzeSmartCaptureLocally(
       lastUserMsg
     );
 
+  const canCaptureTitleInThisStep =
+    !nextDraft.title ||
+    currentDraft.wizardStep === 'ask_subject' ||
+    isExplicitTitleEdit;
+
   if (
+    canCaptureTitleInThisStep &&
     !isPureCategoryWord &&
     !isPureTimeOrDatePhrase &&
     candidateTitle.length >= 2 &&
     !isConfirmCommand &&
     !isRejectOrEdit
   ) {
-    if (!nextDraft.title || isExplicitTitleEdit) {
-      nextDraft.title = candidateTitle;
-    }
+    nextDraft.title = candidateTitle;
   }
 
   // CASE 0: Unknown Intent -> Step 1: Ask for Subject

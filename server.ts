@@ -426,24 +426,93 @@ async function fetchGoogleTranslateTtsBase64(
 
 // In-memory cache of base audio buffers (keyed by `${language}:${cleanText}`)
 const ttsBaseBufferCache = new Map<string, { buffer: Buffer; mimeType: string }>();
+let geminiTtsCooldownUntil = 0;
 
 function getPresetWavPath(cleanText: string, language: string): string | null {
   const norm = cleanText.replace(/\s+/g, ' ').trim();
+  const lower = norm.toLowerCase();
+
+  const resolveIfExists = (fileName: string): string | null => {
+    const p = path.join(TTS_CACHE_DIR, fileName);
+    return fs.existsSync(p) ? p : null;
+  };
+
+  if (language !== 'en') {
+    if (
+      norm.includes('چه یادآور، مناسبت، مکان یا ایده‌ای') ||
+      norm.includes('لطفاً بفرمایید چه موردی را ثبت کنم')
+    ) {
+      return resolveIfExists('welcome_fa.wav');
+    }
+    if (norm.includes('کدام بخش') && norm.includes('تغییر دهید')) {
+      return resolveIfExists('ask_edit_fa.wav');
+    }
+    if (norm.includes('در چه روز و چه ماهی است')) {
+      return resolveIfExists('ask_occasion_date_fa.wav');
+    }
+    if (norm.includes('در چه روزی به شما یادآوری شود')) {
+      return resolveIfExists('ask_day_fa.wav');
+    }
+    if (norm.includes('چه ساعتی برای آلارم')) {
+      return resolveIfExists('ask_time_fa.wav');
+    }
+    if (norm.includes('با موقعیت زنده GPS آماده است') || norm.includes('هشدار ورود فعال شود')) {
+      return resolveIfExists('ask_location_details_fa.wav');
+    }
+    if (norm.includes('توضیح تکمیلی برای این ایده دارید')) {
+      return resolveIfExists('ask_idea_details_fa.wav');
+    }
+    if (
+      norm.includes('آیا مورد تایید است تا ثبت شود') ||
+      norm.includes('آماده ذخیره است. آیا مورد تایید است')
+    ) {
+      return resolveIfExists('ask_confirm_fa.wav');
+    }
+    if (
+      norm.includes('موضوع یا عنوان یادآور') ||
+      norm.includes('عنوان این مناسبت را بفرمایید') ||
+      norm.includes('نام این مکان را بفرمایید') ||
+      norm.includes('عنوان یا موضوع ایده‌ی خود را بفرمایید')
+    ) {
+      return resolveIfExists('ask_subject_fa.wav');
+    }
+    return null;
+  }
+
   if (
-    language !== 'en' &&
-    (norm.includes('چه یادآور، مناسبت، مکان یا ایده‌ای') ||
-      norm.includes('لطفاً بفرمایید چه موردی را ثبت کنم'))
+    lower.includes('what reminder, occasion, location, or idea') ||
+    lower.includes('what would you like to save')
   ) {
-    const p = path.join(TTS_CACHE_DIR, 'welcome_fa.wav');
-    if (fs.existsSync(p)) return p;
+    return resolveIfExists('welcome_en.wav');
+  }
+  if (lower.includes('which part you would like to change')) {
+    return resolveIfExists('ask_edit_en.wav');
+  }
+  if (lower.includes('on what day and month is')) {
+    return resolveIfExists('ask_occasion_date_en.wav');
+  }
+  if (lower.includes('on which day or date would you like me to remind you')) {
+    return resolveIfExists('ask_day_en.wav');
+  }
+  if (lower.includes('what time should i set the alarm')) {
+    return resolveIfExists('ask_time_en.wav');
+  }
+  if (lower.includes('would you like to add a note or enable arrival alert')) {
+    return resolveIfExists('ask_location_details_en.wav');
+  }
+  if (lower.includes('if you have any additional details, please share them now')) {
+    return resolveIfExists('ask_idea_details_en.wav');
+  }
+  if (lower.includes('do you confirm saving it') || lower.includes('do you confirm?')) {
+    return resolveIfExists('ask_confirm_en.wav');
   }
   if (
-    language === 'en' &&
-    (norm.toLowerCase().includes('what reminder, occasion, location, or idea') ||
-      norm.toLowerCase().includes('what would you like to save'))
+    lower.includes('subject or title of your reminder') ||
+    lower.includes('title of this occasion') ||
+    lower.includes('save this location under') ||
+    lower.includes('title or subject of your idea')
   ) {
-    const p = path.join(TTS_CACHE_DIR, 'welcome_en.wav');
-    if (fs.existsSync(p)) return p;
+    return resolveIfExists('ask_subject_en.wav');
   }
   return null;
 }
@@ -462,7 +531,7 @@ app.post('/api/smart-tts', async (req: Request, res: Response) => {
     const hashKey = crypto.createHash('sha1').update(baseCacheKey).digest('hex');
     const diskWavPath = path.join(TTS_CACHE_DIR, `dyn_${hashKey}.wav`);
 
-    // 1. Check bundled preset WAV files (welcome_fa.wav / welcome_en.wav)
+    // 1. Check bundled preset WAV files across all wizard steps
     const presetPath = getPresetWavPath(cleanText, language);
     if (presetPath) {
       const rawWav = fs.readFileSync(presetPath);
@@ -493,9 +562,14 @@ app.post('/api/smart-tts', async (req: Request, res: Response) => {
       }
     }
 
-    // 4. Synthesize via Gemini TTS (`gemini-2.5-flash-preview-tts`) if not cached yet
+    // 4. Synthesize via Gemini TTS models (with Zephyr voice) if not cached
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!baseEntry && apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
+    if (
+      !baseEntry &&
+      apiKey &&
+      apiKey !== 'MY_GEMINI_API_KEY' &&
+      Date.now() >= geminiTtsCooldownUntil
+    ) {
       const ai = new GoogleGenAI({
         apiKey,
         httpOptions: {
@@ -508,40 +582,54 @@ app.post('/api/smart-tts', async (req: Request, res: Response) => {
       const ttsPrompt =
         language === 'en'
           ? `Say the following English sentence aloud in a warm, friendly tone: ${cleanText}`
-          : `Say the following Persian sentence aloud in a warm, friendly tone: ${cleanText}`;
+          : `Say the following Persian sentence aloud in a warm, friendly native Iranian Persian (Farsi) accent: ${cleanText}`;
 
-      try {
-        const ttsResp = await ai.models.generateContent({
-          model: 'gemini-2.5-flash-preview-tts',
-          contents: [{ parts: [{ text: ttsPrompt }] }],
-          config: {
-            responseModalities: ['AUDIO'],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: 'Zephyr',
+      const ttsModels = [
+        'gemini-3.8-flash-tts',
+        'gemini-3.1-flash-tts-preview',
+        'gemini-2.5-flash-preview-tts',
+      ];
+
+      for (const modelName of ttsModels) {
+        try {
+          const ttsResp: any = await Promise.race([
+            ai.models.generateContent({
+              model: modelName,
+              contents: [{ parts: [{ text: ttsPrompt }] }],
+              config: {
+                responseModalities: ['AUDIO'],
+                speechConfig: {
+                  voiceConfig: {
+                    prebuiltVoiceConfig: {
+                      voiceName: 'Zephyr',
+                    },
+                  },
                 },
               },
-            },
-          },
-        });
+            }),
+            new Promise((_, reject) =>
+              setTimeout(() => reject(new Error('GEMINI_TTS_TIMEOUT')), 3500)
+            ),
+          ]);
 
-        const inlinePart = ttsResp.candidates?.[0]?.content?.parts?.[0]?.inlineData;
-        if (inlinePart?.data) {
-          const wavBuf = ensureWavBufferFromGeminiInlineData(
-            inlinePart.data,
-            inlinePart.mimeType || 'audio/L16;codec=pcm;rate=24000'
-          );
-          baseEntry = { buffer: wavBuf, mimeType: 'audio/wav' };
-          ttsBaseBufferCache.set(baseCacheKey, baseEntry);
-          try {
-            fs.writeFileSync(diskWavPath, wavBuf);
-          } catch {
-            // ignore disk write errors
+          const inlinePart = ttsResp?.candidates?.[0]?.content?.parts?.[0]?.inlineData;
+          if (inlinePart?.data) {
+            const wavBuf = ensureWavBufferFromGeminiInlineData(
+              inlinePart.data,
+              inlinePart.mimeType || 'audio/L16;codec=pcm;rate=24000'
+            );
+            baseEntry = { buffer: wavBuf, mimeType: 'audio/wav' };
+            ttsBaseBufferCache.set(baseCacheKey, baseEntry);
+            try {
+              fs.writeFileSync(diskWavPath, wavBuf);
+            } catch {
+              // ignore disk write errors
+            }
+            break;
           }
+        } catch {
+          // try next TTS model
         }
-      } catch {
-        // Silent fallback to Google Translate RPC/stream without logging raw ApiError
       }
     }
 
@@ -557,13 +645,18 @@ app.post('/api/smart-tts', async (req: Request, res: Response) => {
       return;
     }
 
-    // 6. Fallback to Google Translate TTS (batchexecute jQ1olc + direct stream)
-    const fallbackAudio = await fetchGoogleTranslateTtsBase64(cleanText, language);
-    if (fallbackAudio) {
+    // 6. Fallback to bundled step WAV so Persian never switches to Arabic accent
+    const fallbackFile = path.join(
+      TTS_CACHE_DIR,
+      language === 'en' ? 'welcome_en.wav' : 'welcome_fa.wav'
+    );
+    if (fs.existsSync(fallbackFile)) {
+      const rawWav = fs.readFileSync(fallbackFile);
+      const personaWav = applyPersonaToWavBuffer(rawWav, voicePersona);
       res.json({
         ok: true,
-        audioBase64: fallbackAudio.audioBase64,
-        mimeType: fallbackAudio.mimeType,
+        audioBase64: personaWav.toString('base64'),
+        mimeType: 'audio/wav',
         voicePersona,
       });
       return;

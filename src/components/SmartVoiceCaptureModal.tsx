@@ -107,6 +107,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const handleUserUtteranceRef = useRef<(text: string) => void>(() => {});
   const isOpenRef = useRef(isOpen);
+  const messagesRef = useRef<SmartChatMessage[]>(messages);
   const draftRef = useRef(draft);
   const isCompleteRef = useRef(isComplete);
   const voiceEnabledRef = useRef(voiceFeedbackEnabled);
@@ -124,6 +125,10 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   useEffect(() => {
     isOpenRef.current = isOpen;
   }, [isOpen]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     draftRef.current = draft;
@@ -347,12 +352,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             return;
           }
           setIsAssistantSpeaking(false);
-          // مکث کوتاه برای آزادسازی کامل کانال صوتی اندروید پیش از روشن شدن میکروفون
+          // مکث کوتاه برای آزادسازی کامل کانال صوتی پیش از روشن شدن میکروفون
           ttsWaitTimerRef.current = setTimeout(() => {
             if (isOpenRef.current) {
               onDone?.();
             }
-          }, 480);
+          }, 160);
         },
       });
     },
@@ -705,7 +710,14 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             setLiveTranscript(currentConvertedText);
             setInputText(currentConvertedText);
             const isShortConfirm = isConfirmationUtterance(currentConvertedText);
-            schedulePostSpeechCommit(isShortConfirm ? 1050 : 1850);
+            const wordCount = currentConvertedText.split(/\s+/).filter(Boolean).length;
+            const currentStep = draftRef.current.wizardStep;
+            const isStepShortAnswer =
+              (currentStep === 'ask_day' || currentStep === 'ask_time' || currentStep === 'confirm') &&
+              wordCount <= 4;
+            schedulePostSpeechCommit(
+              isShortConfirm ? 950 : isStepShortAnswer ? 1250 : 1750
+            );
           }
         };
 
@@ -888,13 +900,19 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     ]
   );
 
+  const wasOpenRef = useRef(false);
+
   // گام ۱: هنگام باز شدن مدال، سوال صمیمانه و محترمانه پرسیده شده و میکروفون بلافاصله حداقل ۳۰ ثانیه روشن می‌ماند
   useEffect(() => {
     if (!isOpen) {
+      wasOpenRef.current = false;
       stopListening();
       stopSpeaking();
       return;
     }
+
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
 
     unlockAudio();
 
@@ -909,8 +927,13 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       timestamp: Date.now(),
     };
 
+    const initialDraft: SmartCaptureDraft = { intentType: 'unknown', wizardStep: 'ask_subject' };
+    messagesRef.current = [initialGreeting];
+    draftRef.current = initialDraft;
+    isCompleteRef.current = false;
+
     setMessages([initialGreeting]);
-    setDraft({ intentType: 'unknown', wizardStep: 'ask_subject' });
+    setDraft(initialDraft);
     setIsComplete(false);
     setInputText('');
     setLiveTranscript('');
@@ -929,8 +952,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
     return () => {
       clearTimeout(timer);
-      stopListening();
-      stopSpeaking();
     };
   }, [isOpen, isEn, speakPromptWithCallback, startListening, stopListening, stopSpeaking]);
 
@@ -951,11 +972,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       setInputText('');
       setLiveTranscript('');
 
-      const wasAlreadyComplete = isCompleteRef.current && Boolean(draftRef.current.title);
+      const activeDraft = draftRef.current;
+      const wasAlreadyComplete = isCompleteRef.current && Boolean(activeDraft.title);
 
       // گام ۶: اگر در مرحله تایید نهایی هستیم و کاربر هر یک از کلمات تایید (اوکی، خوبه، بله، باشه، ثبت کن، ادامه بده و ...) را بگوید
       if (wasAlreadyComplete && isConfirmationUtterance(trimmed)) {
-        await executeFinalSave(draftRef.current);
+        await executeFinalSave(activeDraft);
         return;
       }
 
@@ -966,13 +988,16 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         timestamp: Date.now(),
       };
 
-      const updatedMessages = [...messages, userMsg];
+      const updatedMessages = [...messagesRef.current, userMsg];
+      messagesRef.current = updatedMessages;
       setMessages(updatedMessages);
       setIsAnalyzing(true);
 
       try {
-        const analysis = await analyzeSmartCaptureTurn(updatedMessages, draft, language);
+        const analysis = await analyzeSmartCaptureTurn(updatedMessages, activeDraft, language);
 
+        draftRef.current = analysis.draft;
+        isCompleteRef.current = analysis.isComplete;
         setDraft(analysis.draft);
         setIsComplete(analysis.isComplete);
 
@@ -988,10 +1013,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           text: analysis.clarifyingQuestion,
           timestamp: Date.now(),
         };
-        setMessages((prev) => [...prev, assistantMsg]);
+        const nextMessages = [...updatedMessages, assistantMsg];
+        messagesRef.current = nextMessages;
+        setMessages(nextMessages);
 
-        // در تمام مراحل (چه پرسیدن روز، چه پرسیدن ساعت، و چه بازخوانی نهایی و درخواست تایید در گام ۵)
-        // گوینده جمله را کامل بیان کرده و بلافاصله میکروفون را روشن می‌کند تا پاسخ یا تایید کاربر را بشنود
+        // در تمام مراحل، گوینده جمله را کامل بیان کرده و بلافاصله میکروفون را روشن می‌کند تا پاسخ یا تایید کاربر را بشنود
         speakPromptWithCallback(analysis.clarifyingQuestion, () => {
           if (isOpenRef.current) {
             startListening();
@@ -1002,10 +1028,8 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       }
     },
     [
-      draft,
       executeFinalSave,
       language,
-      messages,
       speakPromptWithCallback,
       startListening,
       stopListening,
@@ -1018,724 +1042,362 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
   if (!isOpen) return null;
 
-  const sectionMeta: Record<
-    SmartIntentType,
-    { label: string; icon: React.ReactNode; badgeClass: string }
-  > = {
-    reminder: {
-      label: isEn ? 'Reminder' : 'یادآور',
-      icon: <Bell className="w-4 h-4" />,
-      badgeClass: 'bg-[#FF8C00]/15 text-[#FF8C00] border-[#FF8C00]/40',
-    },
-    occasion: {
-      label: isEn ? 'Occasion' : 'مناسبت',
-      icon: <Cake className="w-4 h-4" />,
-      badgeClass: 'bg-pink-500/15 text-pink-400 border-pink-500/40',
-    },
-    location: {
-      label: isEn ? 'Location' : 'مکان',
-      icon: <MapPin className="w-4 h-4" />,
-      badgeClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/40',
-    },
-    idea: {
-      label: isEn ? 'Idea' : 'ایده',
-      icon: <Lightbulb className="w-4 h-4" />,
-      badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/40',
-    },
-    unknown: {
-      label: isEn ? 'Smart Detection' : 'تشخیص هوشمند',
-      icon: <Sparkles className="w-4 h-4" />,
-      badgeClass: 'bg-stone-800 text-stone-300 border-stone-700',
-    },
-  };
+  // آخرین جمله منشی برای نمایش در زیرنویس زنده
+  const lastAssistantMessage =
+    [...messages].reverse().find((m) => m.role === 'assistant')?.text || '';
+  const lastUserMessage =
+    [...messages].reverse().find((m) => m.role === 'user')?.text || '';
 
-  const currentSection = sectionMeta[draft.intentType || 'unknown'];
+  // خلاصه تک‌خطی و شفاف در مرحله تایید نهایی (بدون هیچ فرمی)
+  const buildMinimalSummaryLine = (): string | null => {
+    if (!draft.title || draft.title.trim().length < 2) return null;
+    const typeLabel =
+      draft.intentType === 'occasion'
+        ? isEn
+          ? 'Occasion'
+          : 'مناسبت'
+        : draft.intentType === 'location'
+        ? isEn
+          ? 'Location'
+          : 'مکان'
+        : draft.intentType === 'idea'
+        ? isEn
+          ? 'Idea'
+          : 'ایده'
+        : isEn
+        ? 'Reminder'
+        : 'یادآور';
 
-  // Step Progress Indicators per category
-  const getWizardSteps = (): Array<{ label: string; done: boolean; active: boolean }> => {
-    const hasTitle = Boolean(draft.title && draft.title.trim().length >= 2);
     if (draft.intentType === 'occasion') {
-      const hasDate = Boolean(draft.solarDay && draft.solarMonth);
-      return [
-        {
-          label: isEn ? '1. Title' : '۱. عنوان',
-          done: hasTitle,
-          active: !hasTitle,
-        },
-        {
-          label: isEn ? '2. Date' : '۲. تاریخ',
-          done: hasDate,
-          active: hasTitle && !hasDate,
-        },
-        {
-          label: isEn ? '3. Confirm' : '۳. تایید نهایی',
-          done: false,
-          active: hasTitle && hasDate,
-        },
-      ];
+      if (draft.solarDay && draft.solarMonth) {
+        const mName = PERSIAN_MONTHS[draft.solarMonth - 1] || '';
+        const datePart = isEn
+          ? `${draft.solarDay} ${mName}`
+          : `${toPersianDigits(draft.solarDay)} ${mName}`;
+        return `${typeLabel}: ${draft.title} · ${datePart}`;
+      }
+      return `${typeLabel}: ${draft.title}`;
     }
 
     if (draft.intentType === 'location') {
-      const hasLiveGps = gpsStatus === 'ready' && Boolean(gpsCoords);
-      return [
-        {
-          label: isEn ? '1. Name' : '۱. نام مکان',
-          done: hasTitle,
-          active: !hasTitle,
-        },
-        {
-          label: isEn ? '2. Live GPS' : '۲. GPS زنده',
-          done: hasLiveGps,
-          active: hasTitle && !hasLiveGps,
-        },
-        {
-          label: isEn ? '3. Confirm' : '۳. تایید نهایی',
-          done: false,
-          active: hasTitle && hasLiveGps,
-        },
-      ];
+      const gpsPart =
+        gpsStatus === 'ready' && gpsCoords
+          ? isEn
+            ? 'Live GPS Ready'
+            : 'موقعیت زنده GPS دریافت شد'
+          : gpsStatus === 'fetching'
+          ? isEn
+            ? 'Getting Live GPS...'
+            : 'در حال دریافت GPS زنده...'
+          : gpsErrorMsg || (isEn ? 'Waiting for GPS' : 'در انتظار GPS');
+      return `${typeLabel}: ${draft.title} · ${gpsPart}`;
     }
 
     if (draft.intentType === 'idea') {
-      return [
-        {
-          label: isEn ? '1. Subject' : '۱. موضوع ایده',
-          done: hasTitle,
-          active: !hasTitle,
-        },
-        {
-          label: isEn ? '2. Details' : '۲. توضیحات',
-          done: Boolean(draft.detailsAsked),
-          active: hasTitle && !draft.detailsAsked,
-        },
-        {
-          label: isEn ? '3. Confirm' : '۳. تایید نهایی',
-          done: false,
-          active: hasTitle && Boolean(draft.detailsAsked),
-        },
-      ];
+      return `${typeLabel}: ${draft.title}${draft.description ? ` · ${draft.description}` : ''}`;
     }
 
-    // Default / Reminder steps: 1. Title -> 2. Day -> 3. Time -> 4. Confirm
+    // Reminder
+    const hasTime = typeof draft.hour === 'number' && draft.hour >= 0;
     const hasDay = Boolean(
       draft.daySpecified ||
         (draft.solarDay && draft.solarMonth) ||
         typeof draft.offsetDays === 'number'
     );
-    const hasTime = typeof draft.hour === 'number' && draft.hour >= 0;
-
-    return [
-      {
-        label: isEn ? '1. Subject' : '۱. موضوع',
-        done: hasTitle,
-        active: !hasTitle,
-      },
-      {
-        label: isEn ? '2. Day' : '۲. روز',
-        done: hasDay,
-        active: hasTitle && !hasDay,
-      },
-      {
-        label: isEn ? '3. Time' : '۳. ساعت',
-        done: hasTime,
-        active: hasTitle && hasDay && !hasTime,
-      },
-      {
-        label: isEn ? '4. Confirm' : '۴. تایید نهایی',
-        done: false,
-        active: hasTitle && hasDay && hasTime,
-      },
-    ];
+    if (hasTime && hasDay) {
+      const timeStr = formatJalaliFull(computeReminderTimestampFromDraft(draft), language);
+      return `${typeLabel}: ${draft.title} · ${timeStr}`;
+    }
+    return `${typeLabel}: ${draft.title}`;
   };
 
-  const wizardSteps = getWizardSteps();
+  const minimalSummaryLine = buildMinimalSummaryLine();
+
+  // مقیاس پویا برای کره بر اساس بلندی صدای کاربر یا صحبت منشی
+  const dynamicOrbScale = isSpeechActive
+    ? 1 + Math.min(0.28, Math.max(0.06, voiceLevel / 190))
+    : isListening
+    ? 1 + Math.min(0.1, voiceLevel / 360)
+    : 1;
+
+  const handleOrbOrMicInteraction = () => {
+    unlockAudio();
+    // اگر منشی در حال صحبت است، با لمس کره صحبت او قطع شده و بلافاصله میکروفون برای شنیدن صدای کاربر باز می‌شود (Interrupt)
+    if (isAssistantSpeaking) {
+      stopSpeaking();
+      startListening();
+      return;
+    }
+    const pendingText = (liveTranscript || inputText).trim();
+    if (isListening && pendingText) {
+      handleUserUtterance(pendingText);
+    } else if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  };
 
   return (
     <div
       dir={isEn ? 'ltr' : 'rtl'}
-      className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-end sm:items-center justify-center p-0 sm:p-4 animate-in fade-in duration-200"
-      onClick={onClose}
+      className="fixed inset-0 z-50 bg-stone-950/95 backdrop-blur-2xl flex flex-col justify-between p-6 sm:p-10 animate-in fade-in duration-300 select-none overflow-hidden"
+      onClick={() => unlockAudio()}
     >
+      {/* Ambient Background Glow */}
       <div
-        onClick={(e) => {
-          e.stopPropagation();
-          unlockAudio();
+        aria-hidden="true"
+        className={`pointer-events-none fixed inset-0 transition-opacity duration-700 ${
+          isSpeechActive
+            ? 'opacity-45'
+            : isAssistantSpeaking
+            ? 'opacity-40'
+            : isListening
+            ? 'opacity-25'
+            : 'opacity-15'
+        }`}
+        style={{
+          background: isSpeechActive
+            ? 'radial-gradient(circle at 50% 44%, rgba(16, 185, 129, 0.28), rgba(255, 140, 0, 0.12) 45%, transparent 72%)'
+            : isAssistantSpeaking
+            ? 'radial-gradient(circle at 50% 44%, rgba(255, 140, 0, 0.34), rgba(251, 191, 36, 0.12) 45%, transparent 72%)'
+            : 'radial-gradient(circle at 50% 44%, rgba(255, 140, 0, 0.20), transparent 68%)',
         }}
-        className="w-full max-w-lg bg-stone-950 border-t sm:border border-stone-800 rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh]"
-      >
-        {/* Minimal Clean Header: Only "ثبت هوشمند" / "Smart Capture" */}
-        <div className="px-4 py-3 border-b border-stone-800/90 flex items-center justify-between bg-stone-900/70">
-          <div className="flex items-center gap-2.5">
-            <div
-              data-keep-color="true"
-              className="w-8 h-8 rounded-xl bg-[#FF8C00] text-white flex items-center justify-center shadow-md shadow-[#FF8C00]/30"
-            >
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <h3 className="text-sm sm:text-base font-black text-white">
-              {isEn ? 'Smart Capture' : 'ثبت هوشمند'}
-            </h3>
-          </div>
+      />
 
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setVoiceFeedbackEnabled((v) => !v)}
-              className="p-2 rounded-xl bg-stone-800/80 hover:bg-stone-800 text-stone-300 transition-colors cursor-pointer"
-              title={isEn ? 'Voice Readback' : 'صدای گوینده'}
-            >
-              {voiceFeedbackEnabled ? (
-                <Volume2 className="w-4 h-4 text-[#FF8C00]" />
-              ) : (
-                <VolumeX className="w-4 h-4 text-stone-500" />
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-2 rounded-xl bg-stone-800/80 hover:bg-stone-800 text-stone-300 hover:text-white transition-colors cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
+      {/* Top Minimal Header: Only Title + Mute Toggle */}
+      <div className="relative z-10 flex items-center justify-between max-w-xl w-full mx-auto">
+        <h3 className="text-base sm:text-lg font-black text-white tracking-tight">
+          {isEn ? 'Smart Capture' : 'ثبت هوشمند'}
+        </h3>
 
-        {/* Step-by-Step Progress Bar */}
-        <div className="px-4 py-2 bg-stone-900/40 border-b border-stone-800/60 flex items-center justify-between gap-1.5 overflow-x-auto">
-          {wizardSteps.map((step, idx) => (
-            <div
-              key={idx}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-bold whitespace-nowrap transition-all ${
-                step.done
-                  ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                  : step.active
-                  ? 'bg-[#FF8C00]/20 text-[#FF8C00] border border-[#FF8C00]/50'
-                  : 'bg-stone-900 text-stone-500 border border-stone-800'
-              }`}
-            >
-              {step.done && <Check className="w-3 h-3 stroke-[3]" />}
-              <span>{step.label}</span>
-            </div>
-          ))}
-        </div>
-
-        {/* Conversation Area */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[160px] max-h-[290px]">
-          {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-start' : 'justify-end'}`}
-            >
-              <div
-                className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 text-xs sm:text-sm leading-relaxed ${
-                  msg.role === 'user'
-                    ? 'bg-[#FF8C00]/15 border border-[#FF8C00]/35 text-white rounded-br-sm'
-                    : 'bg-stone-900 border border-stone-800 text-stone-200 rounded-bl-sm'
-                }`}
-              >
-                {msg.text}
-              </div>
-            </div>
-          ))}
-
-          {liveTranscript && (
-            <div className="flex justify-start">
-              <div className="max-w-[88%] rounded-2xl px-3.5 py-2 text-xs sm:text-sm bg-[#FF8C00]/10 border border-dashed border-[#FF8C00]/50 text-stone-200">
-                {liveTranscript}...
-              </div>
-            </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            unlockAudio();
+            setVoiceFeedbackEnabled((v) => !v);
+          }}
+          className="w-10 h-10 rounded-full bg-stone-900/80 hover:bg-stone-800 border border-stone-800 text-stone-300 flex items-center justify-center transition-colors cursor-pointer"
+          title={isEn ? 'Voice Output' : 'صدای گوینده'}
+        >
+          {voiceFeedbackEnabled ? (
+            <Volume2 className="w-4 h-4 text-[#FF8C00]" />
+          ) : (
+            <VolumeX className="w-4 h-4 text-stone-500" />
           )}
+        </button>
+      </div>
 
-          {isAnalyzing && (
-            <div className="flex justify-end">
-              <div className="rounded-2xl px-3.5 py-2 text-xs bg-stone-900 border border-stone-800 text-stone-400 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#FF8C00] animate-ping" />
-                <span>{isEn ? 'Analyzing...' : 'در حال پردازش...'}</span>
-              </div>
-            </div>
-          )}
-
-          <div ref={chatEndRef} />
-        </div>
-
-        {/* Live Extracted Fields Card */}
-        {(draft.title || draft.intentType !== 'unknown') && (
-          <div className="mx-4 mb-2 p-3 rounded-2xl bg-stone-900/90 border border-stone-800 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg text-[11px] font-bold border ${currentSection.badgeClass}`}
-              >
-                {currentSection.icon}
-                <span>{currentSection.label}</span>
-              </span>
-
-              {isComplete ? (
-                <span className="text-[11px] font-bold text-emerald-400 flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5" />
-                  <span>
-                    {isEn
-                      ? 'Awaiting your confirmation (Say Yes / OK)'
-                      : 'منتظر تایید شما (بگویید: بله / اوکی / ثبت کن)'}
-                  </span>
-                </span>
-              ) : (
-                <span className="text-[11px] font-bold text-amber-400">
-                  {isEn ? 'Step-by-step completion...' : 'در حال تکمیل مرحله‌ای...'}
-                </span>
-              )}
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-              <div>
-                <label className="block text-[10px] text-stone-400 mb-0.5">
-                  {isEn ? 'Title' : 'عنوان'}
-                </label>
-                <input
-                  type="text"
-                  value={draft.title || ''}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setDraft((prev) => ({ ...prev, title: val }));
-                  }}
-                  placeholder={isEn ? 'Enter title...' : 'عنوان...'}
-                  className="w-full px-2.5 py-1.5 rounded-xl bg-stone-950 border border-stone-800 text-xs text-white focus:outline-none focus:border-[#FF8C00]"
-                />
-              </div>
-
-              {(draft.intentType === 'reminder' || draft.intentType === 'unknown') && (
-                <div>
-                  <div className="flex items-center justify-between mb-0.5">
-                    <label className="block text-[10px] text-stone-400">
-                      {isEn ? 'Date & Time' : 'روز و ساعت'}
-                    </label>
-                    {(typeof draft.hour === 'number' && draft.hour >= 0) ||
-                    (draft.solarDay && draft.solarMonth) ? (
-                      <span className="text-[10px] text-[#FF8C00] font-bold truncate max-w-[155px]">
-                        {formatJalaliFull(computeReminderTimestampFromDraft(draft), language)}
-                      </span>
-                    ) : null}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <select
-                      value={
-                        draft.solarDay && draft.solarMonth
-                          ? 'solar'
-                          : draft.daySpecified && typeof draft.offsetDays === 'number'
-                          ? String(draft.offsetDays)
-                          : ''
-                      }
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (val === 'solar' || val === '') return;
-                        const nextOffset = Number(val);
-                        const nextDraft: SmartCaptureDraft = {
-                          ...draft,
-                          intentType: draft.intentType === 'unknown' ? 'reminder' : draft.intentType,
-                          daySpecified: true,
-                          offsetDays: nextOffset,
-                          solarDay: undefined,
-                          solarMonth: undefined,
-                          solarYear: undefined,
-                        };
-                        setDraft(nextDraft);
-                        if (nextDraft.title && typeof nextDraft.hour === 'number') {
-                          setIsComplete(true);
-                        }
-                      }}
-                      className="px-2 py-1.5 rounded-xl bg-stone-950 border border-stone-800 text-xs text-stone-200 focus:outline-none focus:border-[#FF8C00] cursor-pointer"
-                    >
-                      <option value="">{isEn ? 'Select day...' : 'انتخاب روز...'}</option>
-                      {draft.solarDay && draft.solarMonth && (
-                        <option value="solar">
-                          {isEn
-                            ? `${draft.solarDay}/${draft.solarMonth}${
-                                draft.solarYear ? `/${draft.solarYear}` : ''
-                              }`
-                            : `${toPersianDigits(draft.solarDay)} ${PERSIAN_MONTHS[draft.solarMonth - 1]}${
-                                draft.solarYear ? ` ${toPersianDigits(draft.solarYear)}` : ''
-                              }`}
-                        </option>
-                      )}
-                      <option value="0">{isEn ? 'Today' : 'امروز'}</option>
-                      <option value="1">{isEn ? 'Tomorrow' : 'فردا'}</option>
-                      <option value="2">{isEn ? 'In 2 days' : 'پس‌فردا'}</option>
-                      <option value="3">{isEn ? 'In 3 days' : '۳ روز دیگر'}</option>
-                      <option value="4">{isEn ? 'In 4 days' : '۴ روز دیگر'}</option>
-                      <option value="7">{isEn ? 'Next week' : 'هفته آینده'}</option>
-                      {typeof draft.offsetDays === 'number' &&
-                        ![0, 1, 2, 3, 4, 7].includes(draft.offsetDays) && (
-                          <option value={String(draft.offsetDays)}>
-                            {isEn
-                              ? `In ${draft.offsetDays} days`
-                              : `${toPersianDigits(draft.offsetDays)} روز دیگر`}
-                          </option>
-                        )}
-                    </select>
-                    <input
-                      type="time"
-                      dir="ltr"
-                      value={
-                        typeof draft.hour === 'number' && draft.hour >= 0
-                          ? `${String(draft.hour).padStart(2, '0')}:${String(draft.minute || 0).padStart(2, '0')}`
-                          : ''
-                      }
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        if (!val) return;
-                        const [hStr, mStr] = val.split(':');
-                        const h = Number(hStr);
-                        const m = Number(mStr);
-                        if (!Number.isNaN(h) && !Number.isNaN(m)) {
-                          const hasSolar = Boolean(draft.solarDay && draft.solarMonth);
-                          const nextDraft: SmartCaptureDraft = {
-                            ...draft,
-                            intentType: draft.intentType === 'unknown' ? 'reminder' : draft.intentType,
-                            hour: h,
-                            minute: m,
-                            daySpecified: true,
-                            offsetDays: hasSolar
-                              ? undefined
-                              : typeof draft.offsetDays === 'number'
-                              ? draft.offsetDays
-                              : 0,
-                          };
-                          setDraft(nextDraft);
-                          if (nextDraft.title) setIsComplete(true);
-                        }
-                      }}
-                      className="flex-1 px-2.5 py-1.5 rounded-xl bg-stone-950 border border-stone-800 text-xs text-white font-mono focus:outline-none focus:border-[#FF8C00]"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {draft.intentType === 'occasion' && (
-                <div>
-                  <label className="block text-[10px] text-stone-400 mb-0.5">
-                    {isEn ? 'Date' : 'تاریخ مناسبت'}
-                  </label>
-                  <div className="flex items-center gap-1.5">
-                    <select
-                      value={draft.solarDay || ''}
-                      onChange={(e) => {
-                        const nextDay = Number(e.target.value) || undefined;
-                        const nextMonth = draft.solarMonth || 1;
-                        const nextDraft = {
-                          ...draft,
-                          solarDay: nextDay,
-                          solarMonth: nextDay ? nextMonth : draft.solarMonth,
-                        };
-                        setDraft(nextDraft);
-                        if (nextDraft.title && nextDraft.solarDay && nextDraft.solarMonth) {
-                          setIsComplete(true);
-                        }
-                      }}
-                      className="w-20 px-2 py-1.5 rounded-xl bg-stone-950 border border-stone-800 text-xs text-stone-200 focus:outline-none focus:border-[#FF8C00] cursor-pointer"
-                    >
-                      <option value="">{isEn ? 'Day' : 'روز'}</option>
-                      {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
-                        <option key={d} value={d}>
-                          {isEn ? d : toPersianDigits(d)}
-                        </option>
-                      ))}
-                    </select>
-                    <select
-                      value={draft.solarMonth || ''}
-                      onChange={(e) => {
-                        const nextMonth = Number(e.target.value) || undefined;
-                        const nextDay = draft.solarDay || 1;
-                        const nextDraft = {
-                          ...draft,
-                          solarMonth: nextMonth,
-                          solarDay: nextMonth ? nextDay : draft.solarDay,
-                        };
-                        setDraft(nextDraft);
-                        if (nextDraft.title && nextDraft.solarDay && nextDraft.solarMonth) {
-                          setIsComplete(true);
-                        }
-                      }}
-                      className="flex-1 px-2 py-1.5 rounded-xl bg-stone-950 border border-stone-800 text-xs text-stone-200 focus:outline-none focus:border-[#FF8C00] cursor-pointer"
-                    >
-                      <option value="">{isEn ? 'Month' : 'ماه'}</option>
-                      {PERSIAN_MONTHS.map((mName, idx) => (
-                        <option key={mName} value={idx + 1}>
-                          {isEn ? `${idx + 1} - ${mName}` : mName}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-              )}
-
-              {draft.intentType === 'location' && (
-                <div>
-                  <div className="flex items-center justify-between mb-0.5">
-                    <label className="block text-[10px] text-stone-400">
-                      {isEn ? 'Live GPS Coordinates' : 'موقعیت زنده GPS'}
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => acquireLiveGpsCoordinates()}
-                      className="text-[10px] text-[#FF8C00] hover:underline flex items-center gap-1 cursor-pointer font-bold"
-                    >
-                      <Navigation className="w-3 h-3" />
-                      <span>{isEn ? 'Refresh GPS' : 'بروزرسانی GPS'}</span>
-                    </button>
-                  </div>
-                  <div
-                    className={`px-2.5 py-1.5 rounded-xl bg-stone-950 border text-xs truncate ${
-                      gpsStatus === 'ready' && gpsCoords
-                        ? 'border-emerald-500/40 text-emerald-400 font-mono'
-                        : gpsStatus === 'error'
-                        ? 'border-rose-500/40 text-rose-400'
-                        : 'border-stone-800 text-amber-400'
-                    }`}
-                  >
-                    {gpsStatus === 'ready' && gpsCoords
-                      ? `${gpsCoords.lat.toFixed(5)}, ${gpsCoords.lng.toFixed(5)}`
-                      : gpsStatus === 'fetching'
-                      ? isEn
-                        ? 'Receiving live GPS signal...'
-                        : 'در حال دریافت سیگنال زنده GPS...'
-                      : gpsErrorMsg ||
-                        (isEn ? 'Waiting for live GPS...' : 'در انتظار اتصال به GPS زنده...')}
-                  </div>
-                </div>
-              )}
-
-              {draft.intentType === 'idea' && (
-                <div>
-                  <label className="block text-[10px] text-stone-400 mb-0.5">
-                    {isEn ? 'Additional Details' : 'توضیحات تکمیلی'}
-                  </label>
-                  <input
-                    type="text"
-                    value={draft.description || ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      setDraft((prev) => ({ ...prev, description: val }));
-                    }}
-                    placeholder={isEn ? 'Optional note...' : 'توضیحات ایده (اختیاری)...'}
-                    className="w-full px-2.5 py-1.5 rounded-xl bg-stone-950 border border-stone-800 text-xs text-white focus:outline-none focus:border-[#FF8C00]"
-                  />
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Bottom Controls: Prominent Continuous Microphone Bar + Text Input + Final Submit Button */}
-        <div className="p-3.5 bg-stone-900/95 border-t border-stone-800 space-y-2.5">
-          {/* Prominent Microphone Hero Box */}
+      {/* Center Stage: Interactive Conversational Voice Orb + Live Caption */}
+      <div className="relative z-10 flex-1 flex flex-col items-center justify-center max-w-xl w-full mx-auto my-4">
+        {/* Interactive Fluid Sphere Container */}
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={(e) => {
+            e.stopPropagation();
+            handleOrbOrMicInteraction();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleOrbOrMicInteraction();
+            }
+          }}
+          aria-label={isEn ? 'Interactive Voice Assistant Orb' : 'گوی محاوره‌ای دستیار هوشمند'}
+          className="relative w-56 h-56 sm:w-64 sm:h-64 flex items-center justify-center cursor-pointer group focus:outline-none"
+        >
+          {/* Outer Acoustic Ripple 1 */}
           <div
-            onClick={() => {
-              unlockAudio();
-              stopSpeaking();
-              const pendingText = (liveTranscript || inputText).trim();
-              if (isListening && pendingText) {
-                handleUserUtterance(pendingText);
-              } else if (isListening) {
-                stopListening();
-              } else {
-                startListening();
-              }
+            aria-hidden="true"
+            style={{
+              transform: `scale(${
+                isSpeechActive
+                  ? 1.18 + Math.min(0.35, voiceLevel / 160)
+                  : isAssistantSpeaking
+                  ? 1.16
+                  : isListening
+                  ? 1.06
+                  : 0.96
+              })`,
             }}
-            className={`w-full rounded-2xl p-3 border-2 transition-all cursor-pointer flex items-center justify-between gap-3 select-none ${
+            className={`absolute inset-0 rounded-full transition-all duration-200 ${
               isSpeechActive
-                ? 'bg-[#FF8C00]/20 border-[#FF8C00] shadow-lg shadow-[#FF8C00]/25'
+                ? 'bg-emerald-500/15 border border-emerald-400/30'
+                : isAssistantSpeaking
+                ? 'bg-[#FF8C00]/15 border border-[#FF8C00]/35 animate-pulse'
                 : isListening
-                ? 'bg-[#FF8C00]/12 border-[#FF8C00]/80 shadow-md shadow-[#FF8C00]/15'
-                : 'bg-stone-950/90 hover:bg-stone-900 border-[#FF8C00]/50'
+                ? 'bg-[#FF8C00]/10 border border-[#FF8C00]/20'
+                : 'bg-stone-800/20 border border-stone-800/40'
+            }`}
+          />
+
+          {/* Middle Acoustic Ripple 2 */}
+          <div
+            aria-hidden="true"
+            style={{
+              transform: `scale(${
+                isSpeechActive
+                  ? 1.08 + Math.min(0.24, voiceLevel / 210)
+                  : isAssistantSpeaking
+                  ? 1.08
+                  : isListening
+                  ? 1.02
+                  : 0.94
+              })`,
+            }}
+            className={`absolute inset-5 rounded-full transition-all duration-150 ${
+              isSpeechActive
+                ? 'bg-emerald-400/20 border border-emerald-400/40'
+                : isAssistantSpeaking
+                ? 'bg-[#FF8C00]/25 border border-amber-400/40 animate-ping [animation-duration:2.4s]'
+                : isListening
+                ? 'bg-[#FF8C00]/15 border border-[#FF8C00]/25'
+                : 'bg-stone-800/30'
+            }`}
+          />
+
+          {/* Core Living Conversational Sphere */}
+          <div
+            data-keep-color="true"
+            style={{
+              transform: `scale(${dynamicOrbScale})`,
+              background: isAnalyzing
+                ? 'radial-gradient(circle at 32% 28%, #fde68a 0%, #ff8c00 48%, #7c2d12 100%)'
+                : isSpeechActive
+                ? 'radial-gradient(circle at 32% 28%, #a7f3d0 0%, #10b981 46%, #065f46 88%, #022c22 100%)'
+                : isAssistantSpeaking
+                ? 'radial-gradient(circle at 30% 26%, #fef08a 0%, #ff8c00 46%, #c2410c 86%, #431407 100%)'
+                : isListening
+                ? 'radial-gradient(circle at 32% 28%, #fed7aa 0%, #ff8c00 50%, #9a3412 88%, #292524 100%)'
+                : 'radial-gradient(circle at 32% 28%, #78716c 0%, #44403c 55%, #1c1917 100%)',
+              boxShadow: isSpeechActive
+                ? '0 0 75px rgba(16, 185, 129, 0.55), inset 0 -14px 28px rgba(0,0,0,0.45), inset 0 12px 24px rgba(255,255,255,0.35)'
+                : isAssistantSpeaking
+                ? '0 0 80px rgba(255, 140, 0, 0.65), inset 0 -14px 28px rgba(0,0,0,0.45), inset 0 12px 24px rgba(255,255,255,0.4)'
+                : isListening
+                ? '0 0 55px rgba(255, 140, 0, 0.40), inset 0 -12px 24px rgba(0,0,0,0.45), inset 0 10px 20px rgba(255,255,255,0.28)'
+                : '0 0 30px rgba(0, 0, 0, 0.6), inset 0 8px 18px rgba(255,255,255,0.12)',
+            }}
+            className={`relative w-36 h-36 sm:w-44 sm:h-44 rounded-full transition-transform duration-150 flex flex-col items-center justify-center overflow-hidden ${
+              isAnalyzing ? 'animate-spin' : isAssistantSpeaking ? 'animate-pulse' : ''
             }`}
           >
-            <div className="flex items-center gap-3.5 min-w-0">
-              {/* Large Unmistakable Microphone Button */}
-              <button
-                type="button"
-                data-keep-color="true"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  unlockAudio();
-                  stopSpeaking();
-                  const pendingText = (liveTranscript || inputText).trim();
-                  if (isListening && pendingText) {
-                    handleUserUtterance(pendingText);
-                  } else if (isListening) {
-                    stopListening();
-                  } else {
-                    startListening();
-                  }
-                }}
-                style={{
-                  transform: isSpeechActive
-                    ? `scale(${1.06 + Math.min(0.14, voiceLevel / 450)})`
-                    : undefined,
-                }}
-                className={`relative w-14 h-14 sm:w-16 sm:h-16 rounded-2xl flex flex-col items-center justify-center transition-all cursor-pointer shrink-0 ${
-                  isListening
-                    ? 'bg-[#FF8C00] text-white shadow-xl shadow-[#FF8C00]/50 ring-4 ring-[#FF8C00]/30'
-                    : 'bg-[#FF8C00] hover:bg-[#FF9E1F] text-white shadow-lg shadow-[#FF8C00]/35 ring-2 ring-white/25'
-                }`}
-              >
-                {isListening && (
-                  <>
-                    <span className="absolute inset-0 rounded-2xl bg-[#FF8C00] animate-ping opacity-35 pointer-events-none" />
-                    <span
-                      className="absolute -inset-1.5 rounded-3xl border-2 border-[#FF8C00]/60 pointer-events-none transition-transform duration-150"
-                      style={{
-                        transform: `scale(${1 + Math.min(0.25, voiceLevel / 260)})`,
-                      }}
-                    />
-                  </>
-                )}
-                <Mic className="w-7 h-7 sm:w-8 sm:h-8 text-white stroke-[2.4] drop-shadow" />
-                <span className="text-[9px] font-black text-white/95 mt-0.5 leading-none">
-                  {isListening ? (isEn ? 'ON' : 'روشن') : isEn ? 'MIC' : 'میکروفون'}
-                </span>
-              </button>
-
-              {/* Live Status & Speech-to-Text Preview */}
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${
-                      isSpeechActive
-                        ? 'bg-emerald-400 animate-ping'
-                        : isListening
-                        ? 'bg-[#FF8C00] animate-pulse'
-                        : isAssistantSpeaking
-                        ? 'bg-amber-400 animate-pulse'
-                        : 'bg-stone-500'
-                    }`}
-                  />
-                  <p className="text-xs sm:text-sm font-black text-white truncate">
-                    {isSpeechActive
-                      ? isEn
-                        ? 'Listening to your voice...'
-                        : 'در حال شنیدن و تبدیل گفتار شما...'
-                      : isListening
-                      ? isEn
-                        ? 'Microphone is ON — Waiting for your response'
-                        : 'میکروفون روشن است — منتظر پاسخ شما'
-                      : isAssistantSpeaking
-                      ? isEn
-                        ? 'Assistant is speaking...'
-                        : 'در حال بیان صوتی پرسش...'
-                      : isEn
-                      ? 'Tap Microphone to Speak'
-                      : 'برای صحبت روی میکروفون بزنید'}
-                  </p>
-                </div>
-                <p className="text-[11px] text-stone-300 mt-0.5 truncate">
-                  {liveTranscript
-                    ? liveTranscript
-                    : isComplete
-                    ? isEn
-                      ? 'Say "Yes", "OK", or "Save" to confirm'
-                      : 'برای تایید نهایی بگویید: «بله»، «اوکی»، «باشه» یا «ثبت کن»'
-                    : isListening
-                    ? isEn
-                      ? 'Microphone stays active for at least 30 seconds'
-                      : 'میکروفون حداقل ۳۰ ثانیه آماده شنیدن صحبت شما می‌ماند'
-                    : isAssistantSpeaking
-                    ? isEn
-                      ? 'Microphone activates right after voice prompt'
-                      : 'بلافاصله پس از پایان صدای گوینده، میکروفون فعال می‌شود'
-                    : isEn
-                    ? 'Tap the orange button to start voice capture'
-                    : 'دکمه نارنجی میکروفون را لمس کنید'}
-                </p>
-              </div>
-            </div>
-
-            {/* Real-Time 5-Bar Voice Equalizer Indicator */}
-            <div className="flex items-center gap-1 h-9 px-1.5 shrink-0" aria-hidden="true">
-              {[0.45, 0.75, 1.0, 0.8, 0.5].map((multiplier, i) => {
-                const activeHeight = isListening
-                  ? Math.max(
-                      8,
-                      Math.min(
-                        34,
-                        Math.round(
-                          (isSpeechActive ? Math.max(30, voiceLevel) : Math.max(16, voiceLevel)) *
-                            0.34 *
-                            multiplier
-                        )
-                      )
-                    )
-                  : 6;
-                return (
-                  <span
-                    key={i}
-                    data-keep-color="true"
-                    style={{ height: `${activeHeight}px` }}
-                    className={`w-1.5 rounded-full transition-all duration-100 ${
-                      isSpeechActive
-                        ? 'bg-emerald-400'
-                        : isListening
-                        ? 'bg-[#FF8C00]'
-                        : 'bg-stone-700'
-                    }`}
-                  />
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Secondary Text Input */}
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              unlockAudio();
-              if (inputText.trim()) {
-                handleUserUtterance(inputText);
-              }
-            }}
-            className="flex items-center gap-1.5 bg-stone-950 border border-stone-800 focus-within:border-[#FF8C00] rounded-2xl px-3 py-1"
-          >
-            <input
-              type="text"
-              value={inputText}
-              onChange={(e) => {
-                setInputText(e.target.value);
-              }}
-              placeholder={
-                isEn ? 'Or type your response here...' : 'یا پاسخ خود را اینجا بنویسید...'
-              }
-              className="w-full bg-transparent border-0 text-xs sm:text-sm text-white placeholder-stone-500 focus:outline-none py-1.5"
+            {/* Internal Fluid Light Specular Highlight */}
+            <div
+              aria-hidden="true"
+              className="w-24 h-14 rounded-full bg-white/25 blur-md -translate-y-8 -translate-x-3 pointer-events-none"
             />
-            <button
-              type="submit"
-              disabled={!inputText.trim()}
-              data-keep-color="true"
-              className="p-2 rounded-xl bg-[#FF8C00] disabled:opacity-35 text-white transition-all cursor-pointer active:scale-95 shrink-0"
-            >
-              <Send className="w-3.5 h-3.5 text-white" />
-            </button>
-          </form>
+          </div>
+        </div>
 
-          {/* Direct Final Save Button when title is present */}
-          {draft.title && draft.title.trim().length >= 2 && (
-            <button
-              type="button"
-              data-keep-color="true"
-              onClick={() => executeFinalSave(draft)}
-              className="btn-brand-submit w-full py-3 px-4 rounded-2xl bg-[#FF8C00] hover:bg-[#FF9E1F] text-white font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-lg shadow-[#FF8C00]/30 transition-all active:scale-98 cursor-pointer"
-            >
-              <Check className="w-4 h-4 text-white stroke-[3]" />
-              <span>
-                {isEn
-                  ? `Confirm & Save in ${
-                      draft.intentType === 'unknown' ? 'Reminders' : currentSection.label
-                    }`
-                  : `تایید و ثبت نهایی در بخش ${
-                      draft.intentType === 'unknown' ? 'یادآورها' : currentSection.label
-                    }`}
-              </span>
-            </button>
+        {/* Status Indicator Line */}
+        <p className="mt-6 text-xs sm:text-sm font-bold tracking-wide text-stone-400 text-center">
+          {isAnalyzing
+            ? isEn
+              ? 'Thinking...'
+              : 'در حال تنظیم...'
+            : isAssistantSpeaking
+            ? isEn
+              ? 'Speaking — Tap the orb anytime to interrupt'
+              : 'در حال صحبت — هر زمان خواستید بفرمایید'
+            : isSpeechActive
+            ? isEn
+              ? 'Listening to you...'
+              : 'در حال شنیدن صحبت شما...'
+            : isListening
+            ? isEn
+              ? 'Listening...'
+              : 'گوش می‌دهم، بفرمایید...'
+            : isEn
+            ? 'Tap the orb to continue speaking'
+            : 'برای صحبت روی گوی بزنید'}
+        </p>
+
+        {/* Live Conversational Caption (Single-Focus Subtitle) */}
+        <div className="mt-4 min-h-[76px] max-w-md w-full flex flex-col items-center justify-center text-center px-3">
+          {liveTranscript ? (
+            <p className="text-base sm:text-xl font-black text-emerald-300 leading-relaxed animate-in fade-in duration-150">
+              «{liveTranscript}»
+            </p>
+          ) : (
+            <p className="text-base sm:text-xl font-black text-white leading-relaxed">
+              {lastAssistantMessage}
+            </p>
+          )}
+
+          {!liveTranscript && lastUserMessage && !isAssistantSpeaking && (
+            <p className="mt-2 text-xs text-stone-400 truncate max-w-sm">
+              {isEn ? `You said: "${lastUserMessage}"` : `شما فرمودید: «${lastUserMessage}»`}
+            </p>
           )}
         </div>
+
+        {/* Minimal Unboxed / Whisper Summary Line when item details are captured */}
+        {minimalSummaryLine && (
+          <div className="mt-4 px-4 py-2 rounded-2xl bg-stone-900/75 border border-stone-800/90 text-center max-w-md">
+            <p className="text-xs sm:text-sm font-bold text-amber-300 leading-relaxed">
+              {minimalSummaryLine}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Bottom Minimal Action Dock (Like ChatGPT Voice Mode) */}
+      <div className="relative z-10 flex items-center justify-center gap-6 pb-2">
+        {/* Mic / Interrupt Button */}
+        <button
+          type="button"
+          data-keep-color="true"
+          onClick={(e) => {
+            e.stopPropagation();
+            handleOrbOrMicInteraction();
+          }}
+          className={`w-16 h-16 rounded-full flex items-center justify-center transition-all cursor-pointer active:scale-95 ${
+            isSpeechActive
+              ? 'bg-emerald-500 text-white shadow-xl shadow-emerald-500/40 ring-4 ring-emerald-400/30'
+              : isListening
+              ? 'bg-[#FF8C00] text-white shadow-xl shadow-[#FF8C00]/40 ring-4 ring-[#FF8C00]/25'
+              : 'bg-stone-800 hover:bg-stone-700 text-white border border-stone-700'
+          }`}
+          title={isListening ? (isEn ? 'Microphone On' : 'میکروفون روشن') : isEn ? 'Speak' : 'صحبت'}
+        >
+          <Mic className="w-7 h-7 text-white stroke-[2.2]" />
+        </button>
+
+        {/* Optional One-Tap Save Button when draft is complete */}
+        {isComplete && draft.title && draft.title.trim().length >= 2 && (
+          <button
+            type="button"
+            data-keep-color="true"
+            onClick={(e) => {
+              e.stopPropagation();
+              executeFinalSave(draft);
+            }}
+            className="h-16 px-6 rounded-full bg-emerald-500 hover:bg-emerald-400 text-white font-black text-xs sm:text-sm flex items-center gap-2 shadow-xl shadow-emerald-500/30 transition-all cursor-pointer active:scale-95"
+          >
+            <Check className="w-5 h-5 text-white stroke-[2.8]" />
+            <span>{isEn ? 'Save Now' : 'ثبت نهایی'}</span>
+          </button>
+        )}
+
+        {/* Close / End Session Button */}
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            stopListening();
+            stopSpeaking();
+            onClose();
+          }}
+          className="w-16 h-16 rounded-full bg-stone-900 hover:bg-rose-500/20 border border-stone-800 hover:border-rose-500/40 text-stone-300 hover:text-rose-400 flex items-center justify-center transition-all cursor-pointer active:scale-95"
+          title={isEn ? 'End Voice Session' : 'پایان گفتگو'}
+        >
+          <X className="w-7 h-7" />
+        </button>
       </div>
     </div>
   );
 };
+

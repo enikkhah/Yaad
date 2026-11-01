@@ -812,22 +812,88 @@ export const stopAiAssistantPrompt = () => {
 
 function getPresetWavUrl(cleanText: string, language: 'fa' | 'en'): string | null {
   const norm = cleanText.replace(/\s+/g, ' ').trim();
+  const lower = norm.toLowerCase();
   const baseUrl = ((import.meta as any).env?.BASE_URL || '/').replace(/\/?$/, '/');
-  if (
-    language !== 'en' &&
-    (norm.includes('چه یادآور، مناسبت، مکان یا ایده‌ای') ||
-      norm.includes('لطفاً بفرمایید چه موردی را ثبت کنم'))
-  ) {
+
+  if (language !== 'en') {
+    if (
+      norm.includes('چه یادآور، مناسبت، مکان یا ایده‌ای') ||
+      norm.includes('لطفاً بفرمایید چه موردی را ثبت کنم')
+    ) {
+      return `${baseUrl}tts-cache/welcome_fa.wav`;
+    }
+    if (norm.includes('کدام بخش') && norm.includes('تغییر دهید')) {
+      return `${baseUrl}tts-cache/ask_edit_fa.wav`;
+    }
+    if (norm.includes('در چه روز و چه ماهی است')) {
+      return `${baseUrl}tts-cache/ask_occasion_date_fa.wav`;
+    }
+    if (norm.includes('در چه روزی به شما یادآوری شود')) {
+      return `${baseUrl}tts-cache/ask_day_fa.wav`;
+    }
+    if (norm.includes('چه ساعتی برای آلارم')) {
+      return `${baseUrl}tts-cache/ask_time_fa.wav`;
+    }
+    if (norm.includes('با موقعیت زنده GPS آماده است') || norm.includes('هشدار ورود فعال شود')) {
+      return `${baseUrl}tts-cache/ask_location_details_fa.wav`;
+    }
+    if (norm.includes('توضیح تکمیلی برای این ایده دارید')) {
+      return `${baseUrl}tts-cache/ask_idea_details_fa.wav`;
+    }
+    if (
+      norm.includes('آیا مورد تایید است تا ثبت شود') ||
+      norm.includes('آماده ذخیره است. آیا مورد تایید است')
+    ) {
+      return `${baseUrl}tts-cache/ask_confirm_fa.wav`;
+    }
+    if (
+      norm.includes('موضوع یا عنوان یادآور') ||
+      norm.includes('عنوان این مناسبت را بفرمایید') ||
+      norm.includes('نام این مکان را بفرمایید') ||
+      norm.includes('عنوان یا موضوع ایده‌ی خود را بفرمایید')
+    ) {
+      return `${baseUrl}tts-cache/ask_subject_fa.wav`;
+    }
     return `${baseUrl}tts-cache/welcome_fa.wav`;
   }
+
+  // English ('en') preset WAVs
   if (
-    language === 'en' &&
-    (norm.toLowerCase().includes('what reminder, occasion, location, or idea') ||
-      norm.toLowerCase().includes('what would you like to save'))
+    lower.includes('what reminder, occasion, location, or idea') ||
+    lower.includes('what would you like to save')
   ) {
     return `${baseUrl}tts-cache/welcome_en.wav`;
   }
-  return null;
+  if (lower.includes('which part you would like to change')) {
+    return `${baseUrl}tts-cache/ask_edit_en.wav`;
+  }
+  if (lower.includes('on what day and month is')) {
+    return `${baseUrl}tts-cache/ask_occasion_date_en.wav`;
+  }
+  if (lower.includes('on which day or date would you like me to remind you')) {
+    return `${baseUrl}tts-cache/ask_day_en.wav`;
+  }
+  if (lower.includes('what time should i set the alarm')) {
+    return `${baseUrl}tts-cache/ask_time_en.wav`;
+  }
+  if (lower.includes('would you like to add a note or enable arrival alert')) {
+    return `${baseUrl}tts-cache/ask_location_details_en.wav`;
+  }
+  if (lower.includes('if you have any additional details, please share them now')) {
+    return `${baseUrl}tts-cache/ask_idea_details_en.wav`;
+  }
+  if (lower.includes('do you confirm saving it') || lower.includes('do you confirm?')) {
+    return `${baseUrl}tts-cache/ask_confirm_en.wav`;
+  }
+  if (
+    lower.includes('subject or title of your reminder') ||
+    lower.includes('title of this occasion') ||
+    lower.includes('save this location under') ||
+    lower.includes('title or subject of your idea')
+  ) {
+    return `${baseUrl}tts-cache/ask_subject_en.wav`;
+  }
+  return `${baseUrl}tts-cache/welcome_en.wav`;
 }
 
 /**
@@ -1047,6 +1113,16 @@ export const speakAiAssistantPrompt = (options: {
   const finishAndReleaseAudioFocus = () => {
     if (finished) return;
     finished = true;
+    if (sharedTtsAudio) {
+      try {
+        sharedTtsAudio.onended = null;
+        sharedTtsAudio.onerror = null;
+        sharedTtsAudio.onloadedmetadata = null;
+        sharedTtsAudio.pause();
+      } catch {
+        // ignore
+      }
+    }
     revokeActiveObjectUrl();
     if (activeAssistantTimer) {
       clearTimeout(activeAssistantTimer);
@@ -1054,7 +1130,7 @@ export const speakAiAssistantPrompt = (options: {
     }
     activeAssistantTimer = setTimeout(() => {
       onDone?.();
-    }, 320);
+    }, 120);
   };
 
   const playHtmlAudioUrl = (
@@ -1075,26 +1151,52 @@ export const speakAiAssistantPrompt = (options: {
         ? Math.max(0.76, Math.min(1.28, personaMeta.rate * (personaMeta.pitch * 0.45 + 0.55)))
         : 1.0;
 
-      const applyRateSettings = () => {
+      let durationWatchdogId: ReturnType<typeof setTimeout> | null = null;
+      const clearAudioTimers = () => {
+        clearTimeout(safetyId);
+        if (durationWatchdogId) {
+          clearTimeout(durationWatchdogId);
+          durationWatchdogId = null;
+        }
+      };
+
+      const applyRateAndScheduleDurationWatchdog = () => {
         try {
           (audio as any).preservesPitch = !applyPlaybackRatePersona;
           (audio as any).mozPreservesPitch = !applyPlaybackRatePersona;
           (audio as any).webkitPreservesPitch = !applyPlaybackRatePersona;
           audio.defaultPlaybackRate = targetRate;
           audio.playbackRate = targetRate;
+
+          if (
+            !durationWatchdogId &&
+            Number.isFinite(audio.duration) &&
+            audio.duration > 0.15
+          ) {
+            const expectedMs = Math.min(
+              13000,
+              Math.ceil((audio.duration / Math.max(0.6, targetRate)) * 1000) + 420
+            );
+            durationWatchdogId = setTimeout(() => {
+              finishAndReleaseAudioFocus();
+            }, expectedMs);
+          }
         } catch {
           // ignore
         }
       };
 
-      applyRateSettings();
-      audio.onloadedmetadata = applyRateSettings;
+      applyRateAndScheduleDurationWatchdog();
+      audio.onloadedmetadata = applyRateAndScheduleDurationWatchdog;
 
       const startedAt = Date.now();
-      const safetyId = setTimeout(finishAndReleaseAudioFocus, 15000);
+      const safetyId = setTimeout(
+        finishAndReleaseAudioFocus,
+        Math.min(11500, minExpectedSpeechMs + 3200)
+      );
 
       audio.onended = () => {
-        clearTimeout(safetyId);
+        clearAudioTimers();
         if (Date.now() - startedAt < 180) {
           onFail();
           return;
@@ -1103,16 +1205,16 @@ export const speakAiAssistantPrompt = (options: {
       };
 
       audio.onerror = () => {
-        clearTimeout(safetyId);
+        clearAudioTimers();
         onFail();
       };
 
       const p = audio.play();
       if (p) {
         p.then(() => {
-          applyRateSettings();
+          applyRateAndScheduleDurationWatchdog();
         }).catch(() => {
-          clearTimeout(safetyId);
+          clearAudioTimers();
           onFail();
         });
       }
@@ -1232,14 +1334,16 @@ export const speakAiAssistantPrompt = (options: {
   };
 
   const playOnlineStreamFallback = (onFail: () => void) => {
-    // Google Translate TTS returns 400 for tl=fa; use tl=ar with phonetic Persian letter mapping as emergency fallback
-    const tl = isEn ? 'en' : 'ar';
-    const queryText = isEn ? cleanText : normalizePersianForArabicStream(cleanText);
-    const primaryUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=tw-ob&q=${encodeURIComponent(
-      queryText
+    if (!isEn) {
+      // Never use Arabic tl=ar stream for Persian so the accent never changes
+      onFail();
+      return;
+    }
+    const primaryUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=tw-ob&q=${encodeURIComponent(
+      cleanText
     )}`;
-    const secondaryUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=${tl}&client=gtx&q=${encodeURIComponent(
-      queryText
+    const secondaryUrl = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en&client=gtx&q=${encodeURIComponent(
+      cleanText
     )}`;
     playHtmlAudioUrl(primaryUrl, true, () => {
       playHtmlAudioUrl(secondaryUrl, true, onFail);
@@ -1260,9 +1364,6 @@ export const speakAiAssistantPrompt = (options: {
         if (isEn) return l.startsWith('en');
         return l.startsWith('fa') || n.includes('persian') || n.includes('farsi');
       });
-      const rtlFallbackVoice = !isEn
-        ? voices.find((v) => (v.lang || '').toLowerCase().startsWith('ar'))
-        : undefined;
 
       const personaIndex = Math.max(
         0,
@@ -1271,25 +1372,10 @@ export const speakAiAssistantPrompt = (options: {
       const selectedVoice =
         matchingVoices.length > 0
           ? matchingVoices[personaIndex % matchingVoices.length]
-          : rtlFallbackVoice;
+          : undefined;
 
-      // اگر صدای فارسی روی مرورگر یا گوشی نصب نباشد، ابتدا از استریم آنلاین استفاده شود تا سکوت رخ ندهد
       if (!isEn && !selectedVoice) {
-        playOnlineStreamFallback(() => {
-          try {
-            const u = new SpeechSynthesisUtterance(cleanText);
-            u.lang = 'fa-IR';
-            u.volume = clampedVol;
-            u.rate = personaMeta.rate;
-            u.pitch = personaMeta.pitch;
-            u.onend = () => finishAndReleaseAudioFocus();
-            u.onerror = () => finishAndReleaseAudioFocus();
-            window.speechSynthesis.speak(u);
-            activeAssistantTimer = setTimeout(finishAndReleaseAudioFocus, minExpectedSpeechMs);
-          } catch {
-            finishAndReleaseAudioFocus();
-          }
-        });
+        finishAndReleaseAudioFocus();
         return;
       }
 
@@ -1408,7 +1494,7 @@ export const speakAiAssistantPrompt = (options: {
   // ۳. درخواست به سرور (/api/smart-tts) برای جملات پویا در طول گفتگو
   const controller = new AbortController();
   activeAssistantAbort = controller;
-  const fetchTimeout = setTimeout(() => controller.abort(), 4500);
+  const fetchTimeout = setTimeout(() => controller.abort(), 7500);
 
   fetch('/api/smart-tts', {
     method: 'POST',
@@ -1426,14 +1512,20 @@ export const speakAiAssistantPrompt = (options: {
       const data = await res.json();
       if (!data?.ok || !data?.audioBase64) throw new Error('No audioBase64');
       const mimeType = data.mimeType || 'audio/wav';
+      const isServerWav = mimeType.includes('wav');
       const bytes = base64ToUint8Array(data.audioBase64);
       ttsRawBytesCache.set(personaCacheKey, {
         bytes,
         mimeType,
-        alreadyPersonaTransformed: true,
+        alreadyPersonaTransformed: isServerWav,
       });
       if (finished) return;
-      playAudioBytesWithPersona(bytes, mimeType, true, playNativeSpeechWithVerification);
+      playAudioBytesWithPersona(
+        bytes,
+        mimeType,
+        isServerWav,
+        playNativeSpeechWithVerification
+      );
     })
     .catch(() => {
       clearTimeout(fetchTimeout);
