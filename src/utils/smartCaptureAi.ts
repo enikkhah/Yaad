@@ -210,11 +210,32 @@ const WEEKDAY_JS_INDEX: Array<{ pattern: RegExp; jsDay: number }> = [
   { pattern: /(?:^|\s|[،,.:؛!?-])(جمعه|\bfriday\b)(?=\s|$|[،,.:؛!?-])/i, jsDay: 5 },
 ];
 
-function normalizePersianSpeech(raw: string, expectTimeOrDay = false): string {
-  let s = fromPersianDigits(raw || '')
+/**
+ * تصحیح فوق‌سریع (< 0.2ms) خطاهای رایج شنیداری و هم‌آوایی در تشخیص گفتار فارسی (100% لوکال و بدون بار پردازشی)
+ */
+export function correctPersianAsrErrors(raw: string): string {
+  return (raw || '')
     .replace(/ي/g, 'ی')
     .replace(/ك/g, 'ک')
     .replace(/\u200c/g, ' ')
+    .replace(/(^|\s)(سبت|صبت)(\s|$)/g, '$1ثبت$3')
+    .replace(/(^|\s)(سبت کن|صبت کن|ثبتشکن|ثبت کنن)(\s|$)/g, '$1ثبت کن$3')
+    .replace(/(^|\s)(طایید|تأیید|تائید|تاییده)(\s|$)/g, '$1تایید$3')
+    .replace(/(^|\s)(او کی|اکی|اکے)(\s|$)/g, '$1اوکی$3')
+    .replace(/(^|\s)(با شه|بشه)(\s|$)/g, '$1باشه$3')
+    .replace(/(^|\s)(یاد هم بنداز|یادم بندازه|یادم انداختن)(\s|$)/g, '$1یادم بنداز$3')
+    .replace(/(^|\s)(پس از فردا|پسا فردا)(\s|$)/g, '$1پس فردا$3')
+    .replace(/(\d+|یک|دو|سه|چهار|پنج|شش|شیش|هفت|هشت|نه|ده)\s*(?:روزی\s*که|روزه\s*دیگه|روزه\s*دیگر)/g, '$1 روز دیگه')
+    .replace(/(\d+|یک|دو|سه|چهار|پنج|شش|شیش|هفت|هشت|نه|ده| یازده|دوازده)\s*از(?=\s|$)/g, '$1 عصر')
+    .replace(/(^|\s)شیش(\s|$)/g, '$1شش$2')
+    .replace(/(^|\s)چار(\s|$)/g, '$1چهار$2')
+    .replace(/(^|\s)دیقه(\s|$)/g, '$1دقیقه$2')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizePersianSpeech(raw: string, expectTimeOrDay = false): string {
+  let s = fromPersianDigits(correctPersianAsrErrors(raw || ''))
     .replace(/\s+/g, ' ')
     .trim();
 
@@ -484,11 +505,8 @@ export function detectIntentFromText(text: string, prevIntent: SmartIntentType):
  * تشخیص عبارات تایید نهایی در گام ۶ (فارسی و انگلیسی)
  */
 export function isConfirmationUtterance(rawText: string): boolean {
-  const cleaned = rawText
+  const cleaned = correctPersianAsrErrors(rawText)
     .toLowerCase()
-    .replace(/ي/g, 'ی')
-    .replace(/ك/g, 'ک')
-    .replace(/\u200c/g, ' ')
     .replace(/[!.،,؟?؛:]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();

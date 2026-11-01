@@ -1011,53 +1011,67 @@ export const prewarmAiAssistantPrompt = (
   const cleanText = text.replace(/\s+/g, ' ').trim();
   if (!cleanText) return;
 
-  const baseCacheKey = `${language}:raw:${cleanText}`;
-  if (ttsRawBytesCache.has(baseCacheKey)) return;
+  const baseUrl = ((import.meta as any).env?.BASE_URL || '/').replace(/\/?$/, '/');
+  const stepPrompts =
+    language === 'en'
+      ? [
+          { key: cleanText, file: 'welcome_en.wav' },
+          {
+            key: 'Please tell me the subject or title of your reminder?',
+            file: 'ask_subject_en.wav',
+          },
+          {
+            key: 'On which day or date would you like me to remind you',
+            file: 'ask_day_en.wav',
+          },
+          { key: 'What time should I set the alarm', file: 'ask_time_en.wav' },
+          { key: 'Do you confirm saving it?', file: 'ask_confirm_en.wav' },
+          { key: 'On what day and month is', file: 'ask_occasion_date_en.wav' },
+          {
+            key: 'Would you like to add a note or enable arrival alert',
+            file: 'ask_location_details_en.wav',
+          },
+          {
+            key: 'If you have any additional details, please share them now',
+            file: 'ask_idea_details_en.wav',
+          },
+          { key: 'which part you would like to change', file: 'ask_edit_en.wav' },
+        ]
+      : [
+          { key: cleanText, file: 'welcome_fa.wav' },
+          {
+            key: 'لطفاً موضوع یا عنوان یادآور مورد نظر خود را بفرمایید؟',
+            file: 'ask_subject_fa.wav',
+          },
+          { key: 'می‌خواهید در چه روزی به شما یادآوری شود؟', file: 'ask_day_fa.wav' },
+          { key: 'چه ساعتی برای آلارم', file: 'ask_time_fa.wav' },
+          { key: 'آیا مورد تایید است تا ثبت شود؟', file: 'ask_confirm_fa.wav' },
+          { key: 'در چه روز و چه ماهی است؟', file: 'ask_occasion_date_fa.wav' },
+          { key: 'با موقعیت زنده GPS آماده است', file: 'ask_location_details_fa.wav' },
+          { key: 'توضیح تکمیلی برای این ایده دارید', file: 'ask_idea_details_fa.wav' },
+          { key: 'کدام بخش (عنوان، روز یا ساعت) را می‌خواهید تغییر دهید؟', file: 'ask_edit_fa.wav' },
+        ];
 
-  const presetUrl = getPresetWavUrl(cleanText, language);
-  if (presetUrl) {
-    fetch(presetUrl)
+  for (const item of stepPrompts) {
+    const url = `${baseUrl}tts-cache/${item.file}`;
+    const urlCacheKey = `preset_url:${url}`;
+    if (ttsRawBytesCache.has(urlCacheKey)) continue;
+    fetch(url)
       .then((r) => (r.ok ? r.arrayBuffer() : null))
       .then((buf) => {
         if (buf && buf.byteLength > 100) {
-          ttsRawBytesCache.set(baseCacheKey, {
+          const entry = {
             bytes: new Uint8Array(buf),
             mimeType: 'audio/wav',
             alreadyPersonaTransformed: false,
-          });
+          };
+          ttsRawBytesCache.set(urlCacheKey, entry);
+          ttsRawBytesCache.set(`${language}:raw:${item.key}`, entry);
         }
       })
       .catch(() => {});
-    return;
   }
-
-  const isStaticHost =
-    window.location.protocol === 'capacitor:' ||
-    window.location.protocol === 'file:' ||
-    window.location.hostname.includes('github.io');
-  if (isStaticHost) return;
-
-  const personaCacheKey = `${language}:${voicePersona}:${cleanText}`;
-  if (ttsRawBytesCache.has(personaCacheKey)) return;
-
-  fetch('/api/smart-tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text: cleanText, language, voicePersona }),
-  })
-    .then((r) => (r.ok ? r.json() : null))
-    .then((data) => {
-      if (data?.ok && data?.audioBase64) {
-        const mimeType = data.mimeType || 'audio/wav';
-        const bytes = base64ToUint8Array(data.audioBase64);
-        ttsRawBytesCache.set(personaCacheKey, {
-          bytes,
-          mimeType,
-          alreadyPersonaTransformed: true,
-        });
-      }
-    })
-    .catch(() => {});
+  void voicePersona;
 };
 
 /**
@@ -1130,7 +1144,7 @@ export const speakAiAssistantPrompt = (options: {
     }
     activeAssistantTimer = setTimeout(() => {
       onDone?.();
-    }, 120);
+    }, 25);
   };
 
   const playHtmlAudioUrl = (
@@ -1458,20 +1472,33 @@ export const speakAiAssistantPrompt = (options: {
     return;
   }
 
-  // ۲. اگر جمله مربوط به خوش‌آمدگویی یا تست گوینده است، مستقیماً از فایل WAV پیش‌ساخته داخل باندل استفاده کن
+  // ۲. استفاده مستقیم از فایل‌های WAV پیش‌ساخته در حافظه RAM یا باندل برای تمام مراحل
   const presetUrl = getPresetWavUrl(cleanText, language);
   if (presetUrl) {
+    const presetMem = ttsRawBytesCache.get(`preset_url:${presetUrl}`);
+    if (presetMem) {
+      playAudioBytesWithPersona(
+        presetMem.bytes,
+        'audio/wav',
+        false,
+        playNativeSpeechWithVerification
+      );
+      return;
+    }
+
     fetch(presetUrl)
       .then(async (res) => {
         if (!res.ok) throw new Error('Preset fetch failed');
         const arrBuf = await res.arrayBuffer();
         if (!arrBuf || arrBuf.byteLength < 100) throw new Error('Empty preset');
         const rawBytes = new Uint8Array(arrBuf);
-        ttsRawBytesCache.set(rawCacheKey, {
+        const entry = {
           bytes: rawBytes,
           mimeType: 'audio/wav',
           alreadyPersonaTransformed: false,
-        });
+        };
+        ttsRawBytesCache.set(`preset_url:${presetUrl}`, entry);
+        ttsRawBytesCache.set(rawCacheKey, entry);
         if (finished) return;
         playAudioBytesWithPersona(rawBytes, 'audio/wav', false, playNativeSpeechWithVerification);
       })

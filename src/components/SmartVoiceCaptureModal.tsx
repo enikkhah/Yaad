@@ -352,12 +352,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             return;
           }
           setIsAssistantSpeaking(false);
-          // مکث کوتاه برای آزادسازی کامل کانال صوتی پیش از روشن شدن میکروفون
+          // فعال‌سازی فوری میکروفون بلافاصله پس از پایان جمله گوینده
           ttsWaitTimerRef.current = setTimeout(() => {
             if (isOpenRef.current) {
               onDone?.();
             }
-          }, 160);
+          }, 30);
         },
       });
     },
@@ -582,15 +582,15 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             const avgBandEnergy = count > 0 ? sumEnergy / count : 0;
             const weightedBandEnergy = avgBandEnergy * 0.7 + peakEnergy * 0.3;
 
-            // ۳. کالیبراسیون اولیه نویز محیط در ۸ فریم اول (~۶۴۰ میلی‌ثانیه) تا هیچ بوق یا نویز ثابتی باعث تحریک کاذب نشود
-            if (calibrationFrames < 8) {
+            // ۳. کالیبراسیون فوق‌سریع نویز محیط در ۳ فریم اول (~۱۵۰ میلی‌ثانیه)
+            if (calibrationFrames < 3) {
               calibrationFrames += 1;
               baselineBandEnergy =
                 calibrationFrames === 1
                   ? weightedBandEnergy
-                  : baselineBandEnergy * 0.75 + weightedBandEnergy * 0.25;
+                  : baselineBandEnergy * 0.7 + weightedBandEnergy * 0.3;
               baselineRms =
-                calibrationFrames === 1 ? currentRms : baselineRms * 0.75 + currentRms * 0.25;
+                calibrationFrames === 1 ? currentRms : baselineRms * 0.7 + currentRms * 0.3;
               setVoiceLevel(0);
               return;
             }
@@ -599,18 +599,18 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             const rmsRise = Math.max(0, currentRms - baselineRms);
 
             // آستانه افزایش انرژی نسبت به نویز محیط بر اساس اسلایدر حساسیت میکروفون (۱۰٪ تا ۱۰۰٪)
-            const requiredEnergyRise = Math.max(16, Math.round(48 - sens * 0.3));
-            const requiredRmsRise = Math.max(2.0, (115 - sens) * 0.055);
+            const requiredEnergyRise = Math.max(14, Math.round(44 - sens * 0.3));
+            const requiredRmsRise = Math.max(1.8, (112 - sens) * 0.05);
 
             const normalizedLevel = Math.min(
               100,
-              Math.round((energyRise / Math.max(16, requiredEnergyRise)) * 45)
+              Math.round((energyRise / Math.max(14, requiredEnergyRise)) * 45)
             );
             setVoiceLevel(normalizedLevel > 8 ? normalizedLevel : 0);
 
             if (energyRise >= requiredEnergyRise && rmsRise >= requiredRmsRise) {
               consecutiveVoiceFrames += 1;
-              if (consecutiveVoiceFrames >= 3) {
+              if (consecutiveVoiceFrames >= 2) {
                 // شروع واقعی صحبت کاربر تشخیص داده شد -> آزادسازی استریم پایش و شروع تشخیص گفتار
                 stopSilentVadMonitor();
                 setIsSpeechActive(true);
@@ -623,7 +623,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
               baselineBandEnergy = baselineBandEnergy * 0.94 + weightedBandEnergy * 0.06;
               baselineRms = baselineRms * 0.94 + currentRms * 0.06;
             }
-          }, 80);
+          }, 50);
         })
         .catch(() => {
           setIsListening(false);
@@ -948,7 +948,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           startListening();
         }
       });
-    }, 100);
+    }, 30);
 
     return () => {
       clearTimeout(timer);

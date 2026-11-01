@@ -209,31 +209,59 @@ try {
   // ignore
 }
 
-// Helper: Wraps raw 16-bit mono PCM (24000 Hz) from Gemini TTS in a standard 16000 Hz 16-bit WAV container
+// Helper: Converts 24kHz RIFF WAV or raw 16-bit mono PCM from Gemini TTS into a trimmed 16000 Hz 16-bit WAV container
 function ensureWavBufferFromGeminiInlineData(base64Data: string, mimeType = ''): Buffer {
   const rawBuf = Buffer.from(base64Data, 'base64');
+  let pcmBuf = rawBuf;
+  let inRate = 24000;
+
   if (rawBuf.length > 44 && rawBuf.subarray(0, 4).toString('ascii') === 'RIFF') {
-    return rawBuf;
+    inRate = rawBuf.readUInt32LE(24) || 24000;
+    const dataSize = rawBuf.readUInt32LE(40);
+    const endOffset = Math.min(rawBuf.length, 44 + dataSize);
+    pcmBuf = rawBuf.subarray(44, endOffset);
+  } else {
+    const rateMatch = mimeType.match(/rate=(\d+)/i);
+    if (rateMatch) inRate = parseInt(rateMatch[1], 10);
   }
 
-  const rateMatch = mimeType.match(/rate=(\d+)/i);
-  const inRate = rateMatch ? parseInt(rateMatch[1], 10) : 24000;
   const outRate = 16000;
-  const inSamples = Math.floor(rawBuf.length / 2);
+  const inSamples = Math.floor(pcmBuf.length / 2);
   const ratio = inRate / outRate;
   const outSamples = Math.max(1, Math.floor(inSamples / ratio));
-  const outPcm = Buffer.alloc(outSamples * 2);
+  const resampled = Buffer.alloc(outSamples * 2);
 
   for (let i = 0; i < outSamples; i++) {
     const srcPos = i * ratio;
     const idx0 = Math.floor(srcPos);
     const idx1 = Math.min(inSamples - 1, idx0 + 1);
     const frac = srcPos - idx0;
-    const s0 = rawBuf.readInt16LE(idx0 * 2);
-    const s1 = rawBuf.readInt16LE(idx1 * 2);
+    const s0 = pcmBuf.readInt16LE(idx0 * 2);
+    const s1 = pcmBuf.readInt16LE(idx1 * 2);
     const sample = Math.max(-32768, Math.min(32767, Math.round(s0 + (s1 - s0) * frac)));
-    outPcm.writeInt16LE(sample, i * 2);
+    resampled.writeInt16LE(sample, i * 2);
   }
+
+  // Trim leading and trailing silence so microphone activates immediately after speech ends
+  const threshold = 320;
+  let first = 0;
+  let last = outSamples - 1;
+  for (let i = 0; i < outSamples; i++) {
+    if (Math.abs(resampled.readInt16LE(i * 2)) > threshold) {
+      first = Math.max(0, i - Math.floor(outRate * 0.03));
+      break;
+    }
+  }
+  for (let i = outSamples - 1; i >= first; i--) {
+    if (Math.abs(resampled.readInt16LE(i * 2)) > threshold) {
+      last = Math.min(outSamples - 1, i + Math.floor(outRate * 0.05));
+      break;
+    }
+  }
+
+  const trimmedSamples = Math.max(1, last - first + 1);
+  const outPcm = Buffer.alloc(trimmedSamples * 2);
+  resampled.copy(outPcm, 0, first * 2, (last + 1) * 2);
 
   const dataSize = outPcm.length;
   const header = Buffer.alloc(44);
@@ -579,11 +607,6 @@ app.post('/api/smart-tts', async (req: Request, res: Response) => {
         },
       });
 
-      const ttsPrompt =
-        language === 'en'
-          ? `Say the following English sentence aloud in a warm, friendly tone: ${cleanText}`
-          : `Say the following Persian sentence aloud in a warm, friendly native Iranian Persian (Farsi) accent: ${cleanText}`;
-
       const ttsModels = [
         'gemini-3.8-flash-tts',
         'gemini-3.1-flash-tts-preview',
@@ -595,7 +618,7 @@ app.post('/api/smart-tts', async (req: Request, res: Response) => {
           const ttsResp: any = await Promise.race([
             ai.models.generateContent({
               model: modelName,
-              contents: [{ parts: [{ text: ttsPrompt }] }],
+              contents: [{ parts: [{ text: cleanText }] }],
               config: {
                 responseModalities: ['AUDIO'],
                 speechConfig: {
