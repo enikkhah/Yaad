@@ -101,6 +101,133 @@ export function getSmartTypeFallbackPrompt(language: 'fa' | 'en' = 'fa'): string
   return 'صدا واضح دریافت نمی‌شه؛ لطفاً در کادر پایین تایپ کنید.';
 }
 
+const KNOWN_ASSISTANT_ECHO_SIGNATURES: string[] = [
+  'سلام بفرمایید ثبت کنم',
+  'بفرمایید ثبت کنم',
+  'سلام بفرمایید منتظرم',
+  'بفرمایید منتظرم',
+  'سلام در خدمتم بفرمایید',
+  'در خدمتم بفرمایید',
+  'سلام بفرمایید',
+  'برای چه روزی تنظیمش کنم',
+  'چه روزی بهتون یادآوری کنم',
+  'چه روزی یادآوری کنم',
+  'کدوم روز یادتون بندازم',
+  'برای کدوم روز ثبتش کنم',
+  'ساعت چند زنگ بزنه',
+  'چه ساعتی خبرتون کنم',
+  'برای چه ساعتی تنظیم بشه',
+  'ساعت چند یادآوری کنم',
+  'برای چه ساعتی ثبت بشه',
+  'همه چی آماده است ثبتش کنم',
+  'مورد تاییده تا ثبت بشه',
+  'اطلاعات کامل شد ذخیره کنم',
+  'درسته ثبتش کنم',
+  'تاییده ثبت کنم',
+  'همینطور ثبت بشه',
+  'متوجه نشدم بی زحمت یک بار دیگه بفرمایید',
+  'بی زحمت یک بار دیگه بفرمایید',
+  'صداتون واضح نبود لطفا دوباره بگید',
+  'صداتون واضح نبود',
+  'ببخشید میشه یک بار دیگه تکرار کنید',
+  'یک بار دیگه تکرار کنید',
+  'صدا واضح دریافت نمیشه',
+  'در کادر پایین تایپ کنید',
+  'موضوع یادآور چیه',
+  'عنوان این مناسبت چیه',
+  'نام این مکان را چه بگذارم',
+  'موضوع ایده تون چیه',
+  'کدام بخش عنوان روز یا ساعت را می خواهید تغییر دهید',
+  'hello go ahead i m ready',
+  'go ahead i m ready',
+  'hello please tell me i m listening',
+  'please tell me i m listening',
+  'hello what can i save for you',
+  'what can i save for you',
+  'for which day should i set',
+  'what time should the alarm ring',
+  'sorry i didn t catch that',
+  'could you please repeat that once more',
+  'voice is not clear please type your request below',
+];
+
+function normalizeForEchoCheck(text: string): string {
+  return fromPersianDigits(text || '')
+    .toLowerCase()
+    .replace(/ي/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/آ/g, 'ا')
+    .replace(/أ|إ/g, 'ا')
+    .replace(/\u200c/g, ' ')
+    .replace(/[!.،,؟?؛:«»"'()[\]{}\-_]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * تشخیص دقیق اکوی صدای خود گوینده (Self-Echo Filter):
+ * اگر به هر دلیل صدای اسپیکر دستگاه در میکروفون منعکس شود، این تابع آن را شناسایی می‌کند
+ * تا هرگز جملات خود گوینده (مثل «سلام؛ بفرمایید ثبت کنم») به عنوان یادآور ثبت نشوند.
+ */
+export function isEchoOfAssistantSpeech(
+  rawTranscript: string,
+  recentAssistantTexts: string[] = []
+): boolean {
+  const norm = normalizeForEchoCheck(rawTranscript);
+  if (!norm) return false;
+
+  // هرگز پاسخ‌های کوتاه تایید/رد کاربر (مثل «بله»، «ثبت کن»، «آره»، «نه») را به عنوان اکو مسدود نکن
+  if (
+    /^(بله|بلی|آره|اره|اوکی|باشه|ثبت کن|ثبتش کن|ثبت بشه|ذخیره کن|تایید|درسته|حله|نه|خیر|نخیر|ویرایش|امروز|فردا|پس فردا|yes|ok|okay|confirm|save|save it|no|today|tomorrow)$/i.test(
+      norm
+    )
+  ) {
+    return false;
+  }
+
+  for (const sig of KNOWN_ASSISTANT_ECHO_SIGNATURES) {
+    const normSig = normalizeForEchoCheck(sig);
+    if (!normSig) continue;
+    if (norm === normSig || norm.includes(normSig)) {
+      return true;
+    }
+    // اگر جمله دریافت‌شده بخشی حداقل ۳ کلمه‌ای از جملات اختصاصی منشی باشد
+    const words = norm.split(' ').filter(Boolean);
+    if (words.length >= 2 && normSig.includes(norm) && /(بفرمایید|منتظرم|خدمتم|تنظیمش کنم|زنگ بزنه|یادتون بندازم|خبرتون کنم|ثبتش کنم|واضح نبود|متوجه نشدم|تکرار کنید)/i.test(rawTranscript)) {
+      return true;
+    }
+  }
+
+  const transcriptWords = norm.split(' ').filter((w) => w.length >= 2);
+  if (transcriptWords.length >= 2) {
+    for (const assistantText of recentAssistantTexts) {
+      const normAssistant = normalizeForEchoCheck(assistantText);
+      if (!normAssistant) continue;
+      if (norm === normAssistant) {
+        return true;
+      }
+      if (
+        transcriptWords.length >= 3 &&
+        (normAssistant.includes(norm) || norm.includes(normAssistant))
+      ) {
+        return true;
+      }
+      const assistantWordSet = new Set(normAssistant.split(' ').filter((w) => w.length >= 2));
+      if (assistantWordSet.size >= 3 && transcriptWords.length >= 3) {
+        let matched = 0;
+        for (const w of transcriptWords) {
+          if (assistantWordSet.has(w)) matched++;
+        }
+        if (matched / transcriptWords.length >= 0.75) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
 const PERSIAN_WORD_NUMBERS: Record<string, number> = {
   یک: 1,
   یه: 1,
@@ -1194,6 +1321,19 @@ export function analyzeSmartCaptureLocally(
 ): SmartAnalysisResult {
   const isEn = language === 'en';
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')?.text.trim() || '';
+  const assistantHistory = messages.filter((m) => m.role === 'assistant').map((m) => m.text);
+
+  if (isEchoOfAssistantSpeech(lastUserMsg, assistantHistory)) {
+    return {
+      intentType: currentDraft.intentType,
+      isComplete: false,
+      unclearInput: true,
+      clarifyingQuestion: getSmartWelcomePrompt(language),
+      quickSuggestions: [],
+      draft: currentDraft,
+    };
+  }
+
   const normLast = normalizePersianSpeech(lastUserMsg);
 
   const isConfirmCommand = isConfirmationUtterance(lastUserMsg);

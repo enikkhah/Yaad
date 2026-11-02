@@ -33,6 +33,7 @@ import {
   getSmartTypeFallbackPrompt,
   getSmartWelcomePrompt,
   isConfirmationUtterance,
+  isEchoOfAssistantSpeech,
 } from '../utils/smartCaptureAi';
 
 interface SmartVoiceCaptureModalProps {
@@ -87,7 +88,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'fetching' | 'ready' | 'error'>('idle');
   const [gpsErrorMsg, setGpsErrorMsg] = useState<string | null>(null);
 
-  // Persistent SpeechRecognition refs (ChatGPT Voice Mode: single continuous warm session, 0ms turn latency)
+  // SpeechRecognition & Turn Control refs (strictly half-duplex: mic is 100% OFF during assistant speech)
   const recognitionRef = useRef<any>(null);
   const shouldKeepListeningRef = useRef<boolean>(false);
   const isUserTurnActiveRef = useRef<boolean>(false);
@@ -95,6 +96,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   const ttsMuteUntilRef = useRef<number>(0);
   const unclearAttemptsRef = useRef<number>(0);
   const showTextInputFallbackRef = useRef<boolean>(false);
+  const spokenPromptsHistoryRef = useRef<string[]>([]);
 
   const accumulatedFinalRef = useRef<string>('');
   const latestInterimRef = useRef<string>('');
@@ -193,7 +195,8 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   }, []);
 
   /**
-   * توقف کامل موتور تشخیص گفتار (فقط هنگام بستن مدال یا فعال شدن حالت تایپ پس از ۳ بار عدم وضوح صدا)
+   * قطع کامل و فوری میکروفون (هم هنگام بستن مدال و هم در تمام مدت صحبت گوینده):
+   * با فراخوانی abort() هرگونه صدای بافرشده در مرورگر دور ریخته می‌شود تا صدای گوینده هرگز ثبت نشود.
    */
   const stopListening = useCallback(() => {
     shouldKeepListeningRef.current = false;
@@ -204,17 +207,23 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       reconnectTimerRef.current = null;
     }
     if (recognitionRef.current) {
-      try {
-        recognitionRef.current.onstart = null;
-        recognitionRef.current.onresult = null;
-        recognitionRef.current.onerror = null;
-        recognitionRef.current.onend = null;
-        recognitionRef.current.stop();
-      } catch {
-        safeAbortSpeechRecognition(recognitionRef.current);
-      }
+      const activeRec = recognitionRef.current;
       recognitionRef.current = null;
+      try {
+        activeRec.onstart = null;
+        activeRec.onsoundstart = null;
+        activeRec.onspeechstart = null;
+        activeRec.onresult = null;
+        activeRec.onerror = null;
+        activeRec.onend = null;
+      } catch {
+        // ignore
+      }
+      safeAbortSpeechRecognition(activeRec);
     }
+    accumulatedFinalRef.current = '';
+    latestInterimRef.current = '';
+    lastFinalChunkRef.current = '';
     setIsListening(false);
     setIsSpeechActive(false);
     setVoiceLevel(0);
@@ -316,13 +325,18 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   }, [isEn, aiVoicePersona]);
 
   /**
-   * موتور پیوسته و بدون لگ میکروفون (مشابه ChatGPT Voice Mode):
-   * - از لحظه باز شدن مدال روشن می‌شود و در تمام طول مکالمه باز می‌ماند (هی خاموش و روشن نمی‌شود).
-   * - در زمان صحبت گوینده (isAssistantSpeakingRef = true)، خروجی‌ها نادیده گرفته می‌شوند تا صدای خود گوینده ثبت نشود.
-   * - به محض اتمام جمله گوینده، بدون حتی ۱ میلی‌ثانیه تاخیر راه‌اندازی، آماده دریافت اولین کلمه کاربر است.
+   * راه‌اندازی موتور تشخیص گفتار فقط در نوبت صحبت کاربر (زمانی که گوینده کاملاً ساکت است):
+   * - در زمان صحبت گوینده میکروفون ۱۰۰٪ خاموش است تا صدای گوینده وارد بافر میکروفون نشود.
+   * - گوی دقیقاً در لحظه rec.onstart سبز می‌شود تا وقتی سبز است، بدون هیچ تاخیری صدای کاربر را بشنود.
    */
   const ensureRecognitionEngineRunning = useCallback(() => {
-    if (!isOpenRef.current || showTextInputFallbackRef.current || typeof window === 'undefined') {
+    if (
+      !isOpenRef.current ||
+      showTextInputFallbackRef.current ||
+      isAssistantSpeakingRef.current ||
+      !isUserTurnActiveRef.current ||
+      typeof window === 'undefined'
+    ) {
       return;
     }
 
@@ -334,13 +348,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       return;
     }
 
-    // اگر موتور در حال حاضر فعال است، دوباره استارت نزن تا هیچ وقفه یا چشمک میکروفونی ایجاد نشود
     if (recognitionRef.current) {
       return;
     }
 
     const commitCurrentUtterance = () => {
-      if (!isUserTurnActiveRef.current) return;
+      if (!isUserTurnActiveRef.current || isAssistantSpeakingRef.current) return;
       const combined = appendWithoutDuplicate(
         accumulatedFinalRef.current,
         latestInterimRef.current
@@ -348,22 +361,20 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
       if (!combined) return;
 
-      // پایان نوبت فعلی کاربر بدون خاموش کردن موتور میکروفون
-      isUserTurnActiveRef.current = false;
-      clearTurnTimers();
-
-      // علامت‌گذاری تمام ایندکس‌های قبلی تا در نوبت بعدی دوباره خوانده نشوند
-      for (let idx = 0; idx < latestResultCountRef.current; idx++) {
-        ignoredResultIndicesRef.current.add(idx);
-        processedFinalIndicesRef.current.add(idx);
+      // فیلتر ضد اکوی صدای خود گوینده
+      if (isEchoOfAssistantSpeech(combined, spokenPromptsHistoryRef.current)) {
+        accumulatedFinalRef.current = '';
+        latestInterimRef.current = '';
+        lastFinalChunkRef.current = '';
+        setLiveTranscript('');
+        setInputText('');
+        setIsSpeechActive(false);
+        setVoiceLevel(0);
+        return;
       }
 
-      accumulatedFinalRef.current = '';
-      latestInterimRef.current = '';
-      lastFinalChunkRef.current = '';
-
-      setIsSpeechActive(false);
-      setVoiceLevel(0);
+      // پایان نوبت فعلی کاربر و بستن میکروفون پیش از پردازش و پاسخ صوتی منشی
+      stopListening();
       setLiveTranscript('');
       setInputText('');
 
@@ -397,12 +408,17 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       rec.onstart = () => {
         markPermissionGranted('microphone');
         if (isOpenRef.current && isUserTurnActiveRef.current && !isAssistantSpeakingRef.current) {
+          // کره دقیقاً در همان میلی‌ثانیه‌ای سبز می‌شود که میکروفون سخت‌افزاری باز شده و آماده شنیدن است
           setIsListening(true);
         }
       };
 
       rec.onsoundstart = () => {
-        if (!isUserTurnActiveRef.current || isAssistantSpeakingRef.current || Date.now() < ttsMuteUntilRef.current) {
+        if (
+          !isUserTurnActiveRef.current ||
+          isAssistantSpeakingRef.current ||
+          Date.now() < ttsMuteUntilRef.current
+        ) {
           return;
         }
         setIsSpeechActive(true);
@@ -410,7 +426,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       };
 
       rec.onspeechstart = () => {
-        if (!isUserTurnActiveRef.current || isAssistantSpeakingRef.current || Date.now() < ttsMuteUntilRef.current) {
+        if (
+          !isUserTurnActiveRef.current ||
+          isAssistantSpeakingRef.current ||
+          Date.now() < ttsMuteUntilRef.current
+        ) {
           return;
         }
         setIsSpeechActive(true);
@@ -420,17 +440,14 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       rec.onresult = (event: any) => {
         latestResultCountRef.current = event.results?.length || 0;
 
-        // اگر گوینده در حال صحبت است یا هنوز در بازه محافظ اکو (90ms) هستیم، این نتایج مربوط به صدای گوینده است
         if (
           !isUserTurnActiveRef.current ||
           isAssistantSpeakingRef.current ||
           Date.now() < ttsMuteUntilRef.current
         ) {
           for (let i = event.resultIndex; i < event.results.length; ++i) {
-            if (event.results[i]?.isFinal) {
-              ignoredResultIndicesRef.current.add(i);
-              processedFinalIndicesRef.current.add(i);
-            }
+            ignoredResultIndicesRef.current.add(i);
+            processedFinalIndicesRef.current.add(i);
           }
           return;
         }
@@ -443,6 +460,13 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           const res = event.results[i];
           const bestTranscript = (res[0]?.transcript || '').trim();
           if (!bestTranscript) continue;
+
+          // اگر متن دریافت‌شده بازتاب صدای خود گوینده باشد، فوراً نادیده بگیر
+          if (isEchoOfAssistantSpeech(bestTranscript, spokenPromptsHistoryRef.current)) {
+            ignoredResultIndicesRef.current.add(i);
+            processedFinalIndicesRef.current.add(i);
+            continue;
+          }
 
           heardNewUserWords = true;
 
@@ -464,7 +488,26 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
         if (!heardNewUserWords) return;
 
-        // کاربر شروع به صحبت کرده است -> تایمر سکوت ریست شود
+        const cleanInterim = interimText.trim();
+        const candidateCombined = appendWithoutDuplicate(
+          accumulatedFinalRef.current,
+          cleanInterim
+        ).trim();
+
+        // بررسی مجدد روی کل جمله ترکیب‌شده جهت جلوگیری ۱۰۰٪ از ثبت اکوی گوینده
+        if (
+          candidateCombined &&
+          isEchoOfAssistantSpeech(candidateCombined, spokenPromptsHistoryRef.current)
+        ) {
+          accumulatedFinalRef.current = '';
+          latestInterimRef.current = '';
+          lastFinalChunkRef.current = '';
+          setLiveTranscript('');
+          setInputText('');
+          return;
+        }
+
+        // کاربر واقعاً شروع به صحبت کرده است -> تایمر سکوت ریست شود
         if (silenceWatchdogTimerRef.current) {
           clearTimeout(silenceWatchdogTimerRef.current);
           silenceWatchdogTimerRef.current = null;
@@ -473,20 +516,14 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         setIsSpeechActive(true);
         setVoiceLevel(60 + Math.floor(Math.random() * 35));
 
-        const cleanInterim = interimText.trim();
         latestInterimRef.current = cleanInterim;
 
-        const currentConvertedText = appendWithoutDuplicate(
-          accumulatedFinalRef.current,
-          cleanInterim
-        ).trim();
+        if (candidateCombined) {
+          setLiveTranscript(candidateCombined);
+          setInputText(candidateCombined);
 
-        if (currentConvertedText) {
-          setLiveTranscript(currentConvertedText);
-          setInputText(currentConvertedText);
-
-          const isShortConfirm = isConfirmationUtterance(currentConvertedText);
-          const wordCount = currentConvertedText.split(/\s+/).filter(Boolean).length;
+          const isShortConfirm = isConfirmationUtterance(candidateCombined);
+          const wordCount = candidateCombined.split(/\s+/).filter(Boolean).length;
           const currentStep = draftRef.current.wizardStep;
           const isStepShortAnswer =
             (currentStep === 'ask_day' || currentStep === 'ask_time' || currentStep === 'confirm') &&
@@ -508,7 +545,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         recognitionRef.current = null;
 
         // اگر کاربر جمله‌ای گفته بود و مرورگر جلسه تشخیص را بست، بلافاصله جمله او را ثبت کن
-        if (isUserTurnActiveRef.current) {
+        if (isUserTurnActiveRef.current && !isAssistantSpeakingRef.current) {
           if (latestInterimRef.current.trim()) {
             accumulatedFinalRef.current = appendWithoutDuplicate(
               accumulatedFinalRef.current,
@@ -518,17 +555,30 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           }
           if (accumulatedFinalRef.current.trim()) {
             commitCurrentUtterance();
+            return;
           }
         }
 
-        // اگر مدال باز است و در حالت تایپ نیستیم، بدون خاموش کردن وضعیت کره، بلافاصله موتور را گرم نگه دار
-        if (isOpenRef.current && shouldKeepListeningRef.current && !showTextInputFallbackRef.current) {
+        // اگر هنوز نوبت کاربر است و کاربر در حال فکر کردن است، بدون خاموش کردن وضعیت کره، جلسه میکروفون را تمدید کن
+        if (
+          isOpenRef.current &&
+          shouldKeepListeningRef.current &&
+          isUserTurnActiveRef.current &&
+          !isAssistantSpeakingRef.current &&
+          !showTextInputFallbackRef.current
+        ) {
           if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
           reconnectTimerRef.current = setTimeout(() => {
-            if (isOpenRef.current && shouldKeepListeningRef.current && !showTextInputFallbackRef.current) {
+            if (
+              isOpenRef.current &&
+              shouldKeepListeningRef.current &&
+              isUserTurnActiveRef.current &&
+              !isAssistantSpeakingRef.current &&
+              !showTextInputFallbackRef.current
+            ) {
               ensureRecognitionEngineRunning();
             }
-          }, 20);
+          }, 25);
         } else {
           setIsListening(false);
           setIsSpeechActive(false);
@@ -540,38 +590,43 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       rec.start();
     } catch {
       recognitionRef.current = null;
+      setIsListening(false);
     }
   }, [clearTurnTimers, isEn, stopListening]);
 
   /**
-   * فعال‌سازی نوبت صحبت کاربر با تاخیر صفر (۰ میلی‌ثانیه):
-   * چون موتور SpeechRecognition از قبل روشن و گرم است، بلافاصله در همان لحظه سبز/فعال شدن کره، صدای کاربر شنیده می‌شود.
+   * شروع نوبت گوش دادن به کاربر (فقط پس از اتمام کامل صحبت گوینده):
+   * وضعیت سبز شدن گوی (setIsListening(true)) داخل rec.onstart انجام می‌شود تا وقتی گوی سبز است میکروفون ۱۰۰٪ آماده باشد.
    */
   const startListening = useCallback(() => {
-    if (!isOpenRef.current || showTextInputFallbackRef.current || typeof window === 'undefined') {
+    if (
+      !isOpenRef.current ||
+      showTextInputFallbackRef.current ||
+      isAssistantSpeakingRef.current ||
+      typeof window === 'undefined'
+    ) {
       return;
     }
 
     stopSpeaking();
     clearTurnTimers();
 
-    // علامت‌گذاری نتایج قبلی تا فقط صدای جدید کاربر در این نوبت دریافت شود
-    for (let idx = 0; idx < latestResultCountRef.current; idx++) {
-      ignoredResultIndicesRef.current.add(idx);
-      processedFinalIndicesRef.current.add(idx);
-    }
-
     accumulatedFinalRef.current = '';
     latestInterimRef.current = '';
     lastFinalChunkRef.current = '';
+    processedFinalIndicesRef.current.clear();
+    ignoredResultIndicesRef.current.clear();
     setLiveTranscript('');
 
     shouldKeepListeningRef.current = true;
     isUserTurnActiveRef.current = true;
-    setIsListening(true);
     setIsSpeechActive(false);
 
-    ensureRecognitionEngineRunning();
+    if (recognitionRef.current) {
+      setIsListening(true);
+    } else {
+      ensureRecognitionEngineRunning();
+    }
 
     // اگر تا ۱۴ ثانیه هیچ صدای مفهومی دریافت نشد، گوینده مودبانه درخواست تکرار کند (و بعد از ۳ بار کادر تایپ را باز کند)
     silenceWatchdogTimerRef.current = setTimeout(() => {
@@ -588,28 +643,29 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   }, [clearTurnTimers, ensureRecognitionEngineRunning, stopSpeaking]);
 
   /**
-   * پخش صدای گوینده در حالی که موتور میکروفون در پس‌زمینه گرم می‌ماند (صفر لگ در شروع شنیدن)
+   * پخش صدای گوینده با خاموشی ۱۰۰٪ میکروفون در حین صحبت:
+   * - قبل از شروع صدای گوینده، میکروفون به طور کامل abort و بسته می‌شود تا صدای گوینده وارد میکروفون نشود.
+   * - پس از اتمام کامل پخش صوت، ۲۴۰ میلی‌ثانیه صبر می‌کند تا انعکاس صدای اسپیکر در محیط محو شود و سپس میکروفون را باز می‌کند.
    */
   const speakPromptWithCallback = useCallback(
     (rawText: string, onDone?: () => void) => {
       const cleanText = rawText.replace(/\s+/g, ' ').trim();
+      if (cleanText) {
+        spokenPromptsHistoryRef.current = [
+          ...spokenPromptsHistoryRef.current.slice(-12),
+          cleanText,
+        ];
+      }
+
       if (!voiceEnabledRef.current || !cleanText || typeof window === 'undefined') {
         onDone?.();
         return;
       }
 
-      clearTurnTimers();
-      isUserTurnActiveRef.current = false;
-      setIsSpeechActive(false);
-      setVoiceLevel(0);
-
-      // گرم نگه داشتن موتور تشخیص گفتار در پس‌زمینه حین صحبت گوینده تا به محض اتمام جمله، بدون تاخیر بشنود
-      if (!showTextInputFallbackRef.current) {
-        shouldKeepListeningRef.current = true;
-        ensureRecognitionEngineRunning();
-      }
-
+      // ۱. خاموش کردن قطعی میکروفون قبل از شروع صحبت گوینده
+      stopListening();
       stopSpeaking();
+
       isAssistantSpeakingRef.current = true;
       setIsAssistantSpeaking(true);
 
@@ -624,18 +680,24 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             setIsAssistantSpeaking(false);
             return;
           }
-          isAssistantSpeakingRef.current = false;
-          ttsMuteUntilRef.current = Date.now() + 80;
-          setIsAssistantSpeaking(false);
 
-          // فعال‌سازی آنی دریافت صدای کاربر (۰ میلی‌ثانیه لگ چون میکروفون از قبل گرم است)
-          if (isOpenRef.current) {
-            onDone?.();
+          // ۲. محافظ آکوستیک پس از پایان صدای اسپیکر (۲۴۰ میلی‌ثانیه) تا پژواک اتاق وارد میکروفون نشود
+          ttsMuteUntilRef.current = Date.now() + 280;
+          if (ttsWaitTimerRef.current) {
+            clearTimeout(ttsWaitTimerRef.current);
           }
+          ttsWaitTimerRef.current = setTimeout(() => {
+            ttsWaitTimerRef.current = null;
+            isAssistantSpeakingRef.current = false;
+            setIsAssistantSpeaking(false);
+            if (isOpenRef.current) {
+              onDone?.();
+            }
+          }, 240);
         },
       });
     },
-    [clearTurnTimers, ensureRecognitionEngineRunning, isEn, stopSpeaking]
+    [isEn, stopListening, stopSpeaking]
   );
 
   /**
@@ -807,7 +869,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
   const wasOpenRef = useRef(false);
 
-  // هنگام باز شدن مدال: جمله خوش‌آمدگویی کوتاه و متنوع پخش شده و میکروفون از همان لحظه اول در پس‌زمینه گرم و آماده می‌شود
+  // هنگام باز شدن مدال: میکروفون در حین گویش خوش‌آمدگویی کاملاً خاموش است و فقط پس از پایان جمله گوینده فعال می‌شود
   useEffect(() => {
     if (!isOpen) {
       wasOpenRef.current = false;
@@ -820,12 +882,14 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     wasOpenRef.current = true;
 
     unlockAudio();
+    stopListening();
 
     unclearAttemptsRef.current = 0;
     showTextInputFallbackRef.current = false;
     setShowTextInputFallback(false);
 
     const initialQuestion = getSmartWelcomePrompt(isEn ? 'en' : 'fa');
+    spokenPromptsHistoryRef.current = [initialQuestion];
 
     const initialGreeting: SmartChatMessage = {
       id: 'welcome_' + Date.now(),
@@ -849,13 +913,9 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     setGpsStatus('idle');
     setGpsErrorMsg(null);
 
-    // پیش‌راه‌اندازی میکروفون همزمان با شروع خوش‌آمدگویی کوتاه تا به محض پایان جمله، بدون هیچ لگی آماده شنیدن باشد
-    shouldKeepListeningRef.current = true;
-    ensureRecognitionEngineRunning();
-
     const timer = setTimeout(() => {
       speakPromptWithCallback(initialQuestion, () => {
-        if (isOpenRef.current) {
+        if (isOpenRef.current && !showTextInputFallbackRef.current) {
           startListening();
         }
       });
@@ -865,7 +925,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       clearTimeout(timer);
     };
   }, [
-    ensureRecognitionEngineRunning,
     isOpen,
     isEn,
     speakPromptWithCallback,
@@ -887,10 +946,15 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       const trimmed = rawText.trim();
       if (!trimmed) return;
 
-      clearTurnTimers();
-      isUserTurnActiveRef.current = false;
-      setIsSpeechActive(false);
-      setVoiceLevel(0);
+      // اگر صدای دریافت‌شده اکوی خود گوینده بود، هرگز آن را به عنوان ورودی کاربر ثبت نکن
+      if (!isTyped && isEchoOfAssistantSpeech(trimmed, spokenPromptsHistoryRef.current)) {
+        if (isOpenRef.current && !showTextInputFallbackRef.current && !isAssistantSpeakingRef.current) {
+          startListening();
+        }
+        return;
+      }
+
+      stopListening();
       setInputText('');
       setLiveTranscript('');
 
@@ -960,11 +1024,11 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       }
     },
     [
-      clearTurnTimers,
       executeFinalSave,
       language,
       speakPromptWithCallback,
       startListening,
+      stopListening,
       triggerUnclearSpeechRetry,
     ]
   );
