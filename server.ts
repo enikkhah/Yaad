@@ -43,6 +43,163 @@ app.get('/api/health', (_req: Request, res: Response) => {
   res.json({ status: 'ok', time: Date.now(), folder: DEFAULT_BACKUP_FOLDER_NAME });
 });
 
+// Smart AI Voice/Text Capture endpoint (Reminder, Occasion, Location, Idea)
+app.post('/api/smart-capture', async (req: Request, res: Response) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    res.status(503).json({ ok: false, error: 'GEMINI_API_KEY not configured on server' });
+    return;
+  }
+
+  try {
+    const { messages, currentDraft, currentJalaliInfo, language = 'fa' } = req.body || {};
+    if (!Array.isArray(messages) || messages.length === 0) {
+      res.status(400).json({ ok: false, error: 'messages array is required' });
+      return;
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const systemPrompt =
+      language === 'en'
+        ? `You are a warm, friendly, conversational Smart Voice Assistant in the "Yaad" app.
+Analyze the user's speech/text in a multi-turn conversation and classify it into one of 4 sections:
+1. "reminder": tasks, appointments, meetings, medications, calls, or time-based alarms.
+   - Required fields (isComplete = true): specific subject (title) + specific time (hour and minute, plus date/offsetDays).
+   - If the user did not specify the title or the time, set isComplete = false and ask a warm, friendly, conversational English question in clarifyingQuestion about the exact missing field (e.g., "Got it! What day and what time should I remind you about this?" or "Sure thing! What is this reminder about?").
+2. "occasion": birthdays, wedding anniversaries, memorial dates, or annual calendar events.
+   - Required fields (isComplete = true): occasion title/name (title) + day (solarDay 1-31) + month (solarMonth 1-12).
+   - If the title or date is missing, set isComplete = false and ask a warm, friendly question for the missing part (e.g., "Nice! What day and month is this occasion?").
+3. "location": saving a GPS place, parked car spot, office/clinic address, or geofence.
+   - Required fields (isComplete = true): place name (title).
+   - If the place name is missing, set isComplete = false and ask: "I've got your location! What name would you like me to save this place under?"
+4. "idea": thoughts, notes, startup ideas, shopping lists, or free-form notes without an alarm time.
+   - Required fields (isComplete = true): idea title or content (title).
+
+Current user date info: ${JSON.stringify(currentJalaliInfo || {})}
+Current extracted draft so far: ${JSON.stringify(currentDraft || {})}
+
+Important rules:
+- Merge the user's new answer with currentDraft so previous fields are preserved.
+- Your clarifyingQuestion and quickSuggestions MUST be 100% in English, written in a warm, friendly, conversational tone as a complete question sentence without parentheses so it sounds natural when spoken aloud.
+- When all mandatory fields are complete (isComplete = true), state a friendly summary and ask: "Everything is ready! Should I go ahead and save this for you now?"`
+        : `شما دستیار هوشمند صوتی صمیمی و خوش‌برخورد در اپلیکیشن «یاد» هستید.
+لحن شما باید کاملاً صمیمی، گرم، دوستانه و محاوره‌ای محترمانه باشد (مثلاً از عباراتی مثل «برات ثبت کنم؟»، «ساعت چند بهت یادآوری کنم؟»، «موضوعش چیه؟»، «همه‌چی آماده است!» استفاده کنید و از جملات خشک و کتابی پرهیز کنید).
+وظیفه شما تحلیل گفتار یا متن کاربر در یک گفتگوی چندمرحله‌ای و دسته‌بندی آن در یکی از ۴ بخش زیر است:
+1. "reminder" (یادآور): کارها، قرارها، جلسات، داروها، تماس‌ها یا آلارم‌های زمانی.
+   - اطلاعات ضروری برای تکمیل (isComplete = true): عنوان مشخص (title) + زمان و ساعت مشخص (hour و minute، و تاریخ یا offsetDays).
+   - اگر کاربر عنوان یا ساعت را نگفته است، isComplete را false بگذارید و در clarifyingQuestion با لحن صمیمی و محاوره‌ای یک جمله سوالی کامل درباره همان مورد کسری بپرسید (مثلاً: «خب، برای این یادآور می‌خوای چه روزی و ساعت چند بهت خبر بدم؟» یا «ساعتش مشخص شد؛ حالا بگو موضوع این یادآور چیه تا برات ثبتش کنم؟»).
+2. "occasion" (مناسبت): تولد، سالگرد ازدواج، سالگرد آشنایی، سالگرد فوت، یا مناسبت‌های سالانه.
+   - اطلاعات ضروری برای تکمیل (isComplete = true): عنوان مناسبت (title) + روز شمسی (solarDay بین 1 تا 31) + ماه شمسی (solarMonth بین 1 تا 12).
+   - اگر عنوان یا روز و ماه مشخص نیست، isComplete را false بگذارید و با یک جمله سوالی صمیمی و محاوره‌ای فارسی همان مورد را بپرسید (مثلاً: «چه مناسبت قشنگی! دقیقاً چه روزی و چه ماهیه؟»).
+3. "location" (مکان): ذخیره موقعیت مکانی، محل پارک خودرو، آدرس مطب یا شرکت.
+   - اطلاعات ضروری برای تکمیل (isComplete = true): نام مکان (title).
+   - اگر نام مکان بیان نشده است، صمیمی بپرسید: «موقعیت مکانی رو گرفتم؛ دوست داری این مکان رو با چه اسمی برات ذخیره کنم؟».
+4. "idea" (ایده): فکر جدید، یادداشت ذهنی یا ایده بدون نیاز به آلارم ساعتی.
+   - اطلاعات ضروری برای تکمیل (isComplete = true): عنوان یا متن ایده (title).
+
+اطلاعات زمان فعلی کاربر (تقویم شمسی):
+${JSON.stringify(currentJalaliInfo || {})}
+
+پیش‌نویس فعلی تا این لحظه:
+${JSON.stringify(currentDraft || {})}
+
+قوانین بسیار مهم:
+- پیام جدید کاربر را با پیش‌نویس قبلی (currentDraft) ترکیب کنید تا اطلاعات قبلی حفظ و تکمیل شود.
+- متن clarifyingQuestion و گزینه‌های quickSuggestions باید صددرصد به زبان فارسی صمیمی و محاوره‌ای، بدون هیچ کلمه انگلیسی یا پرانتز اضافی و در قالب یک جمله سوالی کامل باشد تا در خوانش صوتی کاملاً طبیعی و دوستانه شنیده شود.
+- هنگامی که تمام ورودی‌های اجباری کامل شد (isComplete = true)، در clarifyingQuestion خلاصه را صمیمی بگویید و بپرسید: «همه‌چی آماده است! برات ثبتش کنم؟»`;
+
+    const conversationText = messages
+      .map(
+        (m: { role: string; text: string }) =>
+          `${m.role === 'user' ? (language === 'en' ? 'User' : 'کاربر') : language === 'en' ? 'Assistant' : 'دستیار'}: ${m.text}`
+      )
+      .join('\n');
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: conversationText,
+      config: {
+        systemInstruction: systemPrompt,
+        temperature: 0.3,
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            intentType: {
+              type: Type.STRING,
+              description: "One of: 'reminder', 'occasion', 'location', 'idea', 'unknown'",
+            },
+            isComplete: {
+              type: Type.BOOLEAN,
+              description: 'True only when all required fields for the chosen intentType are present and unambiguous.',
+            },
+            shouldAutoSubmit: {
+              type: Type.BOOLEAN,
+              description: 'True if the user explicitly confirmed saving an already complete draft.',
+            },
+            clarifyingQuestion: {
+              type: Type.STRING,
+              description: 'Warm, friendly, conversational interrogative question in the requested language (Persian if fa, English if en).',
+            },
+            quickSuggestions: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: '2 to 4 short clickable reply chips in the requested language.',
+            },
+            draft: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING },
+                description: { type: Type.STRING },
+                category: { type: Type.STRING, description: "'work', 'family', or 'other'" },
+                priority: { type: Type.STRING, description: "'high', 'medium', or 'low'" },
+                offsetDays: {
+                  type: Type.INTEGER,
+                  description: '0 for today, 1 for tomorrow, 2 for day after tomorrow, etc. Null/-1 if explicit solar date used.',
+                },
+                hour: { type: Type.INTEGER, description: '0-23 hour for reminder, or -1 if not specified yet' },
+                minute: { type: Type.INTEGER, description: '0-59 minute for reminder, or -1 if not specified yet' },
+                solarYear: { type: Type.INTEGER, description: 'Jalali year if mentioned, else 0' },
+                solarMonth: { type: Type.INTEGER, description: '1-12 Jalali month if mentioned, else 0' },
+                solarDay: { type: Type.INTEGER, description: '1-31 Jalali day if mentioned, else 0' },
+                occasionType: {
+                  type: Type.STRING,
+                  description: "'birthday', 'wedding', 'dating', 'memorial', 'family', 'work', or 'custom'",
+                },
+                personName: { type: Type.STRING },
+                locationAddress: { type: Type.STRING },
+                enableGeofence: { type: Type.BOOLEAN },
+                recurrence: {
+                  type: Type.STRING,
+                  description: "'none', 'hourly', 'daily', 'weekly', 'monthly'",
+                },
+              },
+            },
+          },
+          required: ['intentType', 'isComplete', 'clarifyingQuestion', 'quickSuggestions', 'draft'],
+        },
+      },
+    });
+
+    const rawText = response.text || '{}';
+    const parsed = JSON.parse(rawText);
+    res.json({ ok: true, result: parsed });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      error: err?.message || 'Smart capture AI analysis failed',
+    });
+  }
+});
+
 const TTS_CACHE_DIR = path.resolve(process.cwd(), 'public', 'tts-cache');
 try {
   if (!fs.existsSync(TTS_CACHE_DIR)) {
@@ -303,281 +460,157 @@ function getPresetWavPath(cleanText: string, language: string): string | null {
   const norm = cleanText.replace(/\s+/g, ' ').trim();
   const lower = norm.toLowerCase();
 
-  const resolveIfExists = (fileName: string): string | null => {
-    const p = path.join(TTS_CACHE_DIR, fileName);
-    return fs.existsSync(p) ? p : null;
+  const resolveFirstExisting = (...fileNames: string[]): string | null => {
+    for (const f of fileNames) {
+      const p = path.join(TTS_CACHE_DIR, f);
+      if (fs.existsSync(p)) return p;
+    }
+    return null;
   };
 
   if (language !== 'en') {
     if (norm.includes('بفرمایید ثبت کنم')) {
-      return resolveIfExists('welcome_1_fa.wav') || resolveIfExists('welcome_fa.wav');
+      return resolveFirstExisting('welcome_1_fa.wav', 'welcome_fa.wav');
     }
     if (norm.includes('بفرمایید، منتظرم') || norm.includes('بفرمایید منتظرم')) {
-      return resolveIfExists('welcome_2_fa.wav') || resolveIfExists('welcome_fa.wav');
+      return resolveFirstExisting('welcome_2_fa.wav', 'welcome_1_fa.wav', 'welcome_fa.wav');
     }
     if (norm.includes('در خدمتم، بفرمایید') || norm.includes('در خدمتم بفرمایید')) {
-      return resolveIfExists('welcome_3_fa.wav') || resolveIfExists('welcome_fa.wav');
+      return resolveFirstExisting('welcome_3_fa.wav', 'welcome_1_fa.wav', 'welcome_fa.wav');
     }
     if (
       norm.includes('چه یادآور، مناسبت، مکان یا ایده‌ای') ||
       norm.includes('لطفاً بفرمایید چه موردی را ثبت کنم')
     ) {
-      return resolveIfExists('welcome_1_fa.wav') || resolveIfExists('welcome_fa.wav');
+      return resolveFirstExisting('welcome_1_fa.wav', 'welcome_fa.wav');
     }
-    if (norm.includes('همین پایین تایپ کنید') || norm.includes('لطفا تایپ کنید')) {
-      return resolveIfExists('retry_max_fa.wav') || resolveIfExists('retry_1_fa.wav');
+    if (norm.includes('متوجه نشدم') && norm.includes('یک بار دیگه')) {
+      return resolveFirstExisting('retry_1_fa.wav', 'ask_subject_fa.wav');
     }
-    if (norm.includes('صداتون واضح نبود') || norm.includes('دوباره بفرمایید')) {
-      return resolveIfExists('retry_2_fa.wav') || resolveIfExists('retry_1_fa.wav');
+    if (norm.includes('صداتون واضح نبود') || norm.includes('دوباره بگید')) {
+      return resolveFirstExisting('retry_2_fa.wav', 'retry_1_fa.wav', 'ask_subject_fa.wav');
     }
-    if (norm.includes('متوجه نشدم') || norm.includes('یه بار دیگه بگید')) {
-      return resolveIfExists('retry_1_fa.wav');
+    if (norm.includes('ببخشید') && norm.includes('تکرار کنید')) {
+      return resolveFirstExisting('retry_3_fa.wav', 'retry_1_fa.wav', 'ask_subject_fa.wav');
+    }
+    if (norm.includes('در کادر پایین تایپ کنید') || norm.includes('تایپ کنید')) {
+      return resolveFirstExisting('retry_type_fa.wav', 'ask_edit_fa.wav');
     }
     if (norm.includes('کدام بخش') && norm.includes('تغییر دهید')) {
-      return resolveIfExists('ask_edit_fa.wav');
+      return resolveFirstExisting('ask_edit_fa.wav');
     }
-    if (norm.includes('در چه روز و چه ماهی است') || norm.includes('چه روز و چه ماهیه')) {
-      return resolveIfExists('ask_occasion_date_fa.wav');
+    if (norm.includes('در چه روز و چه ماهی است')) {
+      return resolveFirstExisting('ask_occasion_date_fa.wav');
     }
-    if (norm.includes('برای کدوم روز تنظیمش کنم')) {
-      return resolveIfExists('ask_day_2_fa.wav') || resolveIfExists('ask_day_fa.wav');
+    if (norm.includes('برای چه روزی تنظیمش کنم')) {
+      return resolveFirstExisting('ask_day_1_fa.wav', 'ask_day_fa.wav');
     }
-    if (norm.includes('کی بهتون یادآوری کنم')) {
-      return resolveIfExists('ask_day_3_fa.wav') || resolveIfExists('ask_day_fa.wav');
+    if (norm.includes('چه روزی بهتون یادآوری کنم')) {
+      return resolveFirstExisting('ask_day_2_fa.wav', 'ask_day_1_fa.wav', 'ask_day_fa.wav');
     }
-    if (
-      norm.includes('چه روزی یادتون بندازم') ||
-      norm.includes('در چه روزی به شما یادآوری شود')
-    ) {
-      return resolveIfExists('ask_day_1_fa.wav') || resolveIfExists('ask_day_fa.wav');
+    if (norm.includes('کدوم روز یادتون بندازم')) {
+      return resolveFirstExisting('ask_day_3_fa.wav', 'ask_day_1_fa.wav', 'ask_day_fa.wav');
     }
-    if (norm.includes('آلارمش روی چه ساعتی باشه')) {
-      return resolveIfExists('ask_time_2_fa.wav') || resolveIfExists('ask_time_fa.wav');
+    if (norm.includes('در چه روزی به شما یادآوری شود')) {
+      return resolveFirstExisting('ask_day_1_fa.wav', 'ask_day_fa.wav');
     }
-    if (norm.includes('چه ساعتی بهتون خبر بدم')) {
-      return resolveIfExists('ask_time_3_fa.wav') || resolveIfExists('ask_time_fa.wav');
+    if (norm.includes('ساعت چند زنگ بزنه')) {
+      return resolveFirstExisting('ask_time_1_fa.wav', 'ask_time_fa.wav');
     }
-    if (norm.includes('ساعت چند یادآوری کنم') || norm.includes('چه ساعتی برای آلارم')) {
-      return resolveIfExists('ask_time_1_fa.wav') || resolveIfExists('ask_time_fa.wav');
+    if (norm.includes('چه ساعتی خبرتون کنم')) {
+      return resolveFirstExisting('ask_time_2_fa.wav', 'ask_time_1_fa.wav', 'ask_time_fa.wav');
+    }
+    if (norm.includes('برای چه ساعتی تنظیم بشه')) {
+      return resolveFirstExisting('ask_time_3_fa.wav', 'ask_time_1_fa.wav', 'ask_time_fa.wav');
+    }
+    if (norm.includes('چه ساعتی برای آلارم')) {
+      return resolveFirstExisting('ask_time_fa.wav');
     }
     if (norm.includes('با موقعیت زنده GPS آماده است') || norm.includes('هشدار ورود فعال شود')) {
-      return resolveIfExists('ask_location_details_fa.wav');
+      return resolveFirstExisting('ask_location_details_fa.wav');
     }
     if (norm.includes('توضیح تکمیلی برای این ایده دارید')) {
-      return resolveIfExists('ask_idea_details_fa.wav');
+      return resolveFirstExisting('ask_idea_details_fa.wav');
     }
-    if (norm.includes('مورد تاییده که ثبت بشه')) {
-      return resolveIfExists('ask_confirm_2_fa.wav') || resolveIfExists('ask_confirm_fa.wav');
+    if (norm.includes('همه‌چی آماده است؛ ثبتش کنم') || norm.includes('ثبتش کنم؟')) {
+      return resolveFirstExisting('ask_confirm_1_fa.wav', 'ask_confirm_fa.wav');
+    }
+    if (norm.includes('مورد تاییده تا ثبت بشه')) {
+      return resolveFirstExisting('ask_confirm_2_fa.wav', 'ask_confirm_1_fa.wav', 'ask_confirm_fa.wav');
+    }
+    if (norm.includes('اطلاعات کامل شد؛ ذخیره کنم') || norm.includes('ذخیره کنم؟')) {
+      return resolveFirstExisting('ask_confirm_3_fa.wav', 'ask_confirm_1_fa.wav', 'ask_confirm_fa.wav');
     }
     if (
-      norm.includes('ثبتش کنم؟') ||
       norm.includes('آیا مورد تایید است تا ثبت شود') ||
       norm.includes('آماده ذخیره است. آیا مورد تایید است')
     ) {
-      return resolveIfExists('ask_confirm_1_fa.wav') || resolveIfExists('ask_confirm_fa.wav');
+      return resolveFirstExisting('ask_confirm_1_fa.wav', 'ask_confirm_fa.wav');
     }
     if (
-      norm.includes('موضوع یا عنوان یادآور') ||
-      norm.includes('عنوان این مناسبت را بفرمایید') ||
-      norm.includes('نام این مکان را بفرمایید') ||
-      norm.includes('عنوان یا موضوع ایده‌ی خود را بفرمایید')
+      norm.includes('موضوع یادآور') ||
+      norm.includes('عنوان این مناسبت') ||
+      norm.includes('نام این مکان') ||
+      norm.includes('موضوع ایده‌')
     ) {
-      return resolveIfExists('ask_subject_fa.wav');
+      return resolveFirstExisting('ask_subject_fa.wav');
     }
     return null;
   }
 
   if (
-    lower.includes('go ahead, i am ready') ||
-    lower.includes('go ahead, i am listening') ||
+    lower.includes("go ahead, i'm ready") ||
+    lower.includes("please tell me, i'm listening") ||
+    lower.includes('what can i save for you') ||
     lower.includes('what reminder, occasion, location, or idea') ||
     lower.includes('what would you like to save')
   ) {
-    return resolveIfExists('welcome_en.wav');
+    return resolveFirstExisting('welcome_en.wav');
   }
   if (lower.includes('which part you would like to change')) {
-    return resolveIfExists('ask_edit_en.wav');
+    return resolveFirstExisting('ask_edit_en.wav');
   }
   if (lower.includes('on what day and month is')) {
-    return resolveIfExists('ask_occasion_date_en.wav');
+    return resolveFirstExisting('ask_occasion_date_en.wav');
   }
   if (
-    lower.includes('on which day or date') ||
-    lower.includes('which day should i remind you') ||
-    lower.includes('for which day should i set')
+    lower.includes('for which day should i set') ||
+    lower.includes('what day should i remind you') ||
+    lower.includes('which day works for') ||
+    lower.includes('on which day or date would you like me to remind you')
   ) {
-    return resolveIfExists('ask_day_en.wav');
+    return resolveFirstExisting('ask_day_en.wav');
   }
   if (
-    lower.includes('what time should i set the alarm') ||
-    lower.includes('what time should i remind you')
+    lower.includes('at what time') ||
+    lower.includes('what time should the alarm ring') ||
+    lower.includes('what time should i set')
   ) {
-    return resolveIfExists('ask_time_en.wav');
+    return resolveFirstExisting('ask_time_en.wav');
   }
-  if (lower.includes('would you like to add a note or enable arrival alert')) {
-    return resolveIfExists('ask_location_details_en.wav');
+  if (lower.includes('would you like to add a note')) {
+    return resolveFirstExisting('ask_location_details_en.wav');
   }
   if (lower.includes('if you have any additional details, please share them now')) {
-    return resolveIfExists('ask_idea_details_en.wav');
+    return resolveFirstExisting('ask_idea_details_en.wav');
   }
   if (
+    lower.includes('should i save it') ||
     lower.includes('do you confirm saving it') ||
-    lower.includes('do you confirm?') ||
-    lower.includes('should i save it?')
+    lower.includes('do you confirm?')
   ) {
-    return resolveIfExists('ask_confirm_en.wav');
+    return resolveFirstExisting('ask_confirm_en.wav');
   }
   if (
-    lower.includes('subject or title of your reminder') ||
+    lower.includes('subject of your reminder') ||
     lower.includes('title of this occasion') ||
     lower.includes('save this location under') ||
-    lower.includes('title or subject of your idea')
+    lower.includes('subject of your idea')
   ) {
-    return resolveIfExists('ask_subject_en.wav');
+    return resolveFirstExisting('ask_subject_en.wav');
   }
   return null;
 }
-
-// Fast Server-Side Speech-to-Text endpoint with strict acoustic VAD to prevent noise hallucination
-app.post('/api/smart-stt', async (req: Request, res: Response) => {
-  try {
-    const { audioBase64, mimeType = 'audio/wav', language = 'fa' } = req.body || {};
-    if (!audioBase64 || typeof audioBase64 !== 'string') {
-      res.status(400).json({ ok: false, error: 'audioBase64 is required' });
-      return;
-    }
-
-    // 1. Acoustic verification on raw 16-bit PCM samples before calling LLM
-    const wavBuf = Buffer.from(audioBase64, 'base64');
-    if (wavBuf.length <= 640) {
-      res.json({ ok: true, transcript: '', isUnclear: true });
-      return;
-    }
-
-    const pcmOffset =
-      wavBuf.length > 44 && wavBuf.subarray(0, 4).toString('ascii') === 'RIFF' ? 44 : 0;
-    const totalSamples = Math.floor((wavBuf.length - pcmOffset) / 2);
-    if (totalSamples < 4000) {
-      // Less than 250ms at 16kHz -> too short to be a spoken command
-      res.json({ ok: true, transcript: '', isUnclear: true });
-      return;
-    }
-
-    const frameSize = 320; // 20ms at 16kHz
-    let maxPeak = 0;
-    let voicedFrames = 0;
-    const totalFrames = Math.floor(totalSamples / frameSize);
-
-    for (let f = 0; f < totalFrames; f++) {
-      let sumSq = 0;
-      let zeroCrossings = 0;
-      let prevSample = 0;
-      const baseIdx = pcmOffset + f * frameSize * 2;
-      for (let i = 0; i < frameSize; i++) {
-        const s = wavBuf.readInt16LE(baseIdx + i * 2);
-        const abs = Math.abs(s);
-        if (abs > maxPeak) maxPeak = abs;
-        sumSq += s * s;
-        if (i > 0 && ((s >= 0 && prevSample < 0) || (s < 0 && prevSample >= 0))) {
-          zeroCrossings++;
-        }
-        prevSample = s;
-      }
-      const frameRms = Math.sqrt(sumSq / frameSize);
-      // Human voice at 16kHz has strong energy (frameRms >= 1100) and moderate zero-crossings (not pure high-freq hiss)
-      if (frameRms >= 1100 && zeroCrossings >= 4 && zeroCrossings <= 130) {
-        voicedFrames++;
-      }
-    }
-
-    // Reject background noise, clicks, or faint room hiss before calling Gemini
-    if (maxPeak < 2600 || voicedFrames < 10) {
-      res.json({ ok: true, transcript: '', isUnclear: true });
-      return;
-    }
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
-      res.status(503).json({ ok: false, error: 'GEMINI_API_KEY not configured' });
-      return;
-    }
-
-    const ai = new GoogleGenAI({
-      apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-
-    const isEn = language === 'en';
-    const sttInstruction = isEn
-      ? 'Transcribe the exact English words spoken by the human voice in this audio. Do NOT guess, invent, or complete sentences. If the audio does not contain clear intelligible human speech, set isClearSpeech to false and transcript to empty string.'
-      : 'فقط کلمات دقیقی که با صدای انسان در این فایل صوتی به زبان فارسی گفته شده را بنویس. به هیچ عنوان از خودت جمله‌ای حدس نزن و نساز. اگر صدای انسان واضح نیست یا فقط نویز و سکوت است، isClearSpeech را false و transcript را رشته خالی بگذار.';
-
-    const sttModels = ['gemini-3.1-flash-lite', 'gemini-3-flash-preview', 'gemini-3.8-flash'];
-    for (const modelName of sttModels) {
-      try {
-        const resp: any = await Promise.race([
-          ai.models.generateContent({
-            model: modelName,
-            contents: [
-              {
-                parts: [
-                  { inlineData: { data: audioBase64, mimeType } },
-                  { text: sttInstruction },
-                ],
-              },
-            ],
-            config: {
-              temperature: 0,
-              responseMimeType: 'application/json',
-              responseSchema: {
-                type: Type.OBJECT,
-                properties: {
-                  isClearSpeech: { type: Type.BOOLEAN },
-                  transcript: { type: Type.STRING },
-                },
-                required: ['isClearSpeech', 'transcript'],
-              },
-            },
-          }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('STT_TIMEOUT')), 4200)),
-        ]);
-
-        const parsed = JSON.parse(resp?.text || '{}');
-        const rawOut = String(parsed?.transcript || '')
-          .trim()
-          .replace(/^["'«»]+|["'«»]+$/g, '')
-          .trim();
-
-        // Filter out known generic LLM hallucinations or echo of the assistant's own prompt
-        const isEchoOrHallucination =
-          !parsed?.isClearSpeech ||
-          !rawOut ||
-          /^unclear$/i.test(rawOut) ||
-          /^(نامفهوم|سکوت|نویز|متوجه نشدم)$/i.test(rawOut) ||
-          /سلام.*بفرمایید.*(ثبت کنم|منتظرم)/i.test(rawOut) ||
-          /یادآوری کن فردا ساعت ۱۰ صبح جلسه دارم/i.test(rawOut) ||
-          /فردا ساعت نه صبح به من یادآوری کن که برم دکتر/i.test(rawOut);
-
-        res.json({
-          ok: true,
-          transcript: isEchoOrHallucination ? '' : rawOut,
-          isUnclear: isEchoOrHallucination,
-        });
-        return;
-      } catch {
-        // try next model
-      }
-    }
-
-    res.json({ ok: true, transcript: '', isUnclear: true });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: err?.message || 'STT failed' });
-  }
-});
 
 // Server-side TTS endpoint for Persian ('fa') & English ('en') spoken questions across all 5 voice personas
 app.post('/api/smart-tts', async (req: Request, res: Response) => {

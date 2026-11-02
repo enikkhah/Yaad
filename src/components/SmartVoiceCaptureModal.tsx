@@ -23,16 +23,16 @@ import {
 } from '../utils/audio';
 import { requestLocationPermission, markPermissionGranted } from '../utils/nativePermissions';
 import { saveLastKnownPosition } from '../utils/geofenceManager';
+import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 import {
   SmartCaptureDraft,
   SmartChatMessage,
   analyzeSmartCaptureTurn,
   computeReminderTimestampFromDraft,
-  formatDraftDayLabel,
+  getSmartRetryPrompt,
+  getSmartTypeFallbackPrompt,
+  getSmartWelcomePrompt,
   isConfirmationUtterance,
-  isMeaningfulStepInput,
-  pickInitialGreeting,
-  pickUnclearRetryPrompt,
 } from '../utils/smartCaptureAi';
 
 interface SmartVoiceCaptureModalProps {
@@ -54,85 +54,6 @@ interface SmartVoiceCaptureModalProps {
   micBaseFrequencyHz?: number;
 }
 
-/**
- * تبدیل آرایه‌ای از قطعات PCM 16-bit (نرخ ۱۶ کیلوهرتز) به رشته Base64 با هدر استاندارد WAV
- */
-function encodePcmChunksToWavBase64(chunks: Int16Array[], sampleRate = 16000): string {
-  let totalSamples = 0;
-  for (const c of chunks) totalSamples += c.length;
-
-  const dataSize = totalSamples * 2;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  const writeStr = (offset: number, str: string) => {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
-    }
-  };
-
-  writeStr(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeStr(8, 'WAVE');
-  writeStr(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeStr(36, 'data');
-  view.setUint32(40, dataSize, true);
-
-  let offset = 44;
-  for (const chunk of chunks) {
-    for (let i = 0; i < chunk.length; i++) {
-      view.setInt16(offset, chunk[i], true);
-      offset += 2;
-    }
-  }
-
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  const step = 0x8000;
-  for (let i = 0; i < bytes.length; i += step) {
-    binary += String.fromCharCode.apply(
-      null,
-      Array.from(bytes.subarray(i, Math.min(i + step, bytes.length)))
-    );
-  }
-  return window.btoa(binary);
-}
-
-/**
- * کاهش نرخ نمونه‌برداری (Downsampling) از نرخ کارت صدا (۴۴.۱ یا ۴۸ کیلوهرتز) به ۱۶ کیلوهرتز ۱۶ بیتی
- */
-function downsampleFloat32ToInt16(
-  input: Float32Array,
-  inRate: number,
-  outRate = 16000
-): Int16Array {
-  if (inRate <= outRate) {
-    const out = new Int16Array(input.length);
-    for (let i = 0; i < input.length; i++) {
-      const s = Math.max(-1, Math.min(1, input[i]));
-      out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-    }
-    return out;
-  }
-  const ratio = inRate / outRate;
-  const outLength = Math.max(1, Math.floor(input.length / ratio));
-  const out = new Int16Array(outLength);
-  for (let i = 0; i < outLength; i++) {
-    const pos = i * ratio;
-    const idx = Math.floor(pos);
-    const s = Math.max(-1, Math.min(1, input[idx] || 0));
-    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
-  }
-  return out;
-}
-
 export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   isOpen,
   onClose,
@@ -143,6 +64,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   language = 'fa',
   aiVoicePersona = 'zephyr_warm',
   aiVoiceVolume = 1.0,
+  ttsVoiceRate = 0.95,
   micSensitivity = 75,
 }) => {
   const isEn = language === 'en';
@@ -158,40 +80,31 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   const [isAssistantSpeaking, setIsAssistantSpeaking] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [voiceFeedbackEnabled, setVoiceFeedbackEnabled] = useState(true);
-  const [showFallbackTypeBox, setShowFallbackTypeBox] = useState(false);
+  const [showTextInputFallback, setShowTextInputFallback] = useState(false);
 
   // Real live GPS state (strictly live hardware GPS with maximumAge: 0; never cached or mock coordinates)
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number; accuracy?: number } | null>(null);
   const [gpsStatus, setGpsStatus] = useState<'idle' | 'fetching' | 'ready' | 'error'>('idle');
   const [gpsErrorMsg, setGpsErrorMsg] = useState<string | null>(null);
 
-  // Persistent Continuous MediaStream & Audio Pipeline refs (ChatGPT Voice Architecture)
-  const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const processorNodeRef = useRef<ScriptProcessorNode | null>(null);
-
-  // Persistent Continuous Web Speech API refs (0ms lag, live word-by-word Persian caption)
+  // Persistent SpeechRecognition refs (ChatGPT Voice Mode: single continuous warm session, 0ms turn latency)
   const recognitionRef = useRef<any>(null);
-  const consumedResultCountRef = useRef<number>(0);
-  const latestResultsLenRef = useRef<number>(0);
-  const webSpeechTextRef = useRef<string>('');
-  const webSpeechCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shouldKeepListeningRef = useRef<boolean>(false);
+  const isUserTurnActiveRef = useRef<boolean>(false);
+  const isAssistantSpeakingRef = useRef<boolean>(false);
+  const ttsMuteUntilRef = useRef<number>(0);
+  const unclearAttemptsRef = useRef<number>(0);
+  const showTextInputFallbackRef = useRef<boolean>(false);
 
-  // Listening Gate & Ring Buffer refs (0ms startup latency, 650ms pre-roll, strict acoustic VAD)
-  const isListeningGateOpenRef = useRef<boolean>(false);
-  const isCapturingUtteranceRef = useRef<boolean>(false);
-  const isProcessingTurnRef = useRef<boolean>(false);
-  const preRollChunksRef = useRef<Int16Array[]>([]);
-  const capturedPcmChunksRef = useRef<Int16Array[]>([]);
-  const voicedFramesCountRef = useRef<number>(0);
-  const utterancePeakSampleRef = useRef<number>(0);
-  const speechStartedAtRef = useRef<number>(0);
-  const lastVoiceDetectedAtRef = useRef<number>(0);
-  const gateOpenedAtRef = useRef<number>(0);
-  const noiseFloorRmsRef = useRef<number>(1.8);
-  const unclearRetryCountRef = useRef<number>(0);
+  const accumulatedFinalRef = useRef<string>('');
+  const latestInterimRef = useRef<string>('');
+  const lastFinalChunkRef = useRef<string>('');
+  const processedFinalIndicesRef = useRef<Set<number>>(new Set());
+  const ignoredResultIndicesRef = useRef<Set<number>>(new Set());
+  const latestResultCountRef = useRef<number>(0);
 
-  const typeInputRef = useRef<HTMLInputElement | null>(null);
+  const handleUserUtteranceRef = useRef<(text: string, isTyped?: boolean) => void>(() => {});
+  const handleSilenceOrUnclearTimeoutRef = useRef<() => void>(() => {});
   const isOpenRef = useRef(isOpen);
   const messagesRef = useRef<SmartChatMessage[]>(messages);
   const draftRef = useRef(draft);
@@ -201,9 +114,13 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
   const micSensitivityRef = useRef<number>(micSensitivity);
   const aiVoicePersonaRef = useRef<AiVoicePersona>(aiVoicePersona);
   const aiVoiceVolumeRef = useRef<number>(aiVoiceVolume);
+  const ttsVoiceRateRef = useRef<number>(ttsVoiceRate);
+
+  const speechDoneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ttsWaitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const processCapturedAudioRef = useRef<(chunks: Int16Array[]) => void>(() => {});
-  const commitWebSpeechTranscriptRef = useRef<(text: string) => void>(() => {});
+  const silenceWatchdogTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const textInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     isOpenRef.current = isOpen;
@@ -241,398 +158,32 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     aiVoiceVolumeRef.current = aiVoiceVolume;
   }, [aiVoiceVolume]);
 
-  /**
-   * راه‌اندازی یکپارچه و پیوسته Web Speech API با continuous=true
-   * تا در پس‌زمینه گرم شود، هیچ تاخیر شروعی نداشته باشد و دقیقاً کلمات کاربر را زنده بنویسد.
-   */
-  const ensurePersistentWebSpeech = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    const SpeechRec =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRec) return;
+  useEffect(() => {
+    ttsVoiceRateRef.current = ttsVoiceRate;
+  }, [ttsVoiceRate]);
 
-    if (recognitionRef.current) return;
-
-    try {
-      const rec = new SpeechRec();
-      rec.lang = isEn ? 'en-US' : 'fa-IR';
-      rec.continuous = true;
-      rec.interimResults = true;
-      rec.maxAlternatives = 3;
-
-      rec.onresult = (event: any) => {
-        if (!isOpenRef.current) return;
-        latestResultsLenRef.current = event.results.length;
-
-        // اگر دریچه شنود بسته است (گوینده در حال صحبت است)، اشاره‌گر نتایج مصرف‌شده را جلو ببر تا صدای گوینده ثبت نشود
-        if (!isListeningGateOpenRef.current || isProcessingTurnRef.current) {
-          consumedResultCountRef.current = event.results.length;
-          return;
-        }
-
-        let combined = '';
-        let hasFinalInTurn = false;
-        const startIdx = Math.min(consumedResultCountRef.current, event.results.length);
-        for (let i = startIdx; i < event.results.length; i++) {
-          const res = event.results[i];
-          const chunk = (res[0]?.transcript || '').trim();
-          if (chunk) {
-            combined += (combined ? ' ' : '') + chunk;
-            if (res.isFinal) hasFinalInTurn = true;
-          }
-        }
-
-        const cleaned = combined.replace(/\s+/g, ' ').trim();
-        if (!cleaned) return;
-
-        webSpeechTextRef.current = cleaned;
-        setLiveTranscript(cleaned);
-        setIsSpeechActive(true);
-        lastVoiceDetectedAtRef.current = Date.now();
-
-        if (webSpeechCommitTimerRef.current) {
-          clearTimeout(webSpeechCommitTimerRef.current);
-        }
-
-        const step = draftRef.current.wizardStep;
-        const waitMs = hasFinalInTurn
-          ? step === 'confirm' || step === 'ask_day' || step === 'ask_time'
-            ? 650
-            : 820
-          : 1250;
-
-        webSpeechCommitTimerRef.current = setTimeout(() => {
-          if (!isOpenRef.current || !isListeningGateOpenRef.current || isProcessingTurnRef.current) {
-            return;
-          }
-          const finalTxt = webSpeechTextRef.current.trim();
-          if (finalTxt) {
-            consumedResultCountRef.current = latestResultsLenRef.current;
-            webSpeechTextRef.current = '';
-            commitWebSpeechTranscriptRef.current(finalTxt);
-          }
-        }, waitMs);
-      };
-
-      rec.onerror = (err: any) => {
-        const code = err?.error || '';
-        if (code === 'not-allowed' || code === 'service-not-allowed') {
-          recognitionRef.current = null;
-        }
-      };
-
-      rec.onend = () => {
-        if (!isOpenRef.current) {
-          recognitionRef.current = null;
-          return;
-        }
-        // اگر مرورگر بعد از سکوت طولانی نشست را بست، بی‌صدا آن را باز نگه دار
-        try {
-          consumedResultCountRef.current = 0;
-          latestResultsLenRef.current = 0;
-          rec.start();
-        } catch {
-          recognitionRef.current = null;
-        }
-      };
-
-      recognitionRef.current = rec;
-      consumedResultCountRef.current = 0;
-      latestResultsLenRef.current = 0;
-      rec.start();
-    } catch {
-      recognitionRef.current = null;
+  useEffect(() => {
+    showTextInputFallbackRef.current = showTextInputFallback;
+    if (showTextInputFallback) {
+      setTimeout(() => {
+        textInputRef.current?.focus();
+      }, 80);
     }
-  }, [isEn]);
+  }, [showTextInputFallback]);
 
-  /**
-   * بستن کامل استریم میکروفون فقط هنگام بسته شدن پنجره ثبت هوشمند
-   */
-  const destroyContinuousMicStream = useCallback(() => {
-    isListeningGateOpenRef.current = false;
-    isCapturingUtteranceRef.current = false;
-    preRollChunksRef.current = [];
-    capturedPcmChunksRef.current = [];
-    webSpeechTextRef.current = '';
-    consumedResultCountRef.current = 0;
-    latestResultsLenRef.current = 0;
-
-    if (webSpeechCommitTimerRef.current) {
-      clearTimeout(webSpeechCommitTimerRef.current);
-      webSpeechCommitTimerRef.current = null;
+  const clearTurnTimers = useCallback(() => {
+    if (speechDoneTimerRef.current) {
+      clearTimeout(speechDoneTimerRef.current);
+      speechDoneTimerRef.current = null;
     }
-
-    if (recognitionRef.current) {
-      try {
-        const r = recognitionRef.current;
-        recognitionRef.current = null;
-        r.onend = null;
-        r.onresult = null;
-        r.onerror = null;
-        r.abort();
-      } catch {
-        // ignore
-      }
-    }
-
-    if (processorNodeRef.current) {
-      try {
-        processorNodeRef.current.onaudioprocess = null;
-        processorNodeRef.current.disconnect();
-      } catch {
-        // ignore
-      }
-      processorNodeRef.current = null;
-    }
-    if (mediaStreamRef.current) {
-      try {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      } catch {
-        // ignore
-      }
-      mediaStreamRef.current = null;
-    }
-    if (audioCtxRef.current) {
-      try {
-        audioCtxRef.current.close().catch(() => {});
-      } catch {
-        // ignore
-      }
-      audioCtxRef.current = null;
-    }
-
-    setIsListening(false);
-    setIsSpeechActive(false);
-    setVoiceLevel(0);
-  }, []);
-
-  /**
-   * بستن موقت دریچه شنود (در زمان صحبت گوینده یا پردازش) بدون قطع کردن خط میکروفون
-   * تا هیچ بوقی زده نشود و در مرحله بعد در 0 میلی‌ثانیه آماده شنیدن باشد.
-   */
-  const pauseListeningGate = useCallback(() => {
-    isListeningGateOpenRef.current = false;
-    isCapturingUtteranceRef.current = false;
-    preRollChunksRef.current = [];
-    capturedPcmChunksRef.current = [];
-    voicedFramesCountRef.current = 0;
-    utterancePeakSampleRef.current = 0;
-    webSpeechTextRef.current = '';
-    consumedResultCountRef.current = latestResultsLenRef.current;
-    if (webSpeechCommitTimerRef.current) {
-      clearTimeout(webSpeechCommitTimerRef.current);
-      webSpeechCommitTimerRef.current = null;
-    }
-    setIsListening(false);
-    setIsSpeechActive(false);
-    setVoiceLevel(0);
-  }, []);
-
-  /**
-   * راه‌اندازی خط میکروفون یکپارچه و همیشه باز (مشابه ChatGPT Voice)
-   * با بافر پیش‌ضبط ۶۵۰ میلی‌ثانیه‌ای (Pre-Roll Ring Buffer) و تشخیص دقیق صدای واقعی انسان
-   */
-  const ensureContinuousMicStream = useCallback(async (): Promise<boolean> => {
-    if (typeof window === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-      return false;
-    }
-
-    if (mediaStreamRef.current && audioCtxRef.current && processorNodeRef.current) {
-      if (audioCtxRef.current.state === 'suspended') {
-        await audioCtxRef.current.resume().catch(() => {});
-      }
-      return true;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-          channelCount: 1,
-        },
-      });
-
-      if (!isOpenRef.current) {
-        stream.getTracks().forEach((t) => t.stop());
-        return false;
-      }
-
-      markPermissionGranted('microphone');
-      mediaStreamRef.current = stream;
-
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      const audioCtx: AudioContext = new AudioCtx();
-      audioCtxRef.current = audioCtx;
-
-      const source = audioCtx.createMediaStreamSource(stream);
-      const processor = audioCtx.createScriptProcessor(2048, 1, 1);
-      processorNodeRef.current = processor;
-
-      const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0;
-
-      source.connect(processor);
-      processor.connect(silentGain);
-      silentGain.connect(audioCtx.destination);
-
-      const inRate = audioCtx.sampleRate || 48000;
-      const maxPreRollChunks = 15;
-
-      processor.onaudioprocess = (event: AudioProcessingEvent) => {
-        if (!isOpenRef.current) return;
-
-        // اگر دریچه شنود بسته است (گوینده در حال صحبت است)، بافر را خالی نگه دار تا صدای گوینده ضبط نشود
-        if (!isListeningGateOpenRef.current || isProcessingTurnRef.current) {
-          preRollChunksRef.current = [];
-          return;
-        }
-
-        const now = Date.now();
-        // محافظ ۲۲۰ میلی‌ثانیه‌ای پس از پایان صدای گوینده برای جلوگیری از ضبط پژواک اسپیکر
-        if (now - gateOpenedAtRef.current < 220) {
-          return;
-        }
-
-        const inputData = event.inputBuffer.getChannelData(0);
-        const pcm16 = downsampleFloat32ToInt16(inputData, inRate, 16000);
-
-        // ۱. محاسبه انرژی لحظه‌ای سیگنال (RMS) و بیشینه دامنه نمونه (Peak)
-        let sumSq = 0;
-        let chunkPeak = 0;
-        for (let i = 0; i < pcm16.length; i++) {
-          const abs = Math.abs(pcm16[i]);
-          if (abs > chunkPeak) chunkPeak = abs;
-          const norm = pcm16[i] / 32768;
-          sumSq += norm * norm;
-        }
-        const currentRms = Math.sqrt(sumSq / Math.max(1, pcm16.length)) * 100;
-
-        const sens = Math.max(10, Math.min(100, micSensitivityRef.current || 75));
-        // آستانه واقعی صدای انسان (هرگز با نویز خفیف اتاق فعال نمی‌شود)
-        const rmsThreshold = Math.max(3.8, noiseFloorRmsRef.current + (110 - sens) * 0.06);
-        const isVoiceFrame = currentRms >= rmsThreshold && chunkPeak >= 2400;
-
-        const visualLevel = Math.min(
-          100,
-          Math.round(Math.max(0, (currentRms - noiseFloorRmsRef.current) * 14))
-        );
-        setVoiceLevel(visualLevel > 6 ? visualLevel : 0);
-
-        if (!isCapturingUtteranceRef.current) {
-          preRollChunksRef.current.push(pcm16);
-          if (preRollChunksRef.current.length > maxPreRollChunks) {
-            preRollChunksRef.current.shift();
-          }
-
-          if (isVoiceFrame) {
-            isCapturingUtteranceRef.current = true;
-            speechStartedAtRef.current = now;
-            lastVoiceDetectedAtRef.current = now;
-            voicedFramesCountRef.current = 1;
-            utterancePeakSampleRef.current = chunkPeak;
-            capturedPcmChunksRef.current = [...preRollChunksRef.current, pcm16];
-            preRollChunksRef.current = [];
-            setIsSpeechActive(true);
-          } else {
-            noiseFloorRmsRef.current =
-              noiseFloorRmsRef.current * 0.94 + Math.min(currentRms, 4.5) * 0.06;
-          }
-        } else {
-          capturedPcmChunksRef.current.push(pcm16);
-          if (chunkPeak > utterancePeakSampleRef.current) {
-            utterancePeakSampleRef.current = chunkPeak;
-          }
-          if (isVoiceFrame) {
-            voicedFramesCountRef.current += 1;
-            lastVoiceDetectedAtRef.current = now;
-          } else if (currentRms >= rmsThreshold * 0.82 && chunkPeak >= 1900) {
-            lastVoiceDetectedAtRef.current = now;
-          }
-
-          const silenceDurationMs = now - lastVoiceDetectedAtRef.current;
-          const totalSpeechDurationMs = now - speechStartedAtRef.current;
-          const currentStep = draftRef.current.wizardStep;
-          const pauseRequiredMs =
-            currentStep === 'confirm' || currentStep === 'ask_day' || currentStep === 'ask_time'
-              ? 1050
-              : 1200;
-
-          if (silenceDurationMs >= pauseRequiredMs || totalSpeechDurationMs >= 14000) {
-            const chunksToProcess = capturedPcmChunksRef.current;
-            const voicedFrames = voicedFramesCountRef.current;
-            const maxPeak = utterancePeakSampleRef.current;
-
-            isCapturingUtteranceRef.current = false;
-            capturedPcmChunksRef.current = [];
-            voicedFramesCountRef.current = 0;
-            utterancePeakSampleRef.current = 0;
-
-            // اگر Web Speech API متن زنده کاربر را دریافت کرده، بلافاصله همان متن دقیق را ثبت کن
-            if (webSpeechTextRef.current.trim()) {
-              const txt = webSpeechTextRef.current.trim();
-              webSpeechTextRef.current = '';
-              consumedResultCountRef.current = latestResultsLenRef.current;
-              if (webSpeechCommitTimerRef.current) {
-                clearTimeout(webSpeechCommitTimerRef.current);
-                webSpeechCommitTimerRef.current = null;
-              }
-              isListeningGateOpenRef.current = false;
-              setIsSpeechActive(false);
-              setIsListening(false);
-              setVoiceLevel(0);
-              commitWebSpeechTranscriptRef.current(txt);
-              return;
-            }
-
-            // اگر فقط یک ضربه کوتاه یا نویز لحظه‌ای بوده (کمتر از ۸ فریم آوایی)، نادیده بگیر و به گوش دادن ادامه بده
-            if (voicedFrames < 8 || maxPeak < 2700) {
-              setIsSpeechActive(false);
-              setVoiceLevel(0);
-              return;
-            }
-
-            isListeningGateOpenRef.current = false;
-            setIsSpeechActive(false);
-            setIsListening(false);
-            setVoiceLevel(0);
-            processCapturedAudioRef.current(chunksToProcess);
-          }
-        }
-      };
-
-      return true;
-    } catch {
-      return false;
+    if (silenceWatchdogTimerRef.current) {
+      clearTimeout(silenceWatchdogTimerRef.current);
+      silenceWatchdogTimerRef.current = null;
     }
   }, []);
-
-  /**
-   * باز کردن فوری دریچه شنود در ۰ میلی‌ثانیه بدون هیچ بوق و بدون خاموش/روشن شدن میکروفون
-   */
-  const openListeningGate = useCallback(async () => {
-    if (!isOpenRef.current) return;
-    ensurePersistentWebSpeech();
-    const ready = await ensureContinuousMicStream();
-    if (!ready && !recognitionRef.current) {
-      setIsListening(false);
-      return;
-    }
-    preRollChunksRef.current = [];
-    capturedPcmChunksRef.current = [];
-    voicedFramesCountRef.current = 0;
-    utterancePeakSampleRef.current = 0;
-    webSpeechTextRef.current = '';
-    consumedResultCountRef.current = latestResultsLenRef.current;
-    isCapturingUtteranceRef.current = false;
-    gateOpenedAtRef.current = Date.now();
-    isListeningGateOpenRef.current = true;
-    setIsListening(true);
-    setIsSpeechActive(false);
-  }, [ensureContinuousMicStream, ensurePersistentWebSpeech]);
 
   const stopSpeaking = useCallback(() => {
+    isAssistantSpeakingRef.current = false;
     setIsAssistantSpeaking(false);
     if (ttsWaitTimerRef.current) {
       clearTimeout(ttsWaitTimerRef.current);
@@ -640,6 +191,34 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     }
     stopAiAssistantPrompt();
   }, []);
+
+  /**
+   * توقف کامل موتور تشخیص گفتار (فقط هنگام بستن مدال یا فعال شدن حالت تایپ پس از ۳ بار عدم وضوح صدا)
+   */
+  const stopListening = useCallback(() => {
+    shouldKeepListeningRef.current = false;
+    isUserTurnActiveRef.current = false;
+    clearTurnTimers();
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.stop();
+      } catch {
+        safeAbortSpeechRecognition(recognitionRef.current);
+      }
+      recognitionRef.current = null;
+    }
+    setIsListening(false);
+    setIsSpeechActive(false);
+    setVoiceLevel(0);
+  }, [clearTurnTimers]);
 
   /**
    * دریافت موقعیت مکانی زنده و واقعی از سنسور GPS دستگاه (maximumAge: 0)
@@ -729,12 +308,288 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     });
   }, [isEn]);
 
-  // Pre-warm all short varied voice prompts into RAM
+  // Pre-warm short welcome prompts
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    prewarmAiAssistantPrompt('سلام؛ بفرمایید ثبت کنم.', isEn ? 'en' : 'fa', aiVoicePersona);
+    const sampleWelcome = isEn ? "Hello! Go ahead, I'm ready to save." : 'سلام؛ بفرمایید ثبت کنم.';
+    prewarmAiAssistantPrompt(sampleWelcome, isEn ? 'en' : 'fa', aiVoicePersona);
   }, [isEn, aiVoicePersona]);
 
+  /**
+   * موتور پیوسته و بدون لگ میکروفون (مشابه ChatGPT Voice Mode):
+   * - از لحظه باز شدن مدال روشن می‌شود و در تمام طول مکالمه باز می‌ماند (هی خاموش و روشن نمی‌شود).
+   * - در زمان صحبت گوینده (isAssistantSpeakingRef = true)، خروجی‌ها نادیده گرفته می‌شوند تا صدای خود گوینده ثبت نشود.
+   * - به محض اتمام جمله گوینده، بدون حتی ۱ میلی‌ثانیه تاخیر راه‌اندازی، آماده دریافت اولین کلمه کاربر است.
+   */
+  const ensureRecognitionEngineRunning = useCallback(() => {
+    if (!isOpenRef.current || showTextInputFallbackRef.current || typeof window === 'undefined') {
+      return;
+    }
+
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setIsListening(false);
+      return;
+    }
+
+    // اگر موتور در حال حاضر فعال است، دوباره استارت نزن تا هیچ وقفه یا چشمک میکروفونی ایجاد نشود
+    if (recognitionRef.current) {
+      return;
+    }
+
+    const commitCurrentUtterance = () => {
+      if (!isUserTurnActiveRef.current) return;
+      const combined = appendWithoutDuplicate(
+        accumulatedFinalRef.current,
+        latestInterimRef.current
+      ).trim();
+
+      if (!combined) return;
+
+      // پایان نوبت فعلی کاربر بدون خاموش کردن موتور میکروفون
+      isUserTurnActiveRef.current = false;
+      clearTurnTimers();
+
+      // علامت‌گذاری تمام ایندکس‌های قبلی تا در نوبت بعدی دوباره خوانده نشوند
+      for (let idx = 0; idx < latestResultCountRef.current; idx++) {
+        ignoredResultIndicesRef.current.add(idx);
+        processedFinalIndicesRef.current.add(idx);
+      }
+
+      accumulatedFinalRef.current = '';
+      latestInterimRef.current = '';
+      lastFinalChunkRef.current = '';
+
+      setIsSpeechActive(false);
+      setVoiceLevel(0);
+      setLiveTranscript('');
+      setInputText('');
+
+      handleUserUtteranceRef.current(combined, false);
+    };
+
+    const schedulePostSpeechCommit = (baseDelayMs = 1550) => {
+      if (speechDoneTimerRef.current) {
+        clearTimeout(speechDoneTimerRef.current);
+      }
+      const sens = micSensitivityRef.current ?? 75;
+      const sensitivityBonusMs = Math.round((sens - 50) * 5);
+      const effectiveDelayMs = Math.max(1050, baseDelayMs + sensitivityBonusMs);
+
+      speechDoneTimerRef.current = setTimeout(() => {
+        commitCurrentUtterance();
+      }, effectiveDelayMs);
+    };
+
+    try {
+      const rec = new SpeechRecognition();
+      rec.lang = isEn ? 'en-US' : 'fa-IR';
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.maxAlternatives = 3;
+
+      processedFinalIndicesRef.current.clear();
+      ignoredResultIndicesRef.current.clear();
+      latestResultCountRef.current = 0;
+
+      rec.onstart = () => {
+        markPermissionGranted('microphone');
+        if (isOpenRef.current && isUserTurnActiveRef.current && !isAssistantSpeakingRef.current) {
+          setIsListening(true);
+        }
+      };
+
+      rec.onsoundstart = () => {
+        if (!isUserTurnActiveRef.current || isAssistantSpeakingRef.current || Date.now() < ttsMuteUntilRef.current) {
+          return;
+        }
+        setIsSpeechActive(true);
+        setVoiceLevel(55);
+      };
+
+      rec.onspeechstart = () => {
+        if (!isUserTurnActiveRef.current || isAssistantSpeakingRef.current || Date.now() < ttsMuteUntilRef.current) {
+          return;
+        }
+        setIsSpeechActive(true);
+        setVoiceLevel(80);
+      };
+
+      rec.onresult = (event: any) => {
+        latestResultCountRef.current = event.results?.length || 0;
+
+        // اگر گوینده در حال صحبت است یا هنوز در بازه محافظ اکو (90ms) هستیم، این نتایج مربوط به صدای گوینده است
+        if (
+          !isUserTurnActiveRef.current ||
+          isAssistantSpeakingRef.current ||
+          Date.now() < ttsMuteUntilRef.current
+        ) {
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i]?.isFinal) {
+              ignoredResultIndicesRef.current.add(i);
+              processedFinalIndicesRef.current.add(i);
+            }
+          }
+          return;
+        }
+
+        let interimText = '';
+        let heardNewUserWords = false;
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (ignoredResultIndicesRef.current.has(i)) continue;
+          const res = event.results[i];
+          const bestTranscript = (res[0]?.transcript || '').trim();
+          if (!bestTranscript) continue;
+
+          heardNewUserWords = true;
+
+          if (res.isFinal) {
+            if (!processedFinalIndicesRef.current.has(i)) {
+              processedFinalIndicesRef.current.add(i);
+              if (bestTranscript !== lastFinalChunkRef.current) {
+                lastFinalChunkRef.current = bestTranscript;
+                accumulatedFinalRef.current = appendWithoutDuplicate(
+                  accumulatedFinalRef.current,
+                  bestTranscript
+                );
+              }
+            }
+          } else {
+            interimText += bestTranscript + ' ';
+          }
+        }
+
+        if (!heardNewUserWords) return;
+
+        // کاربر شروع به صحبت کرده است -> تایمر سکوت ریست شود
+        if (silenceWatchdogTimerRef.current) {
+          clearTimeout(silenceWatchdogTimerRef.current);
+          silenceWatchdogTimerRef.current = null;
+        }
+
+        setIsSpeechActive(true);
+        setVoiceLevel(60 + Math.floor(Math.random() * 35));
+
+        const cleanInterim = interimText.trim();
+        latestInterimRef.current = cleanInterim;
+
+        const currentConvertedText = appendWithoutDuplicate(
+          accumulatedFinalRef.current,
+          cleanInterim
+        ).trim();
+
+        if (currentConvertedText) {
+          setLiveTranscript(currentConvertedText);
+          setInputText(currentConvertedText);
+
+          const isShortConfirm = isConfirmationUtterance(currentConvertedText);
+          const wordCount = currentConvertedText.split(/\s+/).filter(Boolean).length;
+          const currentStep = draftRef.current.wizardStep;
+          const isStepShortAnswer =
+            (currentStep === 'ask_day' || currentStep === 'ask_time' || currentStep === 'confirm') &&
+            wordCount <= 4;
+
+          schedulePostSpeechCommit(
+            isShortConfirm ? 850 : isStepShortAnswer ? 1150 : 1550
+          );
+        }
+      };
+
+      rec.onerror = (e: any) => {
+        if (e?.error === 'not-allowed' || e?.error === 'service-not-allowed') {
+          stopListening();
+        }
+      };
+
+      rec.onend = () => {
+        recognitionRef.current = null;
+
+        // اگر کاربر جمله‌ای گفته بود و مرورگر جلسه تشخیص را بست، بلافاصله جمله او را ثبت کن
+        if (isUserTurnActiveRef.current) {
+          if (latestInterimRef.current.trim()) {
+            accumulatedFinalRef.current = appendWithoutDuplicate(
+              accumulatedFinalRef.current,
+              latestInterimRef.current.trim()
+            );
+            latestInterimRef.current = '';
+          }
+          if (accumulatedFinalRef.current.trim()) {
+            commitCurrentUtterance();
+          }
+        }
+
+        // اگر مدال باز است و در حالت تایپ نیستیم، بدون خاموش کردن وضعیت کره، بلافاصله موتور را گرم نگه دار
+        if (isOpenRef.current && shouldKeepListeningRef.current && !showTextInputFallbackRef.current) {
+          if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = setTimeout(() => {
+            if (isOpenRef.current && shouldKeepListeningRef.current && !showTextInputFallbackRef.current) {
+              ensureRecognitionEngineRunning();
+            }
+          }, 20);
+        } else {
+          setIsListening(false);
+          setIsSpeechActive(false);
+          setVoiceLevel(0);
+        }
+      };
+
+      recognitionRef.current = rec;
+      rec.start();
+    } catch {
+      recognitionRef.current = null;
+    }
+  }, [clearTurnTimers, isEn, stopListening]);
+
+  /**
+   * فعال‌سازی نوبت صحبت کاربر با تاخیر صفر (۰ میلی‌ثانیه):
+   * چون موتور SpeechRecognition از قبل روشن و گرم است، بلافاصله در همان لحظه سبز/فعال شدن کره، صدای کاربر شنیده می‌شود.
+   */
+  const startListening = useCallback(() => {
+    if (!isOpenRef.current || showTextInputFallbackRef.current || typeof window === 'undefined') {
+      return;
+    }
+
+    stopSpeaking();
+    clearTurnTimers();
+
+    // علامت‌گذاری نتایج قبلی تا فقط صدای جدید کاربر در این نوبت دریافت شود
+    for (let idx = 0; idx < latestResultCountRef.current; idx++) {
+      ignoredResultIndicesRef.current.add(idx);
+      processedFinalIndicesRef.current.add(idx);
+    }
+
+    accumulatedFinalRef.current = '';
+    latestInterimRef.current = '';
+    lastFinalChunkRef.current = '';
+    setLiveTranscript('');
+
+    shouldKeepListeningRef.current = true;
+    isUserTurnActiveRef.current = true;
+    setIsListening(true);
+    setIsSpeechActive(false);
+
+    ensureRecognitionEngineRunning();
+
+    // اگر تا ۱۴ ثانیه هیچ صدای مفهومی دریافت نشد، گوینده مودبانه درخواست تکرار کند (و بعد از ۳ بار کادر تایپ را باز کند)
+    silenceWatchdogTimerRef.current = setTimeout(() => {
+      if (
+        isOpenRef.current &&
+        isUserTurnActiveRef.current &&
+        !isAssistantSpeakingRef.current &&
+        !accumulatedFinalRef.current.trim() &&
+        !latestInterimRef.current.trim()
+      ) {
+        handleSilenceOrUnclearTimeoutRef.current();
+      }
+    }, 14000);
+  }, [clearTurnTimers, ensureRecognitionEngineRunning, stopSpeaking]);
+
+  /**
+   * پخش صدای گوینده در حالی که موتور میکروفون در پس‌زمینه گرم می‌ماند (صفر لگ در شروع شنیدن)
+   */
   const speakPromptWithCallback = useCallback(
     (rawText: string, onDone?: () => void) => {
       const cleanText = rawText.replace(/\s+/g, ' ').trim();
@@ -743,8 +598,19 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         return;
       }
 
-      pauseListeningGate();
+      clearTurnTimers();
+      isUserTurnActiveRef.current = false;
+      setIsSpeechActive(false);
+      setVoiceLevel(0);
+
+      // گرم نگه داشتن موتور تشخیص گفتار در پس‌زمینه حین صحبت گوینده تا به محض اتمام جمله، بدون تاخیر بشنود
+      if (!showTextInputFallbackRef.current) {
+        shouldKeepListeningRef.current = true;
+        ensureRecognitionEngineRunning();
+      }
+
       stopSpeaking();
+      isAssistantSpeakingRef.current = true;
       setIsAssistantSpeaking(true);
 
       speakAiAssistantPrompt({
@@ -754,24 +620,82 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         volume: aiVoiceVolumeRef.current,
         onDone: () => {
           if (!isOpenRef.current) {
+            isAssistantSpeakingRef.current = false;
             setIsAssistantSpeaking(false);
             return;
           }
+          isAssistantSpeakingRef.current = false;
+          ttsMuteUntilRef.current = Date.now() + 80;
           setIsAssistantSpeaking(false);
-          ttsWaitTimerRef.current = setTimeout(() => {
-            if (isOpenRef.current) {
-              onDone?.();
-            }
-          }, 20);
+
+          // فعال‌سازی آنی دریافت صدای کاربر (۰ میلی‌ثانیه لگ چون میکروفون از قبل گرم است)
+          if (isOpenRef.current) {
+            onDone?.();
+          }
         },
       });
     },
-    [isEn, pauseListeningGate, stopSpeaking]
+    [clearTurnTimers, ensureRecognitionEngineRunning, isEn, stopSpeaking]
   );
+
+  /**
+   * مدیریت صدای نامفهوم یا سکوت:
+   * - تا ۳ مرتبه جملات کوتاه و متنوع («متوجه نشدم؛ بی‌زحمت یک بار دیگه بفرمایید.» و...) می‌گوید.
+   * - اگر بیش از ۳ بار شد (مرتبه چهارم)، مودبانه از کاربر می‌خواهد تایپ کند و کادر تایپ را نمایش می‌دهد.
+   */
+  const triggerUnclearSpeechRetry = useCallback(() => {
+    if (!isOpenRef.current) return;
+    clearTurnTimers();
+    isUserTurnActiveRef.current = false;
+
+    unclearAttemptsRef.current += 1;
+    const attempt = unclearAttemptsRef.current;
+
+    if (attempt > 3) {
+      showTextInputFallbackRef.current = true;
+      setShowTextInputFallback(true);
+      stopListening();
+
+      const fallbackPrompt = getSmartTypeFallbackPrompt(language);
+      const fallbackMsg: SmartChatMessage = {
+        id: 'retry_type_' + Date.now(),
+        role: 'assistant',
+        text: fallbackPrompt,
+        timestamp: Date.now(),
+      };
+      const nextMsgs = [...messagesRef.current, fallbackMsg];
+      messagesRef.current = nextMsgs;
+      setMessages(nextMsgs);
+
+      speakPromptWithCallback(fallbackPrompt);
+      return;
+    }
+
+    const retryPrompt = getSmartRetryPrompt(attempt, language);
+    const retryMsg: SmartChatMessage = {
+      id: 'retry_' + Date.now(),
+      role: 'assistant',
+      text: retryPrompt,
+      timestamp: Date.now(),
+    };
+    const nextMsgs = [...messagesRef.current, retryMsg];
+    messagesRef.current = nextMsgs;
+    setMessages(nextMsgs);
+
+    speakPromptWithCallback(retryPrompt, () => {
+      if (isOpenRef.current && !showTextInputFallbackRef.current) {
+        startListening();
+      }
+    });
+  }, [clearTurnTimers, language, speakPromptWithCallback, startListening, stopListening]);
+
+  useEffect(() => {
+    handleSilenceOrUnclearTimeoutRef.current = triggerUnclearSpeechRetry;
+  }, [triggerUnclearSpeechRetry]);
 
   const executeFinalSave = useCallback(
     async (finalDraft: SmartCaptureDraft) => {
-      pauseListeningGate();
+      stopListening();
       stopSpeaking();
 
       const targetIntent = finalDraft.intentType === 'unknown' ? 'reminder' : finalDraft.intentType;
@@ -830,7 +754,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             { id: 'gps_err_' + Date.now(), role: 'assistant', text: gpsFailMsg, timestamp: Date.now() },
           ]);
           speakPromptWithCallback(gpsFailMsg, () => {
-            if (isOpenRef.current) openListeningGate();
+            if (isOpenRef.current) startListening();
           });
           return;
         }
@@ -874,75 +798,108 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       onSaveLocation,
       onSaveOccasion,
       onSaveReminder,
-      openListeningGate,
-      pauseListeningGate,
       speakPromptWithCallback,
+      startListening,
+      stopListening,
       stopSpeaking,
     ]
   );
 
-  /**
-   * مدیریت صدای نامفهوم کاربر با سقف ۳ بار تلاش و باز کردن خودکار کادر تایپ
-   */
-  const handleUnclearVoiceAttempt = useCallback(() => {
-    unclearRetryCountRef.current += 1;
-    const retryCount = unclearRetryCountRef.current;
-    const retryPrompt = pickUnclearRetryPrompt(retryCount, language);
+  const wasOpenRef = useRef(false);
 
-    const assistantMsg: SmartChatMessage = {
-      id: 'retry_' + Date.now(),
-      role: 'assistant',
-      text: retryPrompt,
-      timestamp: Date.now(),
-    };
-    const nextMessages = [...messagesRef.current, assistantMsg];
-    messagesRef.current = nextMessages;
-    setMessages(nextMessages);
-
-    if (retryCount >= 3) {
-      setShowFallbackTypeBox(true);
-      speakPromptWithCallback(retryPrompt, () => {
-        setTimeout(() => {
-          typeInputRef.current?.focus();
-        }, 80);
-      });
+  // هنگام باز شدن مدال: جمله خوش‌آمدگویی کوتاه و متنوع پخش شده و میکروفون از همان لحظه اول در پس‌زمینه گرم و آماده می‌شود
+  useEffect(() => {
+    if (!isOpen) {
+      wasOpenRef.current = false;
+      stopListening();
+      stopSpeaking();
       return;
     }
 
-    speakPromptWithCallback(retryPrompt, () => {
-      if (isOpenRef.current) {
-        openListeningGate();
-      }
-    });
-  }, [language, openListeningGate, speakPromptWithCallback]);
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
+
+    unlockAudio();
+
+    unclearAttemptsRef.current = 0;
+    showTextInputFallbackRef.current = false;
+    setShowTextInputFallback(false);
+
+    const initialQuestion = getSmartWelcomePrompt(isEn ? 'en' : 'fa');
+
+    const initialGreeting: SmartChatMessage = {
+      id: 'welcome_' + Date.now(),
+      role: 'assistant',
+      text: initialQuestion,
+      timestamp: Date.now(),
+    };
+
+    const initialDraft: SmartCaptureDraft = { intentType: 'unknown', wizardStep: 'ask_subject' };
+    messagesRef.current = [initialGreeting];
+    draftRef.current = initialDraft;
+    isCompleteRef.current = false;
+
+    setMessages([initialGreeting]);
+    setDraft(initialDraft);
+    setIsComplete(false);
+    setInputText('');
+    setLiveTranscript('');
+    setGpsCoords(null);
+    gpsCoordsRef.current = null;
+    setGpsStatus('idle');
+    setGpsErrorMsg(null);
+
+    // پیش‌راه‌اندازی میکروفون همزمان با شروع خوش‌آمدگویی کوتاه تا به محض پایان جمله، بدون هیچ لگی آماده شنیدن باشد
+    shouldKeepListeningRef.current = true;
+    ensureRecognitionEngineRunning();
+
+    const timer = setTimeout(() => {
+      speakPromptWithCallback(initialQuestion, () => {
+        if (isOpenRef.current) {
+          startListening();
+        }
+      });
+    }, 20);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [
+    ensureRecognitionEngineRunning,
+    isOpen,
+    isEn,
+    speakPromptWithCallback,
+    startListening,
+    stopListening,
+    stopSpeaking,
+  ]);
+
+  // به محض تشخیص دسته‌ی «مکان»، دریافت زنده و واقعی GPS (با maximumAge: 0) آغاز شود
+  useEffect(() => {
+    if (!isOpen || draft.intentType !== 'location') return;
+    if (gpsStatus === 'idle') {
+      acquireLiveGpsCoordinates();
+    }
+  }, [acquireLiveGpsCoordinates, draft.intentType, gpsStatus, isOpen]);
 
   const handleUserUtterance = useCallback(
-    async (rawText: string, fromVoice = false) => {
+    async (rawText: string, isTyped = false) => {
       const trimmed = rawText.trim();
-      if (!trimmed) {
-        if (fromVoice) handleUnclearVoiceAttempt();
-        return;
-      }
+      if (!trimmed) return;
 
-      pauseListeningGate();
+      clearTurnTimers();
+      isUserTurnActiveRef.current = false;
+      setIsSpeechActive(false);
+      setVoiceLevel(0);
       setInputText('');
       setLiveTranscript('');
 
       const activeDraft = draftRef.current;
-
-      // اگر از طریق صوت دریافت شده و برای مرحله فعلی نامفهوم است، طبق قانون ۳ بار تلاش، مودبانه درخواست تکرار کن
-      if (fromVoice && !isMeaningfulStepInput(trimmed, activeDraft)) {
-        handleUnclearVoiceAttempt();
-        return;
-      }
-
-      // پاسخ معتبر دریافت شد -> صفر کردن شمارنده خطای صوتی
-      unclearRetryCountRef.current = 0;
-
       const wasAlreadyComplete = isCompleteRef.current && Boolean(activeDraft.title);
 
-      // گام ۶: اگر در مرحله تایید نهایی هستیم و کاربر کلمه تایید را بگوید
+      // اگر در مرحله تایید نهایی هستیم و کاربر تایید کرد
       if (wasAlreadyComplete && isConfirmationUtterance(trimmed)) {
+        unclearAttemptsRef.current = 0;
         await executeFinalSave(activeDraft);
         return;
       }
@@ -962,11 +919,22 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       try {
         const analysis = await analyzeSmartCaptureTurn(updatedMessages, activeDraft, language);
 
+        // اگر صدای کاربر نامفهوم بود یا اطلاعات خواسته شده را نداشت (در حالت صوتی)
+        if (analysis.unclearInput && !isTyped) {
+          setIsAnalyzing(false);
+          triggerUnclearSpeechRetry();
+          return;
+        }
+
+        // ورودی معتبر دریافت شد -> شمارنده خطای وضوح صدا صفر شود
+        unclearAttemptsRef.current = 0;
+
         draftRef.current = analysis.draft;
         isCompleteRef.current = analysis.isComplete;
         setDraft(analysis.draft);
         setIsComplete(analysis.isComplete);
 
+        // اگر کاربر مستقیماً دستور ثبت داده باشد
         if (analysis.isComplete && analysis.shouldAutoSubmit && analysis.draft.title) {
           await executeFinalSave(analysis.draft);
           return;
@@ -983,8 +951,8 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         setMessages(nextMessages);
 
         speakPromptWithCallback(analysis.clarifyingQuestion, () => {
-          if (isOpenRef.current) {
-            openListeningGate();
+          if (isOpenRef.current && !showTextInputFallbackRef.current) {
+            startListening();
           }
         });
       } finally {
@@ -992,149 +960,18 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       }
     },
     [
+      clearTurnTimers,
       executeFinalSave,
-      handleUnclearVoiceAttempt,
       language,
-      openListeningGate,
-      pauseListeningGate,
       speakPromptWithCallback,
+      startListening,
+      triggerUnclearSpeechRetry,
     ]
   );
 
-  /**
-   * ارسال صدای ضبط‌شده کاربر از بافر پیوسته به `/api/smart-stt` و تحلیل بلافاصله
-   */
-  const processCapturedAudio = useCallback(
-    async (pcmChunks: Int16Array[]) => {
-      if (!isOpenRef.current || isProcessingTurnRef.current) return;
-      if (!pcmChunks || pcmChunks.length === 0) {
-        openListeningGate();
-        return;
-      }
-
-      isProcessingTurnRef.current = true;
-      setIsAnalyzing(true);
-
-      try {
-        const audioBase64 = encodePcmChunksToWavBase64(pcmChunks, 16000);
-        const resp = await fetch('/api/smart-stt', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            audioBase64,
-            mimeType: 'audio/wav',
-            language,
-          }),
-        });
-
-        if (!resp.ok) {
-          handleUnclearVoiceAttempt();
-          return;
-        }
-
-        const data = await resp.json();
-        const transcript = (data?.transcript || '').trim();
-        if (!data?.ok || data?.isUnclear || !transcript) {
-          handleUnclearVoiceAttempt();
-          return;
-        }
-
-        setLiveTranscript(transcript);
-        await handleUserUtterance(transcript, true);
-      } catch {
-        handleUnclearVoiceAttempt();
-      } finally {
-        isProcessingTurnRef.current = false;
-        setIsAnalyzing(false);
-      }
-    },
-    [handleUnclearVoiceAttempt, handleUserUtterance, language, openListeningGate]
-  );
-
   useEffect(() => {
-    processCapturedAudioRef.current = processCapturedAudio;
-  }, [processCapturedAudio]);
-
-  useEffect(() => {
-    commitWebSpeechTranscriptRef.current = (txt: string) => {
-      handleUserUtterance(txt, true);
-    };
+    handleUserUtteranceRef.current = handleUserUtterance;
   }, [handleUserUtterance]);
-
-  const wasOpenRef = useRef(false);
-
-  // گام ۱: هنگام باز شدن مدال، خط میکروفون یکپارچه گرم شده، سلام کوتاه و متنوع پخش شده و در ۰ms شنود فعال می‌شود
-  useEffect(() => {
-    if (!isOpen) {
-      wasOpenRef.current = false;
-      destroyContinuousMicStream();
-      stopSpeaking();
-      return;
-    }
-
-    if (wasOpenRef.current) return;
-    wasOpenRef.current = true;
-
-    unlockAudio();
-    // گرم کردن خط میکروفون و موتور تشخیص گفتار از همان لحظه اول باز شدن پنجره (بدون بوق و آماده در پس‌زمینه)
-    ensureContinuousMicStream();
-    ensurePersistentWebSpeech();
-
-    const initialQuestion = pickInitialGreeting(language);
-
-    const initialGreeting: SmartChatMessage = {
-      id: 'welcome_' + Date.now(),
-      role: 'assistant',
-      text: initialQuestion,
-      timestamp: Date.now(),
-    };
-
-    const initialDraft: SmartCaptureDraft = { intentType: 'unknown', wizardStep: 'ask_subject' };
-    messagesRef.current = [initialGreeting];
-    draftRef.current = initialDraft;
-    isCompleteRef.current = false;
-    unclearRetryCountRef.current = 0;
-
-    setMessages([initialGreeting]);
-    setDraft(initialDraft);
-    setIsComplete(false);
-    setInputText('');
-    setLiveTranscript('');
-    setShowFallbackTypeBox(false);
-    setGpsCoords(null);
-    gpsCoordsRef.current = null;
-    setGpsStatus('idle');
-    setGpsErrorMsg(null);
-
-    const timer = setTimeout(() => {
-      speakPromptWithCallback(initialQuestion, () => {
-        if (isOpenRef.current) {
-          openListeningGate();
-        }
-      });
-    }, 20);
-
-    return () => {
-      clearTimeout(timer);
-    };
-  }, [
-    destroyContinuousMicStream,
-    ensureContinuousMicStream,
-    ensurePersistentWebSpeech,
-    isOpen,
-    language,
-    openListeningGate,
-    speakPromptWithCallback,
-    stopSpeaking,
-  ]);
-
-  // به محض تشخیص دسته‌ی «مکان»، دریافت زنده و واقعی GPS (با maximumAge: 0) آغاز شود
-  useEffect(() => {
-    if (!isOpen || draft.intentType !== 'location') return;
-    if (gpsStatus === 'idle') {
-      acquireLiveGpsCoordinates();
-    }
-  }, [acquireLiveGpsCoordinates, draft.intentType, gpsStatus, isOpen]);
 
   if (!isOpen) return null;
 
@@ -1201,10 +1038,6 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
       const timeStr = formatJalaliFull(computeReminderTimestampFromDraft(draft), language);
       return `${typeLabel}: ${draft.title} · ${timeStr}`;
     }
-    if (hasDay) {
-      const dayStr = formatDraftDayLabel(draft, isEn);
-      return `${typeLabel}: ${draft.title} · ${dayStr}`;
-    }
     return `${typeLabel}: ${draft.title}`;
   };
 
@@ -1218,32 +1051,32 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
 
   const handleOrbOrMicInteraction = () => {
     unlockAudio();
+    // اگر منشی در حال صحبت است، با لمس کره صحبت او قطع شده و بلافاصله میکروفون برای شنیدن صدای کاربر فعال می‌شود
     if (isAssistantSpeaking) {
       stopSpeaking();
-      openListeningGate();
+      showTextInputFallbackRef.current = false;
+      setShowTextInputFallback(false);
+      startListening();
       return;
     }
-    if (webSpeechTextRef.current.trim()) {
-      const txt = webSpeechTextRef.current.trim();
-      webSpeechTextRef.current = '';
-      consumedResultCountRef.current = latestResultsLenRef.current;
-      pauseListeningGate();
-      handleUserUtterance(txt, true);
-      return;
-    }
-    if (isCapturingUtteranceRef.current && capturedPcmChunksRef.current.length > 0) {
-      const chunksToProcess = capturedPcmChunksRef.current;
-      pauseListeningGate();
-      processCapturedAudio(chunksToProcess);
-    } else if (!isListening) {
-      openListeningGate();
+    const pendingText = (liveTranscript || inputText).trim();
+    if (isListening && pendingText && !showTextInputFallback) {
+      handleUserUtterance(pendingText, false);
+    } else if (isListening) {
+      stopListening();
+    } else {
+      showTextInputFallbackRef.current = false;
+      setShowTextInputFallback(false);
+      unclearAttemptsRef.current = 0;
+      startListening();
     }
   };
 
   const handleTextSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputText.trim()) return;
-    handleUserUtterance(inputText.trim(), false);
+    const cleaned = inputText.trim();
+    if (!cleaned) return;
+    handleUserUtterance(cleaned, true);
   };
 
   return (
@@ -1261,65 +1094,45 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             : isAssistantSpeaking
             ? 'opacity-40'
             : isListening
-            ? 'opacity-30'
+            ? 'opacity-25'
             : 'opacity-15'
         }`}
         style={{
           background: isSpeechActive
-            ? 'radial-gradient(circle at 50% 44%, rgba(16, 185, 129, 0.30), rgba(255, 140, 0, 0.12) 45%, transparent 72%)'
+            ? 'radial-gradient(circle at 50% 44%, rgba(16, 185, 129, 0.28), rgba(255, 140, 0, 0.12) 45%, transparent 72%)'
             : isAssistantSpeaking
             ? 'radial-gradient(circle at 50% 44%, rgba(255, 140, 0, 0.34), rgba(251, 191, 36, 0.12) 45%, transparent 72%)'
-            : isListening
-            ? 'radial-gradient(circle at 50% 44%, rgba(16, 185, 129, 0.22), transparent 68%)'
-            : 'radial-gradient(circle at 50% 44%, rgba(255, 140, 0, 0.18), transparent 68%)',
+            : 'radial-gradient(circle at 50% 44%, rgba(255, 140, 0, 0.20), transparent 68%)',
         }}
       />
 
-      {/* Top Minimal Header */}
+      {/* Top Minimal Header: Only Title + Mute Toggle */}
       <div className="relative z-10 flex items-center justify-between max-w-xl w-full mx-auto">
         <h3 className="text-base sm:text-lg font-black text-white tracking-tight">
           {isEn ? 'Smart Capture' : 'ثبت هوشمند'}
         </h3>
 
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowFallbackTypeBox((v) => !v);
-              setTimeout(() => typeInputRef.current?.focus(), 60);
-            }}
-            className={`w-10 h-10 rounded-full border flex items-center justify-center transition-colors cursor-pointer ${
-              showFallbackTypeBox
-                ? 'bg-[#FF8C00]/20 border-[#FF8C00] text-[#FF8C00]'
-                : 'bg-stone-900/80 hover:bg-stone-800 border-stone-800 text-stone-300'
-            }`}
-            title={isEn ? 'Type instead' : 'تایپ دستی'}
-          >
-            <Keyboard className="w-4 h-4" />
-          </button>
-
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              unlockAudio();
-              setVoiceFeedbackEnabled((v) => !v);
-            }}
-            className="w-10 h-10 rounded-full bg-stone-900/80 hover:bg-stone-800 border border-stone-800 text-stone-300 flex items-center justify-center transition-colors cursor-pointer"
-            title={isEn ? 'Voice Output' : 'صدای گوینده'}
-          >
-            {voiceFeedbackEnabled ? (
-              <Volume2 className="w-4 h-4 text-[#FF8C00]" />
-            ) : (
-              <VolumeX className="w-4 h-4 text-stone-500" />
-            )}
-          </button>
-        </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            unlockAudio();
+            setVoiceFeedbackEnabled((v) => !v);
+          }}
+          className="w-10 h-10 rounded-full bg-stone-900/80 hover:bg-stone-800 border border-stone-800 text-stone-300 flex items-center justify-center transition-colors cursor-pointer"
+          title={isEn ? 'Voice Output' : 'صدای گوینده'}
+        >
+          {voiceFeedbackEnabled ? (
+            <Volume2 className="w-4 h-4 text-[#FF8C00]" />
+          ) : (
+            <VolumeX className="w-4 h-4 text-stone-500" />
+          )}
+        </button>
       </div>
 
       {/* Center Stage: Interactive Conversational Voice Orb + Live Caption */}
       <div className="relative z-10 flex-1 flex flex-col items-center justify-center max-w-xl w-full mx-auto my-2">
+        {/* Interactive Fluid Sphere Container */}
         <div
           role="button"
           tabIndex={0}
@@ -1334,7 +1147,7 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
             }
           }}
           aria-label={isEn ? 'Interactive Voice Assistant Orb' : 'گوی محاوره‌ای دستیار هوشمند'}
-          className="relative w-52 h-52 sm:w-60 sm:h-60 flex items-center justify-center cursor-pointer group focus:outline-none"
+          className="relative w-52 h-52 sm:w-64 sm:h-64 flex items-center justify-center cursor-pointer group focus:outline-none"
         >
           {/* Outer Acoustic Ripple 1 */}
           <div
@@ -1346,15 +1159,17 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                   : isAssistantSpeaking
                   ? 1.16
                   : isListening
-                  ? 1.08 + Math.min(0.15, voiceLevel / 280)
+                  ? 1.06
                   : 0.96
               })`,
             }}
-            className={`absolute inset-0 rounded-full transition-all duration-150 ${
-              isSpeechActive || isListening
+            className={`absolute inset-0 rounded-full transition-all duration-200 ${
+              isSpeechActive
                 ? 'bg-emerald-500/15 border border-emerald-400/30'
                 : isAssistantSpeaking
                 ? 'bg-[#FF8C00]/15 border border-[#FF8C00]/35 animate-pulse'
+                : isListening
+                ? 'bg-emerald-500/10 border border-emerald-400/25'
                 : 'bg-stone-800/20 border border-stone-800/40'
             }`}
           />
@@ -1369,15 +1184,17 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
                   : isAssistantSpeaking
                   ? 1.08
                   : isListening
-                  ? 1.03 + Math.min(0.1, voiceLevel / 320)
+                  ? 1.02
                   : 0.94
               })`,
             }}
             className={`absolute inset-5 rounded-full transition-all duration-150 ${
-              isSpeechActive || isListening
+              isSpeechActive
                 ? 'bg-emerald-400/20 border border-emerald-400/40'
                 : isAssistantSpeaking
                 ? 'bg-[#FF8C00]/25 border border-amber-400/40 animate-ping [animation-duration:2.4s]'
+                : isListening
+                ? 'bg-emerald-400/15 border border-emerald-400/30'
                 : 'bg-stone-800/30'
             }`}
           />
@@ -1389,22 +1206,26 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
               transform: `scale(${dynamicOrbScale})`,
               background: isAnalyzing
                 ? 'radial-gradient(circle at 32% 28%, #fde68a 0%, #ff8c00 48%, #7c2d12 100%)'
-                : isSpeechActive || isListening
+                : isSpeechActive
                 ? 'radial-gradient(circle at 32% 28%, #a7f3d0 0%, #10b981 46%, #065f46 88%, #022c22 100%)'
                 : isAssistantSpeaking
                 ? 'radial-gradient(circle at 30% 26%, #fef08a 0%, #ff8c00 46%, #c2410c 86%, #431407 100%)'
+                : isListening
+                ? 'radial-gradient(circle at 32% 28%, #a7f3d0 0%, #10b981 48%, #065f46 88%, #022c22 100%)'
                 : 'radial-gradient(circle at 32% 28%, #78716c 0%, #44403c 55%, #1c1917 100%)',
-              boxShadow:
-                isSpeechActive || isListening
-                  ? '0 0 75px rgba(16, 185, 129, 0.55), inset 0 -14px 28px rgba(0,0,0,0.45), inset 0 12px 24px rgba(255,255,255,0.35)'
-                  : isAssistantSpeaking
-                  ? '0 0 80px rgba(255, 140, 0, 0.65), inset 0 -14px 28px rgba(0,0,0,0.45), inset 0 12px 24px rgba(255,255,255,0.4)'
-                  : '0 0 30px rgba(0, 0, 0, 0.6), inset 0 8px 18px rgba(255,255,255,0.12)',
+              boxShadow: isSpeechActive
+                ? '0 0 75px rgba(16, 185, 129, 0.55), inset 0 -14px 28px rgba(0,0,0,0.45), inset 0 12px 24px rgba(255,255,255,0.35)'
+                : isAssistantSpeaking
+                ? '0 0 80px rgba(255, 140, 0, 0.65), inset 0 -14px 28px rgba(0,0,0,0.45), inset 0 12px 24px rgba(255,255,255,0.4)'
+                : isListening
+                ? '0 0 60px rgba(16, 185, 129, 0.45), inset 0 -12px 24px rgba(0,0,0,0.45), inset 0 10px 20px rgba(255,255,255,0.3)'
+                : '0 0 30px rgba(0, 0, 0, 0.6), inset 0 8px 18px rgba(255,255,255,0.12)',
             }}
             className={`relative w-36 h-36 sm:w-44 sm:h-44 rounded-full transition-transform duration-150 flex flex-col items-center justify-center overflow-hidden ${
               isAnalyzing ? 'animate-spin' : isAssistantSpeaking ? 'animate-pulse' : ''
             }`}
           >
+            {/* Internal Fluid Light Specular Highlight */}
             <div
               aria-hidden="true"
               className="w-24 h-14 rounded-full bg-white/25 blur-md -translate-y-8 -translate-x-3 pointer-events-none"
@@ -1416,27 +1237,31 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
         <p className="mt-5 text-xs sm:text-sm font-bold tracking-wide text-stone-400 text-center">
           {isAnalyzing
             ? isEn
-              ? 'Analyzing...'
-              : 'در حال بررسی...'
+              ? 'Thinking...'
+              : 'در حال تنظیم...'
             : isAssistantSpeaking
             ? isEn
-              ? 'Speaking — Tap orb to interrupt'
-              : 'در حال صحبت — با لمس گوی می‌توانید صحبت کنید'
+              ? 'Speaking — Tap the orb anytime to interrupt'
+              : 'در حال صحبت — هر زمان خواستید بفرمایید'
+            : showTextInputFallback
+            ? isEn
+              ? 'Please type your request below'
+              : 'لطفاً خواسته خود را در کادر پایین بنویسید'
             : isSpeechActive
             ? isEn
-              ? 'Hearing your voice...'
-              : 'در حال شنیدن صدای شما...'
+              ? 'Listening to you...'
+              : 'در حال شنیدن صحبت شما...'
             : isListening
             ? isEn
-              ? 'Ready & Listening — Speak anytime'
-              : 'آماده شنیدن — بفرمایید...'
+              ? 'Listening...'
+              : 'گوش می‌دهم، بفرمایید...'
             : isEn
-            ? 'Tap the orb to speak'
+            ? 'Tap the orb to continue speaking'
             : 'برای صحبت روی گوی بزنید'}
         </p>
 
-        {/* Live Conversational Caption */}
-        <div className="mt-3 min-h-[68px] max-w-md w-full flex flex-col items-center justify-center text-center px-3">
+        {/* Live Conversational Caption (Single-Focus Subtitle) */}
+        <div className="mt-3 min-h-[72px] max-w-md w-full flex flex-col items-center justify-center text-center px-3">
           {liveTranscript ? (
             <p className="text-base sm:text-xl font-black text-emerald-300 leading-relaxed animate-in fade-in duration-150">
               «{liveTranscript}»
@@ -1448,13 +1273,13 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           )}
 
           {!liveTranscript && lastUserMessage && !isAssistantSpeaking && (
-            <p className="mt-1.5 text-xs text-stone-400 truncate max-w-sm">
+            <p className="mt-2 text-xs text-stone-400 truncate max-w-sm">
               {isEn ? `You said: "${lastUserMessage}"` : `شما فرمودید: «${lastUserMessage}»`}
             </p>
           )}
         </div>
 
-        {/* Minimal Summary Line when item details are captured */}
+        {/* Minimal Unboxed / Whisper Summary Line when item details are captured */}
         {minimalSummaryLine && (
           <div className="mt-3 px-4 py-2 rounded-2xl bg-stone-900/75 border border-stone-800/90 text-center max-w-md">
             <p className="text-xs sm:text-sm font-bold text-amber-300 leading-relaxed">
@@ -1463,39 +1288,40 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           </div>
         )}
 
-        {/* Fallback Typing Input (Appears automatically after 3 unclear voice attempts or via Keyboard icon) */}
-        {showFallbackTypeBox && (
+        {/* کادر تایپ محترمانه (فقط زمانی نمایش داده می‌شود که بیش از ۳ بار صدا واضح دریافت نشده باشد) */}
+        {showTextInputFallback && (
           <form
             onSubmit={handleTextSubmit}
             onClick={(e) => e.stopPropagation()}
-            className="mt-4 w-full max-w-md flex items-center gap-2 bg-stone-900/90 border border-stone-700/80 rounded-2xl p-1.5 shadow-xl animate-in fade-in slide-in-from-bottom-2 duration-200"
+            className="mt-4 w-full max-w-md flex items-center gap-2 bg-stone-900/95 border border-amber-500/40 rounded-2xl p-2 shadow-2xl animate-in fade-in slide-in-from-bottom-2 duration-200"
           >
+            <Keyboard className="w-5 h-5 text-amber-400 mx-2 shrink-0" />
             <input
-              ref={typeInputRef}
+              ref={textInputRef}
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               placeholder={
-                isEn
-                  ? 'Type your request here...'
-                  : 'خواسته یا پاسخ خود را اینجا تایپ کنید...'
+                isEn ? 'Type your request here...' : 'اینجا بنویسید (مثلاً: فردا ساعت ۵ عصر دکتر)...'
               }
-              className="flex-1 bg-transparent text-white text-sm font-bold px-3 py-2 focus:outline-none placeholder:text-stone-500"
+              className="flex-1 bg-transparent text-white text-sm sm:text-base placeholder-stone-500 focus:outline-none px-1 py-1.5"
             />
             <button
               type="submit"
-              disabled={!inputText.trim() || isAnalyzing}
+              disabled={!inputText.trim()}
               data-keep-color="true"
-              className="w-10 h-10 rounded-xl bg-[#FF8C00] hover:bg-amber-500 disabled:opacity-40 text-white flex items-center justify-center transition-all cursor-pointer"
+              className="h-10 px-4 rounded-xl bg-[#FF8C00] hover:bg-amber-500 disabled:opacity-40 text-white font-bold text-xs sm:text-sm flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
             >
-              <Send className="w-4 h-4 text-white" />
+              <Send className="w-4 h-4" />
+              <span>{isEn ? 'Send' : 'ارسال'}</span>
             </button>
           </form>
         )}
       </div>
 
-      {/* Bottom Minimal Action Dock */}
+      {/* Bottom Minimal Action Dock (Like ChatGPT Voice Mode) */}
       <div className="relative z-10 flex items-center justify-center gap-6 pb-2">
+        {/* Mic / Interrupt Button */}
         <button
           type="button"
           data-keep-color="true"
@@ -1508,11 +1334,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
               ? 'bg-emerald-500 text-white shadow-xl shadow-emerald-500/40 ring-4 ring-emerald-400/30'
               : 'bg-stone-800 hover:bg-stone-700 text-white border border-stone-700'
           }`}
-          title={isListening ? (isEn ? 'Microphone Active' : 'میکروفون فعال') : isEn ? 'Speak' : 'صحبت'}
+          title={isListening ? (isEn ? 'Microphone On' : 'میکروفون روشن') : isEn ? 'Speak' : 'صحبت'}
         >
           <Mic className="w-7 h-7 text-white stroke-[2.2]" />
         </button>
 
+        {/* Optional One-Tap Save Button when draft is complete */}
         {isComplete && draft.title && draft.title.trim().length >= 2 && (
           <button
             type="button"
@@ -1528,11 +1355,12 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
           </button>
         )}
 
+        {/* Close / End Session Button */}
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            destroyContinuousMicStream();
+            stopListening();
             stopSpeaking();
             onClose();
           }}
@@ -1545,3 +1373,5 @@ export const SmartVoiceCaptureModal: React.FC<SmartVoiceCaptureModalProps> = ({
     </div>
   );
 };
+
+

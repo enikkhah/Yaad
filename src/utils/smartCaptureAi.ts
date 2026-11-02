@@ -49,8 +49,56 @@ export interface SmartAnalysisResult {
   intentType: SmartIntentType;
   isComplete: boolean;
   shouldAutoSubmit?: boolean;
+  unclearInput?: boolean;
   clarifyingQuestion: string;
+  quickSuggestions: string[];
   draft: SmartCaptureDraft;
+}
+
+let lastVariantIndexByKey: Record<string, number> = {};
+
+function pickVariedPrompt(key: string, options: string[]): string {
+  if (options.length <= 1) return options[0] || '';
+  const prev = lastVariantIndexByKey[key] ?? -1;
+  let idx = Math.floor(Math.random() * options.length);
+  if (idx === prev) {
+    idx = (idx + 1) % options.length;
+  }
+  lastVariantIndexByKey[key] = idx;
+  return options[idx];
+}
+
+export function getSmartWelcomePrompt(language: 'fa' | 'en' = 'fa'): string {
+  if (language === 'en') {
+    return pickVariedPrompt('welcome_en', [
+      "Hello! Go ahead, I'm ready.",
+      "Hello! Please tell me, I'm listening.",
+      'Hello! What can I save for you?',
+    ]);
+  }
+  return pickVariedPrompt('welcome_fa', [
+    'سلام؛ بفرمایید ثبت کنم.',
+    'سلام؛ بفرمایید، منتظرم.',
+    'سلام؛ در خدمتم، بفرمایید.',
+  ]);
+}
+
+export function getSmartRetryPrompt(attempt: number, language: 'fa' | 'en' = 'fa'): string {
+  if (language === 'en') {
+    if (attempt === 1) return "Sorry, I didn't catch that. Please say it again.";
+    if (attempt === 2) return 'Could you please repeat that once more?';
+    return 'I still could not hear clearly; please repeat once more.';
+  }
+  if (attempt === 1) return 'متوجه نشدم؛ بی‌زحمت یک بار دیگه بفرمایید.';
+  if (attempt === 2) return 'صداتون واضح نبود؛ لطفاً دوباره بگید.';
+  return 'ببخشید؛ می‌شه یک بار دیگه تکرار کنید؟';
+}
+
+export function getSmartTypeFallbackPrompt(language: 'fa' | 'en' = 'fa'): string {
+  if (language === 'en') {
+    return 'Voice is not clear; please type your request below.';
+  }
+  return 'صدا واضح دریافت نمی‌شه؛ لطفاً در کادر پایین تایپ کنید.';
 }
 
 const PERSIAN_WORD_NUMBERS: Record<string, number> = {
@@ -1016,10 +1064,6 @@ function applyTimePeriod(rawHour: number, periodText: string): number {
 export function cleanExtractedTitle(rawText: string, intent: SmartIntentType): string {
   let t = normalizePersianSpeech(rawText)
     .replace(
-      /^(?:(?:سلام|درود|علیک\s*سلام|خسته\s*نباشید|وقت\s*بخیر|صبح\s*بخیر|عصر\s*بخیر|شب\s*بخیر|hello|hi|hey)[\s،,.:؛!?-]*)+/gi,
-      ''
-    )
-    .replace(
       /^(لطفاً|لطفا|بیزحمت|دیگه|من|میخوام|می‌خوام|میخواهم|می‌خواهم|ثبت کن|ذخیره کن|اضافه کن|بنویس|یادآوری کن|یادم بنداز|یادم بیار|یه یادآور|یک یادآور|یادآور|یه ایده دارم|ایده دارم|یه ایده|یک ایده|ایده جدید|ایده|مکان جدید|لوکیشن جدید|مکان|لوکیشن|مناسبت جدید|مناسبت|عنوانش رو بکن|عنوانش بشه|تغییر عنوان به|remind me to|set a reminder for|set a reminder to|save location|new idea|idea|reminder|occasion|location)\s*/gi,
       ''
     )
@@ -1140,114 +1184,8 @@ export function formatDraftDayLabel(draft: SmartCaptureDraft, isEn: boolean): st
   return `${toPersianDigits(offset)} روز دیگر`;
 }
 
-let greetingRotationCounter = 0;
-let stepQuestionRotationCounter = 0;
-
 /**
- * انتخاب جمله کوتاه و متنوع برای شروع گفتگو
- */
-export function pickInitialGreeting(language: 'fa' | 'en' = 'fa'): string {
-  const idx = greetingRotationCounter++ % 3;
-  if (language === 'en') {
-    const enGreetings = [
-      'Hello! Go ahead, I am ready to save it.',
-      'Hi there! Please go ahead, I am listening.',
-      'Hello! What would you like me to save for you?',
-    ];
-    return enGreetings[idx];
-  }
-  const faGreetings = [
-    'سلام؛ بفرمایید ثبت کنم.',
-    'سلام؛ بفرمایید، منتظرم.',
-    'سلام؛ در خدمتم، بفرمایید.',
-  ];
-  return faGreetings[idx];
-}
-
-/**
- * انتخاب جمله کوتاه و مودبانه در صورت نامفهوم بودن صدای کاربر (با قانون ۳ بار تلاش)
- */
-export function pickUnclearRetryPrompt(
-  retryCount: number,
-  language: 'fa' | 'en' = 'fa'
-): string {
-  if (language === 'en') {
-    if (retryCount >= 3) {
-      return 'Sorry, I still could not hear you clearly. Please type it below.';
-    }
-    return retryCount === 1
-      ? 'I did not catch that. Could you please say it one more time?'
-      : 'Your voice was not clear. Please say it again.';
-  }
-
-  if (retryCount >= 3) {
-    return 'ببخشید باز هم متوجه نشدم؛ لطفاً همین پایین تایپ کنید.';
-  }
-  return retryCount === 1
-    ? 'متوجه نشدم؛ لطفاً یه بار دیگه بگید.'
-    : 'صداتون واضح نبود؛ لطفاً دوباره بفرمایید.';
-}
-
-/**
- * بررسی اینکه آیا عبارت شنیده‌شده در مرحله فعلی معنی‌دار است یا صدای نامفهوم/نویز بوده است
- */
-export function isMeaningfulStepInput(
-  rawText: string,
-  currentDraft: SmartCaptureDraft
-): boolean {
-  const cleaned = correctPersianAsrErrors(rawText || '').trim();
-  if (!cleaned || cleaned.length < 2) return false;
-
-  // Reject pure filler sounds or standalone greetings without any command
-  if (
-    /^(ام+|اا+|هم+|اه+|او+|هوم+|نگاه|صدا|تست|الو|سلام|درود|علیک سلام|خسته نباشید|um+|uh+|hmm+|hello|hi)$/i.test(
-      cleaned
-    )
-  ) {
-    return false;
-  }
-
-  if (isConfirmationUtterance(cleaned) || isRejectionOrEditUtterance(cleaned)) {
-    return true;
-  }
-
-  if (/^(عنوان|موضوع|اسم|نام|روز|تاریخ|ساعت|زمان|آلارم|title|subject|day|date|time|alarm)/i.test(cleaned)) {
-    return true;
-  }
-
-  const step = currentDraft.wizardStep || 'ask_subject';
-  const timeInfo = extractTimeAndDate(cleaned, step === 'ask_time', step === 'ask_day');
-
-  if (step === 'ask_day') {
-    return (
-      timeInfo.hasExplicitDayOrDate ||
-      timeInfo.solarDay !== null ||
-      timeInfo.offsetDays !== null ||
-      /(عنوانش|موضوعش|اسمش|تغییر|عوض)/i.test(cleaned)
-    );
-  }
-
-  if (step === 'ask_time') {
-    return (
-      timeInfo.hour !== null ||
-      timeInfo.hasExplicitDayOrDate ||
-      /(عنوانش|موضوعش|روزش|تغییر|عوض)/i.test(cleaned)
-    );
-  }
-
-  if (step === 'confirm') {
-    return (
-      timeInfo.hour !== null ||
-      timeInfo.hasExplicitDayOrDate ||
-      /(عنوانش|موضوعش|روزش|ساعتش|تغییر|عوض|ویرایش)/i.test(cleaned)
-    );
-  }
-
-  return true;
-}
-
-/**
- * موتور مرحله‌ای هوشمند (۶ گام استاندارد برای یادآور، مناسبت، مکان و ایده با سوالات کوتاه و متنوع)
+ * موتور مرحله‌ای هوشمند (۶ گام استاندارد برای یادآور، مناسبت، مکان و ایده)
  */
 export function analyzeSmartCaptureLocally(
   messages: SmartChatMessage[],
@@ -1257,7 +1195,6 @@ export function analyzeSmartCaptureLocally(
   const isEn = language === 'en';
   const lastUserMsg = [...messages].reverse().find((m) => m.role === 'user')?.text.trim() || '';
   const normLast = normalizePersianSpeech(lastUserMsg);
-  const vIdx = stepQuestionRotationCounter++ % 3;
 
   const isConfirmCommand = isConfirmationUtterance(lastUserMsg);
   const isRejectOrEdit = isRejectionOrEditUtterance(lastUserMsg);
@@ -1338,6 +1275,7 @@ export function analyzeSmartCaptureLocally(
       clarifyingQuestion: isEn
         ? 'No problem. Please tell me which part you would like to change (the title, day, or time)?'
         : 'خواهش می‌کنم؛ لطفاً بفرمایید کدام بخش (عنوان، روز یا ساعت) را می‌خواهید تغییر دهید؟',
+      quickSuggestions: [],
       draft: nextDraft,
     };
   }
@@ -1359,6 +1297,7 @@ export function analyzeSmartCaptureLocally(
   }
 
   // Smart Title Locking:
+  // Only set or update title in Step 1 (when no title exists yet or wizardStep === 'ask_subject') or when the user explicitly requests a title edit
   const isPureCategoryWord = /^(یادآور|مناسبت|مکان|ایده|عنوان|موضوع|روز|تاریخ|ساعت|زمان|بله|تایید|ثبت کن|امروز|فردا|پس فردا|شنبه|یکشنبه|دوشنبه|سه شنبه|چهارشنبه|پنجشنبه|جمعه|reminder|occasion|location|idea|title|day|date|time|today|tomorrow|yes|ok|confirm)$/i.test(
     lastUserMsg.replace(/\u200c/g, ' ').trim()
   );
@@ -1388,24 +1327,21 @@ export function analyzeSmartCaptureLocally(
     nextDraft.title = candidateTitle;
   }
 
-  const faConfirmQuestions = [
-    'همه‌چی آماده‌ست؛ ثبتش کنم؟',
-    'تنظیم شد؛ مورد تاییده که ثبت بشه؟',
-  ];
-
   // CASE 0: Unknown Intent -> Step 1: Ask for Subject
   if (nextDraft.intentType === 'unknown') {
     nextDraft.wizardStep = 'ask_subject';
     return {
       intentType: 'unknown',
       isComplete: false,
-      clarifyingQuestion: pickInitialGreeting(language),
+      unclearInput: true,
+      clarifyingQuestion: getSmartWelcomePrompt(language),
+      quickSuggestions: [],
       draft: nextDraft,
     };
   }
 
   // ============================================================================
-  // CASE 1: REMINDER (یادآور) — سوالات کوتاه، متنوع و صمیمی
+  // CASE 1: REMINDER (یادآور) — گام ۱ (عنوان) -> گام ۳ (روز) -> گام ۴ (ساعت) -> گام ۵ و ۶ (بازخوانی و تایید)
   // ============================================================================
   if (nextDraft.intentType === 'reminder') {
     const hasTitle = Boolean(nextDraft.title && nextDraft.title.trim().length >= 2);
@@ -1419,74 +1355,118 @@ export function analyzeSmartCaptureLocally(
     );
     const hasTime = typeof nextDraft.hour === 'number' && nextDraft.hour >= 0;
 
+    // Step 1: Ask for Title if missing
     if (!hasTitle) {
+      const wasAlreadyAskingSubject =
+        currentDraft.wizardStep === 'ask_subject' &&
+        !/^(یادآور|یاداور|آلارم|reminder)$/i.test(lastUserMsg.trim());
       nextDraft.wizardStep = 'ask_subject';
       return {
         intentType: 'reminder',
         isComplete: false,
+        unclearInput: wasAlreadyAskingSubject,
         clarifyingQuestion: isEn
-          ? 'Please tell me the subject or title of your reminder?'
-          : 'لطفاً موضوع یا عنوان یادآور مورد نظر خود را بفرمایید؟',
+          ? 'What is the subject of your reminder?'
+          : 'موضوع یادآور چیه؟',
+        quickSuggestions: [],
         draft: nextDraft,
       };
     }
 
+    // Step 3: Ask for Day / Date if missing
     if (!hasDay) {
+      const wasAskingDay = currentDraft.wizardStep === 'ask_day';
       nextDraft.wizardStep = 'ask_day';
-      const faDayQuestions = [
-        'چه روزی یادتون بندازم؟',
-        'برای کدوم روز تنظیمش کنم؟',
-        'کی بهتون یادآوری کنم؟',
-      ];
       return {
         intentType: 'reminder',
         isComplete: false,
+        unclearInput: wasAskingDay && !isExplicitTitleEdit && !isRejectOrEdit,
         clarifyingQuestion: isEn
-          ? `On which day or date should I remind you about "${nextDraft.title}"?`
-          : faDayQuestions[vIdx],
+          ? pickVariedPrompt('ask_day_en', [
+              `For which day should I set "${nextDraft.title}"?`,
+              `What day should I remind you about "${nextDraft.title}"?`,
+              `Which day works for "${nextDraft.title}"?`,
+            ])
+          : pickVariedPrompt('ask_day_fa', [
+              `برای چه روزی تنظیمش کنم؟`,
+              `چه روزی بهتون یادآوری کنم؟`,
+              `کدوم روز یادتون بندازم؟`,
+            ]),
+        quickSuggestions: [],
         draft: nextDraft,
       };
     }
 
+    // Step 4: Ask for Alarm Time if missing
     if (!hasTime) {
+      const wasAskingTime = currentDraft.wizardStep === 'ask_time';
       nextDraft.wizardStep = 'ask_time';
-      const dayLabel = formatDraftDayLabel(nextDraft, isEn);
-      const faTimeQuestions = [
-        'ساعت چند یادآوری کنم؟',
-        'آلارمش روی چه ساعتی باشه؟',
-        'چه ساعتی بهتون خبر بدم؟',
-      ];
       return {
         intentType: 'reminder',
         isComplete: false,
+        unclearInput:
+          wasAskingTime &&
+          !timeInfo.hasExplicitDayOrDate &&
+          !isExplicitTitleEdit &&
+          !isRejectOrEdit,
         clarifyingQuestion: isEn
-          ? `What time should I set the alarm for "${nextDraft.title}" on ${dayLabel}?`
-          : faTimeQuestions[vIdx],
+          ? pickVariedPrompt('ask_time_en', [
+              'At what time?',
+              'What time should the alarm ring?',
+              'What time should I set it for?',
+            ])
+          : pickVariedPrompt('ask_time_fa', [
+              'ساعت چند زنگ بزنه؟',
+              'چه ساعتی خبرتون کنم؟',
+              'برای چه ساعتی تنظیم بشه؟',
+            ]),
+        quickSuggestions: [],
         draft: nextDraft,
       };
     }
 
+    // Step 5 & 6: All factors present -> Read back Subject, Day, and Time and ask for Confirmation
     if (nextDraft.minute === undefined || nextDraft.minute === null || nextDraft.minute < 0) {
       nextDraft.minute = 0;
     }
+    const wasAlreadyConfirming = currentDraft.wizardStep === 'confirm';
+    const didChangeAnythingInConfirm =
+      timeInfo.hasExplicitDayOrDate ||
+      timeInfo.hour !== null ||
+      isExplicitTitleEdit ||
+      isRejectOrEdit ||
+      isConfirmCommand;
+
     nextDraft.wizardStep = 'confirm';
 
     const dayLabel = formatDraftDayLabel(nextDraft, isEn);
-    const timeLabel = `${String(nextDraft.hour).padStart(2, '0')}:${String(nextDraft.minute).padStart(2, '0')}`;
+    const timeLabel = isEn
+      ? `${String(nextDraft.hour).padStart(2, '0')}:${String(nextDraft.minute).padStart(2, '0')}`
+      : `${toPersianDigits(String(nextDraft.hour).padStart(2, '0'))}:${toPersianDigits(
+          String(nextDraft.minute).padStart(2, '0')
+        )}`;
+
+    const confirmSuffixFa = pickVariedPrompt('ask_confirm_fa', [
+      'همه‌چی آماده است؛ ثبتش کنم؟',
+      'مورد تاییده تا ثبت بشه؟',
+      'اطلاعات کامل شد؛ ذخیره کنم؟',
+    ]);
 
     return {
       intentType: 'reminder',
       isComplete: true,
       shouldAutoSubmit: isConfirmCommand,
+      unclearInput: wasAlreadyConfirming && !didChangeAnythingInConfirm,
       clarifyingQuestion: isEn
-        ? `"${nextDraft.title}" for ${dayLabel} at ${timeLabel}. Do you confirm saving it?`
-        : faConfirmQuestions[vIdx % 2],
+        ? `"${nextDraft.title}" for ${dayLabel} at ${timeLabel}. Should I save it?`
+        : `«${nextDraft.title}»، ${dayLabel} ساعت ${timeLabel}. ${confirmSuffixFa}`,
+      quickSuggestions: [],
       draft: nextDraft,
     };
   }
 
   // ============================================================================
-  // CASE 2: OCCASION (مناسبت)
+  // CASE 2: OCCASION (مناسبت) — گام ۱ (عنوان) -> گام ۳ (روز و ماه) -> گام ۵ و ۶ (بازخوانی و تایید)
   // ============================================================================
   if (nextDraft.intentType === 'occasion') {
     const hasTitle = Boolean(nextDraft.title && nextDraft.title.trim().length >= 2);
@@ -1497,57 +1477,86 @@ export function analyzeSmartCaptureLocally(
       nextDraft.solarMonth >= 1;
 
     if (!hasTitle) {
+      const wasAskingSubject =
+        currentDraft.wizardStep === 'ask_subject' &&
+        !/^(مناسبت|تولد|سالگرد|occasion)$/i.test(lastUserMsg.trim());
       nextDraft.wizardStep = 'ask_subject';
       return {
         intentType: 'occasion',
         isComplete: false,
+        unclearInput: wasAskingSubject,
         clarifyingQuestion: isEn
-          ? 'Please tell me the title of this occasion?'
-          : 'لطفاً عنوان این مناسبت را بفرمایید؟',
+          ? 'What is the title of this occasion?'
+          : 'عنوان این مناسبت چیه؟',
+        quickSuggestions: [],
         draft: nextDraft,
       };
     }
 
     if (!hasDate) {
+      const wasAskingDay = currentDraft.wizardStep === 'ask_day';
       nextDraft.wizardStep = 'ask_day';
       return {
         intentType: 'occasion',
         isComplete: false,
+        unclearInput: wasAskingDay && !isExplicitTitleEdit && !isRejectOrEdit,
         clarifyingQuestion: isEn
           ? `On what day and month is "${nextDraft.title}"?`
-          : `بسیار خب، مناسبتِ «${nextDraft.title}» در چه روز و چه ماهی است؟`,
+          : `مناسبتِ «${nextDraft.title}» در چه روز و چه ماهی است؟`,
+        quickSuggestions: [],
         draft: nextDraft,
       };
     }
 
+    const wasAlreadyConfirming = currentDraft.wizardStep === 'confirm';
+    const didChangeAnything =
+      timeInfo.hasExplicitDayOrDate || isExplicitTitleEdit || isRejectOrEdit || isConfirmCommand;
+
     nextDraft.wizardStep = 'confirm';
     const monthName = PERSIAN_MONTHS[(nextDraft.solarMonth || 1) - 1] || 'فروردین';
-    const dateLabel = `${nextDraft.solarDay} ${monthName}${nextDraft.solarYear ? ` ${nextDraft.solarYear}` : ''}`;
+    const dateLabel = isEn
+      ? `${nextDraft.solarDay} ${monthName}${nextDraft.solarYear ? ` ${nextDraft.solarYear}` : ''}`
+      : `${toPersianDigits(nextDraft.solarDay!)} ${monthName}${
+          nextDraft.solarYear ? ` ${toPersianDigits(nextDraft.solarYear)}` : ''
+        }`;
+
+    const confirmSuffixFa = pickVariedPrompt('ask_confirm_fa', [
+      'همه‌چی آماده است؛ ثبتش کنم؟',
+      'مورد تاییده تا ثبت بشه؟',
+      'اطلاعات کامل شد؛ ذخیره کنم؟',
+    ]);
 
     return {
       intentType: 'occasion',
       isComplete: true,
       shouldAutoSubmit: isConfirmCommand,
+      unclearInput: wasAlreadyConfirming && !didChangeAnything,
       clarifyingQuestion: isEn
-        ? `Your occasion "${nextDraft.title}" on ${dateLabel} is ready. Do you confirm saving it?`
-        : faConfirmQuestions[vIdx % 2],
+        ? `"${nextDraft.title}" on ${dateLabel}. Should I save it?`
+        : `«${nextDraft.title}»، تاریخ ${dateLabel}. ${confirmSuffixFa}`,
+      quickSuggestions: [],
       draft: nextDraft,
     };
   }
 
   // ============================================================================
-  // CASE 3: LOCATION (مکان)
+  // CASE 3: LOCATION (مکان) — گام ۱ (نام مکان + GPS زنده) -> گام ۲ (توضیحات/هشدار ورود) -> گام ۳ (تایید نهایی)
   // ============================================================================
   if (nextDraft.intentType === 'location') {
     const hasTitle = Boolean(nextDraft.title && nextDraft.title.trim().length >= 2);
     if (!hasTitle) {
+      const wasAskingSubject =
+        currentDraft.wizardStep === 'ask_subject' &&
+        !/^(مکان|لوکیشن|آدرس|موقعیت|location|place)$/i.test(lastUserMsg.trim());
       nextDraft.wizardStep = 'ask_subject';
       return {
         intentType: 'location',
         isComplete: false,
+        unclearInput: wasAskingSubject,
         clarifyingQuestion: isEn
-          ? 'I am getting your live GPS coordinates. What name would you like to save this location under?'
-          : 'در حال دریافت موقعیت زنده GPS شما هستم؛ لطفاً نام این مکان را بفرمایید؟',
+          ? 'What name would you like to save this location under?'
+          : 'نام این مکان را چه بگذارم؟',
+        quickSuggestions: [],
         draft: nextDraft,
       };
     }
@@ -1564,8 +1573,9 @@ export function analyzeSmartCaptureLocally(
         isComplete: true,
         shouldAutoSubmit: false,
         clarifyingQuestion: isEn
-          ? `Location "${nextDraft.title}" is set with your live GPS position. Would you like to add a note or enable arrival alert, or should I save it now?`
-          : `مکانِ «${nextDraft.title}» با موقعیت زنده GPS آماده است. اگر توضیحی دارید یا می‌خواهید هشدار ورود فعال شود بفرمایید، وگرنه برای ذخیره بگویید ثبت کن.`,
+          ? `Location "${nextDraft.title}" is set. Would you like to add a note, or should I save it?`
+          : `مکانِ «${nextDraft.title}» با موقعیت زنده GPS آماده است. اگر توضیحی دارید بفرمایید، وگرنه بگویید ثبت کن.`,
+        quickSuggestions: [],
         draft: nextDraft,
       };
     }
@@ -1578,29 +1588,41 @@ export function analyzeSmartCaptureLocally(
     }
 
     nextDraft.wizardStep = 'confirm';
+    const confirmSuffixFa = pickVariedPrompt('ask_confirm_fa', [
+      'همه‌چی آماده است؛ ثبتش کنم؟',
+      'مورد تاییده تا ثبت بشه؟',
+      'اطلاعات کامل شد؛ ذخیره کنم؟',
+    ]);
+
     return {
       intentType: 'location',
       isComplete: true,
       shouldAutoSubmit: isConfirmCommand,
       clarifyingQuestion: isEn
-        ? `Location "${nextDraft.title}" is ready to be saved with your live GPS coordinates. Do you confirm?`
-        : faConfirmQuestions[vIdx % 2],
+        ? `Location "${nextDraft.title}" is ready. Do you confirm?`
+        : `مکانِ «${nextDraft.title}» آماده است. ${confirmSuffixFa}`,
+      quickSuggestions: [],
       draft: nextDraft,
     };
   }
 
   // ============================================================================
-  // CASE 4: IDEA (ایده)
+  // CASE 4: IDEA (ایده) — گام ۱ (عنوان ایده) -> گام ۲ (توضیحات تکمیلی) -> گام ۳ (تایید نهایی)
   // ============================================================================
   const hasIdeaText = Boolean(nextDraft.title && nextDraft.title.trim().length >= 2);
   if (!hasIdeaText) {
+    const wasAskingSubject =
+      currentDraft.wizardStep === 'ask_subject' &&
+      !/^(ایده|فکر|یادداشت|طرح|idea|note)$/i.test(lastUserMsg.trim());
     nextDraft.wizardStep = 'ask_subject';
     return {
       intentType: 'idea',
       isComplete: false,
+      unclearInput: wasAskingSubject,
       clarifyingQuestion: isEn
-        ? 'Please tell me the title or subject of your idea?'
-        : 'لطفاً عنوان یا موضوع ایده‌ی خود را بفرمایید؟',
+        ? 'What is the subject of your idea?'
+        : 'موضوع ایده‌تون چیه؟',
+      quickSuggestions: [],
       draft: nextDraft,
     };
   }
@@ -1613,8 +1635,9 @@ export function analyzeSmartCaptureLocally(
       isComplete: true,
       shouldAutoSubmit: false,
       clarifyingQuestion: isEn
-        ? `Got the idea "${nextDraft.title}". If you have any additional details, please share them now, or say confirm to save it.`
-        : `عنوان ایده‌ی «${nextDraft.title}» دریافت شد. اگر توضیح تکمیلی برای این ایده دارید بفرمایید، و در غیر این صورت بگویید ثبت شود.`,
+        ? `Got "${nextDraft.title}". If you have any additional details, please share them now, or say confirm to save it.`
+        : `عنوان ایده‌ی «${nextDraft.title}» دریافت شد. اگر توضیح تکمیلی برای این ایده دارید بفرمایید، وگرنه بگویید ثبت شود.`,
+      quickSuggestions: [],
       draft: nextDraft,
     };
   }
@@ -1626,13 +1649,20 @@ export function analyzeSmartCaptureLocally(
   }
 
   nextDraft.wizardStep = 'confirm';
+  const confirmSuffixFa = pickVariedPrompt('ask_confirm_fa', [
+    'همه‌چی آماده است؛ ثبتش کنم؟',
+    'مورد تاییده تا ثبت بشه؟',
+    'اطلاعات کامل شد؛ ذخیره کنم؟',
+  ]);
+
   return {
     intentType: 'idea',
     isComplete: true,
     shouldAutoSubmit: isConfirmCommand,
     clarifyingQuestion: isEn
-      ? `Your idea "${nextDraft.title}" is ready. Do you confirm saving it?`
-      : faConfirmQuestions[vIdx % 2],
+      ? `Idea "${nextDraft.title}" is ready. Do you confirm?`
+      : `ایده‌ی «${nextDraft.title}» آماده است. ${confirmSuffixFa}`,
+    quickSuggestions: [],
     draft: nextDraft,
   };
 }
