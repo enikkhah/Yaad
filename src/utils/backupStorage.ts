@@ -652,17 +652,21 @@ function mergeBackupCollection<T extends { id: string; deletedAt?: number }>(
     map.set(item.id, item);
   }
   for (const diskItem of secArr) {
-    if (!map.has(diskItem.id)) {
+    const existing = map.get(diskItem.id);
+    if (!existing) {
       if (!onlyPreserveWhenPrimaryEmptyOrActive || !diskItem.deletedAt) {
         map.set(diskItem.id, diskItem);
       }
+    } else if (!onlyPreserveWhenPrimaryEmptyOrActive && existing.deletedAt && !diskItem.deletedAt) {
+      // When recalling/merging backups, if the backup copy is active and local copy was soft-deleted, restore active item
+      map.set(diskItem.id, diskItem);
     }
   }
   return Array.from(map.values());
 }
 
 /**
- * Saves an automatic snapshot of all user data into the Local 'Yaad reminder' folder
+ * Saves an automatic snapshot of all user data into the Local 'YAAD' folder
  * (Device Directory Handle, Capacitor Filesystem, OPFS, Server Folder, Cache, IndexedDB, LocalStorage)
  */
 export async function performAutoBackup(
@@ -821,107 +825,95 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
     // ignore
   }
 
-  // 2. Native Android Capacitor Filesystem (smart readdir + readFile with Encoding.UTF8)
-  try {
-    const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
+  // 2. Native Android Capacitor Filesystem (fast direct check + targeted folder scan)
+  if (Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).Capacitor?.Plugins?.Filesystem)) {
+    try {
+      const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
 
-    const searchDirs = [
-      Directory.ExternalStorage,
-      Directory.External,
-      Directory.Documents,
-      Directory.Data,
-    ];
+      const searchDirs = [
+        Directory.ExternalStorage,
+        Directory.External,
+        Directory.Documents,
+        Directory.Data,
+      ];
 
-    const folderPathsToTry = [
-      cleanSubName,
-      'Yaad reminder',
-      `Download/${cleanSubName}`,
-      `Documents/${cleanSubName}`,
-      'Download',
-      'Documents',
-      '',
-    ];
+      const folderPathsToTry = [
+        cleanSubName,
+        'Yaad reminder',
+        `Download/${cleanSubName}`,
+        `Documents/${cleanSubName}`,
+      ];
 
-    for (const dir of searchDirs) {
-      const isExternalDisk = dir !== Directory.Data;
-      for (const folderPath of folderPathsToTry) {
-        try {
-          // A) Try readdir to discover all .json files in this folder
-          const dirInfo = await Filesystem.readdir({
-            path: folderPath,
-            directory: dir,
-          }).catch(() => null);
-
-          if (dirInfo && Array.isArray(dirInfo.files)) {
-            const jsonCandidates: { name: string; mtime: number }[] = [];
-
-            for (const fileItem of dirInfo.files) {
-              const fname = typeof fileItem === 'string' ? fileItem : fileItem?.name;
-              if (fname && fname.toLowerCase().endsWith('.json')) {
-                const mtime = typeof fileItem === 'object' && fileItem?.mtime ? fileItem.mtime : 0;
-                jsonCandidates.push({ name: fname, mtime });
-              }
-            }
-
-            // Sort: prioritize newest mtime, or matching yaad/backup in name
-            jsonCandidates.sort((a, b) => {
-              if (a.mtime && b.mtime && a.mtime !== b.mtime) {
-                return b.mtime - a.mtime;
-              }
-              const aPriority =
-                a.name.toLowerCase().includes('yaad') || a.name.toLowerCase().includes('backup') ? 1 : 0;
-              const bPriority =
-                b.name.toLowerCase().includes('yaad') || b.name.toLowerCase().includes('backup') ? 1 : 0;
-              if (aPriority !== bPriority) return bPriority - aPriority;
-              return b.name.localeCompare(a.name);
-            });
-
-            // Read the json files found in this directory
-            for (const item of jsonCandidates) {
-              const fullFilePath = folderPath ? `${folderPath}/${item.name}` : item.name;
-              const fileRes = await Filesystem.readFile({
-                path: fullFilePath,
-                directory: dir,
-                encoding: Encoding.UTF8,
-              }).catch(() => null);
-
-              if (fileRes?.data) {
-                const parsed = safeParseJsonFromReadFileData(fileRes.data);
-                if (isValidSnapshot(parsed)) {
-                  candidates.push({ snap: parsed, isPhysicalDisk: isExternalDisk });
-                }
-              }
-            }
-          }
-
-          // B) Direct readFile for standard file names as extra fallback
-          const standardPaths = [
-            folderPath ? `${folderPath}/${LOCAL_BACKUP_FILE_NAME}` : LOCAL_BACKUP_FILE_NAME,
-            folderPath ? `${folderPath}/yaad_backup.json` : 'yaad_backup.json',
-          ];
-          for (const sPath of standardPaths) {
-            const res = await Filesystem.readFile({
-              path: sPath,
+      for (const dir of searchDirs) {
+        const isExternalDisk = dir !== Directory.Data;
+        for (const folderPath of folderPathsToTry) {
+          try {
+            // A) Fast direct readFile for standard backup file first
+            const directPath = `${folderPath}/${LOCAL_BACKUP_FILE_NAME}`;
+            const directRes = await Filesystem.readFile({
+              path: directPath,
               directory: dir,
               encoding: Encoding.UTF8,
             }).catch(() => null);
-            if (res?.data) {
-              const parsed = safeParseJsonFromReadFileData(res.data);
+
+            if (directRes?.data) {
+              const parsed = safeParseJsonFromReadFileData(directRes.data);
               if (isValidSnapshot(parsed)) {
                 candidates.push({ snap: parsed, isPhysicalDisk: isExternalDisk });
               }
             }
+
+            // B) Try readdir inside the YAAD folder in case user placed a custom-named .json backup file inside YAAD
+            const dirInfo = await Filesystem.readdir({
+              path: folderPath,
+              directory: dir,
+            }).catch(() => null);
+
+            if (dirInfo && Array.isArray(dirInfo.files)) {
+              const jsonCandidates: { name: string; mtime: number }[] = [];
+
+              for (const fileItem of dirInfo.files) {
+                const fname = typeof fileItem === 'string' ? fileItem : fileItem?.name;
+                if (fname && fname.toLowerCase().endsWith('.json') && fname !== LOCAL_BACKUP_FILE_NAME) {
+                  const mtime = typeof fileItem === 'object' && fileItem?.mtime ? fileItem.mtime : 0;
+                  jsonCandidates.push({ name: fname, mtime });
+                }
+              }
+
+              jsonCandidates.sort((a, b) => {
+                if (a.mtime && b.mtime && a.mtime !== b.mtime) {
+                  return b.mtime - a.mtime;
+                }
+                return b.name.localeCompare(a.name);
+              });
+
+              for (const item of jsonCandidates.slice(0, 5)) {
+                const fullFilePath = `${folderPath}/${item.name}`;
+                const fileRes = await Filesystem.readFile({
+                  path: fullFilePath,
+                  directory: dir,
+                  encoding: Encoding.UTF8,
+                }).catch(() => null);
+
+                if (fileRes?.data) {
+                  const parsed = safeParseJsonFromReadFileData(fileRes.data);
+                  if (isValidSnapshot(parsed)) {
+                    candidates.push({ snap: parsed, isPhysicalDisk: isExternalDisk });
+                  }
+                }
+              }
+            }
+          } catch {
+            // continue next search candidate
           }
-        } catch {
-          // continue next search candidate
         }
       }
+    } catch (err) {
+      console.warn('[retrieveFromLocalYaadFolder] Filesystem scan error:', err);
     }
-  } catch (err) {
-    console.warn('[retrieveFromLocalYaadFolder] Filesystem scan error:', err);
   }
 
-  // 3. OPFS 'Yaad reminder/yaad_backup.json'
+  // 3. OPFS 'YAAD/yaad_backup.json'
   try {
     const fromOpfs = await readFromOpfsYaadFolder();
     if (fromOpfs) candidates.push({ snap: fromOpfs, isPhysicalDisk: false });
@@ -929,7 +921,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
     // ignore
   }
 
-  // 4. Physical 'Yaad reminder/yaad_backup.json' & Cache Storage
+  // 4. Physical 'YAAD/yaad_backup.json' & Cache Storage
   try {
     const fromServerOrCache = await readFromServerOrCacheYaadFolder();
     if (fromServerOrCache) candidates.push({ snap: fromServerOrCache, isPhysicalDisk: false });
@@ -975,29 +967,30 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
 
   if (candidates.length === 0) return null;
 
-  // Prefer candidates that actually contain reminders and user items, and prioritize physical YAAD folder on disk
+  // Prefer physical disk candidates when non-empty, and newest updatedAt among non-empty snapshots
   candidates.sort((a, b) => {
-    const aReminders = Array.isArray(a.snap.reminders) ? a.snap.reminders.length : 0;
-    const bReminders = Array.isArray(b.snap.reminders) ? b.snap.reminders.length : 0;
-    if (aReminders > 0 && bReminders === 0) return -1;
-    if (bReminders > 0 && aReminders === 0) return 1;
-
     const aItems = getSnapshotItemCount(a.snap);
     const bItems = getSnapshotItemCount(b.snap);
     if (aItems > 0 && bItems === 0) return -1;
     if (bItems > 0 && aItems === 0) return 1;
 
-    if (a.isPhysicalDisk !== b.isPhysicalDisk && aReminders !== bReminders) {
-      return bReminders - aReminders;
+    if (a.isPhysicalDisk !== b.isPhysicalDisk && aItems > 0 && bItems > 0) {
+      return a.isPhysicalDisk ? -1 : 1;
     }
 
-    return (b.snap.updatedAt || 0) - (a.snap.updatedAt || 0);
+    const tsDiff = (b.snap.updatedAt || 0) - (a.snap.updatedAt || 0);
+    if (tsDiff !== 0) return tsDiff;
+
+    return bItems - aItems;
   });
 
-  // Merge collections across all valid candidates so no reminders/occasions/ideas/locations in any backup file are ever left behind
-  let mergedBest: AutoBackupSnapshot = { ...candidates[0].snap };
-  for (let i = 1; i < candidates.length; i++) {
-    const cand = candidates[i].snap;
+  // Merge collections across valid candidates so no reminders/occasions/ideas/locations in any backup file are left behind
+  const hasPhysicalWithItems = candidates.some((c) => c.isPhysicalDisk && getSnapshotItemCount(c.snap) > 0);
+  const pool = hasPhysicalWithItems ? candidates.filter((c) => c.isPhysicalDisk) : candidates;
+
+  let mergedBest: AutoBackupSnapshot = { ...pool[0].snap };
+  for (let i = 1; i < pool.length; i++) {
+    const cand = pool[i].snap;
     mergedBest = {
       ...mergedBest,
       reminders: mergeBackupCollection(mergedBest.reminders, cand.reminders, false),

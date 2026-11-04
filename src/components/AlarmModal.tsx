@@ -184,7 +184,6 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
 
   useEffect(() => {
     if (!reminder?.id) {
-      stopAlarmRinging();
       return;
     }
 
@@ -341,7 +340,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
                 <img
                   src={appIcon}
                   alt="YAAD"
-                  className="relative z-10 w-full h-full object-cover rounded-[9px]"
+                  className="relative z-10 w-full h-full object-contain scale-95 rounded-[9px]"
                   draggable={false}
                 />
               </div>

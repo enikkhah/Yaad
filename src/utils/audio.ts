@@ -253,26 +253,26 @@ const playSoftTone = (
   osc.stop(startTime + duration + 0.03);
 };
 
-const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
-  const ctx = getAudioContext();
-  const now = ctx.currentTime;
+const scheduleSynthesizedTones = (ctx: AudioContext, sound: PhoneAlarmSound, vol: number) => {
+  const norm = sound.replace(/_/g, '-');
+  const now = ctx.currentTime + 0.015;
 
-  if (sound === 'digital_beep' || sound === 'digital-beep') {
-    // Classic digital watch/phone double-beep-beep: 4 rapid 880Hz pulses
+  if (norm === 'digital-beep') {
+    // Classic digital watch/phone double-beep-beep: 4 rapid pulses
     const pulses = [0, 0.14, 0.28, 0.42];
     pulses.forEach((offset) => {
-      playTone(ctx, 987.77, now + offset, 0.09, 'square', 0.16, vol); // B5
+      playTone(ctx, 987.77, now + offset, 0.09, 'square', 0.18, vol); // B5
     });
-  } else if (sound === 'beep') {
+  } else if (norm === 'beep') {
     // Clean single standard beep
-    playTone(ctx, 880, now, 0.15, 'sine', 0.25, vol);
-  } else if (sound === 'radar') {
+    playTone(ctx, 880, now, 0.16, 'sine', 0.28, vol);
+  } else if (norm === 'radar') {
     // iOS Radar-like rising chime pulse
     const notes = [523.25, 659.25, 783.99, 1046.5, 783.99, 1046.5];
     notes.forEach((freq, i) => {
       playTone(ctx, freq, now + i * 0.12, 0.2, 'triangle', 0.28, vol);
     });
-  } else if (sound === 'marimba') {
+  } else if (norm === 'marimba') {
     // Warm wooden rhythmic arpeggio
     const pattern = [
       { freq: 392.0, time: 0.0, dur: 0.18 },   // G4
@@ -285,7 +285,7 @@ const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
     pattern.forEach((n) => {
       playTone(ctx, n.freq, now + n.time, n.dur, 'sine', 0.32, vol);
     });
-  } else if (sound === 'morning_chime' || sound === 'morning-chime') {
+  } else if (norm === 'morning-chime') {
     // Gentle calming harmonic chord progression
     const notes = [
       { freq: 440.0, time: 0.0, dur: 0.5 },   // A4
@@ -294,20 +294,20 @@ const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
       { freq: 880.0, time: 0.65, dur: 0.8 },  // A5
     ];
     notes.forEach((n) => {
-      playTone(ctx, n.freq, now + n.time, n.dur, 'sine', 0.24, vol);
+      playTone(ctx, n.freq, now + n.time, n.dur, 'sine', 0.25, vol);
     });
-  } else if (sound === 'zen-bowl') {
+  } else if (norm === 'zen-bowl') {
     // Tibetan Singing Bowl: deep warm fundamental + harmonic overtones with slow gentle decay
-    playSoftTone(ctx, 256.0, now, 0.12, 2.2, 'sine', 0.24, vol);
-    playSoftTone(ctx, 512.0, now + 0.02, 0.15, 1.8, 'sine', 0.11, vol);
-    playSoftTone(ctx, 768.0, now + 0.05, 0.18, 1.4, 'sine', 0.06, vol);
-  } else if (sound === 'soft-harp') {
+    playSoftTone(ctx, 256.0, now, 0.12, 2.2, 'sine', 0.26, vol);
+    playSoftTone(ctx, 512.0, now + 0.02, 0.15, 1.8, 'sine', 0.13, vol);
+    playSoftTone(ctx, 768.0, now + 0.05, 0.18, 1.4, 'sine', 0.08, vol);
+  } else if (norm === 'soft-harp') {
     // Soft Angelic Harp Arpeggio (Fmaj7: F4, A4, C5, E5, A5)
     const harpNotes = [349.23, 440.0, 523.25, 659.25, 880.0];
     harpNotes.forEach((freq, idx) => {
-      playSoftTone(ctx, freq, now + idx * 0.15, 0.04, 1.2, 'sine', 0.18, vol);
+      playSoftTone(ctx, freq, now + idx * 0.15, 0.04, 1.2, 'sine', 0.20, vol);
     });
-  } else if (sound === 'ocean-drop') {
+  } else if (norm === 'ocean-drop') {
     // Gentle Water Droplets: smooth upward pitch-gliding sine drops
     const drops = [
       { start: 0.0, f1: 520, f2: 1040 },
@@ -321,14 +321,14 @@ const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
       osc.frequency.setValueAtTime(f1, now + start);
       osc.frequency.exponentialRampToValueAtTime(f2, now + start + 0.11);
       gain.gain.setValueAtTime(0.0001, now + start);
-      gain.gain.linearRampToValueAtTime(Math.max(0.0005, 0.22 * vol), now + start + 0.02);
+      gain.gain.linearRampToValueAtTime(Math.max(0.0005, 0.24 * vol), now + start + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, now + start + 0.35);
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(now + start);
       osc.stop(now + start + 0.38);
     });
-  } else if (sound === 'wind-chimes') {
+  } else if (norm === 'wind-chimes') {
     // Delicate Pentatonic Wind Chimes
     const chimes = [
       { freq: 1046.5, time: 0.0, dur: 1.1 },  // C6
@@ -338,15 +338,15 @@ const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
       { freq: 1318.51, time: 0.95, dur: 1.2 },// E6
     ];
     chimes.forEach((c) => {
-      playSoftTone(ctx, c.freq, now + c.time, 0.03, c.dur, 'sine', 0.14, vol);
+      playSoftTone(ctx, c.freq, now + c.time, 0.03, c.dur, 'sine', 0.16, vol);
     });
-  } else if (sound === 'warm-pad') {
+  } else if (norm === 'warm-pad') {
     // Soothing Ambient Warm Pad Chord (C4, E4, G4, B4) with slow swell
     const chord = [261.63, 329.63, 392.0, 493.88];
     chord.forEach((freq) => {
-      playSoftTone(ctx, freq, now, 0.6, 2.2, 'sine', 0.10, vol);
+      playSoftTone(ctx, freq, now, 0.5, 2.2, 'sine', 0.13, vol);
     });
-  } else if (sound === 'calm-piano') {
+  } else if (norm === 'calm-piano') {
     // Calm Evening Piano Notes (D4, A4, D5, C5)
     const piano = [
       { freq: 293.66, time: 0.0, dur: 1.3 },
@@ -355,14 +355,92 @@ const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
       { freq: 523.25, time: 0.8, dur: 1.3 },
     ];
     piano.forEach((p) => {
-      playSoftTone(ctx, p.freq, now + p.time, 0.03, p.dur, 'sine', 0.20, vol);
-      playSoftTone(ctx, p.freq * 2, now + p.time, 0.02, p.dur * 0.4, 'triangle', 0.04, vol);
+      playSoftTone(ctx, p.freq, now + p.time, 0.03, p.dur, 'sine', 0.22, vol);
+      playSoftTone(ctx, p.freq * 2, now + p.time, 0.02, p.dur * 0.4, 'triangle', 0.05, vol);
     });
-  } else if (sound === 'urgent_bell' || sound === 'urgent-bell') {
+  } else if (norm === 'urgent-bell') {
     // Urgent dual-frequency bell ring
     for (let i = 0; i < 6; i++) {
       const freq = i % 2 === 0 ? 880 : 1174.66; // A5 / D6
-      playTone(ctx, freq, now + i * 0.11, 0.1, 'sawtooth', 0.18, vol);
+      playTone(ctx, freq, now + i * 0.11, 0.1, 'sawtooth', 0.20, vol);
+    }
+  } else {
+    // Default fallback digital beep
+    const pulses = [0, 0.14, 0.28, 0.42];
+    pulses.forEach((offset) => {
+      playTone(ctx, 987.77, now + offset, 0.09, 'square', 0.18, vol);
+    });
+  }
+};
+
+const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
+  try {
+    const ctx = getAudioContext();
+    if (ctx.state === 'suspended') {
+      ctx.resume()
+        .then(() => {
+          scheduleSynthesizedTones(ctx, sound, vol);
+        })
+        .catch(() => {
+          scheduleSynthesizedTones(ctx, sound, vol);
+        });
+    } else {
+      scheduleSynthesizedTones(ctx, sound, vol);
+    }
+  } catch (e) {
+    console.warn('Synthesized sound error:', e);
+  }
+};
+
+const playHtmlOrSynthesizedPreview = (sound: PhoneAlarmSound, soundFile: string | undefined, clampedVol: number) => {
+  if (typeof window !== 'undefined' && soundFile) {
+    try {
+      if (previewAudio) {
+        try {
+          previewAudio.pause();
+          previewAudio.currentTime = 0;
+        } catch {
+          // ignore
+        }
+      }
+      const audio = new Audio(`/${soundFile}`);
+      previewAudio = audio;
+      audio.volume = clampedVol;
+      let fallbackDone = false;
+      const runFallback = () => {
+        if (!fallbackDone) {
+          fallbackDone = true;
+          playSynthesizedSound(sound, clampedVol);
+        }
+      };
+      audio.onerror = runFallback;
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(runFallback);
+      }
+      return;
+    } catch {
+      // Fallback to Web Audio synthesis
+    }
+  }
+  playSynthesizedSound(sound, clampedVol);
+};
+
+export const stopPreviewSound = () => {
+  if (previewAudio) {
+    try {
+      previewAudio.pause();
+      previewAudio.currentTime = 0;
+    } catch {
+      // Ignore
+    }
+    previewAudio = null;
+  }
+  if (!isAlarmLooping && Capacitor.isNativePlatform()) {
+    try {
+      (LocalNotifications as any).stopNotificationSound().catch(() => {});
+    } catch {
+      // Ignore
     }
   }
 };
@@ -372,41 +450,36 @@ const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
  */
 export const playPhoneAlarmSound = (sound: PhoneAlarmSound, volumeOverride?: number) => {
   try {
+    const effectiveSound = resolveAlarmSound(sound, 'digital_beep');
     const vol = volumeOverride !== undefined ? volumeOverride : globalAlarmVolume;
-    if (vol <= 0.001) return;
+    const clampedVol = Math.max(0, Math.min(1, vol));
+    if (clampedVol <= 0.001) return;
 
-    const soundFile = SOUND_FILE_MAP[sound] || SOUND_FILE_MAP[sound.replace(/-/g, '_')];
+    const soundFile =
+      SOUND_FILE_MAP[effectiveSound] ||
+      SOUND_FILE_MAP[effectiveSound.replace(/-/g, '_')] ||
+      SOUND_FILE_MAP[sound] ||
+      'digital_beep.wav';
+
     if (Capacitor.isNativePlatform() && soundFile) {
       try {
-        (LocalNotifications as any).playNotificationSound({ sound: soundFile, loop: false }).catch(() => {});
-        return;
+        const res = (LocalNotifications as any).playNotificationSound({
+          sound: soundFile,
+          loop: false,
+          volume: clampedVol,
+        });
+        if (res && typeof res.catch === 'function') {
+          res.catch(() => {
+            playHtmlOrSynthesizedPreview(effectiveSound, soundFile, clampedVol);
+          });
+          return;
+        }
       } catch {
         // Fallback if plugin method unavailable
       }
     }
 
-    if (typeof window !== 'undefined' && soundFile) {
-      try {
-        if (previewAudio) {
-          previewAudio.pause();
-          previewAudio.currentTime = 0;
-        }
-        const audio = new Audio(`/${soundFile}`);
-        previewAudio = audio;
-        audio.volume = Math.max(0, Math.min(1, vol));
-        const playPromise = audio.play();
-        if (playPromise) {
-          playPromise.catch(() => {
-            playSynthesizedSound(sound, vol);
-          });
-        }
-        return;
-      } catch {
-        // Fallback to Web Audio synthesis
-      }
-    }
-
-    playSynthesizedSound(sound, vol);
+    playHtmlOrSynthesizedPreview(effectiveSound, soundFile, clampedVol);
   } catch (e) {
     console.warn('Audio play error:', e);
   }
@@ -418,13 +491,13 @@ export const playRingTune = (category: Category | string, volumeOverride?: numbe
     if (vol <= 0.001) return;
 
     // Check if it's one of the phone alarm sounds first
-    if (VALID_ALARM_SOUND_IDS.has(category)) {
-      playPhoneAlarmSound(category as PhoneAlarmSound, vol);
+    if (VALID_ALARM_SOUND_IDS.has(category) || VALID_ALARM_SOUND_IDS.has(category.replace(/_/g, '-'))) {
+      playPhoneAlarmSound(resolveAlarmSound(category), vol);
       return;
     }
 
     const ctx = getAudioContext();
-    const now = ctx.currentTime;
+    const now = ctx.currentTime + 0.015;
 
     if (category === 'work') {
       // Crisp, professional double-chime (C5 -> E5 -> G5)
@@ -462,6 +535,7 @@ export const startAlarmRinging = (
   volumeOverride?: number,
   vibrationOverride?: boolean
 ) => {
+  stopPreviewSound();
   stopAlarmRinging();
   isAlarmLooping = true;
 
@@ -472,22 +546,14 @@ export const startAlarmRinging = (
   const soundFile = SOUND_FILE_MAP[effectiveSound] || SOUND_FILE_MAP[effectiveSound.replace(/-/g, '_')] || 'digital_beep.wav';
 
   const isNative = Capacitor.isNativePlatform();
+  let useWebFallback = !isNative;
 
-  // 1. On Native Android, play via Notification stream (USAGE_NOTIFICATION) instead of WebView Media stream (STREAM_MUSIC)
-  if (isNative) {
-    if (clampedVol > 0.001) {
-      try {
-        (LocalNotifications as any).playNotificationSound({ sound: soundFile, loop: true }).catch(() => {});
-      } catch {
-        // Ignore
-      }
-    }
-  } else if (typeof window !== 'undefined' && clampedVol > 0.001) {
+  const startWebLoop = () => {
+    if (typeof window === 'undefined' || clampedVol <= 0.001 || !isAlarmLooping) return;
     try {
       const audio = new Audio(`/${soundFile}`);
       audio.loop = true;
       audio.volume = clampedVol;
-      // Fallback loop handler in case browser/WebView ignores .loop
       audio.addEventListener('ended', () => {
         if (isAlarmLooping && activeAlarmAudio === audio) {
           audio.currentTime = 0;
@@ -506,6 +572,30 @@ export const startAlarmRinging = (
     } catch {
       playSynthesizedSound(effectiveSound, clampedVol);
     }
+  };
+
+  // 1. On Native Android, play via native MediaPlayer; if it fails, fall back to Web Audio
+  if (isNative) {
+    if (clampedVol > 0.001) {
+      try {
+        const res = (LocalNotifications as any).playNotificationSound({
+          sound: soundFile,
+          loop: true,
+          volume: clampedVol,
+        });
+        if (res && typeof res.catch === 'function') {
+          res.catch(() => {
+            useWebFallback = true;
+            startWebLoop();
+          });
+        }
+      } catch {
+        useWebFallback = true;
+        startWebLoop();
+      }
+    }
+  } else {
+    startWebLoop();
   }
 
   // 2. Continuous vibration + audio watchdog loop every 1.6s for up to 1 minute
@@ -520,7 +610,7 @@ export const startAlarmRinging = (
       }
     }
 
-    if (!isNative && clampedVol > 0.001) {
+    if (useWebFallback && clampedVol > 0.001) {
       if (activeAlarmAudio) {
         if (activeAlarmAudio.paused || activeAlarmAudio.ended) {
           activeAlarmAudio.currentTime = 0;
@@ -544,14 +634,14 @@ export const startAlarmRinging = (
 };
 
 export const stopAlarmRinging = () => {
+  const wasLooping =
+    isAlarmLooping ||
+    activeAlarmAudio !== null ||
+    alarmIntervalId !== null ||
+    alarmAutoStopTimeoutId !== null;
+
   isAlarmLooping = false;
-  if (Capacitor.isNativePlatform()) {
-    try {
-      (LocalNotifications as any).stopNotificationSound().catch(() => {});
-    } catch {
-      // Ignore
-    }
-  }
+
   if (alarmAutoStopTimeoutId !== null) {
     clearTimeout(alarmAutoStopTimeoutId);
     alarmAutoStopTimeoutId = null;
@@ -570,14 +660,17 @@ export const stopAlarmRinging = () => {
     }
     activeAlarmAudio = null;
   }
-  if (previewAudio) {
+
+  if (!wasLooping) {
+    return;
+  }
+
+  if (Capacitor.isNativePlatform()) {
     try {
-      previewAudio.pause();
-      previewAudio.currentTime = 0;
+      (LocalNotifications as any).stopNotificationSound().catch(() => {});
     } catch {
       // Ignore
     }
-    previewAudio = null;
   }
   if ('vibrate' in navigator) {
     try {

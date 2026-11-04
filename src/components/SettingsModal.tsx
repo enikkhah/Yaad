@@ -69,6 +69,8 @@ import {
   PHONE_ALARM_SOUNDS,
   playPhoneAlarmSound,
   stopAlarmRinging,
+  stopPreviewSound,
+  unlockAudio,
   setGlobalVibration,
 } from '../utils/audio';
 import { syncNotificationSoundAndVolume, syncAllRemindersWithLocalNotifications } from '../utils/nativeLocalNotifications';
@@ -319,7 +321,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   useEffect(() => {
     return () => {
-      stopAlarmRinging();
+      stopPreviewSound();
       if (soundTimeoutRef.current) clearTimeout(soundTimeoutRef.current);
     };
   }, []);
@@ -331,16 +333,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
 
     if (playingSoundId === soundId) {
-      stopAlarmRinging();
+      stopPreviewSound();
       setPlayingSoundId(null);
     } else {
-      stopAlarmRinging();
+      unlockAudio();
+      stopPreviewSound();
       setPlayingSoundId(soundId);
       const currentVol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
       playPhoneAlarmSound(soundId, currentVol);
       soundTimeoutRef.current = window.setTimeout(() => {
         setPlayingSoundId(null);
-      }, 1900);
+      }, 2200);
     }
   };
 
@@ -377,30 +380,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handleSaveToLocalYaadFolder = async () => {
     setIsLocalSyncing(true);
     setBackupErrorMessage(null);
+    setBackupSuccessMessage(null);
     try {
-      const res = await requestLocalFolderPermission(false, LOCAL_BACKUP_FOLDER_NAME);
-      if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
-        onRestoreData(
-          {
-            reminders: res.restoredSnapshot.reminders || [],
-            ideas: res.restoredSnapshot.ideas || [],
-            savedLocations: res.restoredSnapshot.savedLocations || [],
-            occasions: res.restoredSnapshot.occasions || [],
-            settings: res.restoredSnapshot.settings,
-          },
-          'merge'
-        );
-      }
+      const res = await requestLocalFolderPermission(true, LOCAL_BACKUP_FOLDER_NAME);
       onUpdateSettings({ localBackupFolderName: LOCAL_BACKUP_FOLDER_NAME });
-      await performAutoBackup({
-        reminders,
-        ideas,
-        savedLocations,
-        occasions,
-        settings: { ...settings, localBackupFolderName: LOCAL_BACKUP_FOLDER_NAME },
-      });
+      const savedOk = await performAutoBackup(
+        {
+          reminders,
+          ideas,
+          savedLocations,
+          occasions,
+          settings: { ...settings, localBackupFolderName: LOCAL_BACKUP_FOLDER_NAME },
+        },
+        { forceReplace: true }
+      );
       const updatedPerms = await checkAllPermissionsStatus();
-      const isStorageGranted = Boolean(res.granted && updatedPerms.storage);
+      const isAndroid = isNativeAndroidApp();
+      const isStorageGranted = isAndroid
+        ? Boolean(res.granted || updatedPerms.storage)
+        : Boolean(savedOk || res.granted || updatedPerms.storage);
       setNativePerms({ ...updatedPerms, storage: isStorageGranted });
       if (isStorageGranted) {
         const msg = isFa
@@ -428,8 +426,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setBackupErrorMessage(null);
     setBackupSuccessMessage(null);
     try {
-      const snap = await retrieveFromLocalYaadFolder(LOCAL_BACKUP_FOLDER_NAME);
-      const itemsCount = snap ? getSnapshotItemCount(snap) : 0;
+      let snap = await retrieveFromLocalYaadFolder(LOCAL_BACKUP_FOLDER_NAME);
+      let itemsCount = snap ? getSnapshotItemCount(snap) : 0;
+
+      if (!snap || itemsCount === 0) {
+        const res = await requestLocalFolderPermission(true, LOCAL_BACKUP_FOLDER_NAME);
+        if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0) {
+          snap = res.restoredSnapshot;
+          itemsCount = getSnapshotItemCount(snap);
+        } else {
+          snap = await retrieveFromLocalYaadFolder(LOCAL_BACKUP_FOLDER_NAME);
+          itemsCount = snap ? getSnapshotItemCount(snap) : 0;
+        }
+      }
+
       if (snap && itemsCount > 0) {
         setPendingRestoreData({
           reminders: snap.reminders || [],
@@ -444,11 +454,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             : `Backup loaded from "${LOCAL_BACKUP_FOLDER_NAME}" folder (${itemsCount} items). Confirm below.`
         );
       } else {
-        setBackupErrorMessage(
-          isFa
-            ? 'برای دسترسی به پوشه پشتیبان‌گیری YAAD، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
-            : 'To access the YAAD backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key'
-        );
+        const perms = await checkAllPermissionsStatus();
+        if (isNativeAndroidApp() && !perms.storage) {
+          setBackupErrorMessage(
+            isFa
+              ? 'برای دسترسی به پوشه پشتیبان‌گیری YAAD، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
+              : 'To access the YAAD backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key'
+          );
+        } else {
+          setBackupErrorMessage(
+            isFa
+              ? `فایل پشتیبان معتبری در پوشه «${LOCAL_BACKUP_FOLDER_NAME}» یافت نشد. ابتدا یک بار گزینه «ذخیره فوری در پوشه ${LOCAL_BACKUP_FOLDER_NAME}» را بزنید.`
+              : `No backup file with items found in "${LOCAL_BACKUP_FOLDER_NAME}" folder yet. Please save a backup first.`
+          );
+        }
       }
     } catch {
       setBackupErrorMessage(
@@ -486,7 +505,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <img
                 src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=ff8c00`}
                 alt="YAAD"
-                className="w-full h-full object-cover rounded-[10px]"
+                className="w-full h-full object-contain scale-95 rounded-[10px]"
                 draggable={false}
               />
             </div>

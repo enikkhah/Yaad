@@ -302,39 +302,78 @@ for (let y = 0; y < srcImage.height; y++) {
   }
 }
 
-const recoloredFullBuffer = encodeRgbaPng(srcImage.width, srcImage.height, srcImage.data);
-fs.writeFileSync(srcTransparentPath, recoloredFullBuffer);
+// Normalize to a 1024x1024 base canvas where the tight non-transparent logo height occupies 90% of height
+// before applying the 5% compaction (so repeated script executions are 100% idempotent)
+let minX = srcImage.width;
+let minY = srcImage.height;
+let maxX = 0;
+let maxY = 0;
+for (let y = 0; y < srcImage.height; y++) {
+  for (let x = 0; x < srcImage.width; x++) {
+    const a = srcImage.data[(y * srcImage.width + x) * 4 + 3];
+    if (a > 16) {
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+  }
+}
 
-// 1. Update web & Capacitor source icons with 100% transparent background and vibrant #FF8C00 brand color
+const bboxW = Math.max(1, maxX - minX + 1);
+const bboxH = Math.max(1, maxY - minY + 1);
+const bboxMaxDim = Math.max(bboxW, bboxH);
+// Base uncompacted canvas has the glyph occupying 90% of the square dimension
+const baseCanvasSize = Math.round(bboxMaxDim / 0.9);
+const baseData = new Uint8Array(baseCanvasSize * baseCanvasSize * 4);
+const offsetX = Math.round((baseCanvasSize - bboxW) / 2);
+const offsetY = Math.round((baseCanvasSize - bboxH) / 2);
+
+for (let y = 0; y < bboxH; y++) {
+  for (let x = 0; x < bboxW; x++) {
+    const srcIdx = ((minY + y) * srcImage.width + (minX + x)) * 4;
+    const dstIdx = ((offsetY + y) * baseCanvasSize + (offsetX + x)) * 4;
+    baseData[dstIdx] = srcImage.data[srcIdx];
+    baseData[dstIdx + 1] = srcImage.data[srcIdx + 1];
+    baseData[dstIdx + 2] = srcImage.data[srcIdx + 2];
+    baseData[dstIdx + 3] = srcImage.data[srcIdx + 3];
+  }
+}
+
+const normalizedSrcImage = {
+  width: baseCanvasSize,
+  height: baseCanvasSize,
+  data: baseData,
+};
+
+// 1. Update web & Capacitor source icons with 100% transparent background, vibrant #FF8C00 brand color,
+// and ~5% more compact logo framing (pad +0.025 on each side = 5% smaller overall)
+const COMPACT_PAD = 0.025; // 2.5% per side = 5% more compact overall
 const iconTargets = [
-  { file: 'public/logo-transparent.png', size: 1024, pad: 0 },
-  { file: 'src/assets/images/logo-transparent.png', size: 1024, pad: 0 },
-  { file: 'src/assets/images/icon.png', size: 1024, pad: 0 },
-  { file: 'public/icon.png', size: 1024, pad: 0 },
+  { file: 'public/logo-transparent.png', size: 1024, pad: COMPACT_PAD },
+  { file: 'src/assets/images/logo-transparent.png', size: 1024, pad: COMPACT_PAD },
+  { file: 'src/assets/images/icon.png', size: 1024, pad: COMPACT_PAD },
+  { file: 'public/icon.png', size: 1024, pad: COMPACT_PAD },
   ...(fs.existsSync(path.join(rootDir, 'resources'))
     ? [
-        { file: 'resources/icon.png', size: 1024, pad: 0 },
-        { file: 'resources/icon-only.png', size: 1024, pad: 0 },
-        { file: 'resources/icon-foreground.png', size: 1024, pad: 0.18 },
+        { file: 'resources/icon.png', size: 1024, pad: COMPACT_PAD },
+        { file: 'resources/icon-only.png', size: 1024, pad: COMPACT_PAD },
+        { file: 'resources/icon-foreground.png', size: 1024, pad: 0.18 + COMPACT_PAD },
       ]
     : []),
-  { file: 'public/pwa-512x512.png', size: 512, pad: 0 },
-  { file: 'public/pwa-maskable-512x512.png', size: 512, pad: 0.12 },
-  { file: 'public/pwa-192x192.png', size: 192, pad: 0 },
-  { file: 'public/pwa-maskable-192x192.png', size: 192, pad: 0.12 },
-  { file: 'public/apple-touch-icon.png', size: 180, pad: 0 },
+  { file: 'public/pwa-512x512.png', size: 512, pad: COMPACT_PAD },
+  { file: 'public/pwa-maskable-512x512.png', size: 512, pad: 0.12 + COMPACT_PAD },
+  { file: 'public/pwa-192x192.png', size: 192, pad: COMPACT_PAD },
+  { file: 'public/pwa-maskable-192x192.png', size: 192, pad: 0.12 + COMPACT_PAD },
+  { file: 'public/apple-touch-icon.png', size: 180, pad: COMPACT_PAD },
 ];
 
 for (const target of iconTargets) {
   const fullPath = path.join(rootDir, target.file);
   fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-  if (target.size === 1024 && target.pad === 0) {
-    fs.writeFileSync(fullPath, recoloredFullBuffer);
-  } else {
-    const outBuf = resizeRgba(srcImage, target.size, target.size, target.pad);
-    fs.writeFileSync(fullPath, outBuf);
-  }
-  console.log(`Generated transparent icon: ${target.file} (${target.size}x${target.size})`);
+  const outBuf = resizeRgba(normalizedSrcImage, target.size, target.size, target.pad);
+  fs.writeFileSync(fullPath, outBuf);
+  console.log(`Generated transparent icon: ${target.file} (${target.size}x${target.size}, pad=${target.pad})`);
 }
 
 // 2. If android/app/src/main/res exists, populate transparent Android launcher & notification icons
@@ -359,8 +398,8 @@ if (fs.existsSync(path.join(rootDir, 'android'))) {
       }
     }
 
-    const launcherPng = resizeRgba(srcImage, cfg.launcherSize, cfg.launcherSize, 0.04);
-    const foregroundPng = resizeRgba(srcImage, cfg.fgSize, cfg.fgSize, 0.18);
+    const launcherPng = resizeRgba(normalizedSrcImage, cfg.launcherSize, cfg.launcherSize, 0.04 + COMPACT_PAD);
+    const foregroundPng = resizeRgba(normalizedSrcImage, cfg.fgSize, cfg.fgSize, 0.18 + COMPACT_PAD);
 
     fs.writeFileSync(path.join(dir, 'ic_launcher.png'), launcherPng);
     fs.writeFileSync(path.join(dir, 'ic_launcher_round.png'), launcherPng);
@@ -388,7 +427,7 @@ if (fs.existsSync(path.join(rootDir, 'android'))) {
   // Write drawable/ic_launcher.png and drawable/ic_stat_notification.png with transparent background
   const drawableDir = path.join(androidResDir, 'drawable');
   fs.mkdirSync(drawableDir, { recursive: true });
-  const notifPng = resizeRgba(srcImage, 192, 192, 0);
+  const notifPng = resizeRgba(normalizedSrcImage, 192, 192, COMPACT_PAD);
   fs.writeFileSync(path.join(drawableDir, 'ic_launcher.png'), notifPng);
   fs.writeFileSync(path.join(drawableDir, 'ic_stat_notification.png'), notifPng);
   console.log('Generated transparent Android mipmap and drawable icons.');

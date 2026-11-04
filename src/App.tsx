@@ -347,12 +347,31 @@ export default function App() {
         if (cleanReminders.length > 0) {
           if (isRemindersEmpty) {
             setReminders(cleanReminders);
+            try {
+              localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(cleanReminders));
+              syncAllRemindersWithLocalNotifications(cleanReminders, settingsRef.current).catch(() => {});
+            } catch {}
             restoredAny = true;
           } else {
+            const byId = new Map<string, Reminder>(cleanReminders.map((r: Reminder) => [r.id, r]));
             const existingIds = new Set(curReminders.map((r) => r.id));
             const missing = cleanReminders.filter((r: Reminder) => !existingIds.has(r.id));
-            if (missing.length > 0) {
-              setReminders((prev) => [...missing, ...prev]);
+            let unDeletedCount = 0;
+            const updatedExisting = curReminders.map((cur) => {
+              const fromDisk = byId.get(cur.id);
+              if (cur.deletedAt && fromDisk && !fromDisk.deletedAt) {
+                unDeletedCount++;
+                return fromDisk;
+              }
+              return cur;
+            });
+            if (missing.length > 0 || unDeletedCount > 0) {
+              const merged = [...missing, ...updatedExisting];
+              setReminders(merged);
+              try {
+                localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(merged));
+                syncAllRemindersWithLocalNotifications(merged, settingsRef.current).catch(() => {});
+              } catch {}
               restoredAny = true;
             }
           }
@@ -366,12 +385,29 @@ export default function App() {
         if (cleanIdeas.length > 0) {
           if (isIdeasEmpty) {
             setIdeas(cleanIdeas);
+            try {
+              localStorage.setItem(IDEAS_STORAGE_KEY, JSON.stringify(cleanIdeas));
+            } catch {}
             restoredAny = true;
           } else {
+            const byId = new Map<string, IdeaNote>(cleanIdeas.map((i: IdeaNote) => [i.id, i]));
             const existingIds = new Set(curIdeas.map((i) => i.id));
             const missing = cleanIdeas.filter((i: IdeaNote) => !existingIds.has(i.id));
-            if (missing.length > 0) {
-              setIdeas((prev) => [...missing, ...prev]);
+            let unDeletedCount = 0;
+            const updatedExisting = curIdeas.map((cur) => {
+              const fromDisk = byId.get(cur.id);
+              if (cur.deletedAt && fromDisk && !fromDisk.deletedAt) {
+                unDeletedCount++;
+                return fromDisk;
+              }
+              return cur;
+            });
+            if (missing.length > 0 || unDeletedCount > 0) {
+              const merged = [...missing, ...updatedExisting];
+              setIdeas(merged);
+              try {
+                localStorage.setItem(IDEAS_STORAGE_KEY, JSON.stringify(merged));
+              } catch {}
               restoredAny = true;
             }
           }
@@ -386,14 +422,31 @@ export default function App() {
         if (cleanLocations.length > 0) {
           if (isLocationsEmpty) {
             setSavedLocations(cleanLocations);
+            try {
+              localStorage.setItem(LOCATIONS_STORAGE_KEY, JSON.stringify(cleanLocations));
+            } catch {}
             restoredAny = true;
           } else {
+            const byId = new Map<string, SavedLocation>(cleanLocations.map((l: SavedLocation) => [l.id, l]));
             const existingIds = new Set(curLocations.map((l) => l.id));
             const missing = cleanLocations.filter(
               (l: SavedLocation) => !existingIds.has(l.id)
             );
-            if (missing.length > 0) {
-              setSavedLocations((prev) => [...missing, ...prev]);
+            let unDeletedCount = 0;
+            const updatedExisting = curLocations.map((cur) => {
+              const fromDisk = byId.get(cur.id);
+              if (cur.deletedAt && fromDisk && !fromDisk.deletedAt) {
+                unDeletedCount++;
+                return fromDisk;
+              }
+              return cur;
+            });
+            if (missing.length > 0 || unDeletedCount > 0) {
+              const merged = [...missing, ...updatedExisting];
+              setSavedLocations(merged);
+              try {
+                localStorage.setItem(LOCATIONS_STORAGE_KEY, JSON.stringify(merged));
+              } catch {}
               restoredAny = true;
             }
           }
@@ -412,12 +465,29 @@ export default function App() {
         if (cleanOccasions.length > 0) {
           if (isOccasionsEmpty) {
             setOccasions(cleanOccasions);
+            try {
+              localStorage.setItem(OCCASIONS_STORAGE_KEY, JSON.stringify(cleanOccasions));
+            } catch {}
             restoredAny = true;
           } else {
+            const byId = new Map<string, Occasion>(cleanOccasions.map((o: Occasion) => [o.id, o]));
             const existingIds = new Set(curOccasions.map((o) => o.id));
             const missing = cleanOccasions.filter((o: Occasion) => !existingIds.has(o.id));
-            if (missing.length > 0) {
-              setOccasions((prev) => [...missing, ...prev]);
+            let unDeletedCount = 0;
+            const updatedExisting = curOccasions.map((cur) => {
+              const fromDisk = byId.get(cur.id);
+              if (cur.deletedAt && fromDisk && !fromDisk.deletedAt) {
+                unDeletedCount++;
+                return fromDisk;
+              }
+              return cur;
+            });
+            if (missing.length > 0 || unDeletedCount > 0) {
+              const merged = [...missing, ...updatedExisting];
+              setOccasions(merged);
+              try {
+                localStorage.setItem(OCCASIONS_STORAGE_KEY, JSON.stringify(merged));
+              } catch {}
               restoredAny = true;
             }
           }
@@ -437,32 +507,6 @@ export default function App() {
       }
 
       if (restoredAny) {
-        try {
-          if (Array.isArray(backup.reminders) && backup.reminders.length > 0 && isRemindersEmpty) {
-            const restoreNow = Date.now();
-            const clean = backup.reminders
-              .filter((r: any) => r?.id && !r.id.startsWith('seed-'))
-              .map((r: Reminder) =>
-                r.dueTimestamp <= restoreNow ? { ...r, acknowledged: true } : r
-              );
-            localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(clean));
-            syncAllRemindersWithLocalNotifications(clean, settingsRef.current).catch(() => {});
-          }
-          if (Array.isArray(backup.ideas) && backup.ideas.length > 0 && isIdeasEmpty) {
-            const clean = backup.ideas.filter((i: any) => i?.id && i.id !== 'idea-1' && !i.id.startsWith('seed-'));
-            localStorage.setItem(IDEAS_STORAGE_KEY, JSON.stringify(clean));
-          }
-          if (Array.isArray(backup.savedLocations) && backup.savedLocations.length > 0 && isLocationsEmpty) {
-            const clean = backup.savedLocations.filter((l: any) => l?.id && !l.id.startsWith('seed-') && !l.id.startsWith('sample_'));
-            localStorage.setItem(LOCATIONS_STORAGE_KEY, JSON.stringify(clean));
-          }
-          if (Array.isArray(backup.occasions) && backup.occasions.length > 0 && isOccasionsEmpty) {
-            const clean = backup.occasions.filter((o: any) => o?.id && !o.id.startsWith('seed-') && !o.id.startsWith('sample_'));
-            localStorage.setItem(OCCASIONS_STORAGE_KEY, JSON.stringify(clean));
-          }
-        } catch {
-          // ignore
-        }
 
         const srcText =
           settingsRef.current?.language === 'en'
@@ -2018,26 +2062,46 @@ export default function App() {
         finalSettings = { ...settingsRef.current, ...data.settings };
       }
     } else {
-      // Merge mode: keep unique IDs
+      // Merge mode: keep unique IDs and un-delete items that are active in the backup
       const curR = remindersRef.current;
+      const backupRMap = new Map(cleanReminders.map((r) => [r.id, r]));
       const curRIds = new Set(curR.map((r) => r.id));
       const newR = cleanReminders.filter((r) => !curRIds.has(r.id));
-      finalReminders = [...newR, ...curR];
+      const mergedExistingR = curR.map((r) => {
+        const b = backupRMap.get(r.id);
+        return r.deletedAt && b && !b.deletedAt ? b : r;
+      });
+      finalReminders = [...newR, ...mergedExistingR];
 
       const curI = ideasRef.current;
+      const backupIMap = new Map(cleanIdeas.map((i) => [i.id, i]));
       const curIIds = new Set(curI.map((i) => i.id));
       const newI = cleanIdeas.filter((i) => !curIIds.has(i.id));
-      finalIdeas = [...newI, ...curI];
+      const mergedExistingI = curI.map((i) => {
+        const b = backupIMap.get(i.id);
+        return i.deletedAt && b && !b.deletedAt ? b : i;
+      });
+      finalIdeas = [...newI, ...mergedExistingI];
 
       const curL = savedLocationsRef.current;
+      const backupLMap = new Map(cleanLocations.map((l: SavedLocation) => [l.id, l]));
       const curLIds = new Set(curL.map((l: SavedLocation) => l.id));
       const newL = cleanLocations.filter((l: SavedLocation) => !curLIds.has(l.id));
-      finalLocations = [...newL, ...curL];
+      const mergedExistingL = curL.map((l: SavedLocation) => {
+        const b = backupLMap.get(l.id);
+        return l.deletedAt && b && !b.deletedAt ? b : l;
+      });
+      finalLocations = [...newL, ...mergedExistingL];
 
       const curO = occasionsRef.current;
+      const backupOMap = new Map(cleanOccasions.map((o) => [o.id, o]));
       const curOIds = new Set(curO.map((o) => o.id));
       const newO = cleanOccasions.filter((o) => !curOIds.has(o.id));
-      finalOccasions = [...newO, ...curO];
+      const mergedExistingO = curO.map((o) => {
+        const b = backupOMap.get(o.id);
+        return o.deletedAt && b && !b.deletedAt ? b : o;
+      });
+      finalOccasions = [...newO, ...mergedExistingO];
 
       if (data.settings) {
         finalSettings = { ...settingsRef.current, ...data.settings };
@@ -2751,7 +2815,7 @@ export default function App() {
               <img
                 src={appIcon}
                 alt="YAAD"
-                className="w-full h-full object-cover rounded-xl transition-transform duration-200 group-hover:scale-105"
+                className="w-full h-full object-contain scale-95 rounded-xl transition-transform duration-200 group-hover:scale-100"
                 draggable={false}
               />
             </button>

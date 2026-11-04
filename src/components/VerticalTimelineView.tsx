@@ -355,7 +355,13 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
           <div className="space-y-6">
             {/* The 'NOW' Line even when empty */}
             <div ref={nowMarkerRef} className="relative py-4 flex items-center justify-center">
-              <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/70 to-transparent" />
+              <div
+                className="absolute inset-x-0 h-0.5"
+                style={{
+                  background:
+                    'linear-gradient(90deg, rgba(255, 140, 0, 0) 0%, #FF8C00 35%, #FF8C00 65%, rgba(255, 140, 0, 0) 100%)',
+                }}
+              />
               <div className="relative z-10 px-4 py-1.5 rounded-full bg-indigo-500 text-white font-black text-xs shadow-lg shadow-indigo-500/20 flex items-center gap-2 border border-indigo-400">
                 <span className="w-2 h-2 rounded-full bg-white animate-pulse" />
                 <span>{isEn ? 'NOW' : 'اکنون'}</span>
@@ -427,7 +433,13 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                   className="relative py-4 my-2 flex items-center justify-center z-20"
                 >
                   {/* Horizontal line across the container */}
-                  <div className="absolute inset-x-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-500/80 to-transparent" />
+                  <div
+                    className="absolute inset-x-0 h-0.5"
+                    style={{
+                      background:
+                        'linear-gradient(90deg, rgba(255, 140, 0, 0) 0%, #FF8C00 35%, #FF8C00 65%, rgba(255, 140, 0, 0) 100%)',
+                    }}
+                  />
                   {/* Centered Small Badge with Live Clock */}
                   <div className="relative z-10 px-4 py-1.5 rounded-full bg-indigo-500 text-white font-black text-xs shadow-lg shadow-indigo-500/25 flex items-center gap-2 border border-indigo-300">
                     <span className="w-2 h-2 rounded-full bg-white animate-pulse" />

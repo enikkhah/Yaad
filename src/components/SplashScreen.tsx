@@ -77,22 +77,22 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
         @keyframes splashPinDropAndGlow {
           0% {
             opacity: 0;
-            transform: translate3d(0, -34px, 0) scale(0.48);
+            transform: translate3d(0, -34px, 0) scale(0.45);
             filter: drop-shadow(0 0 0px rgba(255, 140, 0, 0));
           }
           42% {
             opacity: 1;
-            transform: translate3d(0, 5px, 0) scale(1.04);
+            transform: translate3d(0, 5px, 0) scale(0.99);
             filter: drop-shadow(0 6px 26px rgba(255, 140, 0, 0.58));
           }
           68% {
             opacity: 1;
-            transform: translate3d(0, -4px, 0) scale(0.98);
+            transform: translate3d(0, -4px, 0) scale(0.93);
             filter: drop-shadow(0 8px 22px rgba(255, 140, 0, 0.48));
           }
           100% {
             opacity: 1;
-            transform: translate3d(0, 0px, 0) scale(1.05);
+            transform: translate3d(0, 0px, 0) scale(0.99);
             filter: drop-shadow(0 10px 34px rgba(255, 140, 0, 0.72));
           }
         }

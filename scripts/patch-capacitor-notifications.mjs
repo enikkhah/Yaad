@@ -2457,7 +2457,7 @@ const legacyDispatchReceivedV3 = `    @PluginMethod
         notifyListeners("localNotificationActionPerformed", dataJson, true)
     }`;
 
-const patchedDispatchReceived = `    @PluginMethod
+const legacyDispatchReceivedV4 = `    @PluginMethod
     fun playNotificationSound(call: PluginCall) {
         val soundName = call.getString("sound", "digital_beep.wav") ?: "digital_beep.wav"
         val loop = call.getBoolean("loop", false) ?: false
@@ -2518,14 +2518,86 @@ const patchedDispatchReceived = `    @PluginMethod
         notifyListeners("localNotificationActionPerformed", dataJson, true)
     }`;
 
+const patchedDispatchReceived = `    @PluginMethod
+    fun playNotificationSound(call: PluginCall) {
+        val soundName = call.getString("sound", "digital_beep.wav") ?: "digital_beep.wav"
+        val loop = call.getBoolean("loop", false) ?: false
+        val volume = (call.getFloat("volume", 1.0f) ?: 1.0f).coerceIn(0f, 1f)
+        try {
+            if (loop) {
+                // Ensure no status-bar notification sound overlaps with in-app alarm sound
+                try {
+                    androidx.core.app.NotificationManagerCompat.from(context).cancelAll()
+                } catch (e: Exception) {
+                }
+            }
+            stopActiveMediaPlayer()
+            val cleanName = soundName.substringBeforeLast(".")
+            val resId = context.resources.getIdentifier(cleanName, "raw", context.packageName)
+            val mp = android.media.MediaPlayer()
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            val notifVol = am?.getStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION) ?: 1
+            val useMediaStream = !loop || notifVol <= 0
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(if (useMediaStream) android.media.AudioAttributes.USAGE_MEDIA else android.media.AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(if (useMediaStream) android.media.AudioAttributes.CONTENT_TYPE_MUSIC else android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            mp.setAudioAttributes(attrs)
+            if (resId != 0) {
+                val afd = context.resources.openRawResourceFd(resId)
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            } else {
+                val afd = try {
+                    context.assets.openFd("public/\$soundName")
+                } catch (e: Exception) {
+                    context.assets.openFd("public/sounds/\$soundName")
+                }
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            }
+            mp.setVolume(volume, volume)
+            mp.isLooping = loop
+            mp.setOnCompletionListener { player ->
+                try {
+                    player.release()
+                } catch (e: Exception) {
+                }
+                if (activeMediaPlayer === player) {
+                    activeMediaPlayer = null
+                }
+            }
+            mp.prepare()
+            mp.start()
+            activeMediaPlayer = mp
+            call.resolve()
+        } catch (e: Exception) {
+            call.reject("Failed to play notification sound: \${e.message}")
+        }
+    }
+
+    @PluginMethod
+    fun stopNotificationSound(call: PluginCall) {
+        stopActiveMediaPlayer()
+        call.resolve()
+    }
+
+    internal fun dispatchReceived(notification: JSObject?) {
+        notifyListeners("localNotificationReceived", notification, true)
+    }
+
+    internal fun dispatchActionPerformed(dataJson: JSObject) {
+        notifyListeners("localNotificationActionPerformed", dataJson, true)
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
   'playNotificationSound, stopNotificationSound, and dispatchActionPerformed',
   origDispatchReceived,
   patchedDispatchReceived,
-  '// Ensure no status-bar notification sound overlaps with in-app alarm sound',
-  [legacyDispatchReceived, legacyDispatchReceivedV2, legacyDispatchReceivedV3]
+  'val useMediaStream = !loop || notifVol <= 0',
+  [legacyDispatchReceived, legacyDispatchReceivedV2, legacyDispatchReceivedV3, legacyDispatchReceivedV4]
 );
 
 const origCompanionFire = `        fun fireReceived(notification: JSObject?) {
