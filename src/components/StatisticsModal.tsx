@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Reminder, StatsTimeframe } from '../types';
 import { toPersianDigits } from '../utils/jalali';
 import { AppLanguage, getT } from '../utils/i18n';
@@ -31,8 +32,6 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
   const [timeframe, setTimeframe] = useState<StatsTimeframe>('weekly');
   const t = getT(language);
   const formatNum = (n: number) => (language === 'en' ? n.toString() : toPersianDigits(n));
-
-  if (!isOpen) return null;
 
   // Filter reminders based on timeframe
   const now = Date.now();
@@ -69,8 +68,23 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
   const lowCount = filteredReminders.filter((r) => r.priority === 'low').length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto" dir={language === 'en' ? 'ltr' : 'rtl'}>
-      <div className="bg-stone-900 border border-stone-800 rounded-3xl w-full max-w-xl p-3.5 sm:p-6 shadow-2xl space-y-4 sm:space-y-6 my-auto max-h-[92vh] overflow-y-auto">
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto"
+          dir={language === 'en' ? 'ltr' : 'rtl'}
+        >
+          <motion.div
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            className="bg-stone-900 border border-stone-800 rounded-3xl w-full max-w-xl p-3.5 sm:p-6 shadow-2xl space-y-4 sm:space-y-6 my-auto max-h-[92vh] overflow-y-auto"
+          >
         {/* Header */}
         <div className="flex items-center justify-between pb-3 sm:pb-4 border-b border-stone-800">
           <div className="flex items-center gap-2.5 sm:gap-3">
@@ -275,7 +289,10 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
             </span>
           </div>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
+

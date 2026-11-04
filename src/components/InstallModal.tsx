@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Download, X, Check, Smartphone, Monitor, Copy, FolderOpen, ShieldCheck } from 'lucide-react';
 import appIcon from '../assets/images/icon.png';
 import { AppLanguage } from '../utils/i18n';
@@ -42,8 +43,6 @@ export const InstallModal: React.FC<InstallModalProps> = ({
       });
     }
   }, [isOpen]);
-
-  if (!isOpen) return null;
 
   const handleGrantFolderPermission = async (interactive: boolean = true) => {
     setIsGrantingFolder(true);
@@ -98,11 +97,23 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   };
 
   return (
-    <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in"
-      dir={isEn ? 'ltr' : 'rtl'}
-    >
-      <div className="bg-stone-900 border border-stone-700/80 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col">
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md"
+          dir={isEn ? 'ltr' : 'rtl'}
+        >
+          <motion.div
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            className="bg-stone-900 border border-stone-700/80 rounded-3xl w-full max-w-lg overflow-hidden shadow-2xl flex flex-col"
+          >
         {/* Header */}
         <div className="px-5 py-4 border-b border-stone-800 flex items-center justify-between bg-stone-950/60">
           <div className="flex items-center gap-3">
@@ -302,7 +313,10 @@ export const InstallModal: React.FC<InstallModalProps> = ({
             {isEn ? 'Got It' : 'متوجه شدم'}
           </button>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
+

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
-import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, normalizeSearchText, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
-import { playRingTune, speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging, unlockAudio } from './utils/audio';
+import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
+import { speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { ReminderForm } from './components/ReminderForm';
 import { AlarmModal } from './components/AlarmModal';
@@ -14,9 +15,9 @@ import { SavedLocationCard } from './components/SavedLocationCard';
 import { OccasionsView } from './components/OccasionsView';
 import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
-import { AndroidPermissionType, openAndroidSettings, requestNotificationPermission, requestLocationPermission } from './utils/nativePermissions';
+import { AndroidPermissionType, requestNotificationPermission, requestLocationPermission } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
-import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, requestLocalFolderPermission, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
+import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
 import { useFabVisibility } from './hooks/useFabVisibility';
@@ -155,10 +156,6 @@ export default function App() {
       alarmVolume: 0.85,
       vibrationEnabled: true,
       autoVoiceInput: false,
-      aiVoicePersona: 'zephyr_warm',
-      aiVoiceVolume: 1.0,
-      micSensitivity: 75,
-      micBaseFrequencyHz: 165,
     };
   });
 
@@ -234,7 +231,8 @@ export default function App() {
         syncAllRemindersWithLocalNotifications(reminders, settings).catch(() => {});
       })
       .catch(() => {});
-  }, [settings.alarmSound, settings.alarmVolume, settings.vibrationEnabled, reminders]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings.alarmSound, settings.alarmVolume, settings.vibrationEnabled]);
 
   // Ideas & Thoughts state: Initialized to empty array, all mock data removed
   const [ideas, setIdeas] = useState<IdeaNote[]>(() => {
@@ -500,8 +498,34 @@ export default function App() {
 
     autoRestoreOnOpen();
 
+    // Also re-check when returning from Android Settings (e.g. after granting "All files access" permission)
+    const handleVisibilityOrResume = () => {
+      if (document.visibilityState === 'visible' && remindersRef.current.length === 0) {
+        autoRestoreOnOpen();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrResume);
+    let appStateSub: { remove: () => Promise<void> } | null = null;
+    try {
+      CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+        if (isActive && remindersRef.current.length === 0) {
+          autoRestoreOnOpen();
+        }
+      })
+        .then((sub) => {
+          appStateSub = sub;
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
+
     return () => {
       isMounted = false;
+      document.removeEventListener('visibilitychange', handleVisibilityOrResume);
+      if (appStateSub) {
+        appStateSub.remove().catch(() => {});
+      }
     };
   }, [applyRestoredBackupIfNeeded]);
 
@@ -1322,6 +1346,7 @@ export default function App() {
                 if (!isAppCurrentlyInForeground()) {
                   triggerOutOfAppPersistentNotification(updatedForCycle, settings).catch(() => {});
                 } else {
+                  cancelReminderNotification(r.id).catch(() => {});
                   dismissDeliveredNotifications(r.id).catch(() => {});
                 }
               }
@@ -1365,6 +1390,7 @@ export default function App() {
                 settings
               ).catch(() => {});
             } else {
+              cancelReminderNotification(r.id).catch(() => {});
               dismissDeliveredNotifications(r.id).catch(() => {});
             }
           }
@@ -2053,6 +2079,17 @@ export default function App() {
     setOccasions(finalOccasions);
     setSettings(finalSettings);
 
+    performAutoBackup(
+      {
+        reminders: finalReminders,
+        ideas: finalIdeas,
+        savedLocations: finalLocations,
+        occasions: finalOccasions,
+        settings: finalSettings,
+      },
+      { forceReplace: mode === 'replace' }
+    ).catch(() => {});
+
     // 4. Re-schedule local notifications for all pending restored reminders
     syncAllRemindersWithLocalNotifications(finalReminders, finalSettings).catch(() => {});
 
@@ -2431,16 +2468,31 @@ export default function App() {
 
   // Handler: Permanent delete item from Recycle Bin
   const handlePermanentDeleteItem = (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => {
+    const nextReminders = type === 'reminder' ? reminders.filter((r) => r.id !== id) : reminders;
+    const nextLocations = type === 'location' ? savedLocations.filter((l) => l.id !== id) : savedLocations;
+    const nextOccasions = type === 'occasion' ? occasions.filter((o) => o.id !== id) : occasions;
+    const nextIdeas = type === 'idea' ? ideas.filter((i) => i.id !== id) : ideas;
+
     if (type === 'reminder') {
       cancelReminderNotification(id).catch(() => {});
-      setReminders((prev) => prev.filter((r) => r.id !== id));
+      setReminders(nextReminders);
     } else if (type === 'location') {
-      setSavedLocations((prev) => prev.filter((l) => l.id !== id));
+      setSavedLocations(nextLocations);
     } else if (type === 'occasion') {
-      setOccasions((prev) => prev.filter((o) => o.id !== id));
+      setOccasions(nextOccasions);
     } else if (type === 'idea') {
-      setIdeas((prev) => prev.filter((i) => i.id !== id));
+      setIdeas(nextIdeas);
     }
+    performAutoBackup(
+      {
+        reminders: nextReminders,
+        ideas: nextIdeas,
+        savedLocations: nextLocations,
+        occasions: nextOccasions,
+        settings,
+      },
+      { forceReplace: true }
+    ).catch(() => {});
     showSyncNotification(settings.language === 'en' ? 'Permanently deleted' : 'مورد به صورت دائمی حذف شد');
   };
 
@@ -2451,10 +2503,26 @@ export default function App() {
         cancelReminderNotification(r.id).catch(() => {});
       }
     });
-    setReminders((prev) => prev.filter((r) => !r.deletedAt));
-    setIdeas((prev) => prev.filter((i) => !i.deletedAt));
-    setSavedLocations((prev) => prev.filter((l) => !l.deletedAt));
-    setOccasions((prev) => prev.filter((o) => !o.deletedAt));
+    const nextReminders = reminders.filter((r) => !r.deletedAt);
+    const nextIdeas = ideas.filter((i) => !i.deletedAt);
+    const nextLocations = savedLocations.filter((l) => !l.deletedAt);
+    const nextOccasions = occasions.filter((o) => !o.deletedAt);
+
+    setReminders(nextReminders);
+    setIdeas(nextIdeas);
+    setSavedLocations(nextLocations);
+    setOccasions(nextOccasions);
+
+    performAutoBackup(
+      {
+        reminders: nextReminders,
+        ideas: nextIdeas,
+        savedLocations: nextLocations,
+        occasions: nextOccasions,
+        settings,
+      },
+      { forceReplace: true }
+    ).catch(() => {});
     showSyncNotification(settings.language === 'en' ? 'Recycle bin emptied' : 'سطل بازیافت خالی شد');
   };
 
@@ -3487,12 +3555,18 @@ export default function App() {
       </main>
 
       {/* FULL-SCREEN CLICKAWAY BACKDROP FOR (+) MENU (outside transformed FAB container so fixed inset-0 covers entire viewport) */}
-      {isCreateChoiceOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[3px] animate-in fade-in duration-200"
-          onClick={() => setIsCreateChoiceOpen(false)}
-        />
-      )}
+      <AnimatePresence>
+        {isCreateChoiceOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.22 }}
+            className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[3px]"
+            onClick={() => setIsCreateChoiceOpen(false)}
+          />
+        )}
+      </AnimatePresence>
 
       {/* FLOATING ACTION BUTTON (+) - POSITIONED DIRECTLY ABOVE BOTTOM NAVIGATION BAR */}
       <div 
@@ -3503,83 +3577,89 @@ export default function App() {
         {/* Relative container for FAB and choice popup */}
         <div className="relative">
           {/* Choice Menu Popup */}
-          {isCreateChoiceOpen && (
-            <div
-              ref={fabMenuRef}
-              onClick={(e) => e.stopPropagation()}
-              className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/98 border border-stone-800 rounded-2xl p-2 sm:p-2.5 shadow-2xl backdrop-blur-2xl w-60 sm:w-64 space-y-1 animate-fab-menu"
-            >
-              {/* Option 1: Reminder */}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsCreateChoiceOpen(false);
-                  setEditingReminder(null);
-                  setIsFormOpen(true);
-                }}
-                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-1"
+          <AnimatePresence>
+            {isCreateChoiceOpen && (
+              <motion.div
+                ref={fabMenuRef}
+                initial={{ y: 24, opacity: 0, scale: 0.92 }}
+                animate={{ y: 0, opacity: 1, scale: 1 }}
+                exit={{ y: '100%', opacity: 0 }}
+                transition={{ duration: 0.24, ease: [0.32, 0.72, 0, 1] }}
+                onClick={(e) => e.stopPropagation()}
+                className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/98 border border-stone-800 rounded-2xl p-2 sm:p-2.5 shadow-2xl backdrop-blur-2xl w-60 sm:w-64 space-y-1"
               >
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
-                  <Bell className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
-                  {isEn ? 'New Reminder' : 'ثبت یادآور'}
-                </span>
-              </button>
+                {/* Option 1: Reminder */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCreateChoiceOpen(false);
+                    setEditingReminder(null);
+                    setIsFormOpen(true);
+                  }}
+                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-1"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                    <Bell className="w-4.5 h-4.5" />
+                  </div>
+                  <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                    {isEn ? 'New Reminder' : 'ثبت یادآور'}
+                  </span>
+                </button>
 
-              {/* Option 2: Occasion */}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsCreateChoiceOpen(false);
-                  setEditingOccasion(null);
-                  setIsOccasionModalOpen(true);
-                }}
-                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-2"
-              >
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
-                  <Cake className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
-                  {isEn ? 'Add Occasion' : 'ثبت مناسبت'}
-                </span>
-              </button>
+                {/* Option 2: Occasion */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCreateChoiceOpen(false);
+                    setEditingOccasion(null);
+                    setIsOccasionModalOpen(true);
+                  }}
+                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-2"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                    <Cake className="w-4.5 h-4.5" />
+                  </div>
+                  <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                    {isEn ? 'Add Occasion' : 'ثبت مناسبت'}
+                  </span>
+                </button>
 
-              {/* Option 3: Idea */}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsCreateChoiceOpen(false);
-                  setIsIdeaModalOpen(true);
-                }}
-                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-3"
-              >
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
-                  <Lightbulb className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
-                  {isEn ? 'Capture Idea' : 'ثبت ایده'}
-                </span>
-              </button>
+                {/* Option 3: Idea */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCreateChoiceOpen(false);
+                    setIsIdeaModalOpen(true);
+                  }}
+                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-3"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                    <Lightbulb className="w-4.5 h-4.5" />
+                  </div>
+                  <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                    {isEn ? 'Capture Idea' : 'ثبت ایده'}
+                  </span>
+                </button>
 
-              {/* Option 4: Location */}
-              <button
-                type="button"
-                onClick={() => {
-                  setIsCreateChoiceOpen(false);
-                  setIsLocationModalOpen(true);
-                }}
-                className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-4"
-              >
-                <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
-                  <MapPin className="w-4.5 h-4.5" />
-                </div>
-                <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
-                  {isEn ? 'Save Place' : 'ثبت مکان'}
-                </span>
-              </button>
-            </div>
-          )}
+                {/* Option 4: Location */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsCreateChoiceOpen(false);
+                    setIsLocationModalOpen(true);
+                  }}
+                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-4"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                    <MapPin className="w-4.5 h-4.5" />
+                  </div>
+                  <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                    {isEn ? 'Save Place' : 'ثبت مکان'}
+                  </span>
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Circular FAB (+) — Always Brand Orange (#FF8C00) across ALL themes */}
           <button
@@ -3804,66 +3884,77 @@ export default function App() {
       />
 
       {/* FULL-SCREEN MINIMAL IN-APP NOTIFICATION POPUP */}
-      {activeAlarmReminder && (
-        <AlarmModal
-          reminder={activeAlarmReminder}
-          settings={settings}
-          onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
-          onNoReactionTimeout={(id) => {
-            handleNoReactionTimeout(id);
-          }}
-          onDismiss={() => {
-            if (activeAlarmReminder) {
-              handleNoReactionTimeout(activeAlarmReminder.id);
-            }
-            openedFromNotificationEditRef.current = true;
-            setIsCreateChoiceOpen(false);
-            setActiveAlarmReminder(null);
-            setCategoryFilter('all');
-            setActiveMainTab('reminders');
-            triggerScrollToNow();
-          }}
-          onComplete={(id) => {
-            handleCompleteReminder(id);
-            setActiveAlarmReminder(null);
-            setActiveMainTab('reminders');
-            triggerScrollToNow();
-          }}
-          onPostpone={(id, mins) => {
-            handlePostpone(id, mins);
-            setActiveAlarmReminder(null);
-          }}
-          onEdit={(rem) => {
-            handleStopOrDismissReminder(rem.id);
-            setActiveAlarmReminder(null);
-            setActiveMainTab('reminders');
-            setEditingReminder(rem);
-            setIsFormOpen(true);
-          }}
-        />
-      )}
+      <AlarmModal
+        reminder={activeAlarmReminder}
+        settings={settings}
+        onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
+        onNoReactionTimeout={(id) => {
+          handleNoReactionTimeout(id);
+        }}
+        onDismiss={() => {
+          if (activeAlarmReminder) {
+            handleNoReactionTimeout(activeAlarmReminder.id);
+          }
+          openedFromNotificationEditRef.current = true;
+          setIsCreateChoiceOpen(false);
+          setActiveAlarmReminder(null);
+          setCategoryFilter('all');
+          setActiveMainTab('reminders');
+          triggerScrollToNow();
+        }}
+        onComplete={(id) => {
+          handleCompleteReminder(id);
+          setActiveAlarmReminder(null);
+          setActiveMainTab('reminders');
+          triggerScrollToNow();
+        }}
+        onPostpone={(id, mins) => {
+          handlePostpone(id, mins);
+          setActiveAlarmReminder(null);
+        }}
+        onEdit={(rem) => {
+          handleStopOrDismissReminder(rem.id);
+          setActiveAlarmReminder(null);
+          setActiveMainTab('reminders');
+          setEditingReminder(rem);
+          setIsFormOpen(true);
+        }}
+      />
 
       {/* IMAGE VIEWER MODAL */}
-      {viewingImageUrl && (
-        <div 
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md"
-          onClick={() => setViewingImageUrl(null)}
-        >
-          <div className="relative max-w-2xl max-h-[90vh] overflow-hidden rounded-2xl border border-stone-700 bg-black">
-            <button
-              onClick={() => setViewingImageUrl(null)}
-              className="absolute top-3 left-3 p-2 rounded-full bg-black/60 text-white hover:bg-black"
+      <AnimatePresence>
+        {viewingImageUrl && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.25 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md"
+            onClick={() => setViewingImageUrl(null)}
+          >
+            <motion.div
+              initial={{ y: 40, opacity: 0, scale: 0.96 }}
+              animate={{ y: 0, opacity: 1, scale: 1 }}
+              exit={{ y: '100%', opacity: 0 }}
+              transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative max-w-2xl max-h-[90vh] overflow-hidden rounded-2xl border border-stone-700 bg-black"
             >
-              <X className="w-5 h-5" />
-            </button>
-            <img
-              src={viewingImageUrl}
-              alt="Attachment"
-              className="w-full h-full object-contain max-h-[85vh]"
-            />
-          </div>
-        </div>
-      )}
+              <button
+                onClick={() => setViewingImageUrl(null)}
+                className="absolute top-3 left-3 p-2 rounded-full bg-black/60 text-white hover:bg-black"
+              >
+                <X className="w-5 h-5" />
+              </button>
+              <img
+                src={viewingImageUrl}
+                alt="Attachment"
+                className="w-full h-full object-contain max-h-[85vh]"
+              />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ANDROID SYSTEM PERMISSION & SECTION DIRECTING MODAL */}
       <AndroidPermissionModal

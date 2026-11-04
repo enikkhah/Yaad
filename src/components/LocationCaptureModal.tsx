@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { 
   MapPin, 
   X, 
@@ -333,8 +334,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
     onClose();
   };
 
-  if (!isOpen) return null;
-
   const googleMapsUrl = latitude && longitude 
     ? `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}` 
     : '';
@@ -346,16 +345,25 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
     : '';
 
   return (
-    <>
-      <div 
-        className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
-        style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
-        dir={isEn ? 'ltr' : 'rtl'}
-      >
-        <div 
-          className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col transition-all duration-150"
-          style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '94dvh' }}
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22 }}
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
+          style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
+          dir={isEn ? 'ltr' : 'rtl'}
         >
+          <motion.div
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col"
+            style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '94dvh' }}
+          >
           {/* Header - Fixed & Solid, no scroll bleed-through */}
           <div className="shrink-0 flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-stone-800 bg-stone-900 z-10">
             <div className="flex items-center gap-2.5">
@@ -932,27 +940,29 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               </span>
             </button>
           </div>
-        </div>
-      </div>
+          </motion.div>
 
-      {/* Pop-up alert for missing required fields per user request */}
-      <ValidationAlertModal
-        isOpen={showValidationModal}
-        onClose={() => setShowValidationModal(false)}
-        title={isEn ? 'Required Field Missing' : 'تکمیل فیلد اجباری'}
-        fieldName={validationFieldName}
-        language={language}
-      />
+          {/* Pop-up alert for missing required fields per user request */}
+          <ValidationAlertModal
+            isOpen={showValidationModal}
+            onClose={() => setShowValidationModal(false)}
+            title={isEn ? 'Required Field Missing' : 'تکمیل فیلد اجباری'}
+            fieldName={validationFieldName}
+            language={language}
+          />
 
-      {/* Live Camera Viewfinder Modal */}
-      <CameraCaptureModal
-        isOpen={isCameraOpen}
-        onClose={() => setIsCameraOpen(false)}
-        onCapture={(dataUrl) => {
-          setPhotoUrl(dataUrl);
-          setIsCameraOpen(false);
-        }}
-      />
-    </>
+          {/* Live Camera Viewfinder Modal */}
+          <CameraCaptureModal
+            isOpen={isCameraOpen}
+            onClose={() => setIsCameraOpen(false)}
+            onCapture={(dataUrl) => {
+              setPhotoUrl(dataUrl);
+              setIsCameraOpen(false);
+            }}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
+

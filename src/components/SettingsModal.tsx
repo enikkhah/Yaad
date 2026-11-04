@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AppSettings, AppTheme, PhoneAlarmSound, AiVoicePersona, Reminder, IdeaNote, SavedLocation, Occasion } from '../types';
+import { AnimatePresence, motion } from 'motion/react';
+import { AppSettings, AppTheme, PhoneAlarmSound, Reminder, IdeaNote, SavedLocation, Occasion } from '../types';
 import { 
   X, 
   Palette, 
@@ -66,14 +67,9 @@ import {
 import { App as CapacitorApp } from '@capacitor/app';
 import {
   PHONE_ALARM_SOUNDS,
-  AI_VOICE_PERSONAS,
   playPhoneAlarmSound,
   stopAlarmRinging,
-  setGlobalVolume,
   setGlobalVibration,
-  speakAiAssistantPrompt,
-  stopAiAssistantPrompt,
-  unlockAudio,
 } from '../utils/audio';
 import { syncNotificationSoundAndVolume, syncAllRemindersWithLocalNotifications } from '../utils/nativeLocalNotifications';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
@@ -141,7 +137,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   } | null>(null);
 
   const [playingSoundId, setPlayingSoundId] = useState<PhoneAlarmSound | null>(null);
-  const [isTestingAiVoice, setIsTestingAiVoice] = useState<boolean>(false);
   const soundTimeoutRef = useRef<number | null>(null);
 
   // Recycle Bin state
@@ -258,6 +253,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } else if (type === 'storage') {
       const res = await requestLocalFolderPermission(false, LOCAL_BACKUP_FOLDER_NAME);
       granted = res.granted;
+      if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
+        onRestoreData(
+          {
+            reminders: res.restoredSnapshot.reminders || [],
+            ideas: res.restoredSnapshot.ideas || [],
+            savedLocations: res.restoredSnapshot.savedLocations || [],
+            occasions: res.restoredSnapshot.occasions || [],
+            settings: res.restoredSnapshot.settings,
+          },
+          'merge'
+        );
+      }
       onUpdateSettings({ localBackupFolderName: LOCAL_BACKUP_FOLDER_NAME });
       if (!res.granted) {
         setShowStoragePermNotice(true);
@@ -283,6 +290,25 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsRequestingAllPerms(true);
     const updated = await requestAllNativePermissions();
     setNativePerms(updated);
+    if (updated.storage && onRestoreData) {
+      try {
+        const snap = await retrieveFromLocalYaadFolder(LOCAL_BACKUP_FOLDER_NAME);
+        if (snap && getSnapshotItemCount(snap) > 0) {
+          onRestoreData(
+            {
+              reminders: snap.reminders || [],
+              ideas: snap.ideas || [],
+              savedLocations: snap.savedLocations || [],
+              occasions: snap.occasions || [],
+              settings: snap.settings,
+            },
+            'merge'
+          );
+        }
+      } catch {
+        // ignore
+      }
+    }
     if (!updated.storage) {
       setShowStoragePermNotice(true);
     } else {
@@ -353,6 +379,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setBackupErrorMessage(null);
     try {
       const res = await requestLocalFolderPermission(false, LOCAL_BACKUP_FOLDER_NAME);
+      if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
+        onRestoreData(
+          {
+            reminders: res.restoredSnapshot.reminders || [],
+            ideas: res.restoredSnapshot.ideas || [],
+            savedLocations: res.restoredSnapshot.savedLocations || [],
+            occasions: res.restoredSnapshot.occasions || [],
+            settings: res.restoredSnapshot.settings,
+          },
+          'merge'
+        );
+      }
       onUpdateSettings({ localBackupFolderName: LOCAL_BACKUP_FOLDER_NAME });
       await performAutoBackup({
         reminders,
@@ -423,14 +461,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-      <div 
-        id="settings-modal-panel"
-        className="w-full max-w-xl bg-stone-900 border border-stone-800 rounded-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
-      >
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22 }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm"
+        >
+          <motion.div
+            id="settings-modal-panel"
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            className="w-full max-w-xl bg-stone-900 border border-stone-800 rounded-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
+          >
         {/* Header */}
         <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
           <div className="flex items-center gap-2.5 sm:gap-3">
@@ -1804,7 +1852,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {settings.language === 'en' ? t.confirm : 'تأیید'}
           </button>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
+

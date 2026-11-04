@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Reminder, AppSettings, PhoneAlarmSound, AppTheme } from '../types';
 import { formatJalaliFull, formatJalaliTime, toPersianDigits } from '../utils/jalali';
 import { getRecurrenceLabel } from '../utils/recurrence';
@@ -8,6 +9,7 @@ import {
   clearOutOfAppPersistentNotification,
   isAppCurrentlyInForeground,
   dismissDeliveredNotifications,
+  cancelReminderNotification,
 } from '../utils/nativeLocalNotifications';
 import {
   CheckCircle2,
@@ -195,10 +197,12 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     }
 
     // Trigger persistent out-of-app notification ONLY when outside the app;
-    // when inside the app, ensure no status-bar notification overlaps the in-app modal.
+    // when inside the app, cancel any pending scheduled notification and dismiss delivered notifications
+    // so only the in-app alarm sound plays (no dual notification sound).
     if (!isAppCurrentlyInForeground()) {
       triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
     } else {
+      cancelReminderNotification(reminder.id).catch(() => {});
       dismissDeliveredNotifications(reminder.id).catch(() => {});
     }
 
@@ -252,12 +256,10 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     settings?.ttsVoiceRate,
   ]);
 
-  if (!reminder) return null;
-
   const palette = getAlarmCardPalette(settings?.theme);
 
   const getCategoryIcon = () => {
-    switch (reminder.category) {
+    switch (reminder?.category) {
       case 'work':
         return <Briefcase className="w-3.5 h-3.5" />;
       case 'family':
@@ -268,18 +270,21 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
   };
 
   const handleComplete = () => {
+    if (!reminder) return;
     stopAlarmRinging();
     clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
     onComplete(reminder.id);
   };
 
   const handlePostpone = (minutes: number) => {
+    if (!reminder) return;
     stopAlarmRinging();
     clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
     onPostpone(reminder.id, minutes);
   };
 
   const handleEdit = () => {
+    if (!reminder) return;
     stopAlarmRinging();
     clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
     if (onEdit) {
@@ -292,21 +297,31 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     onDismiss();
   };
 
-  const timeFormatted = formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa');
-  const dateFormatted = formatJalaliFull(reminder.dueTimestamp, isEn ? 'en' : 'fa');
+  const timeFormatted = reminder ? formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa') : '';
+  const dateFormatted = reminder ? formatJalaliFull(reminder.dueTimestamp, isEn ? 'en' : 'fa') : '';
   const formattedCountdown = isEn
     ? `00:${String(secondsLeft).padStart(2, '0')}`
     : `۰۰:${toPersianDigits(String(secondsLeft).padStart(2, '0'))}`;
 
   return (
-    <div
-      className="fixed inset-0 z-[100] bg-black/65 backdrop-blur-xs flex items-start sm:items-center justify-center p-3.5 sm:p-6 pt-6 select-none animate-in fade-in duration-200"
-      dir={isEn ? 'ltr' : 'rtl'}
-    >
-      <div
-        onClick={handleDismiss}
-        className={`w-full max-w-md rounded-3xl border-2 ${palette.cardBg} ${palette.cardBorder} shadow-2xl overflow-hidden transition-all cursor-pointer`}
-      >
+    <AnimatePresence>
+      {reminder && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22 }}
+          className="fixed inset-0 z-[100] bg-black/65 backdrop-blur-xs flex items-start sm:items-center justify-center p-3.5 sm:p-6 pt-6 select-none"
+          dir={isEn ? 'ltr' : 'rtl'}
+        >
+          <motion.div
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            onClick={handleDismiss}
+            className={`w-full max-w-md rounded-3xl border-2 ${palette.cardBg} ${palette.cardBorder} shadow-2xl overflow-hidden transition-colors cursor-pointer`}
+          >
         {/* Minimal 1-Minute Progress Bar */}
         <div className="w-full h-1 bg-black/20 overflow-hidden">
           <div
@@ -450,7 +465,10 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             </button>
           </div>
         </div>
-      </div>
-    </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
+

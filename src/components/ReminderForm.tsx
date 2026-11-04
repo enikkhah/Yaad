@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { Category, Priority, Reminder, RecurrenceType, SavedLocation, LocationGeofenceConfig, GeofenceTriggerType } from '../types';
 import { 
   getJalaliComponents, 
@@ -26,7 +27,6 @@ import { CameraCaptureModal } from './CameraCaptureModal';
 import { requestMicrophonePermission, requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
-import { setNativeSpeechRecognizerMuteGate } from '../utils/audio';
 import { 
   Mic, 
   MicOff, 
@@ -389,9 +389,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     setSpeechTranscript('');
     lastFinalTranscriptRef.current = '';
     processedFinalIndicesRef.current.clear();
-    setTimeout(() => {
-      setNativeSpeechRecognizerMuteGate(false);
-    }, 260);
   };
 
   const startVoiceListening = async (forcedLang?: 'fa' | 'en') => {
@@ -428,7 +425,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       shouldKeepListeningRef.current = true;
       speechStartTimeRef.current = Date.now();
       lastSpeechTimeRef.current = 0;
-      setNativeSpeechRecognizerMuteGate(true);
 
       const resetSilenceTimer = (durationMs = 5000) => {
         if (silenceTimerRef.current) {
@@ -732,19 +728,26 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     onClose();
   };
 
-  if (!isOpen) return null;
-
   return (
-    <>
-      <div 
-        className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
-        style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
-        dir={isEn ? 'ltr' : 'rtl'}
-      >
-        <div 
-          className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col transition-all duration-150"
-          style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '92dvh' }}
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22 }}
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
+          style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
+          dir={isEn ? 'ltr' : 'rtl'}
         >
+          <motion.div
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col"
+            style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '92dvh' }}
+          >
           {/* Header */}
           <div className="px-2.5 sm:px-6 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-950/60 sticky top-0 z-10 backdrop-blur shrink-0">
             <div className="flex items-center gap-2.5 sm:gap-3">
@@ -1922,27 +1925,29 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </button>
             </div>
           </form>
-        </div>
-      </div>
+          </motion.div>
 
-      {/* Pop-up alert for missing required fields per user request */}
-      <ValidationAlertModal
-        isOpen={showValidationModal}
-        onClose={() => {
-          setShowValidationModal(false);
-          setTimeout(() => titleInputRef.current?.focus(), 50);
-        }}
-        title={isEn ? "Required Field Missing" : "تکمیل فیلد اجباری"}
-        fieldName={isEn ? "Reminder Title" : "عنوان یادآور"}
-        language={language}
-      />
+          {/* Pop-up alert for missing required fields per user request */}
+          <ValidationAlertModal
+            isOpen={showValidationModal}
+            onClose={() => {
+              setShowValidationModal(false);
+              setTimeout(() => titleInputRef.current?.focus(), 50);
+            }}
+            title={isEn ? "Required Field Missing" : "تکمیل فیلد اجباری"}
+            fieldName={isEn ? "Reminder Title" : "عنوان یادآور"}
+            language={language}
+          />
 
-      {/* Camera Capture Modal */}
-      <CameraCaptureModal
-        isOpen={isCameraOpen}
-        onClose={() => setIsCameraOpen(false)}
-        onCapture={(img) => setImageUrl(img)}
-      />
-    </>
+          {/* Camera Capture Modal */}
+          <CameraCaptureModal
+            isOpen={isCameraOpen}
+            onClose={() => setIsCameraOpen(false)}
+            onCapture={(img) => setImageUrl(img)}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
+

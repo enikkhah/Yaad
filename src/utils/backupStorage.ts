@@ -633,6 +633,35 @@ async function readFromServerOrCacheYaadFolder(): Promise<AutoBackupSnapshot | n
 }
 
 /**
+ * Helper to merge two arrays of items with `id` and optional `deletedAt`,
+ * preserving newer or soft-deleted state while ensuring existing disk items are never lost when memory state is empty/partial.
+ */
+function mergeBackupCollection<T extends { id: string; deletedAt?: number }>(
+  primary: T[] | undefined,
+  secondary: T[] | undefined,
+  onlyPreserveWhenPrimaryEmptyOrActive: boolean = false
+): T[] {
+  const primArr = Array.isArray(primary) ? primary.filter((x) => x && x.id && !x.id.startsWith('seed-') && !x.id.startsWith('sample_')) : [];
+  const secArr = Array.isArray(secondary) ? secondary.filter((x) => x && x.id && !x.id.startsWith('seed-') && !x.id.startsWith('sample_')) : [];
+
+  if (secArr.length === 0) return primArr;
+  if (primArr.length === 0) return secArr;
+
+  const map = new Map<string, T>();
+  for (const item of primArr) {
+    map.set(item.id, item);
+  }
+  for (const diskItem of secArr) {
+    if (!map.has(diskItem.id)) {
+      if (!onlyPreserveWhenPrimaryEmptyOrActive || !diskItem.deletedAt) {
+        map.set(diskItem.id, diskItem);
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
+/**
  * Saves an automatic snapshot of all user data into the Local 'Yaad reminder' folder
  * (Device Directory Handle, Capacitor Filesystem, OPFS, Server Folder, Cache, IndexedDB, LocalStorage)
  */
@@ -643,13 +672,15 @@ export async function performAutoBackup(
     savedLocations: SavedLocation[];
     occasions: Occasion[];
     settings?: AppSettings;
-  }
+  },
+  options?: { forceReplace?: boolean }
 ): Promise<boolean> {
   try {
     const now = Date.now();
     const localFolder = LOCAL_BACKUP_FOLDER_NAME;
+    const forceReplace = Boolean(options?.forceReplace);
 
-    const payload: AutoBackupSnapshot = {
+    let payload: AutoBackupSnapshot = {
       version: 3,
       updatedAt: now,
       folder: localFolder,
@@ -660,6 +691,54 @@ export async function performAutoBackup(
       occasions: snapshot.occasions || [],
       settings: snapshot.settings,
     };
+
+    // 0. CRITICAL NON-DESTRUCTIVE DISK GUARD:
+    // Before overwriting YAAD/yaad_backup.json (or localStorage/IndexedDB), check if an existing backup file on disk
+    // already contains reminders/occasions/ideas/locations that were not yet loaded into memory (e.g. before storage permission was granted).
+    const dirHandle = await getDirectoryHandleFromDB();
+    if (!forceReplace) {
+      let existingDiskSnapshot: AutoBackupSnapshot | null = null;
+      try {
+        const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
+        for (const dir of [Directory.ExternalStorage, Directory.External, Directory.Documents]) {
+          const existing = await Filesystem.readFile({
+            path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
+            directory: dir,
+            encoding: Encoding.UTF8,
+          }).catch(() => null);
+          if (existing?.data) {
+            const parsed = safeParseJsonFromReadFileData(existing.data);
+            if (isValidSnapshot(parsed) && getSnapshotItemCount(parsed) > 0) {
+              existingDiskSnapshot = parsed;
+              break;
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      if (!existingDiskSnapshot && dirHandle) {
+        existingDiskSnapshot = await readFromDirectoryHandle(dirHandle);
+      }
+
+      if (existingDiskSnapshot) {
+        const newItemsCount = getSnapshotItemCount(payload);
+        if (newItemsCount === 0 && getSnapshotItemCount(existingDiskSnapshot) > 0) {
+          console.warn('[performAutoBackup] Preserving existing backup file on disk with items; avoiding overwrite with empty initial state.');
+          return false;
+        }
+
+        // Preserve any collection (especially reminders!) if payload has 0 items in that collection or is missing active disk items
+        payload = {
+          ...payload,
+          reminders: mergeBackupCollection(payload.reminders, existingDiskSnapshot.reminders, true),
+          ideas: mergeBackupCollection(payload.ideas, existingDiskSnapshot.ideas, true),
+          savedLocations: mergeBackupCollection(payload.savedLocations, existingDiskSnapshot.savedLocations, true),
+          occasions: mergeBackupCollection(payload.occasions, existingDiskSnapshot.occasions, true),
+        };
+      }
+    }
 
     // 1. Save to primary localStorage vault key
     try {
@@ -686,7 +765,6 @@ export async function performAutoBackup(
     }
 
     // 3. Save to Device Folder 'YAAD/yaad_backup.json' (FileSystemDirectoryHandle if granted)
-    const dirHandle = await getDirectoryHandleFromDB();
     if (dirHandle) {
       await writeToDirectoryHandle(dirHandle, payload);
     }
@@ -694,32 +772,6 @@ export async function performAutoBackup(
     // 4. Save to Native Capacitor Filesystem 'YAAD/yaad_backup.json' in root storage if available
     try {
       const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
-      const newItemsCount = getSnapshotItemCount(payload);
-
-      // SAFETY GUARD: If payload has 0 items (e.g. app freshly mounted or reinstalled with empty initial arrays),
-      // NEVER overwrite an existing backup on disk that contains items!
-      if (newItemsCount === 0) {
-        let existingBackupHasItems = false;
-        for (const dir of [Directory.ExternalStorage, Directory.External, Directory.Documents]) {
-          const existing = await Filesystem.readFile({
-            path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
-            directory: dir,
-            encoding: Encoding.UTF8,
-          }).catch(() => null);
-          if (existing?.data) {
-            const parsed = safeParseJsonFromReadFileData(existing.data);
-            if (getSnapshotItemCount(parsed) > 0) {
-              existingBackupHasItems = true;
-              break;
-            }
-          }
-        }
-        if (existingBackupHasItems) {
-          console.warn('[performAutoBackup] Preserving existing backup file on disk with items; avoiding overwrite with empty initial state.');
-          return false;
-        }
-      }
-
       const jsonData = JSON.stringify(payload, null, 2);
 
       const writeDirs = [
@@ -756,14 +808,14 @@ export async function performAutoBackup(
  * Retrieves the best/latest backup from the Local 'YAAD' folder in root storage across all local storage layers.
  */
 export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): Promise<AutoBackupSnapshot | null> {
-  const candidates: AutoBackupSnapshot[] = [];
+  const candidates: { snap: AutoBackupSnapshot; isPhysicalDisk: boolean }[] = [];
 
   // 1. User-granted Device Folder Handle ('YAAD/yaad_backup.json')
   try {
     const dirHandle = await getDirectoryHandleFromDB('yaad_remider_dir');
     if (dirHandle) {
       const fromHandle = await readFromDirectoryHandle(dirHandle);
-      if (fromHandle) candidates.push(fromHandle);
+      if (fromHandle) candidates.push({ snap: fromHandle, isPhysicalDisk: true });
     }
   } catch {
     // ignore
@@ -791,6 +843,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
     ];
 
     for (const dir of searchDirs) {
+      const isExternalDisk = dir !== Directory.Data;
       for (const folderPath of folderPathsToTry) {
         try {
           // A) Try readdir to discover all .json files in this folder
@@ -835,7 +888,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
               if (fileRes?.data) {
                 const parsed = safeParseJsonFromReadFileData(fileRes.data);
                 if (isValidSnapshot(parsed)) {
-                  candidates.push(parsed);
+                  candidates.push({ snap: parsed, isPhysicalDisk: isExternalDisk });
                 }
               }
             }
@@ -855,7 +908,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
             if (res?.data) {
               const parsed = safeParseJsonFromReadFileData(res.data);
               if (isValidSnapshot(parsed)) {
-                candidates.push(parsed);
+                candidates.push({ snap: parsed, isPhysicalDisk: isExternalDisk });
               }
             }
           }
@@ -871,7 +924,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
   // 3. OPFS 'Yaad reminder/yaad_backup.json'
   try {
     const fromOpfs = await readFromOpfsYaadFolder();
-    if (fromOpfs) candidates.push(fromOpfs);
+    if (fromOpfs) candidates.push({ snap: fromOpfs, isPhysicalDisk: false });
   } catch {
     // ignore
   }
@@ -879,7 +932,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
   // 4. Physical 'Yaad reminder/yaad_backup.json' & Cache Storage
   try {
     const fromServerOrCache = await readFromServerOrCacheYaadFolder();
-    if (fromServerOrCache) candidates.push(fromServerOrCache);
+    if (fromServerOrCache) candidates.push({ snap: fromServerOrCache, isPhysicalDisk: false });
   } catch {
     // ignore
   }
@@ -900,7 +953,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
         }
       });
       if (isValidSnapshot(dbResult)) {
-        candidates.push(dbResult);
+        candidates.push({ snap: dbResult, isPhysicalDisk: false });
       }
     }
   } catch {
@@ -913,7 +966,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
     if (raw) {
       const parsed = JSON.parse(raw);
       if (isValidSnapshot(parsed)) {
-        candidates.push(parsed);
+        candidates.push({ snap: parsed, isPhysicalDisk: false });
       }
     }
   } catch {
@@ -922,16 +975,39 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
 
   if (candidates.length === 0) return null;
 
-  // Prefer candidates that actually contain user items, then sort by newest updatedAt
+  // Prefer candidates that actually contain reminders and user items, and prioritize physical YAAD folder on disk
   candidates.sort((a, b) => {
-    const aItems = getSnapshotItemCount(a);
-    const bItems = getSnapshotItemCount(b);
+    const aReminders = Array.isArray(a.snap.reminders) ? a.snap.reminders.length : 0;
+    const bReminders = Array.isArray(b.snap.reminders) ? b.snap.reminders.length : 0;
+    if (aReminders > 0 && bReminders === 0) return -1;
+    if (bReminders > 0 && aReminders === 0) return 1;
+
+    const aItems = getSnapshotItemCount(a.snap);
+    const bItems = getSnapshotItemCount(b.snap);
     if (aItems > 0 && bItems === 0) return -1;
     if (bItems > 0 && aItems === 0) return 1;
-    return (b.updatedAt || 0) - (a.updatedAt || 0);
+
+    if (a.isPhysicalDisk !== b.isPhysicalDisk && aReminders !== bReminders) {
+      return bReminders - aReminders;
+    }
+
+    return (b.snap.updatedAt || 0) - (a.snap.updatedAt || 0);
   });
 
-  return candidates[0];
+  // Merge collections across all valid candidates so no reminders/occasions/ideas/locations in any backup file are ever left behind
+  let mergedBest: AutoBackupSnapshot = { ...candidates[0].snap };
+  for (let i = 1; i < candidates.length; i++) {
+    const cand = candidates[i].snap;
+    mergedBest = {
+      ...mergedBest,
+      reminders: mergeBackupCollection(mergedBest.reminders, cand.reminders, false),
+      ideas: mergeBackupCollection(mergedBest.ideas, cand.ideas, false),
+      savedLocations: mergeBackupCollection(mergedBest.savedLocations, cand.savedLocations, false),
+      occasions: mergeBackupCollection(mergedBest.occasions, cand.occasions, false),
+    };
+  }
+
+  return mergedBest;
 }
 
 /**

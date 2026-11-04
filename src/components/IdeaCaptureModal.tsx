@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
 import { IdeaNote, Category } from '../types';
 import { 
   Lightbulb, 
@@ -36,7 +37,6 @@ import {
   markPermissionGranted,
 } from '../utils/nativePermissions';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
-import { setNativeSpeechRecognizerMuteGate } from '../utils/audio';
 
 interface IdeaCaptureModalProps {
   isOpen: boolean;
@@ -241,9 +241,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
         titleSpeechRecognitionRef.current = null;
       }
-      setTimeout(() => {
-        setNativeSpeechRecognizerMuteGate(false);
-      }, 260);
       if (mediaRecorderRef.current && isRecordingAudio) {
         mediaRecorderRef.current.stop();
       }
@@ -274,9 +271,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       setTitleInterimTranscript('');
       lastFinalTitleTranscriptRef.current = '';
       processedFinalTitleIndicesRef.current.clear();
-      setTimeout(() => {
-        setNativeSpeechRecognizerMuteGate(false);
-      }, 260);
       return;
     }
 
@@ -301,7 +295,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       shouldKeepTitleListeningRef.current = true;
       titleSpeechStartTimeRef.current = Date.now();
       titleLastSpeechTimeRef.current = 0;
-      setNativeSpeechRecognizerMuteGate(true);
 
       const resetTitleSilenceTimer = (durationMs = 5000) => {
         if (titleSilenceTimerRef.current) {
@@ -314,9 +307,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           titleSpeechRecognitionRef.current = null;
           setIsTitleVoiceTyping(false);
           setTitleInterimTranscript('');
-          setTimeout(() => {
-            setNativeSpeechRecognizerMuteGate(false);
-          }, 260);
         }, durationMs);
       };
 
@@ -382,9 +372,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             titleSpeechRecognitionRef.current = null;
             setIsTitleVoiceTyping(false);
             setTitleInterimTranscript('');
-            setTimeout(() => {
-              setNativeSpeechRecognizerMuteGate(false);
-            }, 260);
           };
 
           recognition.onend = () => {
@@ -392,9 +379,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             titleSpeechRecognitionRef.current = null;
             setIsTitleVoiceTyping(false);
             setTitleInterimTranscript('');
-            setTimeout(() => {
-              setNativeSpeechRecognizerMuteGate(false);
-            }, 260);
           };
 
           titleSpeechRecognitionRef.current = recognition;
@@ -402,7 +386,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         } catch (e) {
           console.warn('Title speech recognition failed', e);
           setIsTitleVoiceTyping(false);
-          setNativeSpeechRecognizerMuteGate(false);
         }
       };
 
@@ -410,7 +393,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     } catch (e) {
       console.warn('Title speech recognition failed', e);
       setIsTitleVoiceTyping(false);
-      setNativeSpeechRecognizerMuteGate(false);
     }
   };
 
@@ -429,9 +411,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       setContentInterimTranscript('');
       lastFinalContentTranscriptRef.current = '';
       processedFinalContentIndicesRef.current.clear();
-      setTimeout(() => {
-        setNativeSpeechRecognizerMuteGate(false);
-      }, 260);
       return;
     }
 
@@ -456,7 +435,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       shouldKeepContentListeningRef.current = true;
       contentSpeechStartTimeRef.current = Date.now();
       contentLastSpeechTimeRef.current = 0;
-      setNativeSpeechRecognizerMuteGate(true);
 
       const resetContentSilenceTimer = (durationMs = 5000) => {
         if (contentSilenceTimerRef.current) {
@@ -469,9 +447,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           speechRecognitionRef.current = null;
           setIsVoiceTyping(false);
           setContentInterimTranscript('');
-          setTimeout(() => {
-            setNativeSpeechRecognizerMuteGate(false);
-          }, 260);
         }, durationMs);
       };
 
@@ -537,9 +512,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             speechRecognitionRef.current = null;
             setIsVoiceTyping(false);
             setContentInterimTranscript('');
-            setTimeout(() => {
-              setNativeSpeechRecognizerMuteGate(false);
-            }, 260);
           };
 
           recognition.onend = () => {
@@ -547,9 +519,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             speechRecognitionRef.current = null;
             setIsVoiceTyping(false);
             setContentInterimTranscript('');
-            setTimeout(() => {
-              setNativeSpeechRecognizerMuteGate(false);
-            }, 260);
           };
 
           speechRecognitionRef.current = recognition;
@@ -557,7 +526,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         } catch (e) {
           console.warn('Speech recognition start failed', e);
           setIsVoiceTyping(false);
-          setNativeSpeechRecognizerMuteGate(false);
         }
       };
 
@@ -1174,19 +1142,27 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     onClose();
   };
 
-  if (!isOpen) return null;
-
   return (
-    <div 
-      className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in overflow-hidden"
-      style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
-    >
-      <div 
-        id="idea-capture-modal-panel"
-        className="w-full max-w-2xl bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden transition-all duration-150"
-        style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '92dvh' }}
-        dir={isEn ? 'ltr' : 'rtl'}
-      >
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.22 }}
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
+          style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
+        >
+          <motion.div
+            id="idea-capture-modal-panel"
+            initial={{ y: '100%', opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: '100%', opacity: 0 }}
+            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            className="w-full max-w-2xl bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+            style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '92dvh' }}
+            dir={isEn ? 'ltr' : 'rtl'}
+          >
         {/* Header */}
         <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
           <div className="flex items-center gap-2.5 sm:gap-3">
@@ -1865,16 +1841,19 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             </span>
           </button>
         </div>
-      </div>
+          </motion.div>
 
-      {/* Pop-up alert for missing required fields per user request */}
-      <ValidationAlertModal
-        isOpen={showValidationModal}
-        onClose={() => setShowValidationModal(false)}
-        title={isEn ? 'Required Field Missing' : 'تکمیل فیلد اجباری'}
-        fieldName={isEn ? 'Idea Title' : 'عنوان ایده'}
-        language={language}
-      />
-    </div>
+          {/* Pop-up alert for missing required fields per user request */}
+          <ValidationAlertModal
+            isOpen={showValidationModal}
+            onClose={() => setShowValidationModal(false)}
+            title={isEn ? 'Required Field Missing' : 'تکمیل فیلد اجباری'}
+            fieldName={isEn ? 'Idea Title' : 'عنوان ایده'}
+            language={language}
+          />
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
+
