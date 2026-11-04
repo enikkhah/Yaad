@@ -195,21 +195,10 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       // ignore
     }
 
-    // Trigger persistent out-of-app notification ONLY when outside the app;
-    // when inside the app, cancel any pending scheduled notification and dismiss delivered notifications
-    // so only the in-app alarm sound plays (no dual notification sound).
+    // Visual in-app alarm modal only: out-of-app notification handles the alarm audio so two sounds never play with a lag
     if (!isAppCurrentlyInForeground()) {
       triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
-    } else {
-      cancelReminderNotification(reminder.id).catch(() => {});
-      dismissDeliveredNotifications(reminder.id).catch(() => {});
     }
-
-    // Ring alarm for 1 minute (60 seconds)
-    const sound: PhoneAlarmSound = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
-    const vol = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
-    const vib = settings?.vibrationEnabled !== false;
-    startAlarmRinging(reminder.category, sound, vol, vib);
 
     let ttsTimer: any = null;
     if (reminder.voiceReadAloud) {
@@ -243,7 +232,6 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     return () => {
       window.clearInterval(intervalId);
       if (ttsTimer) clearTimeout(ttsTimer);
-      stopAlarmRinging();
     };
   }, [
     reminder?.id,
@@ -296,11 +284,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     onDismiss();
   };
 
-  const timeFormatted = reminder ? formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa') : '';
   const dateFormatted = reminder ? formatJalaliFull(reminder.dueTimestamp, isEn ? 'en' : 'fa') : '';
-  const formattedCountdown = isEn
-    ? `00:${String(secondsLeft).padStart(2, '0')}`
-    : `۰۰:${toPersianDigits(String(secondsLeft).padStart(2, '0'))}`;
 
   return (
     <AnimatePresence>
@@ -334,13 +318,13 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
               <div
-                className={`relative w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden p-0.5 ${palette.accentBg} ${palette.accentText}`}
+                className={`relative w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden ${palette.accentBg} ${palette.accentText}`}
               >
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-xl opacity-20 bg-current" />
                 <img
                   src={appIcon}
                   alt="YAAD"
-                  className="relative z-10 w-full h-full object-contain scale-95 rounded-[9px]"
+                  className="relative z-10 w-full h-full object-contain rounded-[9px]"
                   draggable={false}
                 />
               </div>
@@ -371,9 +355,6 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             </div>
 
             <div className="flex items-center gap-2 shrink-0">
-              <span className={`font-mono text-xs font-bold ${palette.mutedText}`}>
-                {formattedCountdown}
-              </span>
               <button
                 type="button"
                 onClick={(e) => {
@@ -388,18 +369,15 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             </div>
           </div>
 
-          {/* Main Reminder Content */}
-          <div className="space-y-1.5 py-1">
-            <div className="flex items-baseline justify-between gap-2">
-              <h2 className={`text-lg sm:text-xl font-black leading-snug ${palette.titleText}`}>
+          {/* Main Reminder Content: Distinct Subject Font + Single Time in Date Line */}
+          <div className="space-y-2 py-1">
+            <div className="px-3.5 py-2.5 rounded-2xl border border-[#FF8C00]/35 bg-[#FF8C00]/10">
+              <h2 className={`text-xl sm:text-2xl font-black tracking-tight leading-snug ${palette.titleText}`}>
                 {reminder.title}
               </h2>
-              <span className={`font-mono text-base sm:text-lg font-black shrink-0 ${palette.accentText}`}>
-                {timeFormatted}
-              </span>
             </div>
 
-            <div className={`text-xs ${palette.mutedText} flex items-center gap-2 flex-wrap`}>
+            <div className={`text-xs font-normal ${palette.mutedText} flex items-center gap-2 flex-wrap`}>
               <span>{dateFormatted}</span>
               {reminder.recurrence && reminder.recurrence !== 'none' && (
                 <>
@@ -413,7 +391,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
             </div>
 
             {reminder.description && (
-              <p className={`text-xs sm:text-sm leading-relaxed pt-1 ${palette.bodyText}`}>
+              <p className={`text-xs sm:text-sm font-normal leading-relaxed pt-1 ${palette.bodyText}`}>
                 {reminder.description}
               </p>
             )}

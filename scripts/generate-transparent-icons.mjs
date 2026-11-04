@@ -323,8 +323,8 @@ for (let y = 0; y < srcImage.height; y++) {
 const bboxW = Math.max(1, maxX - minX + 1);
 const bboxH = Math.max(1, maxY - minY + 1);
 const bboxMaxDim = Math.max(bboxW, bboxH);
-// Base uncompacted canvas has the glyph occupying 90% of the square dimension
-const baseCanvasSize = Math.round(bboxMaxDim / 0.9);
+// Tight square canvas (100% = exact glyph height) so paddingRatio directly controls logo-to-frame height ratio
+const baseCanvasSize = bboxMaxDim;
 const baseData = new Uint8Array(baseCanvasSize * baseCanvasSize * 4);
 const offsetX = Math.round((baseCanvasSize - bboxW) / 2);
 const offsetY = Math.round((baseCanvasSize - bboxH) / 2);
@@ -347,25 +347,27 @@ const normalizedSrcImage = {
 };
 
 // 1. Update web & Capacitor source icons with 100% transparent background, vibrant #FF8C00 brand color,
-// and ~5% more compact logo framing (pad +0.025 on each side = 5% smaller overall)
-const COMPACT_PAD = 0.025; // 2.5% per side = 5% more compact overall
+// and 0.80 logo-height-to-frame-height ratio (pad = 0.10 on each side => 1 - 2*0.10 = 0.80)
+const FRAME_PAD_080 = 0.10; // 10% per side = 0.80 logo height ratio
+const ANDROID_LAUNCHER_PAD = 0.13; // ~0.80 ratio inside Android launcher squircle/rounded frame
+const ANDROID_ADAPTIVE_FG_PAD = 0.233; // 0.534 of 108dp canvas = 0.80 of 72dp adaptive icon frame
 const iconTargets = [
-  { file: 'public/logo-transparent.png', size: 1024, pad: COMPACT_PAD },
-  { file: 'src/assets/images/logo-transparent.png', size: 1024, pad: COMPACT_PAD },
-  { file: 'src/assets/images/icon.png', size: 1024, pad: COMPACT_PAD },
-  { file: 'public/icon.png', size: 1024, pad: COMPACT_PAD },
+  { file: 'public/logo-transparent.png', size: 1024, pad: FRAME_PAD_080 },
+  { file: 'src/assets/images/logo-transparent.png', size: 1024, pad: FRAME_PAD_080 },
+  { file: 'src/assets/images/icon.png', size: 1024, pad: FRAME_PAD_080 },
+  { file: 'public/icon.png', size: 1024, pad: FRAME_PAD_080 },
   ...(fs.existsSync(path.join(rootDir, 'resources'))
     ? [
-        { file: 'resources/icon.png', size: 1024, pad: COMPACT_PAD },
-        { file: 'resources/icon-only.png', size: 1024, pad: COMPACT_PAD },
-        { file: 'resources/icon-foreground.png', size: 1024, pad: 0.18 + COMPACT_PAD },
+        { file: 'resources/icon.png', size: 1024, pad: ANDROID_LAUNCHER_PAD },
+        { file: 'resources/icon-only.png', size: 1024, pad: ANDROID_LAUNCHER_PAD },
+        { file: 'resources/icon-foreground.png', size: 1024, pad: ANDROID_ADAPTIVE_FG_PAD },
       ]
     : []),
-  { file: 'public/pwa-512x512.png', size: 512, pad: COMPACT_PAD },
-  { file: 'public/pwa-maskable-512x512.png', size: 512, pad: 0.12 + COMPACT_PAD },
-  { file: 'public/pwa-192x192.png', size: 192, pad: COMPACT_PAD },
-  { file: 'public/pwa-maskable-192x192.png', size: 192, pad: 0.12 + COMPACT_PAD },
-  { file: 'public/apple-touch-icon.png', size: 180, pad: COMPACT_PAD },
+  { file: 'public/pwa-512x512.png', size: 512, pad: FRAME_PAD_080 },
+  { file: 'public/pwa-maskable-512x512.png', size: 512, pad: 0.18 },
+  { file: 'public/pwa-192x192.png', size: 192, pad: FRAME_PAD_080 },
+  { file: 'public/pwa-maskable-192x192.png', size: 192, pad: 0.18 },
+  { file: 'public/apple-touch-icon.png', size: 180, pad: FRAME_PAD_080 },
 ];
 
 for (const target of iconTargets) {
@@ -391,15 +393,18 @@ if (fs.existsSync(path.join(rootDir, 'android'))) {
     const dir = path.join(androidResDir, cfg.folder);
     fs.mkdirSync(dir, { recursive: true });
 
-    // Remove any default .webp launcher files that could override .png
+    // Remove any default .webp or background .png launcher files that could override transparent icon
     for (const file of fs.readdirSync(dir)) {
-      if (file.startsWith('ic_launcher') && file.endsWith('.webp')) {
+      if (
+        (file.startsWith('ic_launcher') && file.endsWith('.webp')) ||
+        file === 'ic_launcher_background.png'
+      ) {
         fs.unlinkSync(path.join(dir, file));
       }
     }
 
-    const launcherPng = resizeRgba(normalizedSrcImage, cfg.launcherSize, cfg.launcherSize, 0.04 + COMPACT_PAD);
-    const foregroundPng = resizeRgba(normalizedSrcImage, cfg.fgSize, cfg.fgSize, 0.18 + COMPACT_PAD);
+    const launcherPng = resizeRgba(normalizedSrcImage, cfg.launcherSize, cfg.launcherSize, ANDROID_LAUNCHER_PAD);
+    const foregroundPng = resizeRgba(normalizedSrcImage, cfg.fgSize, cfg.fgSize, ANDROID_ADAPTIVE_FG_PAD);
 
     fs.writeFileSync(path.join(dir, 'ic_launcher.png'), launcherPng);
     fs.writeFileSync(path.join(dir, 'ic_launcher_round.png'), launcherPng);
@@ -424,10 +429,10 @@ if (fs.existsSync(path.join(rootDir, 'android'))) {
     'utf8'
   );
 
-  // Write drawable/ic_launcher.png and drawable/ic_stat_notification.png with transparent background
+  // Write drawable/ic_launcher.png and drawable/ic_stat_notification.png with transparent background (0.80 height ratio)
   const drawableDir = path.join(androidResDir, 'drawable');
   fs.mkdirSync(drawableDir, { recursive: true });
-  const notifPng = resizeRgba(normalizedSrcImage, 192, 192, COMPACT_PAD);
+  const notifPng = resizeRgba(normalizedSrcImage, 192, 192, FRAME_PAD_080);
   fs.writeFileSync(path.join(drawableDir, 'ic_launcher.png'), notifPng);
   fs.writeFileSync(path.join(drawableDir, 'ic_stat_notification.png'), notifPng);
   console.log('Generated transparent Android mipmap and drawable icons.');

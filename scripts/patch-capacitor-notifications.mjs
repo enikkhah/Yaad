@@ -389,7 +389,7 @@ const legacyBuildFlagsV4 = `        val isSilentChannel = channelId == "yaad_cha
         mBuilder.setSmallIcon(localNotification.resolveSmallIcon(context, getDefaultSmallIcon(context)))
         mBuilder.setLargeIcon(localNotification.resolveLargeIcon(context))`;
 
-const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
+const legacyBuildFlagsV5 = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
         mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         // Do NOT call setSilent(true) so the notification remains pinned at the TOP of the dropdown shade (Alerting section) after 1 minute
         if (isSilentChannel) {
@@ -423,14 +423,79 @@ const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_chan
             }
         }`;
 
+const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
+        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        // Hide duplicate Android header timestamp because notification body already displays the reminder time
+        mBuilder.setShowWhen(false)
+        // Make notification subject (title) font distinctly larger and bolder than the rest of the notification text
+        try {
+            val rawTitle = localNotification.title ?: ""
+            if (rawTitle.isNotEmpty()) {
+                val styledTitle = android.text.SpannableString(rawTitle)
+                styledTitle.setSpan(
+                    android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                    0,
+                    rawTitle.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                styledTitle.setSpan(
+                    android.text.style.RelativeSizeSpan(1.22f),
+                    0,
+                    rawTitle.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                mBuilder.setContentTitle(styledTitle)
+                val rawBody = localNotification.body ?: ""
+                if (rawBody.isNotEmpty()) {
+                    val styledBody = android.text.SpannableString(rawBody)
+                    styledBody.setSpan(
+                        android.text.style.RelativeSizeSpan(0.92f),
+                        0,
+                        rawBody.length,
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                    mBuilder.setContentText(styledBody)
+                    mBuilder.setStyle(
+                        NotificationCompat.BigTextStyle()
+                            .setBigContentTitle(styledTitle)
+                            .bigText(styledBody)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+        }
+        // Do NOT call setSilent(true) so the notification remains pinned at the TOP of the dropdown shade (Alerting section) after 1 minute
+        if (isSilentChannel) {
+            mBuilder.setOnlyAlertOnce(true)
+            mBuilder.setDefaults(0)
+            mBuilder.setSound(null)
+        } else {
+            mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
+        }
+        if (localNotification.ongoing) {
+            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
+            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
+            mBuilder.setSortKey("0000_yaad_pinned")
+        }
+
+        // Only set SmallIcon using transparent ic_stat_notification drawable; NEVER set LargeIcon
+        // so there is only ONE transparent app logo and no second left logo with a white background
+        val notifIconResId = context.resources.getIdentifier("ic_stat_notification", "drawable", context.packageName)
+        if (notifIconResId != 0) {
+            mBuilder.setSmallIcon(notifIconResId)
+        } else {
+            mBuilder.setSmallIcon(localNotification.resolveSmallIcon(context, getDefaultSmallIcon(context)))
+        }
+        mBuilder.setLargeIcon(null as android.graphics.Bitmap?)`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'buildNotification visibility, category, priority, official app icon, and top-pinned silent channel handling',
+  'buildNotification visibility, category, priority, single transparent app icon, distinct title font, and top-pinned silent channel handling',
   origBuildFlags,
   patchedBuildFlags,
-  'if (context.applicationInfo.icon != 0)',
-  [legacyBuildFlagsV4]
+  'mBuilder.setLargeIcon(null as android.graphics.Bitmap?)',
+  [legacyBuildFlagsV4, legacyBuildFlagsV5]
 );
 
 const origBuildNotif = `        createActionIntents(localNotification, mBuilder)
@@ -547,7 +612,7 @@ const legacyImmediateNotifyV2 = `            if (!isSilentChannel) {
                 }
             }`;
 
-const patchedImmediateNotify = `            if (!isSilentChannel) {
+const legacyImmediateNotifyV3 = `            if (!isSilentChannel) {
                 try {
                     val notificationJson = JSObject(localNotification.source ?: "{}")
                     LocalNotificationsPlugin.fireReceived(notificationJson)
@@ -564,14 +629,31 @@ const patchedImmediateNotify = `            if (!isSilentChannel) {
                 }
             }`;
 
+const patchedImmediateNotify = `            if (!isSilentChannel) {
+                try {
+                    val notificationJson = JSObject(localNotification.source ?: "{}")
+                    LocalNotificationsPlugin.fireReceived(notificationJson)
+                } catch (e: JSONException) {
+                }
+            }
+            localNotification.id?.let {
+                notificationManager.notify(it, buildNotification)
+                if (!isSilentChannel && (buildNotification.flags and Notification.FLAG_INSISTENT) != 0) {
+                    scheduleMuteAfterOneMinute(it, localNotification.source)
+                    if (!LocalNotificationsPlugin.isAppInForeground(context)) {
+                        YaadAlarmPopupActivity.launch(context, it, localNotification.source)
+                    }
+                }
+            }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'scheduleMuteAfterOneMinute, YaadAlarmPopupActivity, and foreground suppression on immediate notify',
+  'scheduleMuteAfterOneMinute and YaadAlarmPopupActivity on immediate notify',
   origImmediateNotify,
   patchedImmediateNotify,
-  'if (isSilentChannel || !LocalNotificationsPlugin.isAppInForeground(context))',
-  [legacyImmediateNotifyV1, legacyImmediateNotifyV2]
+  'if (!LocalNotificationsPlugin.isAppInForeground(context)) {\n                        YaadAlarmPopupActivity.launch(context, it, localNotification.source)\n                    }',
+  [legacyImmediateNotifyV1, legacyImmediateNotifyV2, legacyImmediateNotifyV3]
 );
 
 const origOpenIntent = `        // Open intent
@@ -939,21 +1021,15 @@ class TimedNotificationPublisher : BroadcastReceiver() {
             cancelPreviousActiveNotificationsForReminder(storage, notificationManager, id, reminderId)
         }
 
-        // Do NOT emit a status-bar notification or popup card when the user is actively inside the app
-        if (LocalNotificationsPlugin.isAppInForeground(context)) {
-            LocalNotificationsPlugin.fireReceived(notificationJson)
-            if (id != Int.MIN_VALUE) {
-                storage.deleteNotification(id.toString())
-            }
-            rescheduleNotificationIfNeeded(context, intent, id)
-            return
-        }
-
+        // Always emit the Android notification so the out-of-app notification audio plays whether the app is open or closed;
+        // only launch the standalone native popup card when the app is NOT in the foreground (since in-app AlarmModal shows visually when open).
         LocalNotificationsPlugin.fireReceived(notificationJson)
         notificationManager.notify(id, notification)
         if (id != Int.MIN_VALUE && (notification.flags and Notification.FLAG_INSISTENT) != 0) {
             scheduleMuteAfterOneMinute(context, id, notificationJson.toString())
-            YaadAlarmPopupActivity.launch(context, id, notificationJson.toString())
+            if (!LocalNotificationsPlugin.isAppInForeground(context)) {
+                YaadAlarmPopupActivity.launch(context, id, notificationJson.toString())
+            }
         }
         rescheduleNotificationIfNeeded(context, intent, id)
     }
@@ -3523,8 +3599,13 @@ class YaadAlarmPopupActivity : Activity() {
 
         try {
             val appIconView = android.widget.ImageView(this)
-            val appDrawable = packageManager.getApplicationIcon(applicationInfo)
-            appIconView.setImageDrawable(appDrawable)
+            val notifIconResId = resources.getIdentifier("ic_stat_notification", "drawable", packageName)
+            if (notifIconResId != 0) {
+                appIconView.setImageResource(notifIconResId)
+            } else {
+                val appDrawable = packageManager.getApplicationIcon(applicationInfo)
+                appIconView.setImageDrawable(appDrawable)
+            }
             appIconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
             val iconSize = dp(24f)
             val iconParams = LinearLayout.LayoutParams(iconSize, iconSize)
@@ -3541,20 +3622,11 @@ class YaadAlarmPopupActivity : Activity() {
         val brandTv = TextView(this)
         brandTv.text = if (isPersian) "یادآور هوشمند یاد" else "YAAD Reminder"
         brandTv.setTextColor(palette.accentColor)
-        brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         brandTv.setTypeface(Typeface.DEFAULT_BOLD)
         val brandParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         brandTv.layoutParams = brandParams
         headerRow.addView(brandTv)
-
-        val timerTv = TextView(this)
-        timerTv.text = if (isPersian) "۰۰:۶۰" else "00:60"
-        timerTv.setTextColor(palette.mutedColor)
-        timerTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-        timerTv.setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
-        timerTv.setPadding(dp(8f), 0, dp(8f), 0)
-        timerTextView = timerTv
-        headerRow.addView(timerTv)
 
         val closeTv = TextView(this)
         closeTv.text = "✕"
@@ -3567,14 +3639,21 @@ class YaadAlarmPopupActivity : Activity() {
         headerRow.addView(closeTv)
         content.addView(headerRow)
 
-        // Reminder Title
+        // Reminder Subject (Title) - Distinct larger, extra-bold typography inside a subtle highlighted box
         val titleTv = TextView(this)
         titleTv.text = titleStr
         titleTv.setTextColor(palette.titleColor)
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17.5f)
-        titleTv.setTypeface(Typeface.DEFAULT_BOLD)
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+        titleTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
         titleTv.maxLines = 2
         titleTv.ellipsize = TextUtils.TruncateAt.END
+        titleTv.setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
+        titleTv.background = makeRoundedDrawable(
+            Color.argb(28, Color.red(palette.accentColor), Color.green(palette.accentColor), Color.blue(palette.accentColor)),
+            Color.argb(90, Color.red(palette.accentColor), Color.green(palette.accentColor), Color.blue(palette.accentColor)),
+            1f,
+            12f
+        )
         val titleParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
@@ -3586,19 +3665,20 @@ class YaadAlarmPopupActivity : Activity() {
         }
         content.addView(titleTv)
 
-        // Reminder Body / Time
+        // Reminder Body / Time (normal weight, smaller size for clear contrast with subject)
         if (bodyStr.isNotEmpty()) {
             val bodyTv = TextView(this)
             bodyTv.text = bodyStr
             bodyTv.setTextColor(palette.bodyColor)
-            bodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            bodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            bodyTv.typeface = Typeface.DEFAULT
             bodyTv.maxLines = 3
             bodyTv.ellipsize = TextUtils.TruncateAt.END
             val bodyParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            bodyParams.topMargin = dp(4f)
+            bodyParams.topMargin = dp(8f)
             bodyTv.layoutParams = bodyParams
             bodyTv.setOnClickListener {
                 performTapOpenTimelineAction()

@@ -501,11 +501,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Header */}
         <div className="px-2.5 sm:px-5 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-900/90">
           <div className="flex items-center gap-2.5 sm:gap-3">
-            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden border border-[#FF8C00]/35 flex-shrink-0 bg-stone-950 shadow-sm p-0.5">
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl overflow-hidden border border-[#FF8C00]/35 flex-shrink-0 bg-stone-950 shadow-sm">
               <img
                 src={`${appIcon}${appIcon.includes('?') ? '&' : '?'}v=ff8c00`}
                 alt="YAAD"
-                className="w-full h-full object-contain scale-95 rounded-[10px]"
+                className="w-full h-full object-contain rounded-[10px]"
                 draggable={false}
               />
             </div>
@@ -702,7 +702,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           ? 21
                           : 16
                       }
-                      onChange={(e) => onUpdateSettings({ fontSize: parseInt(e.target.value, 10) })}
+                      onChange={(e) => {
+                        try {
+                          localStorage.setItem('yaad_user_explicit_fontsize_choice', 'true');
+                        } catch {}
+                        onUpdateSettings({ fontSize: parseInt(e.target.value, 10) });
+                      }}
                       className="w-full accent-teal-500 h-2 bg-stone-800 rounded-lg cursor-pointer"
                     />
                     <span className="text-base font-black text-white">{isFa ? 'الف' : 'A'}</span>

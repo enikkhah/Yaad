@@ -498,10 +498,10 @@ export async function scheduleReminderNotification(
   const scheduledDate = new Date(reminder.dueTimestamp);
   const timeFormatted = formatJalaliTime(reminder.dueTimestamp);
 
-  const title = `یادآور: ${reminder.title}`;
+  const title = reminder.title;
   const body = reminder.description
     ? `${reminder.description} • ساعت ${timeFormatted}`
-    : `زمان انجام یادآور: ${timeFormatted}`;
+    : `ساعت ${timeFormatted}`;
 
   // 1. Resolve user-configured alarm sound and volume according to rule:
   // Only if reminder.ringTune is one of the valid IDs (digital_beep, radar, marimba, morning_chime, urgent_bell, beep), use it;
@@ -618,10 +618,10 @@ export async function scheduleReminderNotification(
       },
       ...NOTIFICATION_REPEAT_OFFSETS_MINUTES.map((offsetMins, index) => ({
         id: (notifId + 1000 + index + 1) % 2147483647,
-        title: `⏰ تکرار آلارم: ${reminder.title}`,
+        title: reminder.title,
         body: reminder.description
-          ? `${reminder.description} • در انتظار عکس‌العمل شما (${timeFormatted})`
-          : `یادآور در انتظار ثبت عکس‌العمل شما (${timeFormatted})`,
+          ? `${reminder.description} • ساعت ${timeFormatted}`
+          : `ساعت ${timeFormatted}`,
         channelId: targetChannelId,
         schedule: {
           at: new Date(reminder.dueTimestamp + offsetMins * 60000),
@@ -1123,11 +1123,6 @@ export async function fireImmediateLocalNotification(
   body: string,
   extraData?: any
 ): Promise<void> {
-  // Do NOT emit a notification-bar alert when the user is currently inside the app
-  if (isAppCurrentlyInForeground()) {
-    return;
-  }
-
   if (!isNativeApp()) {
     // In web environment, log or trigger HTML5 notification if granted
     if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
@@ -1160,7 +1155,6 @@ export async function fireImmediateLocalNotification(
           autoCancel: false,
           actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
           smallIcon: 'ic_stat_notification',
-          largeIcon: 'ic_stat_notification',
           extra: {
             theme: settings?.theme || 'dark-gold',
             language: settings?.language || 'fa',
@@ -1246,20 +1240,8 @@ export function setupNotificationListeners(
   if (!isNativeApp()) return;
 
   try {
-    // When a scheduled notification arrives while the user is actively inside the app,
-    // immediately remove any delivered status-bar banner so it never overlaps the in-app notification modal.
-    LocalNotifications.addListener('localNotificationReceived', (notification) => {
-      if (isAppCurrentlyInForeground()) {
-        const remId = notification?.extra?.reminderId;
-        if (remId) {
-          dismissDeliveredNotifications(remId).catch(() => {});
-        } else if (typeof notification?.id === 'number') {
-          LocalNotifications.removeDeliveredNotifications({
-            notifications: [{ id: notification.id, title: '', body: '' }],
-          }).catch(() => {});
-        }
-      }
-    });
+    // Do NOT dismiss delivered notifications when app is in foreground so that out-of-app notification audio plays cleanly without interruption
+    LocalNotifications.addListener('localNotificationReceived', () => {});
 
     LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
       const actionId = action.actionId;
@@ -1356,9 +1338,9 @@ export async function triggerOutOfAppPersistentNotification(
   settings?: AppSettings,
   onClickOpen?: (r: Reminder) => void
 ): Promise<void> {
-  // Never post a notification-bar alert while the user is inside the app
-  if (isAppCurrentlyInForeground()) {
-    dismissDeliveredNotifications(reminder.id).catch(() => {});
+  // On Native Android Capacitor, TimedNotificationPublisher already fires the scheduled notification & sound at dueTimestamp.
+  // Avoid re-scheduling a second duplicate notification from JS which would cause two sounds with a time lag.
+  if (isNativeApp()) {
     return;
   }
 
@@ -1368,49 +1350,9 @@ export async function triggerOutOfAppPersistentNotification(
   const body = reminder.description
     ? `${reminder.description} • ${timeFormatted}`
     : isEn
-    ? `Reminder due at ${timeFormatted} (Awaiting your action)`
-    : `زمان انجام یادآور: ${timeFormatted} (در انتظار عکس‌العمل شما)`;
+    ? `Time: ${timeFormatted}`
+    : `ساعت ${timeFormatted}`;
   const vibrationEnabled = settings?.vibrationEnabled !== false;
-
-  // 1. If running in Native Android Capacitor, fire ongoing high-priority notification
-  if (isNativeApp()) {
-    try {
-      const notifId = reminder.notificationId || getNotificationId(reminder.id);
-      const soundType = resolveAlarmSound(reminder.ringTune, settings?.alarmSound);
-      const volume = settings?.alarmVolume !== undefined ? settings.alarmVolume : 0.85;
-      const isSilent = volume <= 0.01;
-      const targetChannelId = getChannelIdForConfig(soundType, volume, vibrationEnabled);
-      const soundFile = isSilent ? undefined : getSoundFileName(soundType);
-
-      await LocalNotifications.schedule({
-        notifications: [
-          {
-            id: notifId,
-            title,
-            body,
-            channelId: targetChannelId,
-            sound: soundFile,
-            iconColor: '#FF8C00',
-            ongoing: true,
-            autoCancel: false,
-            actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
-            extra: {
-              reminderId: reminder.id,
-              dueTimestamp: reminder.dueTimestamp,
-              sound: soundType,
-              volume,
-              vibrationEnabled,
-              theme: settings?.theme || 'dark-gold',
-              language: settings?.language || 'fa',
-              persistentUntilReaction: true,
-            },
-          },
-        ],
-      });
-    } catch {
-      // ignore native schedule errors
-    }
-  }
 
   // 2. Web / PWA Service Worker persistent notification with action buttons
   if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {

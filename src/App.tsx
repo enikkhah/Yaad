@@ -108,6 +108,8 @@ const SETTINGS_STORAGE_KEY = 'fa_settings_app_data_v1';
 const DEFAULT_THEME_MIGRATION_KEY = 'yaad_default_theme_midnight_v1';
 const DEFAULT_LANG_FA_MIGRATION_KEY = 'yaad_default_lang_fa_v3';
 const USER_EXPLICIT_LANG_KEY = 'yaad_user_explicit_lang_choice';
+const DEFAULT_FONT_SIZE_16_MIGRATION_KEY = 'yaad_default_font_size_16_v1';
+const USER_EXPLICIT_FONTSIZE_KEY = 'yaad_user_explicit_fontsize_choice';
 
 export default function App() {
   // Theme and Settings state
@@ -129,8 +131,19 @@ export default function App() {
           parsed.language = 'fa';
           localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(parsed));
         }
+        if (
+          !localStorage.getItem(DEFAULT_FONT_SIZE_16_MIGRATION_KEY) ||
+          localStorage.getItem(USER_EXPLICIT_FONTSIZE_KEY) !== 'true'
+        ) {
+          localStorage.setItem(DEFAULT_FONT_SIZE_16_MIGRATION_KEY, 'true');
+          parsed.fontSize = 16;
+          localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(parsed));
+        }
         if (!parsed.language) {
           parsed.language = 'fa';
+        }
+        if (!parsed.fontSize || parsed.fontSize === 'normal') {
+          parsed.fontSize = 16;
         }
         return parsed;
       }
@@ -140,6 +153,7 @@ export default function App() {
     try {
       localStorage.setItem(DEFAULT_THEME_MIGRATION_KEY, 'true');
       localStorage.setItem(DEFAULT_LANG_FA_MIGRATION_KEY, 'true');
+      localStorage.setItem(DEFAULT_FONT_SIZE_16_MIGRATION_KEY, 'true');
     } catch {
       // Ignore
     }
@@ -148,7 +162,7 @@ export default function App() {
       theme: 'midnight_blue_silver',
       timelineOrientation: 'vertical',
       timelineMode: 'modern',
-      fontSize: 'normal',
+      fontSize: 16,
       systemNotificationsEnabled: true,
       ttsVoiceRate: 0.95,
       defaultRingTune: 'work',
@@ -498,11 +512,14 @@ export default function App() {
         const userExplicitLang =
           typeof localStorage !== 'undefined' &&
           localStorage.getItem(USER_EXPLICIT_LANG_KEY) === 'true';
+        const userExplicitFontSize =
+          localStorage.getItem(USER_EXPLICIT_FONTSIZE_KEY) === 'true';
         setSettings((prev) => ({
           ...prev,
           ...backup.settings,
-          // Keep Persian ('fa') as default after fresh install unless user explicitly changed language
+          // Keep Persian ('fa') and font size 16 as default after fresh install unless user explicitly changed them
           language: userExplicitLang ? backup.settings.language || 'fa' : 'fa',
+          fontSize: userExplicitFontSize ? backup.settings.fontSize || 16 : 16,
         }));
       }
 
@@ -1387,12 +1404,7 @@ export default function App() {
                 triggeredAlarmsRef.current.add(cycleKey);
                 const updatedForCycle: Reminder = { ...r, dueTimestamp: currentCycleStart, status: 'postponed' };
                 setActiveAlarmReminder(updatedForCycle);
-                if (!isAppCurrentlyInForeground()) {
-                  triggerOutOfAppPersistentNotification(updatedForCycle, settings).catch(() => {});
-                } else {
-                  cancelReminderNotification(r.id).catch(() => {});
-                  dismissDeliveredNotifications(r.id).catch(() => {});
-                }
+                triggerOutOfAppPersistentNotification(updatedForCycle, settings).catch(() => {});
               }
             } else {
               // Outside the 1-minute window: move dueTimestamp to the next 15-minute mark after NOW in the timeline
@@ -1427,16 +1439,12 @@ export default function App() {
             triggeredAlarmsRef.current.add(cycleKey);
             setActiveAlarmReminder({ ...r });
 
-            // Trigger out-of-app notification ONLY when outside the app
-            if (!isAppCurrentlyInForeground()) {
-              triggerOutOfAppPersistentNotification(
-                r,
-                settings
-              ).catch(() => {});
-            } else {
-              cancelReminderNotification(r.id).catch(() => {});
-              dismissDeliveredNotifications(r.id).catch(() => {});
-            }
+            // Trigger out-of-app notification sound (on Android already fired by TimedNotificationPublisher; on Web fired if permitted)
+            // Do NOT cancel or dismiss the delivered notification when the app is open, so the out-of-app sound plays cleanly
+            triggerOutOfAppPersistentNotification(
+              r,
+              settings
+            ).catch(() => {});
           }
         }
       });
@@ -2804,7 +2812,7 @@ export default function App() {
                   return next;
                 });
               }}
-              className={`min-h-[48px] min-w-[48px] w-12 h-12 rounded-2xl p-1 border flex items-center justify-center flex-shrink-0 group cursor-pointer active:scale-95 transition-all duration-200 shadow-md ${
+              className={`min-h-[48px] min-w-[48px] w-12 h-12 rounded-2xl border flex items-center justify-center flex-shrink-0 group cursor-pointer active:scale-95 transition-all duration-200 shadow-md overflow-hidden ${
                 isLogoMenuOpen
                   ? 'bg-stone-900 border-[#FF8C00] ring-1 ring-[#FF8C00]/50 shadow-[#FF8C00]/20'
                   : 'bg-stone-950 border-stone-700/90 hover:border-[#FF8C00]/80 shadow-[#FF8C00]/10'
@@ -2815,7 +2823,7 @@ export default function App() {
               <img
                 src={appIcon}
                 alt="YAAD"
-                className="w-full h-full object-contain scale-95 rounded-xl transition-transform duration-200 group-hover:scale-100"
+                className="w-full h-full object-contain rounded-xl transition-transform duration-200 group-hover:scale-105"
                 draggable={false}
               />
             </button>
