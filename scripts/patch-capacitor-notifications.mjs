@@ -1778,7 +1778,7 @@ const legacyPluginLoadV7 = `        configureWebViewForGoogleOAuth()
         }
     }`;
 
-const patchedPluginLoad = `        isAppInForegroundState = true
+const legacyPluginLoadV8 = `        isAppInForegroundState = true
         configureWebViewForGoogleOAuth()
         purgeStaleOneShotNotifications()
         LegacyNotificationMigrator.run(context, notificationStorage, manager)
@@ -1846,14 +1846,95 @@ const patchedPluginLoad = `        isAppInForegroundState = true
         }
     }`;
 
+const patchedPluginLoad = `        isAppInForegroundState = true
+        configureWebViewForGoogleOAuth()
+        purgeStaleOneShotNotifications()
+        LegacyNotificationMigrator.run(context, notificationStorage, manager)
+        flushQueuedBackgroundActions()
+        activity?.intent?.let { handleOnNewIntent(it) }
+    }
+
+    private inner class YaadNativeAudioBridge(private val appContext: Context) {
+        @android.webkit.JavascriptInterface
+        fun setMicListeningMute(muted: Boolean) {
+            setMicListeningMuteState(appContext, muted)
+        }
+    }
+
+    private fun configureWebViewForGoogleOAuth() {
+        try {
+            activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+            val wv = bridge?.webView
+            if (wv != null) {
+                val ua = wv.settings.userAgentString ?: ""
+                if (ua.contains("; wv") || ua.contains("Version/")) {
+                    wv.settings.userAgentString = ua
+                        .replace("; wv", "")
+                        .replace(Regex("Version/\\\\d+\\\\.\\\\d+\\\\s*"), "")
+                }
+                wv.settings.javaScriptCanOpenWindowsAutomatically = true
+                wv.settings.mediaPlaybackRequiresUserGesture = false
+                try {
+                    wv.removeJavascriptInterface("YaadNativeAudioBridge")
+                } catch (e: Exception) {
+                }
+                wv.addJavascriptInterface(YaadNativeAudioBridge(context.applicationContext), "YaadNativeAudioBridge")
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun purgeStaleOneShotNotifications() {
+        try {
+            val now = System.currentTimeMillis()
+            for (n in notificationStorage.getSavedNotifications()) {
+                val id = n.id ?: continue
+                val sched = n.schedule ?: continue
+                val atDate = sched.at ?: continue
+                if (!sched.isPerpetual() && atDate.time < now - 60000L) {
+                    notificationStorage.deleteNotification(id.toString())
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun handleOnResume() {
+        super.handleOnResume()
+        isAppInForegroundState = true
+        activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+        flushQueuedBackgroundActions()
+    }
+
+    override fun handleOnPause() {
+        super.handleOnPause()
+        isAppInForegroundState = false
+        setMicListeningMuteState(context, false)
+    }
+
+    private fun flushQueuedBackgroundActions() {
+        try {
+            val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(BG_ACTION_KEY, null) ?: return
+            prefs.edit().remove(BG_ACTION_KEY).apply()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val itemStr = arr.optString(i, null) ?: continue
+                val itemJson = JSObject(itemStr)
+                notifyListeners("localNotificationActionPerformed", itemJson, true)
+            }
+        } catch (e: Exception) {
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'load configureWebViewForGoogleOAuth, foreground state tracking, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
+  'load configureWebViewForGoogleOAuth, YaadNativeAudioBridge, foreground state tracking, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
   origPluginLoad,
   patchedPluginLoad,
-  'override fun handleOnPause()',
-  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7]
+  'YaadNativeAudioBridge(context.applicationContext)',
+  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8]
 );
 
 const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
@@ -2187,7 +2268,7 @@ const legacyDispatchReceived = `    internal fun dispatchReceived(notification: 
         notifyListeners("localNotificationActionPerformed", dataJson, true)
     }`;
 
-const patchedDispatchReceived = `    @PluginMethod
+const legacyDispatchReceivedV2 = `    @PluginMethod
     fun playNotificationSound(call: PluginCall) {
         val soundName = call.getString("sound", "digital_beep.wav") ?: "digital_beep.wav"
         val loop = call.getBoolean("loop", false) ?: false
@@ -2243,14 +2324,78 @@ const patchedDispatchReceived = `    @PluginMethod
         notifyListeners("localNotificationActionPerformed", dataJson, true)
     }`;
 
+const patchedDispatchReceived = `    @PluginMethod
+    fun setMicListeningMute(call: PluginCall) {
+        val muted = call.getBoolean("muted", false) ?: false
+        setMicListeningMuteState(context, muted)
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun playNotificationSound(call: PluginCall) {
+        val soundName = call.getString("sound", "digital_beep.wav") ?: "digital_beep.wav"
+        val loop = call.getBoolean("loop", false) ?: false
+        try {
+            setMicListeningMuteState(context, false)
+            stopActiveMediaPlayer()
+            val cleanName = soundName.substringBeforeLast(".")
+            val resId = context.resources.getIdentifier(cleanName, "raw", context.packageName)
+            val mp = android.media.MediaPlayer()
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            mp.setAudioAttributes(attrs)
+            if (resId != 0) {
+                val afd = context.resources.openRawResourceFd(resId)
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            } else {
+                val afd = context.assets.openFd("public/sounds/\$soundName")
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            }
+            mp.isLooping = loop
+            mp.setOnCompletionListener { player ->
+                try {
+                    player.release()
+                } catch (e: Exception) {
+                }
+                if (activeMediaPlayer === player) {
+                    activeMediaPlayer = null
+                }
+            }
+            mp.prepare()
+            mp.start()
+            activeMediaPlayer = mp
+            call.resolve()
+        } catch (e: Exception) {
+            call.reject("Failed to play notification sound: \${e.message}")
+        }
+    }
+
+    @PluginMethod
+    fun stopNotificationSound(call: PluginCall) {
+        stopActiveMediaPlayer()
+        call.resolve()
+    }
+
+    internal fun dispatchReceived(notification: JSObject?) {
+        notifyListeners("localNotificationReceived", notification, true)
+    }
+
+    internal fun dispatchActionPerformed(dataJson: JSObject) {
+        notifyListeners("localNotificationActionPerformed", dataJson, true)
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'playNotificationSound, stopNotificationSound, and dispatchActionPerformed',
+  'setMicListeningMute, playNotificationSound, stopNotificationSound, and dispatchActionPerformed',
   origDispatchReceived,
   patchedDispatchReceived,
-  'fun playNotificationSound(call: PluginCall)',
-  [legacyDispatchReceived]
+  'fun setMicListeningMute(call: PluginCall)',
+  [legacyDispatchReceived, legacyDispatchReceivedV2]
 );
 
 const origCompanionFire = `        fun fireReceived(notification: JSObject?) {
@@ -2383,7 +2528,7 @@ const legacyCompanionFireV3 = `        private const val BG_ACTION_PREFS = "YAAD
             }
         }`;
 
-const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+const legacyCompanionFireV4 = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
         private const val BG_ACTION_KEY = "queued_actions"
         private var activeMediaPlayer: android.media.MediaPlayer? = null
         private var isAppInForegroundState: Boolean = false
@@ -2456,14 +2601,294 @@ const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_
             }
         }`;
 
+const legacyCompanionFireV5 = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+        private const val BG_ACTION_KEY = "queued_actions"
+        private var activeMediaPlayer: android.media.MediaPlayer? = null
+        private var isAppInForegroundState: Boolean = false
+        private var isMicListeningMuted: Boolean = false
+
+        @Synchronized
+        fun setMicListeningMuteState(context: Context, muted: Boolean) {
+            try {
+                val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+                if (muted && !isMicListeningMuted) {
+                    isMicListeningMuted = true
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        try {
+                            am.adjustStreamVolume(
+                                android.media.AudioManager.STREAM_NOTIFICATION,
+                                android.media.AudioManager.ADJUST_MUTE,
+                                0
+                            )
+                        } catch (e: Exception) {
+                        }
+                        try {
+                            am.adjustStreamVolume(
+                                android.media.AudioManager.STREAM_SYSTEM,
+                                android.media.AudioManager.ADJUST_MUTE,
+                                0
+                            )
+                        } catch (e: Exception) {
+                        }
+                        try {
+                            am.adjustStreamVolume(
+                                android.media.AudioManager.STREAM_MUSIC,
+                                android.media.AudioManager.ADJUST_MUTE,
+                                0
+                            )
+                        } catch (e: Exception) {
+                        }
+                    }
+                } else if (!muted && isMicListeningMuted) {
+                    isMicListeningMuted = false
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                        try {
+                            am.adjustStreamVolume(
+                                android.media.AudioManager.STREAM_NOTIFICATION,
+                                android.media.AudioManager.ADJUST_UNMUTE,
+                                0
+                            )
+                        } catch (e: Exception) {
+                        }
+                        try {
+                            am.adjustStreamVolume(
+                                android.media.AudioManager.STREAM_SYSTEM,
+                                android.media.AudioManager.ADJUST_UNMUTE,
+                                0
+                            )
+                        } catch (e: Exception) {
+                        }
+                        try {
+                            am.adjustStreamVolume(
+                                android.media.AudioManager.STREAM_MUSIC,
+                                android.media.AudioManager.ADJUST_UNMUTE,
+                                0
+                            )
+                        } catch (e: Exception) {
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        fun isAppInForeground(context: Context): Boolean {
+            if (!isAppInForegroundState) return false
+            val instance = getLocalNotificationsInstance() ?: return false
+            val act = instance.activity ?: return false
+            if (act.isFinishing || act.isDestroyed) return false
+            try {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (pm != null && !pm.isInteractive) return false
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                if (km != null && km.isKeyguardLocked) return false
+            } catch (e: Exception) {
+            }
+            return true
+        }
+
+        fun stopActiveMediaPlayer() {
+            try {
+                activeMediaPlayer?.let { mp ->
+                    if (mp.isPlaying) {
+                        mp.stop()
+                    }
+                    mp.release()
+                }
+            } catch (e: Exception) {
+            } finally {
+                activeMediaPlayer = null
+            }
+        }
+
+        fun fireReceived(notification: JSObject?) {
+            getLocalNotificationsInstance()?.dispatchReceived(notification)
+        }
+
+        fun fireActionPerformed(dataJson: JSObject): Boolean {
+            val instance = getLocalNotificationsInstance()
+            val act = instance?.activity
+            if (instance != null && act != null && !act.isFinishing && !act.isDestroyed) {
+                instance.dispatchActionPerformed(dataJson)
+                return true
+            }
+            return false
+        }
+
+        fun queueBackgroundAction(context: Context, dataJson: JSObject) {
+            try {
+                val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BG_ACTION_KEY, "[]")
+                val arr = JSONArray(existing)
+                val newRemId = dataJson.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                val filteredArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val itemStr = arr.optString(i, null) ?: continue
+                    if (newRemId.isNotEmpty()) {
+                        try {
+                            val prevObj = JSObject(itemStr)
+                            val prevRemId = prevObj.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (prevRemId == newRemId) continue
+                        } catch (e: Exception) {
+                        }
+                    }
+                    filteredArr.put(itemStr)
+                }
+                filteredArr.put(dataJson.toString())
+                prefs.edit().putString(BG_ACTION_KEY, filteredArr.toString()).apply()
+            } catch (e: Exception) {
+            }
+        }`;
+
+const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+        private const val BG_ACTION_KEY = "queued_actions"
+        private var activeMediaPlayer: android.media.MediaPlayer? = null
+        private var isAppInForegroundState: Boolean = false
+        private var isMicListeningMuted: Boolean = false
+        private val savedMicMuteStreamVolumes = HashMap<Int, Int>()
+        private val micMuteTargetStreams = intArrayOf(
+            android.media.AudioManager.STREAM_MUSIC,
+            android.media.AudioManager.STREAM_NOTIFICATION,
+            android.media.AudioManager.STREAM_SYSTEM,
+            android.media.AudioManager.STREAM_RING,
+            android.media.AudioManager.STREAM_DTMF
+        )
+
+        @Synchronized
+        fun setMicListeningMuteState(context: Context, muted: Boolean) {
+            try {
+                val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager ?: return
+                if (muted) {
+                    if (!isMicListeningMuted) {
+                        isMicListeningMuted = true
+                        savedMicMuteStreamVolumes.clear()
+                        for (stream in micMuteTargetStreams) {
+                            try {
+                                val currentVol = am.getStreamVolume(stream)
+                                savedMicMuteStreamVolumes[stream] = currentVol
+                            } catch (e: Exception) {
+                            }
+                        }
+                    }
+                    for (stream in micMuteTargetStreams) {
+                        try {
+                            am.setStreamVolume(stream, 0, 0)
+                        } catch (e: Exception) {
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            try {
+                                am.adjustStreamVolume(
+                                    stream,
+                                    android.media.AudioManager.ADJUST_MUTE,
+                                    0
+                                )
+                            } catch (e: Exception) {
+                            }
+                        }
+                    }
+                } else if (!muted && isMicListeningMuted) {
+                    isMicListeningMuted = false
+                    for (stream in micMuteTargetStreams) {
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            try {
+                                am.adjustStreamVolume(
+                                    stream,
+                                    android.media.AudioManager.ADJUST_UNMUTE,
+                                    0
+                                )
+                            } catch (e: Exception) {
+                            }
+                        }
+                        try {
+                            val savedVol = savedMicMuteStreamVolumes[stream]
+                            if (savedVol != null && savedVol > 0) {
+                                am.setStreamVolume(stream, savedVol, 0)
+                            }
+                        } catch (e: Exception) {
+                        }
+                    }
+                    savedMicMuteStreamVolumes.clear()
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        fun isAppInForeground(context: Context): Boolean {
+            if (!isAppInForegroundState) return false
+            val instance = getLocalNotificationsInstance() ?: return false
+            val act = instance.activity ?: return false
+            if (act.isFinishing || act.isDestroyed) return false
+            try {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (pm != null && !pm.isInteractive) return false
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                if (km != null && km.isKeyguardLocked) return false
+            } catch (e: Exception) {
+            }
+            return true
+        }
+
+        fun stopActiveMediaPlayer() {
+            try {
+                activeMediaPlayer?.let { mp ->
+                    if (mp.isPlaying) {
+                        mp.stop()
+                    }
+                    mp.release()
+                }
+            } catch (e: Exception) {
+            } finally {
+                activeMediaPlayer = null
+            }
+        }
+
+        fun fireReceived(notification: JSObject?) {
+            getLocalNotificationsInstance()?.dispatchReceived(notification)
+        }
+
+        fun fireActionPerformed(dataJson: JSObject): Boolean {
+            val instance = getLocalNotificationsInstance()
+            val act = instance?.activity
+            if (instance != null && act != null && !act.isFinishing && !act.isDestroyed) {
+                instance.dispatchActionPerformed(dataJson)
+                return true
+            }
+            return false
+        }
+
+        fun queueBackgroundAction(context: Context, dataJson: JSObject) {
+            try {
+                val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BG_ACTION_KEY, "[]")
+                val arr = JSONArray(existing)
+                val newRemId = dataJson.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                val filteredArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val itemStr = arr.optString(i, null) ?: continue
+                    if (newRemId.isNotEmpty()) {
+                        try {
+                            val prevObj = JSObject(itemStr)
+                            val prevRemId = prevObj.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (prevRemId == newRemId) continue
+                        } catch (e: Exception) {
+                        }
+                    }
+                    filteredArr.put(itemStr)
+                }
+                filteredArr.put(dataJson.toString())
+                prefs.edit().putString(BG_ACTION_KEY, filteredArr.toString()).apply()
+            } catch (e: Exception) {
+            }
+        }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'companion isAppInForeground, stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
+  'companion setMicListeningMuteState (5-stream zero-volume + mute lock), isAppInForeground, stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
   origCompanionFire,
   patchedCompanionFire,
-  'fun isAppInForeground(context: Context): Boolean',
-  [legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3]
+  'savedMicMuteStreamVolumes',
+  [legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3, legacyCompanionFireV4, legacyCompanionFireV5]
 );
 
 // 8. Create standalone YaadAlarmPopupActivity.kt (Out-of-app minimal theme-matched 1-minute notification card)

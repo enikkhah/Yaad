@@ -36,6 +36,7 @@ import {
   markPermissionGranted,
 } from '../utils/nativePermissions';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
+import { setNativeSpeechRecognizerMuteGate } from '../utils/audio';
 
 interface IdeaCaptureModalProps {
   isOpen: boolean;
@@ -240,6 +241,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
         titleSpeechRecognitionRef.current = null;
       }
+      setTimeout(() => {
+        setNativeSpeechRecognizerMuteGate(false);
+      }, 260);
       if (mediaRecorderRef.current && isRecordingAudio) {
         mediaRecorderRef.current.stop();
       }
@@ -270,6 +274,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       setTitleInterimTranscript('');
       lastFinalTitleTranscriptRef.current = '';
       processedFinalTitleIndicesRef.current.clear();
+      setTimeout(() => {
+        setNativeSpeechRecognizerMuteGate(false);
+      }, 260);
       return;
     }
 
@@ -294,7 +301,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       shouldKeepTitleListeningRef.current = true;
       titleSpeechStartTimeRef.current = Date.now();
       titleLastSpeechTimeRef.current = 0;
-      setIsTitleVoiceTyping(true);
+      setNativeSpeechRecognizerMuteGate(true);
 
       const resetTitleSilenceTimer = (durationMs = 5000) => {
         if (titleSilenceTimerRef.current) {
@@ -307,6 +314,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           titleSpeechRecognitionRef.current = null;
           setIsTitleVoiceTyping(false);
           setTitleInterimTranscript('');
+          setTimeout(() => {
+            setNativeSpeechRecognizerMuteGate(false);
+          }, 260);
         }, durationMs);
       };
 
@@ -314,17 +324,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
 
       const createAndRunTitleRec = () => {
         if (!shouldKeepTitleListeningRef.current) return;
-
-        const now = Date.now();
-        const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
-        if (now - refTime >= 4900) {
-          shouldKeepTitleListeningRef.current = false;
-          safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
-          titleSpeechRecognitionRef.current = null;
-          setIsTitleVoiceTyping(false);
-          setTitleInterimTranscript('');
-          return;
-        }
 
         try {
           if (titleSpeechRecognitionRef.current) {
@@ -374,55 +373,28 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
               titleLastSpeechTimeRef.current = Date.now();
             }
 
-            resetTitleSilenceTimer(5000);
+            resetTitleSilenceTimer(3500);
           };
 
-          recognition.onerror = (e: any) => {
-            if (e.error === 'no-speech') {
-              const now = Date.now();
-              const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
-              if (now - refTime >= 4800) {
-                shouldKeepTitleListeningRef.current = false;
-                safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
-                titleSpeechRecognitionRef.current = null;
-                setIsTitleVoiceTyping(false);
-                setTitleInterimTranscript('');
-              }
-              return;
-            }
-            if (e.error === 'not-allowed') {
-              shouldKeepTitleListeningRef.current = false;
-              safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
-              titleSpeechRecognitionRef.current = null;
-              setIsTitleVoiceTyping(false);
-              setTitleInterimTranscript('');
-              return;
-            }
+          recognition.onerror = () => {
+            shouldKeepTitleListeningRef.current = false;
+            safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
+            titleSpeechRecognitionRef.current = null;
+            setIsTitleVoiceTyping(false);
+            setTitleInterimTranscript('');
+            setTimeout(() => {
+              setNativeSpeechRecognizerMuteGate(false);
+            }, 260);
           };
 
           recognition.onend = () => {
-            if (!shouldKeepTitleListeningRef.current) {
-              setIsTitleVoiceTyping(false);
-              setTitleInterimTranscript('');
-              return;
-            }
-
-            const now = Date.now();
-            const refTime = titleLastSpeechTimeRef.current || titleSpeechStartTimeRef.current;
-            if (now - refTime >= 4800) {
-              shouldKeepTitleListeningRef.current = false;
-              safeAbortSpeechRecognition(titleSpeechRecognitionRef.current);
-              titleSpeechRecognitionRef.current = null;
-              setIsTitleVoiceTyping(false);
-              setTitleInterimTranscript('');
-              return;
-            }
-
+            shouldKeepTitleListeningRef.current = false;
+            titleSpeechRecognitionRef.current = null;
+            setIsTitleVoiceTyping(false);
+            setTitleInterimTranscript('');
             setTimeout(() => {
-              if (shouldKeepTitleListeningRef.current) {
-                createAndRunTitleRec();
-              }
-            }, 150);
+              setNativeSpeechRecognizerMuteGate(false);
+            }, 260);
           };
 
           titleSpeechRecognitionRef.current = recognition;
@@ -430,6 +402,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         } catch (e) {
           console.warn('Title speech recognition failed', e);
           setIsTitleVoiceTyping(false);
+          setNativeSpeechRecognizerMuteGate(false);
         }
       };
 
@@ -437,6 +410,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     } catch (e) {
       console.warn('Title speech recognition failed', e);
       setIsTitleVoiceTyping(false);
+      setNativeSpeechRecognizerMuteGate(false);
     }
   };
 
@@ -455,6 +429,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       setContentInterimTranscript('');
       lastFinalContentTranscriptRef.current = '';
       processedFinalContentIndicesRef.current.clear();
+      setTimeout(() => {
+        setNativeSpeechRecognizerMuteGate(false);
+      }, 260);
       return;
     }
 
@@ -479,7 +456,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       shouldKeepContentListeningRef.current = true;
       contentSpeechStartTimeRef.current = Date.now();
       contentLastSpeechTimeRef.current = 0;
-      setIsVoiceTyping(true);
+      setNativeSpeechRecognizerMuteGate(true);
 
       const resetContentSilenceTimer = (durationMs = 5000) => {
         if (contentSilenceTimerRef.current) {
@@ -492,6 +469,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
           speechRecognitionRef.current = null;
           setIsVoiceTyping(false);
           setContentInterimTranscript('');
+          setTimeout(() => {
+            setNativeSpeechRecognizerMuteGate(false);
+          }, 260);
         }, durationMs);
       };
 
@@ -499,17 +479,6 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
 
       const createAndRunContentRec = () => {
         if (!shouldKeepContentListeningRef.current) return;
-
-        const now = Date.now();
-        const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
-        if (now - refTime >= 4900) {
-          shouldKeepContentListeningRef.current = false;
-          safeAbortSpeechRecognition(speechRecognitionRef.current);
-          speechRecognitionRef.current = null;
-          setIsVoiceTyping(false);
-          setContentInterimTranscript('');
-          return;
-        }
 
         try {
           if (speechRecognitionRef.current) {
@@ -559,55 +528,28 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
               contentLastSpeechTimeRef.current = Date.now();
             }
 
-            resetContentSilenceTimer(5000);
+            resetContentSilenceTimer(3500);
           };
 
-          recognition.onerror = (e: any) => {
-            if (e.error === 'no-speech') {
-              const now = Date.now();
-              const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
-              if (now - refTime >= 4800) {
-                shouldKeepContentListeningRef.current = false;
-                safeAbortSpeechRecognition(speechRecognitionRef.current);
-                speechRecognitionRef.current = null;
-                setIsVoiceTyping(false);
-                setContentInterimTranscript('');
-              }
-              return;
-            }
-            if (e.error === 'not-allowed') {
-              shouldKeepContentListeningRef.current = false;
-              safeAbortSpeechRecognition(speechRecognitionRef.current);
-              speechRecognitionRef.current = null;
-              setIsVoiceTyping(false);
-              setContentInterimTranscript('');
-              return;
-            }
+          recognition.onerror = () => {
+            shouldKeepContentListeningRef.current = false;
+            safeAbortSpeechRecognition(speechRecognitionRef.current);
+            speechRecognitionRef.current = null;
+            setIsVoiceTyping(false);
+            setContentInterimTranscript('');
+            setTimeout(() => {
+              setNativeSpeechRecognizerMuteGate(false);
+            }, 260);
           };
 
           recognition.onend = () => {
-            if (!shouldKeepContentListeningRef.current) {
-              setIsVoiceTyping(false);
-              setContentInterimTranscript('');
-              return;
-            }
-
-            const now = Date.now();
-            const refTime = contentLastSpeechTimeRef.current || contentSpeechStartTimeRef.current;
-            if (now - refTime >= 4800) {
-              shouldKeepContentListeningRef.current = false;
-              safeAbortSpeechRecognition(speechRecognitionRef.current);
-              speechRecognitionRef.current = null;
-              setIsVoiceTyping(false);
-              setContentInterimTranscript('');
-              return;
-            }
-
+            shouldKeepContentListeningRef.current = false;
+            speechRecognitionRef.current = null;
+            setIsVoiceTyping(false);
+            setContentInterimTranscript('');
             setTimeout(() => {
-              if (shouldKeepContentListeningRef.current) {
-                createAndRunContentRec();
-              }
-            }, 150);
+              setNativeSpeechRecognizerMuteGate(false);
+            }, 260);
           };
 
           speechRecognitionRef.current = recognition;
@@ -615,6 +557,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         } catch (e) {
           console.warn('Speech recognition start failed', e);
           setIsVoiceTyping(false);
+          setNativeSpeechRecognizerMuteGate(false);
         }
       };
 

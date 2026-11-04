@@ -84,6 +84,29 @@ export const getSharedTtsAudioElement = (): HTMLAudioElement | null => {
 };
 
 /**
+ * بی‌صدا کردن صدای اعلان سیستم اندروید (بوق روشن/خاموش شدن SpeechRecognizer) در طول نوبت شنیدن صدای کاربر
+ * و بازگردانی فوری صدا پیش از شروع صحبت دستیار یا پخش آلارم.
+ */
+export const setNativeSpeechRecognizerMuteGate = (muted: boolean) => {
+  if (typeof window === 'undefined') return;
+  try {
+    const win = window as any;
+    if (win.YaadNativeAudioBridge && typeof win.YaadNativeAudioBridge.setMicListeningMute === 'function') {
+      win.YaadNativeAudioBridge.setMicListeningMute(Boolean(muted));
+    }
+  } catch {
+    // ignore
+  }
+  try {
+    if (Capacitor.isNativePlatform()) {
+      (LocalNotifications as any).setMicListeningMute?.({ muted: Boolean(muted) })?.catch?.(() => {});
+    }
+  } catch {
+    // ignore
+  }
+};
+
+/**
  * Plays a gentle two-note voice-assistant prompt chime via Web Audio API
  */
 export const playSoftPromptChime = () => {
@@ -401,6 +424,7 @@ const playSynthesizedSound = (sound: PhoneAlarmSound, vol: number) => {
  */
 export const playPhoneAlarmSound = (sound: PhoneAlarmSound, volumeOverride?: number) => {
   try {
+    setNativeSpeechRecognizerMuteGate(false);
     const vol = volumeOverride !== undefined ? volumeOverride : globalAlarmVolume;
     if (vol <= 0.001) return;
 
@@ -443,6 +467,7 @@ export const playPhoneAlarmSound = (sound: PhoneAlarmSound, volumeOverride?: num
 
 export const playRingTune = (category: Category | string, volumeOverride?: number) => {
   try {
+    setNativeSpeechRecognizerMuteGate(false);
     const vol = volumeOverride !== undefined ? volumeOverride : globalAlarmVolume;
     if (vol <= 0.001) return;
 
@@ -491,6 +516,7 @@ export const startAlarmRinging = (
   volumeOverride?: number,
   vibrationOverride?: boolean
 ) => {
+  setNativeSpeechRecognizerMuteGate(false);
   stopAlarmRinging();
   isAlarmLooping = true;
 
@@ -1165,6 +1191,7 @@ export const speakAiAssistantPrompt = (options: {
     return;
   }
 
+  setNativeSpeechRecognizerMuteGate(false);
   stopAiAssistantPrompt();
   try {
     const ctx = getAudioContext();

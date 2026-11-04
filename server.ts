@@ -128,7 +128,6 @@ ${JSON.stringify(currentDraft || {})}
       contents: conversationText,
       config: {
         systemInstruction: systemPrompt,
-        temperature: 0.3,
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -196,6 +195,113 @@ ${JSON.stringify(currentDraft || {})}
     res.status(500).json({
       ok: false,
       error: err?.message || 'Smart capture AI analysis failed',
+    });
+  }
+});
+
+// Direct Microphone Audio Transcription endpoint using gemini-3.5-transcribe (with gemini-3.8-flash fallback)
+app.post('/api/smart-capture/transcribe', async (req: Request, res: Response) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
+    res.status(503).json({ ok: false, error: 'GEMINI_API_KEY not configured on server' });
+    return;
+  }
+
+  try {
+    const { audioBase64, mimeType = 'audio/webm', language = 'fa' } = req.body || {};
+    if (!audioBase64 || typeof audioBase64 !== 'string') {
+      res.status(400).json({ ok: false, error: 'audioBase64 is required' });
+      return;
+    }
+
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    const cleanMime = (mimeType || 'audio/webm').split(';')[0].trim() || 'audio/webm';
+    const promptText =
+      language === 'en'
+        ? 'Transcribe this spoken English voice command for a reminder and calendar assistant accurately. Output ONLY the exact spoken words without quotes or commentary. If there is only silence or background noise, output an empty string.'
+        : 'این صدای کاربر در یک دستیار صوتی یادآور و تقویم فارسی است (شامل موضوع یادآوری، روز، ساعت، تاریخ یا کلمات تایید مثل بله، ثبت کن، فردا، ساعت چند و غیره). گفتار فارسی را دقیقاً به متن فارسی تبدیل کن و فقط کلمات گفته شده را بدون گیومه و بدون هیچ توضیح اضافه بنویس. اگر فقط سکوت یا نویز بی‌معنی بود، رشته خالی برگردان.';
+
+    const extractTranscriptFromResponse = (resp: any): string => {
+      if (!resp) return '';
+      const parts = resp?.candidates?.[0]?.content?.parts;
+      if (Array.isArray(parts)) {
+        const chunkTexts: string[] = [];
+        for (const p of parts) {
+          if (typeof p?.audioTranscription?.text === 'string' && p.audioTranscription.text.trim()) {
+            chunkTexts.push(p.audioTranscription.text.trim());
+          } else if (typeof p?.text === 'string' && p.text.trim()) {
+            chunkTexts.push(p.text.trim());
+          }
+        }
+        if (chunkTexts.length > 0) {
+          return chunkTexts.join(' ').trim();
+        }
+      }
+      return typeof resp.text === 'string' ? resp.text.trim() : '';
+    };
+
+    let rawTranscript = '';
+    try {
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.5-transcribe',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType: cleanMime,
+                  data: audioBase64,
+                },
+              },
+              { text: promptText },
+            ],
+          },
+        ],
+      });
+      rawTranscript = extractTranscriptFromResponse(response);
+    } catch {
+      const fallbackResponse = await ai.models.generateContent({
+        model: 'gemini-3.1-flash-lite',
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                inlineData: {
+                  mimeType: cleanMime,
+                  data: audioBase64,
+                },
+              },
+              { text: promptText },
+            ],
+          },
+        ],
+      });
+      rawTranscript = extractTranscriptFromResponse(fallbackResponse);
+    }
+
+    const transcript = rawTranscript
+      .replace(/^["'«»„”]+|["'«»„”]+$/g, '')
+      .replace(/^(سکوت|نویز|بدون صدا|رشته خالی|empty|silence|noise|\.+|-+)$/i, '')
+      .trim();
+
+    res.json({
+      ok: true,
+      transcript,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      ok: false,
+      error: err?.message || 'Audio transcription failed',
     });
   }
 });

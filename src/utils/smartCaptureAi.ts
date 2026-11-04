@@ -1188,10 +1188,29 @@ function applyTimePeriod(rawHour: number, periodText: string): number {
   return h;
 }
 
+/**
+ * تشخیص عبارات مقدماتی ناتمام (زمانی که کاربر تازه شروع به صحبت کرده و مثلاً گفته «می‌خوام یه یادآور...» یا «سلام بیزحمت...» و هنوز اصل مطلب را نگفته است)
+ * تا میکروفون وسط صحبت کاربر خاموش نشود و منتظر ادامه جمله بماند.
+ */
+export function isIncompleteIntroductoryUtterance(rawText: string): boolean {
+  const norm = normalizeForEchoCheck(rawText);
+  if (!norm) return true;
+
+  if (
+    /^(?:سلام|درود|خسته نباشی|خسته نباشید|بی\s*زحمت|بیزحمت|لطفا|لطفاً|دیگه|من|میخوام|می خوام|میخواهم|می خواهم|میخواستم|می خواستم|برام|برایم|به من|یه|یک|میشه|می شه|میتونی|می تونی|یادآور|یاداور|یادم بنداز|یادم بیار|یادآوری کن|یاداوری کن|ثبت کن|ثبتش کن|ثبت کنم|ذخیره کن|اضافه کن|بنویس|بذار|بگذار|تنظیم کن|مناسبت|مکان|لوکیشن|ایده|ساعت|روز|تاریخ|برای|در|که|و|رو|را|\s)+$/i.test(
+      norm
+    )
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 export function cleanExtractedTitle(rawText: string, intent: SmartIntentType): string {
   let t = normalizePersianSpeech(rawText)
     .replace(
-      /^(لطفاً|لطفا|بیزحمت|دیگه|من|میخوام|می‌خوام|میخواهم|می‌خواهم|ثبت کن|ذخیره کن|اضافه کن|بنویس|یادآوری کن|یادم بنداز|یادم بیار|یه یادآور|یک یادآور|یادآور|یه ایده دارم|ایده دارم|یه ایده|یک ایده|ایده جدید|ایده|مکان جدید|لوکیشن جدید|مکان|لوکیشن|مناسبت جدید|مناسبت|عنوانش رو بکن|عنوانش بشه|تغییر عنوان به|remind me to|set a reminder for|set a reminder to|save location|new idea|idea|reminder|occasion|location)\s*/gi,
+      /^(?:(?:لطفاً|لطفا|بیزحمت|بی\s*زحمت|سلام|درود|دیگه|من|میخوام|می‌خوام|می\s*خوام|میخواهم|می‌خواهم|می\s*خواهم|میخواستم|برام|برایم|ثبت کن|ثبت کنم|ذخیره کن|اضافه کن|بنویس|بذار|بگذار|یادآوری کن|یادم بنداز|یادم بیار|یه یادآور|یک یادآور|یادآور جدید|یادآور|یه ایده دارم|ایده دارم|یه ایده|یک ایده|ایده جدید|ایده|مکان جدید|لوکیشن جدید|مکان|لوکیشن|مناسبت جدید|مناسبت|عنوانش رو بکن|عنوانش بشه|تغییر عنوان به|remind me to|set a reminder for|set a reminder to|save location|new idea|idea|reminder|occasion|location)\s*)+/gi,
       ''
     )
     .replace(/\b(که|رو|را|باشه|حله|برام|برایم)\b\s*$/gi, '');
@@ -1497,9 +1516,13 @@ export function analyzeSmartCaptureLocally(
 
     // Step 1: Ask for Title if missing
     if (!hasTitle) {
+      const didProvideDateOrTimeOrIntent =
+        timeInfo.hasExplicitDayOrDate ||
+        timeInfo.hour !== null ||
+        /(یادآور|یاداور|آلارم|یادم بنداز|یادآوری|reminder|remind|alarm)/i.test(lastUserMsg.trim());
       const wasAlreadyAskingSubject =
         currentDraft.wizardStep === 'ask_subject' &&
-        !/^(یادآور|یاداور|آلارم|reminder)$/i.test(lastUserMsg.trim());
+        !didProvideDateOrTimeOrIntent;
       nextDraft.wizardStep = 'ask_subject';
       return {
         intentType: 'reminder',
@@ -1515,7 +1538,8 @@ export function analyzeSmartCaptureLocally(
 
     // Step 3: Ask for Day / Date if missing
     if (!hasDay) {
-      const wasAskingDay = currentDraft.wizardStep === 'ask_day';
+      const wasAskingDay =
+        currentDraft.wizardStep === 'ask_day' && timeInfo.hour === null;
       nextDraft.wizardStep = 'ask_day';
       return {
         intentType: 'reminder',

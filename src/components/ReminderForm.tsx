@@ -26,6 +26,7 @@ import { CameraCaptureModal } from './CameraCaptureModal';
 import { requestMicrophonePermission, requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
+import { setNativeSpeechRecognizerMuteGate } from '../utils/audio';
 import { 
   Mic, 
   MicOff, 
@@ -388,6 +389,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     setSpeechTranscript('');
     lastFinalTranscriptRef.current = '';
     processedFinalIndicesRef.current.clear();
+    setTimeout(() => {
+      setNativeSpeechRecognizerMuteGate(false);
+    }, 260);
   };
 
   const startVoiceListening = async (forcedLang?: 'fa' | 'en') => {
@@ -424,7 +428,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       shouldKeepListeningRef.current = true;
       speechStartTimeRef.current = Date.now();
       lastSpeechTimeRef.current = 0;
-      setIsListening(true);
+      setNativeSpeechRecognizerMuteGate(true);
 
       const resetSilenceTimer = (durationMs = 5000) => {
         if (silenceTimerRef.current) {
@@ -436,19 +440,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         }, durationMs);
       };
 
-      // Start initial 5-second silence timer: if no voice arrives within 5 seconds, turn off
       resetSilenceTimer(5000);
 
       const createAndRunRecognition = () => {
         if (!shouldKeepListeningRef.current) return;
-
-        // Check if 5 seconds have passed without voice
-        const now = Date.now();
-        const refTime = lastSpeechTimeRef.current || speechStartTimeRef.current;
-        if (now - refTime >= 4900) {
-          stopVoiceListening();
-          return;
-        }
 
         try {
           if (recognitionRef.current) {
@@ -500,19 +495,11 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               lastSpeechTimeRef.current = Date.now();
             }
 
-            resetSilenceTimer(5000);
+            resetSilenceTimer(3500);
           };
 
           rec.onerror = (e: any) => {
             console.warn('Speech recognition error:', e.error);
-            if (e.error === 'no-speech') {
-              const now = Date.now();
-              const refTime = lastSpeechTimeRef.current || speechStartTimeRef.current;
-              if (now - refTime >= 4800) {
-                stopVoiceListening();
-              }
-              return;
-            }
             if (e.error === 'not-allowed') {
               setVoiceErrorMsg(
                 isEn
@@ -537,25 +524,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
           };
 
           rec.onend = () => {
-            if (!shouldKeepListeningRef.current) {
-              setIsListening(false);
-              setSpeechTranscript('');
-              return;
-            }
-
-            const now = Date.now();
-            const refTime = lastSpeechTimeRef.current || speechStartTimeRef.current;
-            if (now - refTime >= 4800) {
-              stopVoiceListening();
-              return;
-            }
-
-            // Safe pause before reconnecting to let the OS mic pipeline clear
-            setTimeout(() => {
-              if (shouldKeepListeningRef.current) {
-                createAndRunRecognition();
-              }
-            }, 150);
+            recognitionRef.current = null;
+            stopVoiceListening();
           };
 
           recognitionRef.current = rec;
