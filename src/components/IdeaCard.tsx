@@ -16,7 +16,8 @@ import {
   Heart,
   Image as ImageIcon,
   Loader2,
-  Pencil
+  Pencil,
+  Bell
 } from 'lucide-react';
 import { formatJalaliFull } from '../utils/jalali';
 
@@ -24,12 +25,13 @@ interface IdeaCardProps {
   idea: IdeaNote;
   onDelete: (id: string) => void;
   onEdit?: (idea: IdeaNote) => void;
+  onSetReminder?: (idea: IdeaNote) => void;
   onSyncToGoogle?: (idea: IdeaNote) => void;
   onViewImage?: (url: string) => void;
   language?: AppLanguage;
 }
 
-export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSyncToGoogle, onViewImage, language = 'fa' }) => {
+export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSetReminder, onSyncToGoogle, onViewImage, language = 'fa' }) => {
   const [drawingLoaded, setDrawingLoaded] = useState(false);
 
   const getCategoryBadge = () => {
@@ -65,6 +67,17 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
         <div className="flex items-start justify-between gap-2 mb-2">
           <div className="flex items-center gap-2 flex-wrap">
             {getCategoryBadge()}
+            {idea.reminderDueTimestamp && (
+              <button
+                type="button"
+                onClick={() => onSetReminder ? onSetReminder(idea) : onEdit?.(idea)}
+                className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/40 font-bold transition-colors cursor-pointer"
+                title={language === 'en' ? 'Reminder set' : 'یادآور تنظیم‌شده'}
+              >
+                <Bell className="w-3 h-3 text-amber-400" />
+                <span>{formatJalaliFull(idea.reminderDueTimestamp, language)}</span>
+              </button>
+            )}
             {idea.googleSynced && (
               <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-stone-800/80 text-stone-300 border border-stone-700/60 font-medium">
                 <Cloud className="w-3.5 h-3.5 text-stone-400" /> {language === 'en' ? 'Google Tasks' : 'گوگل Tasks'}
@@ -72,6 +85,20 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSy
             )}
           </div>
           <div className="flex items-center gap-1">
+            {onSetReminder && (
+              <button
+                type="button"
+                onClick={() => onSetReminder(idea)}
+                className={`p-2 rounded-xl transition-colors cursor-pointer ${
+                  idea.reminderDueTimestamp
+                    ? 'text-amber-400 bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30'
+                    : 'text-stone-400 hover:text-amber-400 hover:bg-stone-800'
+                }`}
+                title={language === 'en' ? 'Set / Edit Reminder' : 'تنظیم یادآور برای ایده'}
+              >
+                <Bell className="w-4 h-4" />
+              </button>
+            )}
             {onEdit && (
               <button
                 type="button"

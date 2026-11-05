@@ -34,6 +34,15 @@ export interface IdeaNote {
   photoDataUrl?: string;       // Captured photo from rear camera (data URL)
   drawingDataUrl?: string;     // Hand-drawn sketch canvas data URL
   googleSynced?: boolean;
+  linkedReminderId?: string;
+  reminderDueTimestamp?: number;
+  reminderPriority?: Priority;
+  reminderPriorityLevel?: number;
+  reminderRecurrence?: RecurrenceType;
+  reminderRecurrenceInterval?: number;
+  reminderRecurrenceCount?: number;
+  reminderRecurrenceDaysOfWeek?: number[];
+  reminderRecurrenceCustomDates?: string[];
   deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 

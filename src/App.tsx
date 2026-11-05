@@ -622,6 +622,7 @@ export default function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isIdeaModalOpen, setIsIdeaModalOpen] = useState(false);
   const [editingIdea, setEditingIdea] = useState<IdeaNote | null>(null);
+  const [openIdeaReminderMenuByDefault, setOpenIdeaReminderMenuByDefault] = useState(false);
   const [isLocationModalOpen, setIsLocationModalOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<SavedLocation | null>(null);
   const [isOccasionModalOpen, setIsOccasionModalOpen] = useState(false);
@@ -1889,25 +1890,83 @@ export default function App() {
     }
   };
 
-  // Handler: Save / Edit Idea Note
-  const handleSaveIdea = (newIdeaData: Omit<IdeaNote, 'id' | 'createdAt'>) => {
+  // Handler: Save / Edit Idea Note (with optional Reminder from the bottom expandable menu)
+  const handleSaveIdea = (
+    newIdeaData: Omit<IdeaNote, 'id' | 'createdAt'>,
+    reminderData?: Omit<Reminder, 'id' | 'createdAt' | 'status' | 'postponeCount'> | null
+  ) => {
+    let linkedRemId = editingIdea?.linkedReminderId;
+
+    if (reminderData) {
+      const existingRem = linkedRemId ? reminders.find((r) => r.id === linkedRemId) : undefined;
+      if (existingRem && linkedRemId) {
+        triggeredAlarmsRef.current.delete(linkedRemId);
+        recentNotificationActionsRef.current.delete(linkedRemId);
+        const updatedRem: Reminder = {
+          ...existingRem,
+          ...reminderData,
+          status: reminderData.dueTimestamp >= Date.now() ? 'pending' : existingRem.status,
+          acknowledged: false,
+          lastActionAt: undefined,
+        };
+        rescheduleReminderNotification(linkedRemId, updatedRem, settings).catch(() => {});
+        setReminders((prev) => prev.map((r) => (r.id === linkedRemId ? updatedRem : r)));
+      } else {
+        const newRemId = 'rem_idea_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+        linkedRemId = newRemId;
+        const newRem: Reminder = {
+          ...reminderData,
+          id: newRemId,
+          notificationId: getNotificationId(newRemId),
+          createdAt: Date.now(),
+          status: 'pending',
+          acknowledged: false,
+          postponeCount: 0,
+        };
+        scheduleReminderNotification(newRem, settings).catch(() => {});
+        setReminders((prev) => [newRem, ...prev]);
+      }
+    } else if (editingIdea?.linkedReminderId) {
+      // User turned off the reminder for this idea
+      const oldRemId = editingIdea.linkedReminderId;
+      cancelReminderNotification(oldRemId).catch(() => {});
+      setReminders((prev) => prev.filter((r) => r.id !== oldRemId));
+      linkedRemId = undefined;
+    }
+
+    const finalIdeaData: Omit<IdeaNote, 'id' | 'createdAt'> = {
+      ...newIdeaData,
+      linkedReminderId: reminderData ? linkedRemId : undefined,
+    };
+
     if (editingIdea) {
       setIdeas((prev) =>
-        prev.map((i) => (i.id === editingIdea.id ? { ...i, ...newIdeaData } : i))
+        prev.map((i) => (i.id === editingIdea.id ? { ...i, ...finalIdeaData } : i))
       );
       setEditingIdea(null);
-      showSyncNotification('ایده با موفقیت ویرایش شد.');
+      showSyncNotification(
+        reminderData
+          ? (settings.language === 'en' ? 'Idea & Reminder updated!' : 'ایده و یادآور آن با موفقیت بروزرسانی شد.')
+          : (settings.language === 'en' ? 'Idea updated.' : 'ایده با موفقیت ویرایش شد.')
+      );
     } else {
       const newIdea: IdeaNote = {
-        ...newIdeaData,
+        ...finalIdeaData,
         id: 'idea_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
         createdAt: Date.now(),
       };
       setIdeas((prev) => [newIdea, ...prev]);
-      showSyncNotification('ایده با موفقیت ذخیره شد.');
+      showSyncNotification(
+        reminderData
+          ? (settings.language === 'en' ? 'Idea & Reminder saved!' : 'ایده به همراه یادآور با موفقیت ثبت شد.')
+          : (settings.language === 'en' ? 'Idea saved.' : 'ایده با موفقیت ذخیره شد.')
+      );
     }
-    setActiveMainTab('reminders');
-    triggerScrollToNow();
+    setOpenIdeaReminderMenuByDefault(false);
+    if (activeMainTab !== 'ideas') {
+      setActiveMainTab('reminders');
+      triggerScrollToNow();
+    }
   };
 
   const handleDeleteIdea = (id: string) => {
@@ -3314,7 +3373,11 @@ export default function App() {
 
               <button
                 type="button"
-                onClick={() => setIsIdeaModalOpen(true)}
+                onClick={() => {
+                  setEditingIdea(null);
+                  setOpenIdeaReminderMenuByDefault(false);
+                  setIsIdeaModalOpen(true);
+                }}
                 className="btn-brand-submit flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#FF8C00] hover:bg-[#FF9E1F] !text-white font-bold text-xs shadow-md shadow-[#FF8C00]/25 transition-all self-stretch sm:self-auto justify-center active:scale-95 cursor-pointer"
               >
                 <Plus className="w-4 h-4 text-white stroke-[3]" />
@@ -3333,6 +3396,12 @@ export default function App() {
                     onDelete={handleDeleteIdea}
                     onEdit={(item) => {
                       setEditingIdea(item);
+                      setOpenIdeaReminderMenuByDefault(false);
+                      setIsIdeaModalOpen(true);
+                    }}
+                    onSetReminder={(item) => {
+                      setEditingIdea(item);
+                      setOpenIdeaReminderMenuByDefault(true);
                       setIsIdeaModalOpen(true);
                     }}
                     onViewImage={(url) => setViewingImageUrl(url)}
@@ -3879,11 +3948,13 @@ export default function App() {
         onClose={() => {
           setIsIdeaModalOpen(false);
           setEditingIdea(null);
+          setOpenIdeaReminderMenuByDefault(false);
         }}
         onSaveIdea={handleSaveIdea}
         googleToken={googleToken}
         editingIdea={editingIdea}
         language={settings.language}
+        defaultOpenReminderMenu={openIdeaReminderMenuByDefault}
       />
 
       {/* LOCATION CAPTURE MODAL */}
