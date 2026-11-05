@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Category, Priority, Reminder, RecurrenceType, SavedLocation, LocationGeofenceConfig, GeofenceTriggerType } from '../types';
+import { Category, Priority, Reminder, RecurrenceType, SavedLocation, GeofenceTriggerType } from '../types';
 import { 
   getJalaliComponents, 
   PERSIAN_MONTHS, 
@@ -24,42 +24,32 @@ import {
 } from '../utils/recurrence';
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
 import { CameraCaptureModal } from './CameraCaptureModal';
-import { requestMicrophonePermission, requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
+import { requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 import { 
   Mic, 
-  MicOff, 
   Calendar, 
-  Clock, 
   Briefcase, 
   Heart, 
   Tag, 
   Camera, 
   Upload, 
-  Sparkles, 
-  MessageSquare, 
-  Volume2, 
   Zap, 
   X, 
   Plus,
   Trash2,
   Check,
   Repeat,
-  ShieldCheck,
-  FileText,
   AlertCircle,
   Smartphone,
   MapPin,
-  Navigation,
   Crosshair,
-  Radio,
-  Compass,
   ChevronDown,
   Sliders
 } from 'lucide-react';
 import { WheelPicker } from './WheelPicker';
-import { AppLanguage, getT, formatSavedLocationTitle } from '../utils/i18n';
+import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 
@@ -102,7 +92,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   language = 'fa',
   defaultEnableGeofence = false,
 }) => {
-  const t = getT(language);
   const isEn = language === 'en';
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -565,26 +554,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setSelectedHour(j.hour);
       setSelectedMinute(j.minute);
     }
-  };
-
-  const setTonight = () => {
-    const now = new Date();
-    now.setHours(20, 0, 0, 0);
-    if (now.getTime() <= Date.now()) {
-      now.setDate(now.getDate() + 1);
-    }
-    if (isEn) {
-      setSelectedYear(now.getFullYear());
-      setSelectedMonth(now.getMonth() + 1);
-      setSelectedDay(now.getDate());
-    } else {
-      const j = getJalaliComponents(now.getTime());
-      setSelectedYear(j.year);
-      setSelectedMonth(j.month);
-      setSelectedDay(j.day);
-    }
-    setSelectedHour(20);
-    setSelectedMinute(0);
   };
 
   const setTomorrowMorning = () => {

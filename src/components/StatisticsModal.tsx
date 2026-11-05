@@ -53,7 +53,6 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
   const completed = filteredReminders.filter((r) => r.status === 'completed').length;
   const postponed = filteredReminders.filter((r) => r.status === 'postponed' || r.postponeCount > 0).length;
   const cancelled = filteredReminders.filter((r) => r.status === 'cancelled').length;
-  const pending = filteredReminders.filter((r) => r.status === 'pending' && r.dueTimestamp >= now).length;
 
   const completionRate = total > 0 ? Math.round((completed / total) * 100) : 0;
 
@@ -75,7 +74,7 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.22 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto"
+          className="fixed inset-0 z-[60] flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm overflow-y-auto"
           dir={language === 'en' ? 'ltr' : 'rtl'}
         >
           <motion.div

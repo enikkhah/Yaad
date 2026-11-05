@@ -4,7 +4,6 @@ import {
   getJalaliComponents, 
   jalaliToTimestamp, 
   toPersianDigits, 
-  PERSIAN_MONTHS, 
   getDaysInJalaliMonth,
   getJalaliWeekdayIndex 
 } from './jalali';

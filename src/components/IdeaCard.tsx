@@ -2,13 +2,10 @@ import React, { useState } from 'react';
 import { IdeaNote } from '../types';
 import { AppLanguage } from '../utils/i18n';
 import { 
-  Lightbulb, 
   Trash2, 
-  Play, 
   Video, 
   PenTool, 
   Cloud, 
-  Check, 
   Calendar,
   Volume2,
   Tag,

@@ -1,6 +1,5 @@
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
-import { Filesystem } from '@capacitor/filesystem';
 import { unlockAudio } from './audio';
 import { 
   checkNotificationPermission, 

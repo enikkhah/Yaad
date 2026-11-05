@@ -22,7 +22,7 @@ import {
   calculateNextOccasionOccurrence, 
   getOccasionAnniversaryLabel 
 } from '../utils/occasionUtils';
-import { toPersianDigits, PERSIAN_MONTHS } from '../utils/jalali';
+import { toPersianDigits } from '../utils/jalali';
 import { AppLanguage } from '../utils/i18n';
 
 interface OccasionCardProps {

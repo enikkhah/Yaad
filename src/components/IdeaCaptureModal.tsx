@@ -6,19 +6,15 @@ import {
   Mic, 
   MicOff, 
   Video, 
-  VideoOff, 
   PenTool, 
   Trash2, 
-  Save, 
   X, 
-  Play, 
   Square, 
   Check, 
   Sparkles, 
   FileText,
   Clock,
   RotateCcw,
-  Smartphone,
   AlertCircle,
   Camera,
   SwitchCamera,
@@ -31,7 +27,6 @@ import {
   Zap
 } from 'lucide-react';
 import { 
-  formatJalaliFull,
   getJalaliComponents,
   PERSIAN_MONTHS,
   toPersianDigits,
@@ -60,7 +55,6 @@ import { syncToGoogleTasks } from '../utils/googleSync';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { AppLanguage } from '../utils/i18n';
 import {
-  requestMicrophonePermission,
   openAndroidSettings,
   ensureNativeAndroidCameraPermission,
   markPermissionGranted,

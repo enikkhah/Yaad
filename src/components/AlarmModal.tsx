@@ -1,15 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Reminder, AppSettings, PhoneAlarmSound, AppTheme } from '../types';
-import { formatJalaliFull, formatJalaliTime, toPersianDigits } from '../utils/jalali';
+import { Reminder, AppSettings, AppTheme } from '../types';
+import { formatJalaliFull } from '../utils/jalali';
 import { getRecurrenceLabel } from '../utils/recurrence';
-import { startAlarmRinging, stopAlarmRinging, resolveAlarmSound, speakReminderText } from '../utils/audio';
+import { stopAlarmRinging, speakReminderText } from '../utils/audio';
 import {
   triggerOutOfAppPersistentNotification,
   clearOutOfAppPersistentNotification,
   isAppCurrentlyInForeground,
-  dismissDeliveredNotifications,
-  cancelReminderNotification,
 } from '../utils/nativeLocalNotifications';
 import {
   CheckCircle2,

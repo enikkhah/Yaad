@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Reminder, Category, Priority, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
-import { getJalaliComponents, getGregorianComponents, formatJalaliFull, formatJalaliTime, toPersianDigits, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
+import { Reminder, Category, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
+import { getJalaliComponents, getGregorianComponents, formatJalaliFull, toPersianDigits, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
 import { speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging, unlockAudio } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { ReminderForm } from './components/ReminderForm';
@@ -27,8 +27,7 @@ import {
   initGoogleAuth, 
   signInWithGoogle, 
   signOutGoogle, 
-  syncReminderToCalendar, 
-  syncToGoogleTasks 
+  syncReminderToCalendar
 } from './utils/googleSync';
 import { User } from 'firebase/auth';
 import appIcon from './assets/images/icon.png';
@@ -45,8 +44,7 @@ import {
   fireImmediateLocalNotification,
   dismissDeliveredNotifications,
   triggerOutOfAppPersistentNotification,
-  clearOutOfAppPersistentNotification,
-  isAppCurrentlyInForeground
+  clearOutOfAppPersistentNotification
 } from './utils/nativeLocalNotifications';
 import { 
   evaluateGeofences, 
@@ -65,21 +63,9 @@ import { APP_VERSION } from './utils/version';
 import { triggerReviewFlow } from './utils/reviewFlow';
 import { 
   Plus, 
-  BarChart3, 
-  Calendar, 
-  Clock, 
   Search, 
-  Briefcase, 
-  Heart, 
-  Tag, 
-  CheckCircle2, 
   Bell, 
-  Filter, 
-  MessageSquare, 
-  Volume2, 
-  Zap, 
   X,
-  Sparkles,
   Settings as SettingsIcon,
   Lightbulb,
   Check,
@@ -88,13 +74,7 @@ import {
   RotateCcw,
   Trash2,
   Cake,
-  CalendarHeart,
   Radio,
-  Navigation,
-  Crosshair,
-  Moon,
-  Sun,
-  Smartphone,
   ShieldCheck,
   Info,
   Mail,
@@ -727,8 +707,8 @@ export default function App() {
     if (isIdeaModalOpen) { setIsIdeaModalOpen(false); setEditingIdea(null); return true; }
     if (isOccasionModalOpen) { setIsOccasionModalOpen(false); setEditingOccasion(null); return true; }
     if (isFormOpen) { setIsFormOpen(false); setEditingReminder(null); return true; }
-    if (isSettingsOpen) { setIsSettingsOpen(false); return true; }
     if (isStatsOpen) { setIsStatsOpen(false); return true; }
+    if (isSettingsOpen) { setIsSettingsOpen(false); return true; }
     return false;
   }, [
     viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
@@ -862,7 +842,6 @@ export default function App() {
   const fabMenuRef = useRef<HTMLDivElement>(null);
   const fabBtnRef = useRef<HTMLButtonElement>(null);
   const [categoryFilter, setCategoryFilter] = useState<'all' | Category | 'completed'>('all');
-  const [priorityFilter, setPriorityFilter] = useState<'all' | Priority>('all');
 
   // Close logo menu when clicking outside
   useEffect(() => {
@@ -940,7 +919,6 @@ export default function App() {
 
   // Floating Action Button (+) intelligent visibility & scroll edge boundary management
   const {
-    isFabHidden: isFabHiddenOnScroll,
     resetFabPosition,
     fabContainerStyle,
     fabContainerClassName,
@@ -1683,76 +1661,6 @@ export default function App() {
       playPhoneAlarmSound('radar');
       speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
     }
-  };
-
-  const handleToggleReminderGeofence = (reminderId: string) => {
-    setReminders((prev) =>
-      prev.map((r) => {
-        if (r.id !== reminderId) return r;
-        if (!r.geofence) return r;
-        const willBeEnabled = !r.geofence.enabled;
-        return {
-          ...r,
-          geofence: {
-            ...r.geofence,
-            enabled: willBeEnabled,
-          },
-        };
-      })
-    );
-    showSyncNotification(
-      isEn ? 'Geofence status updated' : 'وضعیت حصار مکانی به‌روزرسانی شد'
-    );
-  };
-
-  const handleSimulateGeofenceTrigger = (reminder: Reminder) => {
-    setActiveAlarmReminder(reminder);
-    const actionText = isEn ? 'Arrival simulated at' : 'شبیه‌سازی ورود به';
-    fireImmediateLocalNotification(
-      `📍 هشدار حصار مکانی: ${reminder.title}`,
-      `${actionText} ${reminder.geofence?.locationName || 'مکان حصار مکانی'}`,
-      { reminderId: reminder.id, geofence: true }
-    );
-    setReminders((prev) =>
-      prev.map((item) =>
-        item.id === reminder.id
-          ? {
-              ...item,
-              geofence: item.geofence
-                ? { ...item.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
-                : undefined,
-            }
-          : item
-      )
-    );
-  };
-
-  const handleRefreshUserGps = () => {
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      showSyncNotification(isEn ? 'GPS not supported on device' : 'سخت‌افزار دستگاه از GPS پشتیبانی نمی‌کند');
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const userPos: UserPosition = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
-          timestamp: pos.timestamp || Date.now(),
-        };
-        setCurrentUserPosition(userPos);
-        saveLastKnownPosition(userPos);
-        showSyncNotification(
-          isEn 
-            ? `GPS updated (±${Math.round(userPos.accuracy)}m)` 
-            : `موقعیت GPS ثبت شد (دقت: ±${toPersianDigits(Math.round(userPos.accuracy))} متر)`
-        );
-      },
-      (err) => {
-        showSyncNotification(isEn ? 'Failed to get GPS' : 'خطا در دریافت مختصات GPS');
-      },
-      { enableHighAccuracy: true, timeout: 10000 }
-    );
   };
 
   // Google sign in / out handlers
@@ -2683,10 +2591,6 @@ export default function App() {
       if (r.category !== categoryFilter) return false;
     }
 
-    if (priorityFilter !== 'all' && r.priority !== priorityFilter) {
-      return false;
-    }
-
     if (searchQuery.trim()) {
       return matchesReminderSearch(r, searchQuery);
     }
@@ -2736,29 +2640,6 @@ export default function App() {
     filteredGlobalLocations.length,
     filteredGlobalIdeas.length,
   ]);
-
-  const sortedReminders = [...filteredReminders].sort((a, b) => {
-    if (a.status === 'completed' && b.status !== 'completed') return 1;
-    if (a.status !== 'completed' && b.status === 'completed') return -1;
-    return a.dueTimestamp - b.dueTimestamp;
-  });
-
-  const upcomingReminder =
-    reminders
-      .filter((r) => (r.status === 'pending' || r.status === 'postponed') && r.dueTimestamp >= currentTime)
-      .sort((a, b) => a.dueTimestamp - b.dueTimestamp)[0] || null;
-
-  const upcomingCountdown = upcomingReminder
-    ? (() => {
-        const diffMs = Math.max(0, upcomingReminder.dueTimestamp - currentTime);
-        const totalSecs = Math.floor(diffMs / 1000);
-        return {
-          hours: Math.floor(totalSecs / 3600),
-          minutes: Math.floor((totalSecs % 3600) / 60),
-          seconds: totalSecs % 60,
-        };
-      })()
-    : null;
 
   const todayJalali = getJalaliComponents(currentTime);
   const todayGregorian = getGregorianComponents(currentTime);

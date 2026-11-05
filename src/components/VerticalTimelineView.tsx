@@ -22,7 +22,6 @@ import {
   Briefcase, 
   Heart, 
   Tag, 
-  RotateCcw,
   Sparkles,
   Search
 } from 'lucide-react';

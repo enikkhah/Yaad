@@ -1,4 +1,4 @@
-import { Reminder, LocationGeofenceConfig, GeofenceTriggerType, SavedLocation } from '../types';
+import { Reminder, SavedLocation } from '../types';
 
 // Storage key for user preference on background geofence tracking
 export const GEOFENCE_TRACKING_ENABLED_KEY = 'yaad_geofence_tracking_enabled_v1';

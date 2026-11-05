@@ -12,14 +12,9 @@ import {
   Compass, 
   RefreshCw, 
   AlertTriangle,
-  FileText,
-  Clock,
-  Share2,
   Radio,
   Volume2,
-  VolumeX,
   Sliders,
-  Bell,
   ChevronDown
 } from 'lucide-react';
 import { SavedLocation, GeofenceTriggerType, LocationCheckpointConfig } from '../types';

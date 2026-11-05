@@ -11,14 +11,10 @@ import {
   Smartphone,
   Globe,
   Database,
-  FileJson,
   MapPin,
   Camera,
   Mic,
   ShieldCheck,
-  Check,
-  AlertCircle,
-  Download,
   Info,
   Volume2,
   Play,
@@ -32,8 +28,6 @@ import {
   Lightbulb,
   ExternalLink,
   FolderOpen,
-  HardDrive,
-  RefreshCw,
   Mail
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
@@ -56,7 +50,6 @@ import {
   NativePermissionsStatus
 } from '../utils/nativePermissions';
 import {
-  performAutoBackup,
   retrieveFromLocalYaadFolder,
   getSnapshotItemCount,
   LOCAL_BACKUP_FOLDER_NAME
@@ -127,25 +120,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isSigningIn, setIsSigningIn] = useState(false);
   const [activeInfoDialog, setActiveInfoDialog] = useState<'privacy' | 'about' | null>(null);
 
-  // Backup & Restore state
-  const [backupSuccessMessage, setBackupSuccessMessage] = useState<string | null>(null);
-  const [backupErrorMessage, setBackupErrorMessage] = useState<string | null>(null);
-  const [pendingRestoreData, setPendingRestoreData] = useState<{
-    reminders?: Reminder[];
-    ideas?: IdeaNote[];
-    savedLocations?: SavedLocation[];
-    occasions?: Occasion[];
-    settings?: Partial<AppSettings>;
-  } | null>(null);
-
   const [playingSoundId, setPlayingSoundId] = useState<PhoneAlarmSound | null>(null);
   const soundTimeoutRef = useRef<number | null>(null);
 
   // Recycle Bin state
   const [isConfirmingEmptyBin, setIsConfirmingEmptyBin] = useState<boolean>(false);
-
-  // Local Folder Backup state (Fixed root folder: YAAD)
-  const [isLocalSyncing, setIsLocalSyncing] = useState<boolean>(false);
 
   // Native permissions state (for Android APK / PWA)
   const [nativePerms, setNativePerms] = useState<NativePermissionsStatus>({
@@ -363,122 +342,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     { id: 'jade_warm_light', name: isFa ? 'سبز یشمی و سفید گرم' : 'Jade Green & Warm White', preview: 'bg-[#168779] border-[#DDE1DA]' },
     { id: 'midnight_blue_silver', name: isFa ? 'آبی نیمه‌شب و نقره‌ای' : 'Midnight Blue & Silver', preview: 'bg-[#101722] border-[#9CBCE0]' },
   ];
-
-  const handleConfirmRestore = (mode: 'replace' | 'merge') => {
-    if (!pendingRestoreData || !onRestoreData) return;
-
-    onRestoreData(pendingRestoreData, mode);
-    setBackupSuccessMessage(
-      mode === 'replace'
-        ? (isFa ? 'داده‌ها با موفقیت بازیابی، ذخیره و جایگزین شدند.' : 'Data successfully restored and replaced.')
-        : (isFa ? 'داده‌های فایل پشتیبان با موفقیت ادغام و ذخیره شدند.' : 'Backup data successfully merged.')
-    );
-    setPendingRestoreData(null);
-    setTimeout(() => setBackupSuccessMessage(null), 4000);
-  };
-
-  const handleSaveToLocalYaadFolder = async () => {
-    setIsLocalSyncing(true);
-    setBackupErrorMessage(null);
-    setBackupSuccessMessage(null);
-    try {
-      const res = await requestLocalFolderPermission(true, LOCAL_BACKUP_FOLDER_NAME);
-      onUpdateSettings({ localBackupFolderName: LOCAL_BACKUP_FOLDER_NAME });
-      const savedOk = await performAutoBackup(
-        {
-          reminders,
-          ideas,
-          savedLocations,
-          occasions,
-          settings: { ...settings, localBackupFolderName: LOCAL_BACKUP_FOLDER_NAME },
-        },
-        { forceReplace: true }
-      );
-      const updatedPerms = await checkAllPermissionsStatus();
-      const isAndroid = isNativeAndroidApp();
-      const isStorageGranted = isAndroid
-        ? Boolean(res.granted || updatedPerms.storage)
-        : Boolean(savedOk || res.granted || updatedPerms.storage);
-      setNativePerms({ ...updatedPerms, storage: isStorageGranted });
-      if (isStorageGranted) {
-        const msg = isFa
-          ? `نسخه پشتیبان در ریشه حافظه در پوشه «${LOCAL_BACKUP_FOLDER_NAME}» ذخیره گردید ✓`
-          : `Backup saved in root folder "${LOCAL_BACKUP_FOLDER_NAME}" ✓`;
-        setBackupSuccessMessage(msg);
-        setTimeout(() => setBackupSuccessMessage(null), 5000);
-      } else {
-        setBackupErrorMessage(
-          isFa
-            ? 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
-            : 'To create the backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key'
-        );
-      }
-    } catch {
-      setBackupErrorMessage(isFa ? 'خطا در ذخیره‌سازی در پوشه YAAD.' : 'Failed to save to YAAD folder.');
-    } finally {
-      setIsLocalSyncing(false);
-    }
-  };
-
-  // Recall from local YAAD root folder
-  const handleRecallFromLocalFolder = async () => {
-    setIsLocalSyncing(true);
-    setBackupErrorMessage(null);
-    setBackupSuccessMessage(null);
-    try {
-      let snap = await retrieveFromLocalYaadFolder(LOCAL_BACKUP_FOLDER_NAME);
-      let itemsCount = snap ? getSnapshotItemCount(snap) : 0;
-
-      if (!snap || itemsCount === 0) {
-        const res = await requestLocalFolderPermission(true, LOCAL_BACKUP_FOLDER_NAME);
-        if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0) {
-          snap = res.restoredSnapshot;
-          itemsCount = getSnapshotItemCount(snap);
-        } else {
-          snap = await retrieveFromLocalYaadFolder(LOCAL_BACKUP_FOLDER_NAME);
-          itemsCount = snap ? getSnapshotItemCount(snap) : 0;
-        }
-      }
-
-      if (snap && itemsCount > 0) {
-        setPendingRestoreData({
-          reminders: snap.reminders || [],
-          ideas: snap.ideas || [],
-          savedLocations: snap.savedLocations || [],
-          occasions: snap.occasions || [],
-          settings: snap.settings,
-        });
-        setBackupSuccessMessage(
-          isFa
-            ? `نسخه پشتیبان از پوشه «${LOCAL_BACKUP_FOLDER_NAME}» با موفقیت فراخوانی شد (${toPersianDigits(itemsCount)} مورد). نحوه اعمال را در کادر زیر انتخاب کنید.`
-            : `Backup loaded from "${LOCAL_BACKUP_FOLDER_NAME}" folder (${itemsCount} items). Confirm below.`
-        );
-      } else {
-        const perms = await checkAllPermissionsStatus();
-        if (isNativeAndroidApp() && !perms.storage) {
-          setBackupErrorMessage(
-            isFa
-              ? 'برای دسترسی به پوشه پشتیبان‌گیری YAAD، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
-              : 'To access the YAAD backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key'
-          );
-        } else {
-          setBackupErrorMessage(
-            isFa
-              ? `فایل پشتیبان معتبری در پوشه «${LOCAL_BACKUP_FOLDER_NAME}» یافت نشد. ابتدا یک بار گزینه «ذخیره فوری در پوشه ${LOCAL_BACKUP_FOLDER_NAME}» را بزنید.`
-              : `No backup file with items found in "${LOCAL_BACKUP_FOLDER_NAME}" folder yet. Please save a backup first.`
-          );
-        }
-      }
-    } catch {
-      setBackupErrorMessage(
-        isFa
-          ? 'برای دسترسی به پوشه پشتیبان‌گیری YAAD، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
-          : 'To access the YAAD backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key'
-      );
-    } finally {
-      setIsLocalSyncing(false);
-    }
-  };
 
   return (
     <AnimatePresence>
@@ -1416,118 +1279,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                 </div>
 
-                {/* Alerts */}
-                {backupSuccessMessage && (
-                  <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center gap-2 animate-in fade-in">
-                    <Check className="w-4 h-4 flex-shrink-0 text-emerald-400" />
-                    <span>{backupSuccessMessage}</span>
-                  </div>
-                )}
-                {backupErrorMessage && (
-                  <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2 animate-in fade-in whitespace-pre-line leading-relaxed">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-400 mt-0.5" />
-                    <span>{backupErrorMessage}</span>
-                  </div>
-                )}
-
-                {/* 5.1A Local Folder Automatic Backup (ریشه حافظه در پوشه YAAD) */}
-                <div className="p-3.5 rounded-2xl bg-stone-900/75 border border-stone-800 space-y-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-xs font-bold text-white">
-                      <HardDrive className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <span>
-                        {isFa
-                          ? 'پشتیبان‌گیری خودکار محلی در حافظه گوشی'
-                          : 'Automatic Local Folder Backup'}
-                      </span>
-                    </div>
-                    <span
-                      style={{
-                        backgroundColor: 'rgba(16, 185, 129, 0.2)',
-                        borderColor: '#10b981',
-                        color: '#6ee7b7',
-                      }}
-                      className="text-[10px] px-2.5 py-1 rounded-full border font-black inline-flex items-center gap-1 shrink-0 shadow-xs"
-                    >
-                      <Check className="w-3.5 h-3.5 text-emerald-400 stroke-[3]" />
-                      <span>{isFa ? 'فعال (خودکار)' : 'Auto Active'}</span>
-                    </span>
-                  </div>
-
-                  <p className="text-[11px] text-stone-400 leading-relaxed">
-                    {isFa
-                      ? 'در هر بار بستن، باز شدن و نصب مجدد برنامه، اطلاعات شما به‌صورت خودکار در ریشه حافظه در پوشه YAAD ذخیره و فراخوانی می‌شود.'
-                      : 'Automatically saves and restores your data in the root YAAD folder on every app open, close, and reinstall.'}
-                  </p>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                    <button
-                      type="button"
-                      disabled={isLocalSyncing}
-                      onClick={handleSaveToLocalYaadFolder}
-                      className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
-                      <Check className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>{isFa ? 'ذخیره فوری در پوشه YAAD' : 'Save to YAAD Folder'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isLocalSyncing}
-                      onClick={handleRecallFromLocalFolder}
-                      className="min-h-[40px] px-3 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 border border-stone-800 text-stone-200 text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 text-sky-400 ${isLocalSyncing ? 'animate-spin' : ''}`} />
-                      <span>{isFa ? 'فراخوانی خودکار از پوشه YAAD' : 'Auto Recall from YAAD Folder'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                {/* Pending Restore Confirmation Box */}
-                {pendingRestoreData && (
-                  <div className="p-4 rounded-2xl bg-indigo-500/10 border border-indigo-500/30 space-y-3 animate-in fade-in">
-                    <div className="flex items-center gap-2 text-xs font-bold text-indigo-300">
-                      <FileJson className="w-4 h-4 shrink-0" />
-                      <span>{isFa ? 'فایل پشتیبان با موفقیت شناسایی شد:' : 'Backup file parsed:'}</span>
-                    </div>
-
-                    <div className="text-xs text-stone-300 space-y-1 pr-2">
-                      <p>• {isFa ? 'تعداد یادآورها:' : 'Reminders:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.reminders?.length || 0) : (pendingRestoreData.reminders?.length || 0)}</strong></p>
-                      <p>• {isFa ? 'تعداد مناسبت‌ها:' : 'Occasions:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.occasions?.length || 0) : (pendingRestoreData.occasions?.length || 0)}</strong></p>
-                      <p>• {isFa ? 'تعداد ایده‌ها:' : 'Ideas:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.ideas?.length || 0) : (pendingRestoreData.ideas?.length || 0)}</strong></p>
-                      <p>• {isFa ? 'تعداد مکان‌های GPS:' : 'GPS Places:'} <strong className="text-white">{isFa ? toPersianDigits(pendingRestoreData.savedLocations?.length || 0) : (pendingRestoreData.savedLocations?.length || 0)}</strong></p>
-                    </div>
-
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => handleConfirmRestore('replace')}
-                        className="min-h-[44px] flex-1 py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95"
-                      >
-                        {isFa ? 'جایگزینی داده‌ها (Overwrite)' : 'Overwrite Data'}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => handleConfirmRestore('merge')}
-                        className="min-h-[44px] flex-1 py-2 px-3 rounded-xl bg-stone-800 hover:bg-stone-700 text-white font-bold text-xs transition-colors cursor-pointer active:scale-95 border border-stone-700"
-                      >
-                        {isFa ? 'افزودن و ادغام (Merge)' : 'Merge Data'}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setPendingRestoreData(null)}
-                        className="min-h-[44px] py-2 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-white font-bold text-xs cursor-pointer active:scale-95 border border-stone-800"
-                      >
-                        {isFa ? 'انصراف' : 'Cancel'}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* 5.3 Performance Statistics Modal Trigger */}
+                {/* Performance Statistics Modal Trigger */}
                 {onOpenStats && (
-                  <div className="pt-2 border-t border-stone-800/80">
+                  <div className="pt-1">
                     <div className="flex items-center justify-between p-3 rounded-2xl bg-stone-900/80 border border-stone-800 hover:border-indigo-500/40 transition-all">
                       <div className="w-9 h-9 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 flex items-center justify-center flex-shrink-0">
                         <BarChart3 className="w-5 h-5" />
@@ -1535,7 +1289,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          onClose();
                           onOpenStats();
                         }}
                         className="min-h-[44px] px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs shadow-sm active:scale-95 transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5"
