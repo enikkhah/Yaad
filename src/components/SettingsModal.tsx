@@ -1527,9 +1527,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
 
                 <a
-                  href="mailto:YAADreminder@gmail.com?subject=YAAD%20App%20Support"
+                  href="mailto:narvanapplications@gmail.com?subject=YAAD%20App%20Support"
                   className="py-2 px-2.5 rounded-xl bg-stone-900/80 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-indigo-300 font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                  title="YAADreminder@gmail.com"
+                  title="narvanapplications@gmail.com"
                 >
                   <Mail className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                   <span className="truncate">{isFa ? 'پشتیبانی' : 'Support'}</span>
@@ -1571,8 +1571,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <p>
                     {isFa
-                      ? 'تمامی یادآورها، مناسبت‌ها، ایده‌ها و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه خودتان و در پوشه پشتیبان YAAD در ریشه حافظه ذخیره می‌شوند. پشتیبان‌گیری ابری حذف شده و هیچ اطلاعاتی به سرورهای خارجی ارسال نمی‌شود.'
-                      : 'All your reminders, occasions, ideas, and places are stored 100% locally on your device and in the root YAAD backup folder. Cloud backup has been removed and no data is sent to external servers.'}
+                      ? 'تمامی یادآورها، مناسبت‌ها، ایده‌ها (به همراه یادآورهای متصل به ایده) و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و به‌طور خودکار در پوشه YAAD در ریشه حافظه ذخیره می‌شوند. پایش GPS در حصار مکانی غیردائمی و تطبیقی (کم‌مصرف) بوده، پشتیبان‌گیری ابری حذف شده و هیچ اطلاعاتی به سرورهای خارجی ارسال نمی‌شود.'
+                      : 'All reminders, occasions, ideas (including idea reminders), and places are stored 100% locally on your device with automatic backup in the root YAAD folder. Geofence GPS polling is adaptive and non-continuous, cloud backup is removed, and no data leaves your device.'}
+                  </p>
+                  <p className="text-[10.5px] text-stone-400">
+                    {isFa
+                      ? 'توسعه‌دهنده: تیم نرم‌افزاری ناروَن • narvanteam.ir'
+                      : 'Developer: Narvan Software Team • narvanteam.ir'}
                   </p>
                   <a
                     href="/privacy.html"
@@ -1599,20 +1604,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       ? `دستیار هوشمند مدیریت زمان، یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار مکانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`
                       : `Smart time management assistant for spoken reminders, occasions, ideas, and location-based Geofence alerts • Version ${APP_VERSION}`}
                   </p>
+                  <p className="text-stone-400 font-bold">
+                    {isFa ? 'توسعه‌دهنده: تیم نرم‌افزاری ناروَن' : 'Developer: Narvan Software Team'}
+                  </p>
                 </div>
               )}
 
-              {/* Direct Support Email Display */}
-              <div className="pt-1 flex items-center justify-between text-[11px] text-stone-400">
-                <span>{isFa ? 'ارتباط با پشتیبانی:' : 'Support Email:'}</span>
-                <a
-                  href="mailto:YAADreminder@gmail.com?subject=YAAD%20App%20Support"
-                  className="font-mono text-indigo-400 hover:text-indigo-300 underline flex items-center gap-1"
-                  dir="ltr"
-                >
-                  <span>YAADreminder@gmail.com</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
+              {/* Direct Support Email & Website Display */}
+              <div className="pt-1 space-y-1.5 text-[11px] text-stone-400">
+                <div className="flex items-center justify-between">
+                  <span>{isFa ? 'توسعه‌دهنده:' : 'Developer:'}</span>
+                  <a
+                    href="https://narvanteam.ir"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
+                  >
+                    <span>{isFa ? 'تیم نرم‌افزاری ناروَن (narvanteam.ir)' : 'Narvan Software Team (narvanteam.ir)'}</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span>{isFa ? 'ایمیل پشتیبانی:' : 'Support Email:'}</span>
+                  <a
+                    href="mailto:narvanapplications@gmail.com?subject=YAAD%20App%20Support"
+                    className="font-mono text-indigo-400 hover:text-indigo-300 underline flex items-center gap-1"
+                    dir="ltr"
+                  >
+                    <span>narvanapplications@gmail.com</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                </div>
               </div>
             </div>
           </div>

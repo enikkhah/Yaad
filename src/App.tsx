@@ -2810,8 +2810,8 @@ export default function App() {
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
                     <p>
                       {isEn
-                        ? 'All reminders, occasions, ideas, and places are stored 100% locally on your device and in the root YAAD backup folder. Cloud backup is removed and no data leaves your device.'
-                        : 'تمامی یادآورها، مناسبت‌ها، ایده‌ها و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و پوشه پشتیبان YAAD در ریشه حافظه ذخیره می‌شوند و به هیچ سرور یا فضای ابری ارسال نمی‌گردند.'}
+                        ? 'All reminders, occasions, ideas (with idea reminders), and places are stored 100% locally on your device and backed up automatically in the root YAAD folder. Geofence GPS is adaptive & non-continuous, cloud backup is removed, and no data leaves your device.'
+                        : 'تمامی یادآورها، مناسبت‌ها، ایده‌ها (و یادآورهای متصل به ایده) و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و پوشه پشتیبان خودکار YAAD ذخیره می‌شوند. پایش GPS حصار مکانی غیردائمی و کم‌مصرف بوده و هیچ داده‌ای به سرور یا فضای ابری ارسال نمی‌گردد.'}
                     </p>
                     <a
                       href="/privacy.html"
@@ -2843,24 +2843,39 @@ export default function App() {
                 </button>
 
                 {logoMenuInfoSection === 'about' && (
-                  <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed animate-in fade-in">
-                    {isEn
-                      ? `Smart assistant for spoken reminders, occasions, ideas, and location Geofence alerts • Version ${APP_VERSION}`
-                      : `دستیار هوشمند یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار مکانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`}
+                  <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-1.5 animate-in fade-in">
+                    <p>
+                      {isEn
+                        ? `Smart assistant for spoken reminders, occasions, ideas, and location Geofence alerts • Version ${APP_VERSION}`
+                        : `دستیار هوشمند یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار مکانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`}
+                    </p>
+                    <p className="text-stone-400 font-bold">
+                      {isEn ? 'Developer: Narvan Software Team' : 'توسعه‌دهنده: تیم نرم‌افزاری ناروَن'}
+                    </p>
+                    <a
+                      href="https://narvanteam.ir"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300 font-mono text-[10.5px]"
+                      dir="ltr"
+                    >
+                      <span>narvanteam.ir</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
                   </div>
                 )}
 
-                {/* 4. Support Email Link (mailto:YAADreminder@gmail.com) */}
+                {/* 4. Support Email Link (mailto:narvanapplications@gmail.com) */}
                 <a
-                  href="mailto:YAADreminder@gmail.com?subject=YAAD%20App%20Support"
+                  href="mailto:narvanapplications@gmail.com?subject=YAAD%20App%20Support"
                   className="w-full px-3 py-2.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/35 text-indigo-300 hover:text-white text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Mail className="w-4 h-4 text-indigo-400 shrink-0" />
                     <div className="flex flex-col min-w-0">
-                      <span>{isEn ? 'Support' : 'پشتیبانی'}</span>
+                      <span>{isEn ? 'Support (Narvan Team)' : 'پشتیبانی (تیم ناروَن)'}</span>
                       <span className="text-[10px] font-mono text-stone-400 truncate" dir="ltr">
-                        YAADreminder@gmail.com
+                        narvanapplications@gmail.com
                       </span>
                     </div>
                   </div>

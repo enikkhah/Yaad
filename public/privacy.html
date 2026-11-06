@@ -3,71 +3,72 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>سیاست حریم خصوصی اپ یاد (YAAD)</title>
+<title>سیاست حریم خصوصی اپ یاد (YAAD) | تیم نرم‌افزاری ناروَن</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;700;900&display=swap">
 <style>
-:root{--bg:#101722;--fg:#F0F3F7;--muted:#9CBCE0;--accent:#10B981;--card:#182232;--border:#2B3A4E}
-@media (prefers-color-scheme: light){:root{--bg:#F7F6F0;--fg:#202A29;--muted:#5C6B68;--accent:#059669;--card:#FFFFFF;--border:#DDE1DA}}
-body{margin:0;background:var(--bg);color:var(--fg);font-family:Vazirmatn,Tahoma,sans-serif;line-height:2;font-size:16.5px}
+:root{--bg:#101722;--fg:#F0F3F7;--muted:#9CBCE0;--accent:#10B981;--brand:#FF8C00;--card:#182232;--border:#2B3A4E}
+@media (prefers-color-scheme: light){:root{--bg:#F7F6F0;--fg:#202A29;--muted:#5C6B68;--accent:#059669;--brand:#E67E00;--card:#FFFFFF;--border:#DDE1DA}}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:Vazirmatn,Tahoma,sans-serif;line-height:2;font-size:16px}
 main{max-width:760px;margin:0 auto;padding:32px 20px 64px}
-h1{font-size:26px;font-weight:900;margin:0 0 6px}
-h2{font-size:19px;font-weight:700;color:var(--accent);margin:28px 0 8px}
+h1{font-size:25px;font-weight:900;margin:0 0 6px}
+h2{font-size:18.5px;font-weight:700;color:var(--accent);margin:28px 0 8px}
 p,li{margin:6px 0}
 ul{padding-inline-start:22px}
 a{color:var(--accent);text-decoration:none;font-weight:700}
 a:hover{text-decoration:underline}
-.meta{color:var(--muted);font-size:14.5px;font-weight:700}
+.meta{color:var(--muted);font-size:14px;font-weight:700}
 .box{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px 20px;margin-top:18px}
 .ltr{direction:ltr;text-align:left;font-family:sans-serif}
 code{background:rgba(16,185,129,0.14);color:var(--accent);padding:2px 6px;border-radius:6px;font-family:monospace;font-weight:700}
+.brand-text{color:var(--brand);font-weight:900}
 </style>
 </head>
 <body>
 <main>
-<h1>سیاست حریم خصوصی اپ «یاد» (YAAD)</h1>
-<p class="meta">آخرین به‌روزرسانی: <span id="last-updated-date">امروز</span></p>
+<h1>سیاست حریم خصوصی اپ «<span class="brand-text">یاد</span>» (YAAD)</h1>
+<p class="meta">توسعه‌دهنده: تیم نرم‌افزاری ناروَن • آخرین به‌روزرسانی: <span id="last-updated-date">امروز</span></p>
 
 <div class="box">
-<p>«یاد» (YAAD) یک دستیار هوشمند مدیریت زمان، یادآورهای گفتاری، ثبت ایده، مناسبت‌ها و یادآور مکان‌محور (Geofence) است. اصل بنیادین ما حفظ کامل محرمانگی اطلاعات شماست: <strong>تمامی اطلاعات شما ۱۰۰٪ در حافظه داخلی گوشی خودتان ذخیره می‌شود، قابلیت پشتیبان‌گیری ابری به‌طور کامل از برنامه حذف شده است و هیچ داده‌ای به سرورهای خارجی ارسال یا فروخته نمی‌شود.</strong> استفاده از برنامه نیازی به ثبت‌نام یا ایجاد حساب کاربری ندارد.</p>
+<p>اپلیکیشن «<span class="brand-text">یاد</span>» (YAAD) محصول <strong>تیم نرم‌افزاری ناروَن</strong>، یک دستیار هوشمند مدیریت زمان، یادآورهای گفتاری، ثبت ایده با قابلیت زمان‌بندی یادآور، مناسبت‌ها و یادآور مکان‌محور (Geofence) است. اصل بنیادین ما حفظ کامل محرمانگی اطلاعات شماست: <strong>تمامی اطلاعات شما ۱۰۰٪ در حافظه داخلی گوشی خودتان ذخیره می‌شود، قابلیت پشتیبان‌گیری ابری به‌طور کامل از برنامه حذف شده است و هیچ داده‌ای به سرورهای خارجی ارسال یا فروخته نمی‌شود.</strong> استفاده از برنامه نیازی به ثبت‌نام یا ایجاد حساب کاربری ندارد.</p>
 </div>
 
 <h2>۱. چه اطلاعاتی در اپ ثبت و در حافظه دستگاه ذخیره می‌شود؟</h2>
 <p>تمامی اطلاعاتی که در برنامه وارد می‌کنید، صرفاً در حافظه داخلی دستگاه شما (<code>LocalStorage</code> و <code>IndexedDB</code>) نگهداری می‌شود:</p>
 <ul>
-<li><strong>یادآورها و مناسبت‌ها:</strong> عنوان، توضیحات، دسته‌بندی (کاری، خانوادگی، سایر)، تاریخ و ساعت، الگوی تکرار و تصاویر پیوست‌شده.</li>
-<li><strong>ایده‌ها و یادداشت‌ها:</strong> متن، یادداشت صوتی ضبط‌شده (Voice Memo)، ویدیوی کوتاه و نقاشی دست‌خط.</li>
+<li><strong>یادآورها و مناسبت‌ها:</strong> عنوان، توضیحات، دسته‌بندی (کاری، خانوادگی، سایر)، اولویت، تاریخ و ساعت (شمسی و میلادی)، الگوی تکرار و تصاویر پیوست‌شده.</li>
+<li><strong>ایده‌ها و یادآورهای متصل به ایده:</strong> متن ایده، یادداشت صوتی ضبط‌شده (Voice Memo)، ویدیوی کوتاه، نقاشی دست‌خط و همچنین یادآورهایی که مستقیماً از طریق منوی بازشو پایین بخش ایده‌ها (با ساعت غلتکی، تاریخ، اولویت و تکرار) برای هر ایده تنظیم می‌کنید.</li>
 <li><strong>مکان‌های ثبت‌شده و حصار مکانی (Geofence):</strong> مختصات جغرافیایی (طول و عرض جغرافیایی GPS)، عنوان، آدرس، شعاع محدوده ورود/خروج و عکس مکان.</li>
-<li><strong>تنظیمات برنامه:</strong> زبان، تم ظاهری، اندازه فونت، نوع صوت زنگ هشدار و وضعیت لرزش (ویبره).</li>
+<li><strong>تنظیمات شخصی‌سازی برنامه:</strong> زبان برنامه، تم ظاهری، اندازه فونت (با سایز استاندارد پیش‌فرض ۱۶)، نوع صوت زنگ هشدار، سرعت خوانش صوتی و وضعیت لرزش (ویبره).</li>
 </ul>
 
-<h2>۲. پشتیبان‌گیری خودکار محلی در پوشه <code>YAAD</code> و حذف کامل فضای ابری</h2>
+<h2>۲. پشتیبان‌گیری کاملاً خودکار محلی در پوشه <code>YAAD</code> و حذف فضای ابری</h2>
 <ul>
-<li><strong>حذف کامل پشتیبان‌گیری ابری:</strong> تمامی بخش‌های پشتیبان‌گیری ابری (از جمله Google Drive، سرورهای WebDAV و فضاهای ابری شخص ثالث) و همچنین بخش‌های آپلود یا دانلود دستی فایل پشتیبان از برنامه حذف شده‌اند تا فایل‌های پشتیبان شما هرگز از دستگاهتان خارج نشوند.</li>
-<li><strong>پشتیبان‌گیری خودکار در ریشه حافظه (پوشه <code>YAAD</code>):</strong> برنامه برای محافظت از اطلاعات شما در برابر بسته شدن، به‌روزرسانی یا نصب مجدد، به‌صورت خودکار یک نسخه پشتیبان در <strong>ریشه حافظه داخلی دستگاه در پوشه <code>YAAD</code></strong> ذخیره و در هنگام باز شدن برنامه فراخوانی می‌کند.</li>
+<li><strong>حذف کامل پشتیبان‌گیری ابری:</strong> تمامی سرویس‌های پشتیبان‌گیری ابری و بخش‌های دستی غیرضروری حذف شده‌اند تا فایل‌های پشتیبان شما هرگز از دستگاهتان خارج نشوند.</li>
+<li><strong>پشتیبان‌گیری خودکار و بی‌وقفه در ریشه حافظه (پوشه <code>YAAD</code>):</strong> برنامه برای محافظت کامل از اطلاعات شما در برابر بسته شدن، به‌روزرسانی یا نصب مجدد، به‌صورت کاملاً خودکار پس از هر تغییر و در زمان بسته شدن اپ، یک نسخه پشتیبان در <strong>ریشه حافظه داخلی دستگاه در پوشه <code>YAAD</code></strong> ذخیره کرده و در هنگام باز شدن برنامه به‌طور خودکار آن را بررسی و بازیابی می‌کند.</li>
 </ul>
 
-<h2>۳. سازوکار اعلان‌ها، تنظیم صدا و تعویق هوشمند</h2>
+<h2>۳. سازوکار اعلان‌ها، تفکیک هوشمند صدا و تعویق خودکار</h2>
 <ul>
-<li><strong>تنظیم صدا با ولوم نوتیفیکیشن گوشی:</strong> حجم صدای آلارم‌های صوتی مستقیماً با <strong>ولوم نوتیفیکیشن (Notification Volume) گوشی</strong> تنظیم می‌شود و در داخل اپ صرفاً انتخاب نوع صوت و فعال/غیرفعال‌سازی ویبره انجام می‌گیرد.</li>
-<li><strong>آیکون رسمی و دکمه‌های عملیاتی:</strong> در اعلان اختصاصی و در اعلان منوی کرکره‌ای از آیکون رسمی اپ «یاد» به همراه سه کلید <strong>«✓ انجام شد»</strong>، <strong>«⏱ تعویق ۱۵ دقیقه»</strong> و <strong>«✎ ویرایش»</strong> استفاده می‌شود.</li>
-<li><strong>کلیک روی بدنه اعلان:</strong> با کلیک روی خود اعلان (به‌جز کلیدهای انجام شد، تعویق و ویرایش)، برنامه بدون باز کردن منوی ثبت جدید، مستقیماً <strong>صفحه تایم‌لاین یادآورها</strong> را باز می‌کند.</li>
-<li><strong>رفتار پس از ۱ دقیقه بی‌پاسخ ماندن:</strong> اگر اعلان به مدت ۱ دقیقه بی‌پاسخ بماند، صدای زنگ متوقف شده، اعلان در صدر منوی کرکره‌ای باقی می‌ماند و یادآور مانند یک یادآور آینده به زمان ۱۵ دقیقه بعد در تایم‌لاین منتقل می‌شود تا در صورت باز شدن اپ، پنجره هشدار مجدداً مزاحم کاربر نشود.</li>
+<li><strong>عدم تداخل صوتی در زمان باز بودن برنامه:</strong> هنگامی که داخل برنامه هستید، اعلان‌های دیداری به‌صورت عادی نمایش داده می‌شوند اما صدای زنگ هشدار صرفاً توسط اعلان خارج از اپ (سیستم نوتیفیکیشن اندروید) پخش می‌شود تا از پخش هم‌زمان دو صدا با تأخیر زمانی جلوگیری شود.</li>
+<li><strong>تنظیم صدا با ولوم نوتیفیکیشن گوشی:</strong> حجم صدای آلارم‌های صوتی مستقیماً از <strong>ولوم نوتیفیکیشن (Notification Volume) گوشی</strong> پیروی می‌کند و پیش‌نمایش صداهای زنگ نیز در بخش تنظیمات اپ در دسترس است.</li>
+<li><strong>ساختار شفاف اعلان خارج از اپ:</strong> اعلان صادرشده در نوار اعلان اندروید با یک لوگوی رسمی اپ، یک زمان واحد و نمایش متمایز موضوع یادآور به همراه سه کلید عملیاتی <strong>«✓ انجام شد»</strong>، <strong>«⏱ تعویق ۱۵ دقیقه»</strong> و <strong>«✎ ویرایش»</strong> نمایش داده می‌شود.</li>
+<li><strong>کلیک روی بدنه اعلان و رفتار پس از ۱ دقیقه بی‌پاسخ ماندن:</strong> با لمس بدنه اعلان، برنامه مستقیماً <strong>صفحه تایم‌لاین یادآورها</strong> را باز می‌کند. اگر اعلان به مدت ۱ دقیقه بی‌پاسخ بماند، صدای زنگ متوقف شده، اعلان در صدر منوی کرکره‌ای باقی می‌ماند و یادآور به زمان ۱۵ دقیقه بعد در تایم‌لاین منتقل می‌شود.</li>
 </ul>
 
-<h2>۴. مجوزها و دسترسی‌های دستگاه (Permissions)</h2>
-<p>برنامه بر اساس قابلیت‌هایی که استفاده می‌کنید، مجوزهای زیر را در سیستم‌عامل اندروید یا مرورگر درخواست می‌کند:</p>
+<h2>۴. مجوزهای دستگاه (Permissions) و مدیریت هوشمند و کم‌مصرف GPS</h2>
+<p>برنامه تنها در زمان استفاده شما از قابلیت‌های مرتبط، مجوزهای زیر را در سیستم‌عامل اندروید یا مرورگر درخواست می‌کند:</p>
 <ul>
-<li><strong>اعلان‌ها، زنگ هشدار دقیق و راه‌اندازی مجدد (Notifications, Exact Alarm, Full-Screen Intent, Vibrate &amp; Boot Completed):</strong> برای نمایش به‌موقع یادآورها در صدر منوی کرکره‌ای، پخش صدای هشدار از کانال ولوم نوتیفیکیشن گوشی، لرزش و بازنشانی زنگ‌های زمان‌بندی‌شده پس از خاموش و روشن شدن دستگاه.</li>
+<li><strong>اعلان‌ها، زنگ هشدار دقیق و راه‌اندازی مجدد (Notifications, Exact Alarm, Full-Screen Intent, Vibrate &amp; Boot Completed):</strong> برای نمایش به‌موقع یادآورها در صدر منوی کرکره‌ای، پخش صدای هشدار، لرزش و بازنشانی زنگ‌های زمان‌بندی‌شده پس از ری‌استارت شدن گوشی.</li>
+<li><strong>موقعیت مکانی هوشمند و غیردائمی (Adaptive GPS Location):</strong> موقعیت مکانی (GPS) در برنامه <strong>به‌صورت مداوم روشن نیست</strong>؛ بلکه صرفاً زمانی فعال می‌شود که هم رادار حصار مکانی روشن باشد و هم حداقل یک یادآور یا مکان فعال دارای حصار مکانی ثبت شده باشد. در این حالت نیز از الگوریتم پایش تطبیقی (Adaptive Polling از ۱۵ ثانیه در نزدیکی مقصد تا ۵ دقیقه در فواصل دور) برای حداقل مصرف باتری و حفظ حریم خصوصی استفاده می‌شود.</li>
 <li><strong>میکروفون (Microphone / Record Audio):</strong> صرفاً هنگام استفاده از تایپ صوتی (تبدیل گفتار به متن) یا ضبط یادداشت صوتی در بخش ایده‌ها.</li>
 <li><strong>دوربین (Camera):</strong> صرفاً هنگام عکس‌برداری مستقیم برای پیوست به یادآورها و مکان‌ها، یا ضبط ویدیوی کوتاه در بخش ایده‌ها.</li>
-<li><strong>موقعیت مکانی (GPS - Fine &amp; Coarse Location):</strong> صرفاً برای ثبت موقعیت مکانی روی نقشه و پایش ورود یا خروج از محدوده تعیین‌شده در «حصار مکانی» (Geofence) در صورت فعال بودن رادار.</li>
-<li><strong>پوشه و حافظه (Storage / All Files Access):</strong> صرفاً برای ایجاد و مدیریت خودکار پوشه پشتیبان <code>YAAD</code> در ریشه حافظه دستگاه و پیوست تصاویر.</li>
+<li><strong>پوشه و حافظه (Storage / All Files Access):</strong> صرفاً برای ایجاد و به‌روزرسانی خودکار پوشه پشتیبان <code>YAAD</code> در ریشه حافظه دستگاه و ذخیره پیوست‌ها.</li>
 </ul>
-<p>تمامی این مجوزها شفاف و در کنترل شما هستند و هر زمان بخواهید می‌توانید آن‌ها را از بخش تنظیمات گوشی مدیریت یا لغو کنید.</p>
+<p>تمامی این مجوزها در کنترل کامل شما هستند و هر زمان بخواهید می‌توانید آن‌ها را از بخش تنظیمات گوشی مدیریت یا لغو کنید.</p>
 
 <h2>۵. اطلاعاتی که جمع‌آوری نمی‌کنیم</h2>
 <ul>
-<li>ما به محتوای یادآورها، ایده‌ها، عکس‌ها، صداها یا مکان‌های ثبت‌شده شما هیچ‌گونه دسترسی نداریم و داده‌ای به سرور توسعه‌دهنده ارسال نمی‌شود.</li>
+<li>ما به محتوای یادآورها، ایده‌ها، عکس‌ها، صداها یا مکان‌های ثبت‌شده شما هیچ‌گونه دسترسی نداریم و هیچ داده‌ای به سرورهای تیم نرم‌افزاری ناروَن ارسال نمی‌شود.</li>
 <li>برنامه هیچ کلید اختصاصی Google Maps API از کاربر دریافت یا ذخیره نمی‌کند.</li>
 <li>اپلیکیشن کاملاً فاقد تبلیغات، اسکریپت‌های ردیابی تبلیغاتی و فروش داده به اشخاص ثالث است.</li>
 </ul>
@@ -75,21 +76,25 @@ code{background:rgba(16,185,129,0.14);color:var(--accent);padding:2px 6px;border
 <h2>۶. سرویس‌های بیرونی و همگام‌سازی اختیاری</h2>
 <ul>
 <li><strong>نمایش نقشه و آدرس‌یابی (OpenStreetMap / Nominatim و مسیریاب‌ها):</strong> صرفاً هنگام مشاهده نقشه، تبدیل مختصات جغرافیایی به نام آدرس یا باز کردن مسیریاب استفاده می‌شود.</li>
-<li><strong>موتور تشخیص گفتار سیستم‌عامل/مرورگر (Speech Recognition):</strong> صرفاً در زمان فشردن دکمه میکروفون برای تبدیل صدای شما به متن استفاده می‌شود.</li>
+<li><strong>موتور تشخیص گفتار سیستم‌عامل/مرورگر (Speech Recognition):</strong> صرفاً در زمان فشردن دکمه میکروفون برای تبدیل گفتار شما به متن استفاده می‌شود.</li>
 <li><strong>تقویم گوگل (Google Calendar - کاملاً اختیاری):</strong> تنها در صورتی که خودتان در بخش «همگام‌سازی و سرویس‌ها» گزینه ورود با گوگل را انتخاب کنید، یادآورها با تقویم گوگل شخصی شما همگام‌سازی می‌شوند.</li>
 </ul>
 
-<h2>۷. کنترل، سطل بازیافت و حذف کامل اطلاعات</h2>
-<p>شما مالک کامل داده‌های خود هستید. هر یادآور، مناسبت، مکان یا ایده حذف‌شده به بخش «سطل بازیافت» داخل برنامه منتقل می‌شود تا در صورت نیاز قابل بازیابی باشد یا به‌صورت دائمی حذف گردد. برای پاک کردن کامل همه اطلاعات، کافی است سطل بازیافت را خالی کرده، از بخش تنظیمات گوشی گزینه «پاک کردن داده‌ها» (Clear Data) را بزنید و پوشه <code>YAAD</code> را از ریشه حافظه دستگاه حذف نمایید.</p>
+<h2>۷. کنترل، آمار عملکرد، سطل بازیافت و حذف کامل اطلاعات</h2>
+<p>شما مالک کامل داده‌های خود هستید. آمار عملکرد یادآورها کاملاً به‌صورت محلی روی دستگاه محاسبه می‌شود. هر یادآور، مناسبت، مکان یا ایده حذف‌شده به بخش «سطل بازیافت» داخل برنامه منتقل می‌شود تا در صورت نیاز قابل بازیابی باشد یا به‌صورت دائمی حذف گردد. برای پاک کردن کامل همه اطلاعات، کافی است سطل بازیافت را خالی کرده، از بخش تنظیمات گوشی گزینه «پاک کردن داده‌ها» (Clear Data) را بزنید و پوشه <code>YAAD</code> را از ریشه حافظه دستگاه حذف نمایید.</p>
 
-<h2>۸. تماس با پشتیبانی</h2>
-<p>برای هرگونه پرسش یا راهنمایی مرتبط با حریم خصوصی، از طریق ایمیل زیر با ما در ارتباط باشید:</p>
-<p>ایمیل پشتیبانی: <a href="mailto:YAADreminder@gmail.com" dir="ltr">YAADreminder@gmail.com</a></p>
-<p class="meta">توسعه‌دهنده: عزت‌الله نیکخواه (Ezzatollah Nikkhah)</p>
+<h2>۸. توسعه‌دهنده و ارتباط با پشتیبانی</h2>
+<p>اپلیکیشن «یاد» توسط <strong>تیم نرم‌افزاری ناروَن</strong> طراحی و توسعه یافته است. برای هرگونه پرسش، پیشنهاد یا راهنمایی مرتبط با حریم خصوصی و پشتیبانی، از راه‌های زیر با ما در ارتباط باشید:</p>
+<ul>
+<li><strong>توسعه‌دهنده:</strong> تیم نرم‌افزاری ناروَن (Narvan Software Team)</li>
+<li><strong>ایمیل پشتیبانی:</strong> <a href="mailto:narvanapplications@gmail.com" dir="ltr">narvanapplications@gmail.com</a></li>
+<li><strong>وب‌سایت رسمی:</strong> <a href="https://narvanteam.ir" target="_blank" rel="noopener noreferrer" dir="ltr">narvanteam.ir</a></li>
+</ul>
 
 <div class="box ltr" style="margin-top:32px;font-size:14px;line-height:1.75">
 <strong>Privacy Policy Summary (English):</strong><br>
-<strong>YAAD Reminder</strong> stores 100% of your reminders, occasions, ideas (text, voice memos, short videos, sketches), and saved Geofence locations locally on your device. Cloud backup services have been completely removed; automatic backup and restore operate exclusively in your device's root storage inside the <code>YAAD</code> folder. Alarm volume follows your phone's system Notification Volume stream, unanswered alarms remain pinned at the top of the notification shade after 1 minute while advancing 15 minutes in the timeline, and tapping the notification body opens the Reminders Timeline directly. Device permissions (Notifications/Exact Alarms, Microphone, Camera, GPS Location, and Storage for the <code>YAAD</code> folder) are used strictly when you invoke those features. Google Calendar sync is 100% optional. We never collect, track, or sell your personal data, and there are no ads. Contact: <a href="mailto:YAADreminder@gmail.com">YAADreminder@gmail.com</a>.
+<strong>YAAD Reminder</strong>, developed by <strong>Narvan Software Team</strong>, stores 100% of your reminders, occasions, ideas (including text, voice memos, short videos, sketches, and reminders scheduled directly via the Idea expandable reminder menu), and saved Geofence locations locally on your device. Cloud backup services have been completely removed; automatic backup and restore operate seamlessly in the background inside your device's root <code>YAAD</code> folder. When the app is open, visual alerts are shown in-app while audio rings exclusively via the system's out-of-app notification channel to prevent audio lag or echo. GPS location for Geofencing is never kept continuously active—it runs using an adaptive, battery-saving polling interval (15s to 5m) strictly when the Geofence radar is enabled and active geofences exist. Google Calendar sync is 100% optional. We never collect, track, or sell your personal data, and there are no ads.<br>
+<strong>Developer:</strong> Narvan Software Team • <strong>Email:</strong> <a href="mailto:narvanapplications@gmail.com">narvanapplications@gmail.com</a> • <strong>Website:</strong> <a href="https://narvanteam.ir" target="_blank" rel="noopener noreferrer">narvanteam.ir</a>
 </div>
 </main>
 <script>
