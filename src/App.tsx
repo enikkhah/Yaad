@@ -54,6 +54,7 @@ import {
   setGeofenceTrackingEnabled,
   saveLastKnownPosition, 
   getLastKnownPosition,
+  syncGeofencesWithNativeAndroid,
   UserPosition,
   GeofenceTriggerEvent,
   SavedLocationTriggerEvent
@@ -589,6 +590,22 @@ export default function App() {
 
   // Main Active Tab: 'reminders', 'ideas', 'locations', or 'occasions'
   const [activeMainTab, setActiveMainTab] = useState<'reminders' | 'ideas' | 'locations' | 'occasions'>('reminders');
+  const tabHistoryRef = useRef<Array<'reminders' | 'ideas' | 'locations' | 'occasions'>>([]);
+  const prevActiveTabRef = useRef<'reminders' | 'ideas' | 'locations' | 'occasions'>('reminders');
+  const isPoppingTabHistoryRef = useRef(false);
+
+  useEffect(() => {
+    if (prevActiveTabRef.current !== activeMainTab) {
+      if (!isPoppingTabHistoryRef.current) {
+        tabHistoryRef.current.push(prevActiveTabRef.current);
+        if (tabHistoryRef.current.length > 15) {
+          tabHistoryRef.current.shift();
+        }
+      }
+      isPoppingTabHistoryRef.current = false;
+      prevActiveTabRef.current = activeMainTab;
+    }
+  }, [activeMainTab]);
 
   // Google Auth & Sync state
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -709,12 +726,20 @@ export default function App() {
     if (isFormOpen) { setIsFormOpen(false); setEditingReminder(null); return true; }
     if (isStatsOpen) { setIsStatsOpen(false); return true; }
     if (isSettingsOpen) { setIsSettingsOpen(false); return true; }
+    if (tabHistoryRef.current.length > 0) {
+      const prevTab = tabHistoryRef.current.pop();
+      if (prevTab && prevTab !== activeMainTab) {
+        isPoppingTabHistoryRef.current = true;
+        setActiveMainTab(prevTab);
+        return true;
+      }
+    }
     return false;
   }, [
     viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
     isLocationModalOpen, isIdeaModalOpen,
     isOccasionModalOpen, isFormOpen, isSettingsOpen, isStatsOpen,
-    activeAlarmReminder
+    activeAlarmReminder, activeMainTab
   ]);
 
   const closeTopModalRef = useRef(closeTopModal);
@@ -1466,30 +1491,126 @@ export default function App() {
     };
   }, [reminders]);
 
-  // Geofence Evaluation Engine: Monitors user coordinates and evaluates both location-based reminders and saved location geofences
+  // Sync active geofences with Native Android Background Service (YaadGeofenceService)
+  useEffect(() => {
+    syncGeofencesWithNativeAndroid(
+      isGeofenceActive,
+      reminders,
+      savedLocations,
+      settings.language || 'fa'
+    );
+  }, [isGeofenceActive, reminders, savedLocations, settings.language]);
+
+  // Geofence Evaluation Engine: Monitors user coordinates in-app & in background and evaluates both location-based reminders and saved location geofences
   useEffect(() => {
     if (!isGeofenceActive) return;
     if (typeof navigator === 'undefined' || !navigator.geolocation) return;
 
     // Check if there are any active location reminders or saved location checkpoints
     const hasActiveReminderGeofences = reminders.some(
-      (r) => (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
+      (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
     );
     const hasActiveLocationCheckpoints = savedLocations.some(
-      (l) => l.geofence && l.geofence.enabled
+      (l) => !l.deletedAt && l.geofence && l.geofence.enabled
     );
     if (!hasActiveReminderGeofences && !hasActiveLocationCheckpoints) return;
 
     let isMounted = true;
     let timerId: any = null;
+    let watchId: number | null = null;
+
+    const handlePositionUpdate = (pos: GeolocationPosition) => {
+      if (!isMounted) return;
+      const userPos: UserPosition = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        timestamp: pos.timestamp || Date.now(),
+      };
+
+      setCurrentUserPosition(userPos);
+      saveLastKnownPosition(userPos);
+
+      // 1. Evaluate saved location geofences (حصارهای مکانی ثبت‌شده)
+      if (hasActiveLocationCheckpoints) {
+        evaluateSavedLocationGeofences(userPos, savedLocations, (event: SavedLocationTriggerEvent) => {
+          const displayLocTitle = formatSavedLocationTitle(event.location.title, settings.language);
+          const actionText = event.triggerType === 'enter'
+            ? (isEn ? 'Entered radius of' : 'ورود به محدوده')
+            : (isEn ? 'Exited radius of' : 'خروج از محدوده');
+          const titleText = isEn
+            ? `📍 Geofence Alert: ${displayLocTitle}`
+            : `📍 اعلام حصار مکانی: ${displayLocTitle}`;
+          const bodyText = event.location.geofence?.customMessage
+            ? event.location.geofence.customMessage
+            : `${actionText} ${displayLocTitle} (${isEn ? `Distance: ${Math.round(event.distance)}m` : `فاصله: ${toPersianDigits(Math.round(event.distance))} متر`})`;
+
+          // Native push notification (handles out-of-app & status bar sound)
+          fireImmediateLocalNotification(titleText, bodyText, { locationId: event.location.id, geofence: true });
+          // In-app alert banner
+          showSyncNotification(`${titleText} — ${bodyText}`);
+
+          // Audio alarm and speech when on web/PWA (on native Android, fireImmediateLocalNotification plays the sound)
+          if (event.location.geofence?.playAudio !== false && !Capacitor.isNativePlatform()) {
+            playPhoneAlarmSound('radar');
+            speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
+          }
+
+          // Update savedLocation state
+          setSavedLocations((prev) =>
+            prev.map((loc) =>
+              loc.id === event.location.id
+                ? {
+                    ...loc,
+                    geofence: loc.geofence
+                      ? { ...loc.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
+                      : undefined,
+                  }
+                : loc
+            )
+          );
+
+          // Trigger two-step review flow after successful geofence execution
+          triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
+        });
+      }
+
+      // 2. Evaluate reminder geofences if any exist
+      if (hasActiveReminderGeofences) {
+        evaluateGeofences(userPos, reminders, (event: GeofenceTriggerEvent) => {
+          setActiveAlarmReminder(event.reminder);
+
+          const actionText = event.triggerType === 'enter' ? 'رسیدن به محدوده' : 'خروج از محدوده';
+          fireImmediateLocalNotification(
+            `📍 هشدار مکان: ${event.reminder.title}`,
+            `${actionText} ${event.reminder.geofence?.locationName || 'مکان ثبت‌شده'} (فاصله: ${event.distance} متر)`,
+            { reminderId: event.reminder.id, geofence: true }
+          );
+
+          setReminders((prev) =>
+            prev.map((item) =>
+              item.id === event.reminder.id
+                ? {
+                    ...item,
+                    geofence: item.geofence
+                      ? { ...item.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
+                      : undefined,
+                  }
+                : item
+            )
+          );
+
+          // Trigger two-step review flow after successful reminder geofence execution
+          triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
+        });
+      }
+    };
 
     const runGeofenceCheck = async () => {
-      // Never prompt for Location permission automatically in background/startup;
-      // only poll GPS if geolocation permission has already been granted inside the app.
       if (navigator.permissions && navigator.permissions.query) {
         try {
           const permStatus = await navigator.permissions.query({ name: 'geolocation' as any });
-          if (permStatus.state !== 'granted') {
+          if (permStatus.state === 'denied') {
             return;
           }
         } catch {
@@ -1501,102 +1622,60 @@ export default function App() {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           if (!isMounted) return;
+          handlePositionUpdate(pos);
           const userPos: UserPosition = {
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
             timestamp: pos.timestamp || Date.now(),
           };
-
-          setCurrentUserPosition(userPos);
-          saveLastKnownPosition(userPos);
-
-          // 1. Evaluate saved location geofences (حصارهای مکانی ثبت‌شده)
-          if (hasActiveLocationCheckpoints) {
-            evaluateSavedLocationGeofences(userPos, savedLocations, (event: SavedLocationTriggerEvent) => {
-              const displayLocTitle = formatSavedLocationTitle(event.location.title, settings.language);
-              const actionText = event.triggerType === 'enter' 
-                ? (isEn ? 'Entered radius of' : 'ورود به محدوده') 
-                : (isEn ? 'Exited radius of' : 'خروج از محدوده');
-              const titleText = isEn 
-                ? `📍 Geofence Alert: ${displayLocTitle}` 
-                : `📍 اعلام حصار مکانی: ${displayLocTitle}`;
-              const bodyText = event.location.geofence?.customMessage 
-                ? event.location.geofence.customMessage 
-                : `${actionText} ${displayLocTitle} (${isEn ? `Distance: ${Math.round(event.distance)}m` : `فاصله: ${toPersianDigits(Math.round(event.distance))} متر`})`;
-
-              // Native push notification
-              fireImmediateLocalNotification(titleText, bodyText, { locationId: event.location.id, geofence: true });
-              // In-app alert banner
-              showSyncNotification(`${titleText} — ${bodyText}`);
-
-              // Audio alarm and speech
-              if (event.location.geofence?.playAudio !== false) {
-                playPhoneAlarmSound('radar');
-                speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
-              }
-
-              // Update savedLocation state
-              setSavedLocations((prev) =>
-                prev.map((loc) =>
-                  loc.id === event.location.id
-                    ? {
-                        ...loc,
-                        geofence: loc.geofence
-                          ? { ...loc.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
-                          : undefined,
-                      }
-                    : loc
-                )
-              );
-
-              // Trigger two-step review flow after successful geofence execution
-              triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
-            });
-          }
-
-          // 2. Evaluate legacy reminder geofences if any exist
-          if (hasActiveReminderGeofences) {
-            evaluateGeofences(userPos, reminders, (event: GeofenceTriggerEvent) => {
-              setActiveAlarmReminder(event.reminder);
-
-              const actionText = event.triggerType === 'enter' ? 'رسیدن به محدوده' : 'خروج از محدوده';
-              fireImmediateLocalNotification(
-                `📍 هشدار مکان: ${event.reminder.title}`,
-                `${actionText} ${event.reminder.geofence?.locationName || 'مکان ثبت‌شده'} (فاصله: ${event.distance} متر)`,
-                { reminderId: event.reminder.id, geofence: true }
-              );
-
-              setReminders((prev) =>
-                prev.map((item) =>
-                  item.id === event.reminder.id
-                    ? {
-                        ...item,
-                        geofence: item.geofence
-                          ? { ...item.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
-                          : undefined,
-                      }
-                    : item
-                )
-              );
-
-              // Trigger two-step review flow after successful reminder geofence execution
-              triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
-            });
-          }
-
-          // Schedule next check with adaptive battery-saving interval
           const nextInterval = getAdaptivePollingInterval(userPos, reminders, savedLocations);
+          if (timerId) clearTimeout(timerId);
           timerId = setTimeout(runGeofenceCheck, nextInterval);
         },
         () => {
-          // Graceful fallback: retry in 60s if GPS temporarily fails
           if (!isMounted) return;
-          timerId = setTimeout(runGeofenceCheck, 60000);
+          if (timerId) clearTimeout(timerId);
+          timerId = setTimeout(runGeofenceCheck, 45000);
         },
         { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
       );
     };
+
+    // Start continuous watchPosition alongside adaptive polling for immediate boundary detection
+    try {
+      watchId = navigator.geolocation.watchPosition(
+        (pos) => {
+          handlePositionUpdate(pos);
+        },
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+      );
+    } catch {
+      // ignore if watchPosition fails
+    }
+
+    // Re-check immediately when app returns from background or visibility changes
+    const handleVisibilityOrAppResume = () => {
+      if (isMounted) {
+        runGeofenceCheck();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityOrAppResume);
+    let appStateListener: { remove: () => Promise<void> } | null = null;
+    try {
+      CapacitorApp.addListener('appStateChange', () => {
+        if (isMounted) {
+          runGeofenceCheck();
+        }
+      })
+        .then((sub) => {
+          appStateListener = sub;
+        })
+        .catch(() => {});
+    } catch {
+      // ignore
+    }
 
     // Initial check
     runGeofenceCheck();
@@ -1604,8 +1683,19 @@ export default function App() {
     return () => {
       isMounted = false;
       if (timerId) clearTimeout(timerId);
+      if (watchId !== null) {
+        try {
+          navigator.geolocation.clearWatch(watchId);
+        } catch {
+          // ignore
+        }
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityOrAppResume);
+      if (appStateListener) {
+        appStateListener.remove().catch(() => {});
+      }
     };
-  }, [reminders, savedLocations, isGeofenceActive]);
+  }, [reminders, savedLocations, isGeofenceActive, isEn, settings.language, settings.ttsVoiceRate]);
 
   const handleToggleGeofenceService = (newState?: boolean) => {
     setIsGeofenceActive((prev) => {
@@ -1792,8 +1882,7 @@ export default function App() {
 
       setReminders((prev) => [newReminder, ...prev]);
     }
-    if (!stayOnCurrentTab) {
-      setActiveMainTab('reminders');
+    if (!stayOnCurrentTab && activeMainTab === 'reminders') {
       triggerScrollToNow();
     }
   };
@@ -1871,10 +1960,6 @@ export default function App() {
       );
     }
     setOpenIdeaReminderMenuByDefault(false);
-    if (activeMainTab !== 'ideas') {
-      setActiveMainTab('reminders');
-      triggerScrollToNow();
-    }
   };
 
   const handleDeleteIdea = (id: string) => {
@@ -1928,8 +2013,6 @@ export default function App() {
         setReminders((prev) => [reminderPayload, ...prev]);
       }
     }
-    setActiveMainTab('reminders');
-    triggerScrollToNow();
   };
 
   const handleDeleteLocation = (id: string) => {
@@ -1962,13 +2045,12 @@ export default function App() {
       setOccasions((prev) => [newOccasion, ...prev]);
       showSyncNotification('مناسبت جدید با موفقیت ثبت شد.');
 
-      // Automatically create a Reminder with alarm if requested (staying on Occasions tab!)
+      // Automatically create a Reminder with alarm if requested (staying on current page!)
       if (alsoCreateReminder) {
         const reminderPayload = createReminderFromOccasion(newOccasion);
         handleSaveReminder(reminderPayload, false, true);
       }
     }
-    setActiveMainTab('occasions');
   };
 
   const handleDeleteOccasion = (id: string) => {
@@ -1980,7 +2062,7 @@ export default function App() {
 
   const handleCreateReminderFromOccasion = (occasion: Occasion) => {
     const reminderPayload = createReminderFromOccasion(occasion);
-    handleSaveReminder(reminderPayload);
+    handleSaveReminder(reminderPayload, false, true);
     showSyncNotification(`آلارم یادآور برای مناسبت «${occasion.title}» تنظیم شد.`);
   };
 
@@ -3934,18 +4016,12 @@ export default function App() {
           if (activeAlarmReminder) {
             handleNoReactionTimeout(activeAlarmReminder.id);
           }
-          openedFromNotificationEditRef.current = true;
           setIsCreateChoiceOpen(false);
           setActiveAlarmReminder(null);
-          setCategoryFilter('all');
-          setActiveMainTab('reminders');
-          triggerScrollToNow();
         }}
         onComplete={(id) => {
           handleCompleteReminder(id);
           setActiveAlarmReminder(null);
-          setActiveMainTab('reminders');
-          triggerScrollToNow();
         }}
         onPostpone={(id, mins) => {
           handlePostpone(id, mins);
@@ -3954,7 +4030,6 @@ export default function App() {
         onEdit={(rem) => {
           handleStopOrDismissReminder(rem.id);
           setActiveAlarmReminder(null);
-          setActiveMainTab('reminders');
           setEditingReminder(rem);
           setIsFormOpen(true);
         }}

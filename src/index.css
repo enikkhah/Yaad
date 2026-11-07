@@ -1209,3 +1209,73 @@ html:not(.dark)[data-theme="system"] .main-nav-tab-inactive svg {
     stroke-dashoffset: 0;
   }
 }
+
+/* ==========================================================================
+   DISTINCT GEOFENCE DISTANCE SLIDER THUMB & TRACK (.geofence-radius-slider)
+   ========================================================================== */
+.geofence-radius-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 10px;
+  border-radius: 9999px;
+  outline: none;
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.geofence-radius-slider:hover,
+.geofence-radius-slider:focus-visible {
+  border-color: #10b981;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.5), 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+
+.geofence-radius-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 35%, #34d399 0%, #10b981 55%, #059669 100%);
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.38), 0 4px 12px rgba(0, 0, 0, 0.65);
+  cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.geofence-radius-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.48), 0 6px 14px rgba(0, 0, 0, 0.75);
+}
+
+.geofence-radius-slider::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.18);
+  background: radial-gradient(circle at 35% 35%, #fbbf24 0%, #ff8c00 70%, #d97706 100%);
+  box-shadow: 0 0 0 6px rgba(255, 140, 0, 0.45), 0 6px 16px rgba(0, 0, 0, 0.8);
+}
+
+.geofence-radius-slider::-moz-range-thumb {
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  background: radial-gradient(circle at 35% 35%, #34d399 0%, #10b981 55%, #059669 100%);
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.38), 0 4px 12px rgba(0, 0, 0, 0.65);
+  cursor: grab;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.geofence-radius-slider::-moz-range-thumb:hover {
+  transform: scale(1.12);
+  box-shadow: 0 0 0 5px rgba(16, 185, 129, 0.48), 0 6px 14px rgba(0, 0, 0, 0.75);
+}
+
+.geofence-radius-slider::-moz-range-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.18);
+  background: radial-gradient(circle at 35% 35%, #fbbf24 0%, #ff8c00 70%, #d97706 100%);
+  box-shadow: 0 0 0 6px rgba(255, 140, 0, 0.45), 0 6px 16px rgba(0, 0, 0, 0.8);
+}
+

@@ -3,6 +3,7 @@ import { Reminder, SavedLocation } from '../types';
 // Storage key for user preference on background geofence tracking
 export const GEOFENCE_TRACKING_ENABLED_KEY = 'yaad_geofence_tracking_enabled_v1';
 export const LAST_KNOWN_POSITION_KEY = 'yaad_last_known_user_position_v1';
+export const GEOFENCE_PROXIMITY_STATE_KEY = 'yaad_geofence_proximity_state_v1';
 
 export interface UserPosition {
   latitude: number;
@@ -25,9 +26,42 @@ export interface SavedLocationTriggerEvent {
   timestamp: number;
 }
 
-// Memory tracking of previously checked status (inside or outside geofence)
-// Map of reminderId -> boolean (true = currently inside, false = outside)
+// Memory + persisted tracking of previously checked status (inside or outside geofence)
+// Map of id -> boolean (true = currently inside, false = outside)
 const proximityStateMap = new Map<string, boolean>();
+
+function loadProximityStateFromStorage(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = localStorage.getItem(GEOFENCE_PROXIMITY_STATE_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      for (const [k, v] of Object.entries(parsed)) {
+        if (typeof v === 'boolean') {
+          proximityStateMap.set(k, v);
+        }
+      }
+    }
+  } catch {
+    // Ignore storage read errors
+  }
+}
+
+function saveProximityStateToStorage(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const obj: Record<string, boolean> = {};
+    proximityStateMap.forEach((val, key) => {
+      obj[key] = val;
+    });
+    localStorage.setItem(GEOFENCE_PROXIMITY_STATE_KEY, JSON.stringify(obj));
+  } catch {
+    // Ignore storage write errors
+  }
+}
+
+loadProximityStateFromStorage();
 
 /**
  * Calculates distance between two coordinates in meters using the Haversine formula
@@ -104,26 +138,89 @@ export function getLastKnownPosition(): UserPosition | null {
 }
 
 /**
-export function isReminderInGeofence(
-  userPos: { latitude: number; longitude: number },
-  reminder: Reminder
-): { isInside: boolean; distance: number } | null {
-  if (!reminder.geofence) return null;
-  const distance = calculateHaversineDistance(
-    userPos.latitude,
-    userPos.longitude,
-    reminder.geofence.latitude,
-    reminder.geofence.longitude
-  );
-  return {
-    isInside: distance <= (reminder.geofence.radius || 200),
-    distance,
-  };
+ * Syncs active geofences with the native Android background service (YaadGeofenceService)
+ * so geofence monitoring continues reliably even when the user is outside the app or the app is closed.
+ */
+export function syncGeofencesWithNativeAndroid(
+  enabled: boolean,
+  reminders: Reminder[] = [],
+  locations: SavedLocation[] = [],
+  language: 'fa' | 'en' = 'fa'
+): void {
+  if (typeof window === 'undefined') return;
+  const bridge = (window as any).YaadGeofenceBridge;
+  if (!bridge || typeof bridge.syncGeofences !== 'function') return;
+
+  try {
+    const isEn = language === 'en';
+    const items: Array<{
+      id: string;
+      type: 'location' | 'reminder';
+      title: string;
+      latitude: number;
+      longitude: number;
+      radius: number;
+      triggerOn: 'enter' | 'exit' | 'both';
+      customMessage: string;
+      playAudio: boolean;
+      cooldownMs: number;
+    }> = [];
+
+    if (enabled) {
+      for (const loc of locations) {
+        if (loc.deletedAt || !loc.geofence || !loc.geofence.enabled) continue;
+        items.push({
+          id: `loc_${loc.id}`,
+          type: 'location',
+          title: loc.title || (isEn ? 'Saved Location' : 'مکان ذخیره‌شده'),
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          radius: loc.geofence.radius || 200,
+          triggerOn: loc.geofence.triggerOn || 'enter',
+          customMessage: loc.geofence.customMessage || '',
+          playAudio: loc.geofence.playAudio !== false,
+          cooldownMs: 3 * 60 * 1000,
+        });
+      }
+
+      for (const rem of reminders) {
+        if (
+          rem.deletedAt ||
+          (rem.status !== 'pending' && rem.status !== 'postponed') ||
+          !rem.geofence ||
+          !rem.geofence.enabled
+        ) {
+          continue;
+        }
+        items.push({
+          id: `rem_${rem.id}`,
+          type: 'reminder',
+          title: rem.title || (isEn ? 'Location Reminder' : 'یادآور مکانی'),
+          latitude: rem.geofence.latitude,
+          longitude: rem.geofence.longitude,
+          radius: rem.geofence.radius || 200,
+          triggerOn: rem.geofence.triggerOn || 'enter',
+          customMessage: rem.description || rem.geofence.locationName || '',
+          playAudio: true,
+          cooldownMs: 10 * 60 * 1000,
+        });
+      }
+    }
+
+    const payload = JSON.stringify({
+      enabled: enabled && items.length > 0,
+      language,
+      items,
+    });
+    bridge.syncGeofences(payload);
+  } catch {
+    // Ignore bridge errors on web
+  }
 }
 
 /**
  * Calculates adaptive polling interval (in milliseconds) based on distance
- * to the nearest active location-based reminder to preserve battery.
+ * to the nearest active geofence boundary (supports radii up to 10km) to preserve battery.
  */
 export function getAdaptivePollingInterval(
   userPos: { latitude: number; longitude: number },
@@ -131,50 +228,54 @@ export function getAdaptivePollingInterval(
   locations: SavedLocation[] = []
 ): number {
   const activeReminderGeofences = reminders.filter(
-    (r) => (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
+    (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
   );
   const activeLocationGeofences = locations.filter(
-    (l) => l.geofence && l.geofence.enabled
+    (l) => !l.deletedAt && l.geofence && l.geofence.enabled
   );
 
   if (activeReminderGeofences.length === 0 && activeLocationGeofences.length === 0) {
     return 60000 * 5; // 5 minutes when no location checkpoints are active
   }
 
-  let minDistance = Infinity;
+  let minBoundaryDistance = Infinity;
   for (const r of activeReminderGeofences) {
     if (!r.geofence) continue;
-    const d = calculateHaversineDistance(
+    const centerDist = calculateHaversineDistance(
       userPos.latitude,
       userPos.longitude,
       r.geofence.latitude,
       r.geofence.longitude
     );
-    if (d < minDistance) {
-      minDistance = d;
+    const radius = r.geofence.radius || 200;
+    const boundaryDist = Math.abs(centerDist - radius);
+    if (boundaryDist < minBoundaryDistance) {
+      minBoundaryDistance = boundaryDist;
     }
   }
 
   for (const l of activeLocationGeofences) {
-    const d = calculateHaversineDistance(
+    const centerDist = calculateHaversineDistance(
       userPos.latitude,
       userPos.longitude,
       l.latitude,
       l.longitude
     );
-    if (d < minDistance) {
-      minDistance = d;
+    const radius = l.geofence?.radius || 200;
+    const boundaryDist = Math.abs(centerDist - radius);
+    if (boundaryDist < minBoundaryDistance) {
+      minBoundaryDistance = boundaryDist;
     }
   }
 
-  if (minDistance < 300) {
-    return 10000; // 10 seconds: Very close (within 300m)
-  } else if (minDistance < 1000) {
-    return 30000; // 30 seconds: Nearby (within 1km)
-  } else if (minDistance < 5000) {
-    return 60000; // 1 minute: Moderate distance (within 5km)
+  if (minBoundaryDistance < 350) {
+    return 10000; // 10 seconds: Very close to geofence boundary (< 350m)
+  } else if (minBoundaryDistance < 1200) {
+    return 25000; // 25 seconds: Nearby boundary (< 1.2km)
+  } else if (minBoundaryDistance < 5000) {
+    return 45000; // 45 seconds: Moderate distance (< 5km)
   } else {
-    return 180000; // 3 minutes: Far away (> 5km)
+    return 120000; // 2 minutes: Far away (> 5km)
   }
 }
 
@@ -189,9 +290,11 @@ export function evaluateGeofences(
 ): Reminder[] {
   const updatedReminders: Reminder[] = [];
   const now = Date.now();
+  let stateChanged = false;
 
   for (const reminder of reminders) {
     if (
+      reminder.deletedAt ||
       (reminder.status !== 'pending' && reminder.status !== 'postponed') ||
       !reminder.geofence ||
       !reminder.geofence.enabled
@@ -218,7 +321,10 @@ export function evaluateGeofences(
     const wasInsideBefore = proximityStateMap.get(reminder.id);
 
     // Save current status for future transitions
-    proximityStateMap.set(reminder.id, isInsideNow);
+    if (wasInsideBefore !== isInsideNow) {
+      proximityStateMap.set(reminder.id, isInsideNow);
+      stateChanged = true;
+    }
 
     let shouldTrigger = false;
     let eventType: 'enter' | 'exit' = 'enter';
@@ -267,6 +373,10 @@ export function evaluateGeofences(
     }
   }
 
+  if (stateChanged) {
+    saveProximityStateToStorage();
+  }
+
   return updatedReminders;
 }
 
@@ -280,9 +390,10 @@ export function evaluateSavedLocationGeofences(
 ): SavedLocation[] {
   const updatedLocations: SavedLocation[] = [];
   const now = Date.now();
+  let stateChanged = false;
 
   for (const location of locations) {
-    if (!location.geofence || !location.geofence.enabled) {
+    if (location.deletedAt || !location.geofence || !location.geofence.enabled) {
       continue;
     }
 
@@ -306,7 +417,10 @@ export function evaluateSavedLocationGeofences(
     const wasInsideBefore = proximityStateMap.get(proximityKey);
 
     // Save current status for future transitions
-    proximityStateMap.set(proximityKey, isInsideNow);
+    if (wasInsideBefore !== isInsideNow) {
+      proximityStateMap.set(proximityKey, isInsideNow);
+      stateChanged = true;
+    }
 
     let shouldTrigger = false;
     let eventType: 'enter' | 'exit' = 'enter';
@@ -352,6 +466,10 @@ export function evaluateSavedLocationGeofences(
     }
   }
 
+  if (stateChanged) {
+    saveProximityStateToStorage();
+  }
+
   return updatedLocations;
 }
 
@@ -374,3 +492,4 @@ export function isLocationInGeofence(
     distance,
   };
 }
+

@@ -243,7 +243,13 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               <div className="bg-stone-900/80 p-1.5 rounded-lg border border-stone-800/80 flex items-center justify-between">
                 <span className="text-stone-400">{isEn ? 'Radius:' : 'شعاع محدوده:'}</span>
                 <span className="font-mono font-bold text-emerald-300">
-                  {isEn ? `${radius}m` : `${toPersianDigits(radius)} متر`}
+                  {radius >= 1000
+                    ? isEn
+                      ? `${Number((radius / 1000).toFixed(2))}km`
+                      : `${toPersianDigits(Number((radius / 1000).toFixed(2)))} کیلومتر`
+                    : isEn
+                    ? `${radius}m`
+                    : `${toPersianDigits(radius)} متر`}
                 </span>
               </div>
               <div className="bg-stone-900/80 p-1.5 rounded-lg border border-stone-800/80 flex items-center justify-between">

@@ -1840,30 +1840,68 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   </div>
 
                   {/* 5. Radius Selector */}
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between mb-1">
                       <label className="text-[11px] font-bold text-stone-300">
-                        {isEn ? 'Trigger Radius:' : 'شعاع محدوده حصار مکانی:'}
+                        {isEn ? 'Trigger Radius:' : 'محدوده شعاع حصار مکانی:'}
                       </label>
-                      <span className="text-xs font-mono font-bold text-indigo-400">
-                        {toPersianDigits(geofenceRadius)} {isEn ? 'meters' : 'متر'}
+                      <span className="text-xs font-mono font-bold text-emerald-400 px-2 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30">
+                        {geofenceRadius >= 1000
+                          ? isEn
+                            ? `${Number((geofenceRadius / 1000).toFixed(2))} km (${geofenceRadius}m)`
+                            : `${toPersianDigits(Number((geofenceRadius / 1000).toFixed(2)))} کیلومتر (${toPersianDigits(geofenceRadius)} متر)`
+                          : isEn
+                          ? `${geofenceRadius} meters`
+                          : `${toPersianDigits(geofenceRadius)} متر`}
                       </span>
                     </div>
-                    <div className="grid grid-cols-5 gap-1.5">
-                      {[50, 100, 200, 500, 1000].map((r) => (
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                      {[50, 100, 200, 500, 1000, 5000].map((r) => (
                         <button
                           key={r}
                           type="button"
                           onClick={() => setGeofenceRadius(r)}
                           className={`py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
                             geofenceRadius === r
-                              ? 'bg-indigo-500 text-white font-black border-indigo-400'
+                              ? 'bg-emerald-500 text-stone-950 font-black border-emerald-400'
                               : 'bg-stone-900 border-stone-800 text-stone-300 hover:border-stone-700'
                           }`}
                         >
-                          {isEn ? `${r}m` : `${toPersianDigits(r)}متر`}
+                          {isEn
+                            ? r >= 1000
+                              ? `${r / 1000}km`
+                              : `${r}m`
+                            : r >= 1000
+                            ? `${toPersianDigits(r / 1000)} کیلومتر`
+                            : `${toPersianDigits(r)} متر`}
                         </button>
                       ))}
+                    </div>
+                    <div className="pt-2 pb-1 px-1 space-y-1.5">
+                      <input
+                        type="range"
+                        min="20"
+                        max="10000"
+                        step="10"
+                        dir="ltr"
+                        value={geofenceRadius}
+                        onChange={(e) => setGeofenceRadius(Number(e.target.value))}
+                        style={{
+                          background: `linear-gradient(to right, #10b981 0%, #10b981 ${Math.min(
+                            100,
+                            Math.max(0, ((geofenceRadius - 20) / (10000 - 20)) * 100)
+                          )}%, rgba(41, 37, 36, 0.9) ${Math.min(
+                            100,
+                            Math.max(0, ((geofenceRadius - 20) / (10000 - 20)) * 100)
+                          )}%, rgba(41, 37, 36, 0.9) 100%)`,
+                        }}
+                        className="geofence-radius-slider cursor-pointer"
+                      />
+                      <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 px-0.5" dir="ltr">
+                        <span>{isEn ? '20m' : '۲۰ متر'}</span>
+                        <span>{isEn ? '5km' : '۵ کیلومتر'}</span>
+                        <span>{isEn ? '10km' : '۱۰ کیلومتر'}</span>
+                      </div>
                     </div>
                   </div>
                 </div>

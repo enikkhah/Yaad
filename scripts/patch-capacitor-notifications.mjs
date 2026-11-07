@@ -2003,7 +2003,7 @@ const legacyPluginLoadV9 = `        isAppInForegroundState = true
         }
     }`;
 
-const patchedPluginLoad = `        // YAAD clean foreground state & WebView configuration
+const legacyPluginLoadV10 = `        // YAAD clean foreground state & WebView configuration
         isAppInForegroundState = true
         configureWebViewForGoogleOAuth()
         purgeStaleOneShotNotifications()
@@ -2072,14 +2072,96 @@ const patchedPluginLoad = `        // YAAD clean foreground state & WebView conf
         }
     }`;
 
+const patchedPluginLoad = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge
+        isAppInForegroundState = true
+        configureWebViewForGoogleOAuth()
+        purgeStaleOneShotNotifications()
+        LegacyNotificationMigrator.run(context, notificationStorage, manager)
+        flushQueuedBackgroundActions()
+        YaadGeofenceService.ensureServiceState(context)
+        activity?.intent?.let { handleOnNewIntent(it) }
+    }
+
+    private fun configureWebViewForGoogleOAuth() {
+        try {
+            activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+            val wv = bridge?.webView
+            if (wv != null) {
+                val ua = wv.settings.userAgentString ?: ""
+                if (ua.contains("; wv") || ua.contains("Version/")) {
+                    wv.settings.userAgentString = ua
+                        .replace("; wv", "")
+                        .replace(Regex("Version/\\\\d+\\\\.\\\\d+\\\\s*"), "")
+                }
+                wv.settings.javaScriptCanOpenWindowsAutomatically = true
+                wv.settings.mediaPlaybackRequiresUserGesture = false
+                try {
+                    wv.removeJavascriptInterface("YaadGeofenceBridge")
+                } catch (e: Exception) {
+                }
+                wv.addJavascriptInterface(object {
+                    @android.webkit.JavascriptInterface
+                    fun syncGeofences(payloadJson: String) {
+                        YaadGeofenceService.updateConfigAndSyncService(context.applicationContext, payloadJson)
+                    }
+                }, "YaadGeofenceBridge")
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun purgeStaleOneShotNotifications() {
+        try {
+            val now = System.currentTimeMillis()
+            for (n in notificationStorage.getSavedNotifications()) {
+                val id = n.id ?: continue
+                val sched = n.schedule ?: continue
+                val atDate = sched.at ?: continue
+                if (!sched.isPerpetual() && atDate.time < now - 60000L) {
+                    notificationStorage.deleteNotification(id.toString())
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun handleOnResume() {
+        super.handleOnResume()
+        isAppInForegroundState = true
+        activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+        flushQueuedBackgroundActions()
+        YaadGeofenceService.ensureServiceState(context)
+    }
+
+    override fun handleOnPause() {
+        super.handleOnPause()
+        isAppInForegroundState = false
+        YaadGeofenceService.ensureServiceState(context)
+    }
+
+    private fun flushQueuedBackgroundActions() {
+        try {
+            val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(BG_ACTION_KEY, null) ?: return
+            prefs.edit().remove(BG_ACTION_KEY).apply()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val itemStr = arr.optString(i, null) ?: continue
+                val itemJson = JSObject(itemStr)
+                notifyListeners("localNotificationActionPerformed", itemJson, true)
+            }
+        } catch (e: Exception) {
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'load configureWebViewForGoogleOAuth, foreground state tracking, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, and handleOnResume flushQueuedBackgroundActions',
+  'load configureWebViewForGoogleOAuth, foreground state tracking, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, handleOnResume flushQueuedBackgroundActions, and YaadGeofenceBridge',
   origPluginLoad,
   patchedPluginLoad,
-  '// YAAD clean foreground state & WebView configuration',
-  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8, legacyPluginLoadV9]
+  '// YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge',
+  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8, legacyPluginLoadV9, legacyPluginLoadV10]
 );
 
 const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
@@ -3962,7 +4044,504 @@ class YaadAlarmPopupActivity : Activity() {
 }
 `;
 
-// 9. Patch plugin AndroidManifest.xml to register YaadAlarmPopupActivity and USE_FULL_SCREEN_INTENT
+// 9. Create YaadGeofenceService.kt for Out-of-App Background Geofence Monitoring
+const geofenceServicePath = path.join(pluginDir, 'YaadGeofenceService.kt');
+const geofenceServiceContent = `package com.capacitorjs.plugins.localnotifications
+
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.media.AudioAttributes
+import android.net.Uri
+import android.os.Build
+import android.os.Bundle
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import org.json.JSONArray
+import org.json.JSONObject
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlin.math.sqrt
+
+class YaadGeofenceService : Service(), LocationListener {
+
+    private var locationManager: LocationManager? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var isTrackingRegistered = false
+
+    private val periodicCheckRunnable = object : Runnable {
+        override fun run() {
+            try {
+                if (!shouldRun(applicationContext)) {
+                    stopSelf()
+                    return
+                }
+                checkLastKnownLocations()
+            } catch (e: Exception) {
+            }
+            mainHandler.postDelayed(this, 25000L)
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!shouldRun(applicationContext) || !hasLocationPermission(applicationContext)) {
+            stopLocationUpdates()
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        promoteToForegroundService()
+        startLocationUpdates()
+        mainHandler.removeCallbacks(periodicCheckRunnable)
+        mainHandler.post(periodicCheckRunnable)
+        return START_STICKY
+    }
+
+    private fun promoteToForegroundService() {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val ch = NotificationChannel(
+                    RADAR_SERVICE_CHANNEL_ID,
+                    "Geofence Radar Service",
+                    NotificationManager.IMPORTANCE_LOW
+                ).apply {
+                    description = "Active location boundary monitoring"
+                    setShowBadge(false)
+                    setSound(null, null)
+                    enableVibration(false)
+                }
+                nm.createNotificationChannel(ch)
+            }
+
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val isEn = prefs.getString(KEY_LANGUAGE, "fa") == "en"
+            val title = if (isEn) "YAAD Geofence Radar Active" else "رادار حصار مکانی یاد فعال است"
+            val text = if (isEn) "Monitoring your saved location boundaries in the background" else "در حال پایش هوشمند محدوده مکان‌های ثبت‌شده در پس‌زمینه"
+
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val contentPi = if (launchIntent != null) {
+                PendingIntent.getActivity(this, 909100, launchIntent, piFlags)
+            } else null
+
+            val smallIconRes = resources.getIdentifier("ic_stat_icon_config_sample", "drawable", packageName)
+                .takeIf { it != 0 } ?: applicationInfo.icon
+
+            val notif = NotificationCompat.Builder(this, RADAR_SERVICE_CHANNEL_ID)
+                .setSmallIcon(smallIconRes)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .apply {
+                    if (contentPi != null) setContentIntent(contentPi)
+                }
+                .build()
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    RADAR_FOREGROUND_NOTIFICATION_ID,
+                    notif,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION
+                )
+            } else {
+                startForeground(RADAR_FOREGROUND_NOTIFICATION_ID, notif)
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun startLocationUpdates() {
+        if (isTrackingRegistered) return
+        val lm = locationManager ?: return
+        if (!hasLocationPermission(this)) return
+        try {
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            )
+            for (provider in providers) {
+                try {
+                    if (lm.isProviderEnabled(provider)) {
+                        lm.requestLocationUpdates(
+                            provider,
+                            12000L,
+                            10f,
+                            this,
+                            Looper.getMainLooper()
+                        )
+                    }
+                } catch (e: Exception) {
+                }
+            }
+            isTrackingRegistered = true
+            checkLastKnownLocations()
+        } catch (e: SecurityException) {
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun stopLocationUpdates() {
+        if (!isTrackingRegistered) return
+        try {
+            locationManager?.removeUpdates(this)
+        } catch (e: Exception) {
+        }
+        isTrackingRegistered = false
+    }
+
+    private fun checkLastKnownLocations() {
+        val lm = locationManager ?: return
+        if (!hasLocationPermission(this)) return
+        try {
+            var bestLocation: Location? = null
+            val providers = listOf(
+                LocationManager.GPS_PROVIDER,
+                LocationManager.NETWORK_PROVIDER,
+                LocationManager.PASSIVE_PROVIDER
+            )
+            for (provider in providers) {
+                try {
+                    val loc = lm.getLastKnownLocation(provider) ?: continue
+                    if (bestLocation == null || loc.time > bestLocation.time) {
+                        bestLocation = loc
+                    }
+                } catch (e: Exception) {
+                }
+            }
+            if (bestLocation != null && System.currentTimeMillis() - bestLocation.time <= 5 * 60 * 1000L) {
+                evaluateLocationAgainstGeofences(bestLocation)
+            }
+        } catch (e: SecurityException) {
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun onLocationChanged(location: Location) {
+        evaluateLocationAgainstGeofences(location)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+    override fun onProviderEnabled(provider: String) {}
+    override fun onProviderDisabled(provider: String) {}
+
+    private fun evaluateLocationAgainstGeofences(location: Location) {
+        try {
+            // When app is actively open in foreground, the WebView handles UI + notification directly
+            if (LocalNotificationsPlugin.isAppInForeground()) {
+                return
+            }
+
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val isEn = prefs.getString(KEY_LANGUAGE, "fa") == "en"
+            val rawItems = prefs.getString(KEY_ITEMS_JSON, "[]") ?: "[]"
+            val arr = JSONArray(rawItems)
+            if (arr.length() == 0) return
+
+            val now = System.currentTimeMillis()
+            val editor = prefs.edit()
+            var prefsModified = false
+
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val id = item.optString("id", "")
+                if (id.isEmpty()) continue
+
+                val title = item.optString("title", "")
+                val targetLat = item.optDouble("latitude", Double.NaN)
+                val targetLon = item.optDouble("longitude", Double.NaN)
+                if (targetLat.isNaN() || targetLon.isNaN()) continue
+
+                val radius = item.optInt("radius", 200).coerceAtLeast(20)
+                val triggerOn = item.optString("triggerOn", "enter")
+                val customMessage = item.optString("customMessage", "")
+                val cooldownMs = item.optLong("cooldownMs", 180000L)
+
+                val distance = calculateHaversineMeters(
+                    location.latitude,
+                    location.longitude,
+                    targetLat,
+                    targetLon
+                )
+                val isInsideNow = distance <= radius
+
+                val insideKey = "inside_\$id"
+                val hasPreviousState = prefs.contains(insideKey)
+                val wasInsideBefore = prefs.getBoolean(insideKey, false)
+
+                if (!hasPreviousState || wasInsideBefore != isInsideNow) {
+                    editor.putBoolean(insideKey, isInsideNow)
+                    prefsModified = true
+                }
+
+                val lastTrigKey = "last_trig_\$id"
+                val lastTriggeredAt = prefs.getLong(lastTrigKey, 0L)
+                if (lastTriggeredAt > 0L && now - lastTriggeredAt < cooldownMs) {
+                    continue
+                }
+
+                var shouldTrigger = false
+                var eventType = "enter"
+
+                when (triggerOn) {
+                    "enter" -> {
+                        if (isInsideNow && (!hasPreviousState || !wasInsideBefore)) {
+                            shouldTrigger = true
+                            eventType = "enter"
+                        }
+                    }
+                    "exit" -> {
+                        if (!isInsideNow && hasPreviousState && wasInsideBefore) {
+                            shouldTrigger = true
+                            eventType = "exit"
+                        }
+                    }
+                    "both" -> {
+                        if (hasPreviousState && isInsideNow != wasInsideBefore) {
+                            shouldTrigger = true
+                            eventType = if (isInsideNow) "enter" else "exit"
+                        } else if (!hasPreviousState && isInsideNow) {
+                            shouldTrigger = true
+                            eventType = "enter"
+                        }
+                    }
+                }
+
+                if (shouldTrigger) {
+                    editor.putLong(lastTrigKey, now)
+                    prefsModified = true
+                    fireOutOfAppGeofenceAlert(id, title, customMessage, eventType, distance, isEn)
+                }
+            }
+
+            if (prefsModified) {
+                editor.apply()
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun fireOutOfAppGeofenceAlert(
+        id: String,
+        title: String,
+        customMessage: String,
+        eventType: String,
+        distance: Int,
+        isEn: Boolean
+    ) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val alertChannelId = "yaad_channel_v6_radar"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                if (nm.getNotificationChannel(alertChannelId) == null) {
+                    val soundResId = resources.getIdentifier("radar", "raw", packageName)
+                    val ch = NotificationChannel(
+                        alertChannelId,
+                        "YAAD Geofence Alerts",
+                        NotificationManager.IMPORTANCE_HIGH
+                    ).apply {
+                        description = "Geofence entry and exit alerts"
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0, 400, 200, 400)
+                        lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                        if (soundResId != 0) {
+                            val soundUri = Uri.parse("android.resource://\$packageName/\$soundResId")
+                            val attrs = AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build()
+                            setSound(soundUri, attrs)
+                        }
+                    }
+                    nm.createNotificationChannel(ch)
+                }
+            }
+
+            val actionLabel = if (eventType == "enter") {
+                if (isEn) "Entered radius of" else "ورود به محدوده"
+            } else {
+                if (isEn) "Exited radius of" else "خروج از محدوده"
+            }
+
+            val notifTitle = if (isEn) {
+                "📍 Geofence Alert: \$title"
+            } else {
+                "📍 اعلام حصار مکانی: \$title"
+            }
+
+            val notifBody = if (customMessage.isNotBlank()) {
+                customMessage
+            } else if (isEn) {
+                "\$actionLabel \$title (Distance: \${distance}m)"
+            } else {
+                "\$actionLabel \$title (فاصله: \${distance} متر)"
+            }
+
+            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val contentPi = if (launchIntent != null) {
+                PendingIntent.getActivity(this, id.hashCode(), launchIntent, piFlags)
+            } else null
+
+            val smallIconRes = resources.getIdentifier("ic_stat_icon_config_sample", "drawable", packageName)
+                .takeIf { it != 0 } ?: applicationInfo.icon
+
+            val builder = NotificationCompat.Builder(this, alertChannelId)
+                .setSmallIcon(smallIconRes)
+                .setContentTitle(notifTitle)
+                .setContentText(notifBody)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(notifBody))
+                .setPriority(NotificationCompat.PRIORITY_MAX)
+                .setCategory(NotificationCompat.CATEGORY_ALARM)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .setAutoCancel(true)
+                .setVibrate(longArrayOf(0, 400, 200, 400))
+
+            if (contentPi != null) {
+                builder.setContentIntent(contentPi)
+            }
+
+            val notificationId = (id.hashCode() and 0x7fffffff).coerceAtLeast(10000)
+            NotificationManagerCompat.from(this).notify(notificationId, builder.build())
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun calculateHaversineMeters(
+        lat1: Double,
+        lon1: Double,
+        lat2: Double,
+        lon2: Double
+    ): Int {
+        val r = 6371000.0
+        val phi1 = Math.toRadians(lat1)
+        val phi2 = Math.toRadians(lat2)
+        val dPhi = Math.toRadians(lat2 - lat1)
+        val dLambda = Math.toRadians(lon2 - lon1)
+
+        val a = sin(dPhi / 2) * sin(dPhi / 2) +
+            cos(phi1) * cos(phi2) * sin(dLambda / 2) * sin(dLambda / 2)
+        val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+        return (r * c).roundToInt()
+    }
+
+    override fun onDestroy() {
+        mainHandler.removeCallbacks(periodicCheckRunnable)
+        stopLocationUpdates()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    companion object {
+        private const val PREFS_NAME = "YAAD_GEOFENCE_PREFS"
+        private const val KEY_ENABLED = "geofence_enabled"
+        private const val KEY_LANGUAGE = "geofence_lang"
+        private const val KEY_ITEMS_JSON = "geofence_items_json"
+        private const val RADAR_SERVICE_CHANNEL_ID = "yaad_geofence_radar_service_v1"
+        private const val RADAR_FOREGROUND_NOTIFICATION_ID = 889911
+
+        fun hasLocationPermission(context: Context): Boolean {
+            val fine = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            val coarse = ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+            return fine || coarse
+        }
+
+        fun shouldRun(context: Context): Boolean {
+            return try {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val enabled = prefs.getBoolean(KEY_ENABLED, false)
+                val raw = prefs.getString(KEY_ITEMS_JSON, "[]") ?: "[]"
+                enabled && JSONArray(raw).length() > 0
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        fun updateConfigAndSyncService(context: Context, payloadJson: String) {
+            try {
+                val obj = JSONObject(payloadJson)
+                val enabled = obj.optBoolean("enabled", false)
+                val lang = obj.optString("language", "fa")
+                val itemsArr = obj.optJSONArray("items") ?: JSONArray()
+
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.edit()
+                    .putBoolean(KEY_ENABLED, enabled && itemsArr.length() > 0)
+                    .putString(KEY_LANGUAGE, lang)
+                    .putString(KEY_ITEMS_JSON, itemsArr.toString())
+                    .apply()
+
+                ensureServiceState(context)
+            } catch (e: Exception) {
+            }
+        }
+
+        fun ensureServiceState(context: Context) {
+            try {
+                val appCtx = context.applicationContext
+                val serviceIntent = Intent(appCtx, YaadGeofenceService::class.java)
+                if (shouldRun(appCtx) && hasLocationPermission(appCtx)) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        ContextCompat.startForegroundService(appCtx, serviceIntent)
+                    } else {
+                        appCtx.startService(serviceIntent)
+                    }
+                } else {
+                    appCtx.stopService(serviceIntent)
+                }
+            } catch (e: Exception) {
+            }
+        }
+    }
+}
+`;
+
+// 10. Patch plugin AndroidManifest.xml to register YaadAlarmPopupActivity, YaadGeofenceService, and required permissions
 const manifestPath = path.join(pluginRoot, 'android/src/main/AndroidManifest.xml');
 if (fs.existsSync(manifestPath)) {
   let manifestContent = fs.readFileSync(manifestPath, 'utf8');
@@ -3982,10 +4561,27 @@ if (fs.existsSync(manifestPath)) {
             android:configChanges="orientation|screenSize|keyboardHidden|uiMode" />`
     );
   }
+  if (!manifestContent.includes('YaadGeofenceService')) {
+    manifestContent = manifestContent.replace(
+      '<application>',
+      `<application>
+        <service
+            android:name="com.capacitorjs.plugins.localnotifications.YaadGeofenceService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="location" />`
+    );
+  }
   if (!manifestContent.includes('android.permission.USE_FULL_SCREEN_INTENT')) {
     manifestContent = manifestContent.replace(
       '</manifest>',
       `    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>\n</manifest>`
+    );
+  }
+  if (!manifestContent.includes('android.permission.FOREGROUND_SERVICE')) {
+    manifestContent = manifestContent.replace(
+      '</manifest>',
+      `    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>\n</manifest>`
     );
   }
   fs.writeFileSync(manifestPath, manifestContent, 'utf8');
@@ -3999,8 +4595,9 @@ fs.writeFileSync(channelManagerPath, channelManagerContent, 'utf8');
 fs.writeFileSync(path.join(pluginDir, 'NotificationDismissReceiver.kt'), dismissReceiverContent, 'utf8');
 fs.writeFileSync(pluginPath, pluginContent, 'utf8');
 fs.writeFileSync(popupActivityPath, popupActivityContent, 'utf8');
+fs.writeFileSync(geofenceServicePath, geofenceServiceContent, 'utf8');
 
 console.log(
-  `[patch-capacitor-notifications] Successfully patched and verified @capacitor/local-notifications@${pluginVersion} (with YaadAlarmPopupActivity).`
+  `[patch-capacitor-notifications] Successfully patched and verified @capacitor/local-notifications@${pluginVersion} (with YaadAlarmPopupActivity & YaadGeofenceService).`
 );
 

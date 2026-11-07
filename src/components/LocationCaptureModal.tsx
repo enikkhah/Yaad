@@ -693,20 +693,26 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               {enableGeofence && (
                 <div className="mt-4 pt-4 border-t border-stone-800/80 space-y-4 animate-in fade-in duration-200">
                   {/* 1. تعیین محدوده شعاع (Radius) */}
-                  <div className="space-y-2">
+                  <div className="space-y-2.5">
                     <div className="flex items-center justify-between text-xs font-bold">
                       <span className="text-stone-300 flex items-center gap-1.5">
                         <Sliders className="w-3.5 h-3.5 text-emerald-400" />
                         <span>{isEn ? 'Geofence Radius Boundary:' : 'محدوده شعاع حصار مکانی:'}</span>
                       </span>
-                      <span className="text-emerald-400 font-black px-2 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 font-mono">
-                        {isEn ? `${geofenceRadius} meters` : `${toPersianDigits(geofenceRadius)} متر`}
+                      <span className="text-emerald-400 font-black px-2.5 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 font-mono">
+                        {geofenceRadius >= 1000
+                          ? isEn
+                            ? `${Number((geofenceRadius / 1000).toFixed(2))} km (${geofenceRadius}m)`
+                            : `${toPersianDigits(Number((geofenceRadius / 1000).toFixed(2)))} کیلومتر (${toPersianDigits(geofenceRadius)} متر)`
+                          : isEn
+                          ? `${geofenceRadius} meters`
+                          : `${toPersianDigits(geofenceRadius)} متر`}
                       </span>
                     </div>
 
-                    {/* Quick Preset Buttons */}
-                    <div className="grid grid-cols-5 gap-1.5">
-                      {[50, 100, 200, 500, 1000].map((rVal) => (
+                    {/* Quick Preset Buttons (including 5 km) */}
+                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
+                      {[50, 100, 200, 500, 1000, 5000].map((rVal) => (
                         <button
                           key={rVal}
                           type="button"
@@ -719,22 +725,37 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                         >
                           {isEn 
                             ? (rVal >= 1000 ? `${rVal/1000}km` : `${rVal}m`) 
-                            : (rVal >= 1000 ? `${toPersianDigits(rVal/1000)} کیلومتر` : `${toPersianDigits(rVal)} م`)}
+                            : (rVal >= 1000 ? `${toPersianDigits(rVal/1000)} کیلومتر` : `${toPersianDigits(rVal)} متر`)}
                         </button>
                       ))}
                     </div>
 
-                    {/* Interactive Slider */}
-                    <div className="flex items-center gap-3 pt-1">
+                    {/* Interactive Distance Slider (20m up to 10km) */}
+                    <div className="pt-2 pb-1 px-1 space-y-1.5">
                       <input
                         type="range"
                         min="20"
-                        max="2000"
+                        max="10000"
                         step="10"
+                        dir="ltr"
                         value={geofenceRadius}
                         onChange={(e) => setGeofenceRadius(Number(e.target.value))}
-                        className="w-full accent-emerald-500 bg-stone-800 h-2 rounded-lg cursor-pointer"
+                        style={{
+                          background: `linear-gradient(to right, #10b981 0%, #10b981 ${Math.min(
+                            100,
+                            Math.max(0, ((geofenceRadius - 20) / (10000 - 20)) * 100)
+                          )}%, rgba(41, 37, 36, 0.9) ${Math.min(
+                            100,
+                            Math.max(0, ((geofenceRadius - 20) / (10000 - 20)) * 100)
+                          )}%, rgba(41, 37, 36, 0.9) 100%)`,
+                        }}
+                        className="geofence-radius-slider cursor-pointer"
                       />
+                      <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 px-0.5" dir="ltr">
+                        <span>{isEn ? '20m' : '۲۰ متر'}</span>
+                        <span>{isEn ? '5km' : '۵ کیلومتر'}</span>
+                        <span>{isEn ? '10km' : '۱۰ کیلومتر'}</span>
+                      </div>
                     </div>
                   </div>
 
