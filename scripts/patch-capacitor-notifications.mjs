@@ -2072,7 +2072,7 @@ const legacyPluginLoadV10 = `        // YAAD clean foreground state & WebView co
         }
     }`;
 
-const patchedPluginLoad = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge
+const legacyPluginLoadV11 = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge
         isAppInForegroundState = true
         configureWebViewForGoogleOAuth()
         purgeStaleOneShotNotifications()
@@ -2154,14 +2154,91 @@ const patchedPluginLoad = `        // YAAD clean foreground state, WebView confi
         }
     }`;
 
+const patchedPluginLoad = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v2
+        isAppInForegroundState = true
+        configureWebViewForGoogleOAuth()
+        purgeStaleOneShotNotifications()
+        LegacyNotificationMigrator.run(context, notificationStorage, manager)
+        flushQueuedBackgroundActions()
+        YaadGeofenceService.ensureServiceState(context)
+        activity?.intent?.let { handleOnNewIntent(it) }
+    }
+
+    private fun configureWebViewForGoogleOAuth() {
+        try {
+            activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+            val wv = bridge?.webView
+            if (wv != null) {
+                val ua = wv.settings.userAgentString ?: ""
+                if (ua.contains("; wv") || ua.contains("Version/")) {
+                    wv.settings.userAgentString = ua
+                        .replace("; wv", "")
+                        .replace(Regex("Version/\\\\d+\\\\.\\\\d+\\\\s*"), "")
+                }
+                wv.settings.javaScriptCanOpenWindowsAutomatically = true
+                wv.settings.mediaPlaybackRequiresUserGesture = false
+                try {
+                    wv.removeJavascriptInterface("YaadGeofenceBridge")
+                } catch (e: Exception) {
+                }
+                wv.addJavascriptInterface(YaadGeofenceService.JsBridge(context.applicationContext), "YaadGeofenceBridge")
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun purgeStaleOneShotNotifications() {
+        try {
+            val now = System.currentTimeMillis()
+            for (n in notificationStorage.getSavedNotifications()) {
+                val id = n.id ?: continue
+                val sched = n.schedule ?: continue
+                val atDate = sched.at ?: continue
+                if (!sched.isPerpetual() && atDate.time < now - 60000L) {
+                    notificationStorage.deleteNotification(id.toString())
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun handleOnResume() {
+        super.handleOnResume()
+        isAppInForegroundState = true
+        activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+        flushQueuedBackgroundActions()
+        YaadGeofenceService.ensureServiceState(context)
+    }
+
+    override fun handleOnPause() {
+        super.handleOnPause()
+        isAppInForegroundState = false
+        YaadGeofenceService.ensureServiceState(context)
+    }
+
+    private fun flushQueuedBackgroundActions() {
+        try {
+            val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(BG_ACTION_KEY, null) ?: return
+            prefs.edit().remove(BG_ACTION_KEY).apply()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val itemStr = arr.optString(i, null) ?: continue
+                val itemJson = JSObject(itemStr)
+                notifyListeners("localNotificationActionPerformed", itemJson, true)
+            }
+        } catch (e: Exception) {
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
   'load configureWebViewForGoogleOAuth, foreground state tracking, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, handleOnResume flushQueuedBackgroundActions, and YaadGeofenceBridge',
   origPluginLoad,
   patchedPluginLoad,
-  '// YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge',
-  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8, legacyPluginLoadV9, legacyPluginLoadV10]
+  '// YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v2',
+  [legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8, legacyPluginLoadV9, legacyPluginLoadV10, legacyPluginLoadV11]
 );
 
 const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
@@ -4260,7 +4337,7 @@ class YaadGeofenceService : Service(), LocationListener {
     private fun evaluateLocationAgainstGeofences(location: Location) {
         try {
             // When app is actively open in foreground, the WebView handles UI + notification directly
-            if (LocalNotificationsPlugin.isAppInForeground()) {
+            if (LocalNotificationsPlugin.isAppInForeground(this)) {
                 return
             }
 
@@ -4536,6 +4613,13 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             } catch (e: Exception) {
             }
+        }
+    }
+
+    class JsBridge(private val appContext: Context) {
+        @android.webkit.JavascriptInterface
+        fun syncGeofences(payloadJson: String) {
+            updateConfigAndSyncService(appContext, payloadJson)
         }
     }
 }
