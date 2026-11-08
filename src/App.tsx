@@ -3,8 +3,6 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Reminder, Category, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
 import { getJalaliComponents, getGregorianComponents, formatJalaliFull, toPersianDigits, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
 import {
-  speakReminderText,
-  playPhoneAlarmSound,
   setGlobalVolume,
   setGlobalVibration,
   stopAlarmRinging,
@@ -17,6 +15,7 @@ import {
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { ReminderForm } from './components/ReminderForm';
 import { AlarmModal } from './components/AlarmModal';
+import { GeofenceAlertModal, GeofenceAlertData } from './components/GeofenceAlertModal';
 import { StatisticsModal } from './components/StatisticsModal';
 import { SettingsModal } from './components/SettingsModal';
 import { IdeaCaptureModal } from './components/IdeaCaptureModal';
@@ -52,7 +51,6 @@ import {
   syncNotificationSoundAndVolume,
   setupNotificationListeners,
   getNotificationId,
-  fireImmediateLocalNotification,
   dismissDeliveredNotifications,
   triggerOutOfAppPersistentNotification,
   clearOutOfAppPersistentNotification
@@ -644,6 +642,8 @@ export default function App() {
   const [isCreateChoiceOpen, setIsCreateChoiceOpen] = useState(false);
   const [locationFilter, setLocationFilter] = useState<'all' | 'checkpoints'>('all');
   const [activeAlarmReminder, setActiveAlarmReminder] = useState<Reminder | null>(null);
+  const [activeGeofenceAlert, setActiveGeofenceAlert] = useState<GeofenceAlertData | null>(null);
+  const [focusGeofenceRadius, setFocusGeofenceRadius] = useState<boolean>(false);
   const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null);
   const [isAppInstalled, setIsAppInstalled] = useState<boolean>(false);
@@ -725,17 +725,17 @@ export default function App() {
   );
 
   const closeTopModal = useCallback((): boolean => {
-    // If an alarm is actively ringing on screen, block accidental Back/Escape dismissal until user clicks Done/Snooze/Dismiss!
-    if (activeAlarmReminder) {
+    // If an alarm or geofence alert is actively ringing on screen, block accidental Back/Escape dismissal until user clicks action button
+    if (activeAlarmReminder || activeGeofenceAlert) {
       return true;
     }
     if (viewingImageUrl) { setViewingImageUrl(null); return true; }
     if (isCreateChoiceOpen) { setIsCreateChoiceOpen(false); return true; }
     if (isInstallModalOpen) { setIsInstallModalOpen(false); return true; }
-    if (isLocationModalOpen) { setIsLocationModalOpen(false); setEditingLocation(null); return true; }
+    if (isLocationModalOpen) { setIsLocationModalOpen(false); setEditingLocation(null); setFocusGeofenceRadius(false); return true; }
     if (isIdeaModalOpen) { setIsIdeaModalOpen(false); setEditingIdea(null); return true; }
     if (isOccasionModalOpen) { setIsOccasionModalOpen(false); setEditingOccasion(null); return true; }
-    if (isFormOpen) { setIsFormOpen(false); setEditingReminder(null); return true; }
+    if (isFormOpen) { setIsFormOpen(false); setEditingReminder(null); setFocusGeofenceRadius(false); return true; }
     if (isStatsOpen) { setIsStatsOpen(false); return true; }
     if (isSettingsOpen) { setIsSettingsOpen(false); return true; }
     if (tabHistoryRef.current.length > 0) {
@@ -751,7 +751,7 @@ export default function App() {
     viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
     isLocationModalOpen, isIdeaModalOpen,
     isOccasionModalOpen, isFormOpen, isSettingsOpen, isStatsOpen,
-    activeAlarmReminder, activeMainTab
+    activeAlarmReminder, activeGeofenceAlert, activeMainTab
   ]);
 
   const closeTopModalRef = useRef(closeTopModal);
@@ -1142,11 +1142,51 @@ export default function App() {
         setAppVisible(true);
         setIsCreateChoiceOpen(false);
         setActiveAlarmReminder(null);
+        setActiveGeofenceAlert(null);
         setActiveMainTab('reminders');
         setEditingReminder(found);
         setIsFormOpen(true);
       }
     };
+
+    const handleEditGeofenceRadiusEvent = (e: Event) => {
+      const customEv = e as CustomEvent<{ geofenceItemId?: string }>;
+      const rawId = customEv.detail?.geofenceItemId || '';
+      if (!rawId) return;
+
+      openedFromNotificationEditRef.current = true;
+      if (typeof window !== 'undefined') {
+        (window as any).__yaadOpenedFromNotification = true;
+      }
+      stopSubmarineSonarLoop();
+      stopAlarmRinging();
+      setShowSplash(false);
+      setAppVisible(true);
+      setIsCreateChoiceOpen(false);
+      setActiveAlarmReminder(null);
+      setActiveGeofenceAlert(null);
+
+      if (rawId.startsWith('rem_')) {
+        const remId = rawId.replace(/^rem_/, '');
+        const foundRem = remindersRef.current?.find((r) => r.id === remId);
+        if (foundRem) {
+          setActiveMainTab('reminders');
+          setEditingReminder(foundRem);
+          setFocusGeofenceRadius(true);
+          setIsFormOpen(true);
+        }
+      } else {
+        const locId = rawId.replace(/^loc_/, '');
+        const foundLoc = savedLocationsRef.current?.find((l) => l.id === locId);
+        if (foundLoc) {
+          setActiveMainTab('locations');
+          setEditingLocation(foundLoc);
+          setFocusGeofenceRadius(true);
+          setIsLocationModalOpen(true);
+        }
+      }
+    };
+    window.addEventListener('yaad:edit-geofence-radius', handleEditGeofenceRadiusEvent);
 
     const openTimelineFromNotificationTap = (targetId?: string) => {
       openedFromNotificationEditRef.current = true;
@@ -1279,6 +1319,7 @@ export default function App() {
     return () => {
       unsubscribe();
       navigator.serviceWorker?.removeEventListener('message', handleSwMessage);
+      window.removeEventListener('yaad:edit-geofence-radius', handleEditGeofenceRadiusEvent);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
     };
@@ -1560,55 +1601,19 @@ export default function App() {
             .filter(Boolean)
             .join(' — ');
 
-          const actionText = isSub10mArrival
-            ? (isEn ? 'Target Reached (< 10m):' : 'رسیدن به نقطه مقصد (زیر ۱۰ متر):')
-            : event.triggerType === 'enter'
-            ? (isEn ? 'Entered radius of' : 'ورود به محدوده')
-            : (isEn ? 'Exited radius of' : 'خروج از محدوده');
-
-          const titleText = isSub10mArrival
-            ? (isEn ? `🎯 Arrived (<10m): ${displayLocTitle}` : `🎯 مقصد ثبت‌شده (<۱۰ متر): ${displayLocTitle}`)
-            : (isEn ? `📍 Geofence Radar: ${displayLocTitle}` : `📍 رادار حصار مکانی: ${displayLocTitle}`);
-
-          const distLabel = isEn
-            ? `Distance: ${Math.round(event.distance)}m`
-            : `فاصله: ${toPersianDigits(Math.round(event.distance))} متر`;
-
-          const bodyText = locDetails
-            ? `${locDetails} (${distLabel})`
-            : `${actionText} ${displayLocTitle} (${distLabel})`;
-
-          // Show distinct Geofence Radar card in-app as well
-          setActiveAlarmReminder({
-            id: `geofence_loc_${event.location.id}`,
-            title: titleText,
-            description: bodyText,
-            category: 'other',
-            priority: 'high',
-            dueTimestamp: Date.now(),
-            status: 'pending',
-            createdAt: Date.now(),
-            postponeCount: 0,
-            ringTune: 'radar',
-            voiceReadAloud: false,
-            geofence: {
-              enabled: true,
-              latitude: event.location.latitude,
-              longitude: event.location.longitude,
-              radius: event.location.geofence?.radius || 200,
-              triggerOn: event.location.geofence?.triggerOn || 'enter',
-              locationName: displayLocTitle,
-            },
+          // Show dedicated in-app Geofence Alert (completely separate from Reminder AlarmModal)
+          setActiveGeofenceAlert({
+            id: `geo_loc_${event.location.id}_${Date.now()}`,
+            targetType: 'location',
+            targetId: event.location.id,
+            locationTitle: displayLocTitle,
+            description: locDetails || undefined,
+            triggerType: event.triggerType,
+            initialDistance: Math.round(event.distance),
+            radius: event.location.geofence?.radius || 200,
+            latitude: event.location.latitude,
+            longitude: event.location.longitude,
           });
-
-          // Native push notification
-          fireImmediateLocalNotification(titleText, bodyText, {
-            locationId: event.location.id,
-            geofence: true,
-            sub10m: isSub10mArrival,
-          });
-          // In-app alert banner
-          showSyncNotification(`${titleText} — ${bodyText}`);
 
           // Submarine Sonar Audio (distance-adaptive rhythm) vs Distinct <10m Arrival Audio Effect
           if (event.location.geofence?.playAudio !== false) {
@@ -1616,9 +1621,6 @@ export default function App() {
               playGeofenceArrivalUnder10mSound();
             } else {
               startSubmarineSonarLoop(event.distance, event.location.geofence?.radius || 200);
-            }
-            if (!Capacitor.isNativePlatform()) {
-              speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
             }
           }
 
@@ -1645,21 +1647,20 @@ export default function App() {
       if (hasActiveReminderGeofences) {
         evaluateGeofences(userPos, reminders, (event: GeofenceTriggerEvent) => {
           const isSub10mArrival = event.triggerType === 'arrived_under_10m';
-          setActiveAlarmReminder(event.reminder);
+          const locName = event.reminder.geofence?.locationName || event.reminder.title;
 
-          const actionText = isSub10mArrival
-            ? 'رسیدن به نقطه مقصد (زیر ۱۰ متر)'
-            : event.triggerType === 'enter'
-            ? 'رسیدن به محدوده'
-            : 'خروج از محدوده';
-
-          fireImmediateLocalNotification(
-            isSub10mArrival
-              ? `🎯 مقصد (<۱۰ متر): ${event.reminder.title}`
-              : `📍 رادار مکان: ${event.reminder.title}`,
-            `${actionText} ${event.reminder.geofence?.locationName || 'مکان ثبت‌شده'} (فاصله: ${toPersianDigits(event.distance)} متر)`,
-            { reminderId: event.reminder.id, geofence: true, sub10m: isSub10mArrival }
-          );
+          setActiveGeofenceAlert({
+            id: `geo_rem_${event.reminder.id}_${Date.now()}`,
+            targetType: 'reminder',
+            targetId: event.reminder.id,
+            locationTitle: locName,
+            description: event.reminder.description || event.reminder.title,
+            triggerType: event.triggerType,
+            initialDistance: Math.round(event.distance),
+            radius: event.reminder.geofence?.radius || 200,
+            latitude: event.reminder.geofence?.latitude || userPos.latitude,
+            longitude: event.reminder.geofence?.longitude || userPos.longitude,
+          });
 
           if (isSub10mArrival) {
             playGeofenceArrivalUnder10mSound();
@@ -1814,22 +1815,33 @@ export default function App() {
 
   const handleSimulateLocationCheckpointTrigger = (location: SavedLocation, type: 'enter' | 'exit') => {
     const displayLocTitle = formatSavedLocationTitle(location.title, settings.language);
-    const actionText = type === 'enter' 
-      ? (isEn ? 'Entered radius of' : 'ورود به محدوده') 
-      : (isEn ? 'Exited radius of' : 'خروج از محدوده');
-    const titleText = isEn 
-      ? `📍 Geofence Alert: ${displayLocTitle}` 
-      : `📍 اعلام حصار مکانی: ${displayLocTitle}`;
-    const bodyText = location.geofence?.customMessage 
-      ? location.geofence.customMessage 
-      : `${actionText} ${displayLocTitle} (${isEn ? 'Simulation Test' : 'تست شبیه‌سازی'})`;
+    const locDetails = [location.description, location.geofence?.customMessage]
+      .filter(Boolean)
+      .join(' — ');
+    const simDist = currentUserPosition
+      ? Math.round(
+          Math.hypot(
+            (currentUserPosition.latitude - location.latitude) * 111320,
+            (currentUserPosition.longitude - location.longitude) * 111320
+          )
+        )
+      : Math.round((location.geofence?.radius || 100) * 0.6);
 
-    fireImmediateLocalNotification(titleText, bodyText, { locationId: location.id, geofence: true });
-    showSyncNotification(`${titleText} — ${bodyText}`);
+    setActiveGeofenceAlert({
+      id: `sim_geo_${location.id}_${Date.now()}`,
+      targetType: 'location',
+      targetId: location.id,
+      locationTitle: displayLocTitle,
+      description: locDetails || undefined,
+      triggerType: type,
+      initialDistance: simDist,
+      radius: location.geofence?.radius || 100,
+      latitude: location.latitude,
+      longitude: location.longitude,
+    });
 
     if (location.geofence?.playAudio !== false) {
-      playPhoneAlarmSound('radar');
-      speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
+      startSubmarineSonarLoop(simDist, location.geofence?.radius || 100);
     }
   };
 
@@ -3992,12 +4004,14 @@ export default function App() {
         onClose={() => {
           setIsFormOpen(false);
           setEditingReminder(null);
+          setFocusGeofenceRadius(false);
         }}
         onSave={handleSaveReminder}
         initialData={editingReminder}
         googleToken={googleToken}
         savedLocations={savedLocations}
         language={settings.language}
+        focusGeofenceRadius={focusGeofenceRadius}
       />
 
       {/* IDEA CAPTURE MODAL */}
@@ -4021,10 +4035,12 @@ export default function App() {
         onClose={() => {
           setIsLocationModalOpen(false);
           setEditingLocation(null);
+          setFocusGeofenceRadius(false);
         }}
         onSave={handleSaveLocation}
         editingLocation={editingLocation}
         language={settings.language}
+        focusGeofenceRadius={focusGeofenceRadius}
       />
 
       {/* OCCASION CREATION & EDIT MODAL (مناسبت جدید) */}
@@ -4112,6 +4128,36 @@ export default function App() {
           setActiveAlarmReminder(null);
           setEditingReminder(rem);
           setIsFormOpen(true);
+        }}
+      />
+
+      {/* DEDICATED IN-APP GEOFENCE ALERT MODAL */}
+      <GeofenceAlertModal
+        alert={activeGeofenceAlert}
+        userPosition={currentUserPosition}
+        language={settings.language}
+        onGotIt={() => {
+          setActiveGeofenceAlert(null);
+        }}
+        onEditRadius={(alertData) => {
+          setActiveGeofenceAlert(null);
+          if (alertData.targetType === 'location') {
+            const foundLoc = savedLocations.find((l) => l.id === alertData.targetId);
+            if (foundLoc) {
+              setActiveMainTab('locations');
+              setEditingLocation(foundLoc);
+              setFocusGeofenceRadius(true);
+              setIsLocationModalOpen(true);
+            }
+          } else {
+            const foundRem = reminders.find((r) => r.id === alertData.targetId);
+            if (foundRem) {
+              setActiveMainTab('reminders');
+              setEditingReminder(foundRem);
+              setFocusGeofenceRadius(true);
+              setIsFormOpen(true);
+            }
+          }
         }}
       />
 

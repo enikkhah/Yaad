@@ -34,6 +34,7 @@ interface LocationCaptureModalProps {
   editingLocation?: SavedLocation | null;
   googleMapsApiKey?: string;
   language?: AppLanguage;
+  focusGeofenceRadius?: boolean;
 }
 
 export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
@@ -44,6 +45,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   editingLocation,
   googleMapsApiKey,
   language = 'fa',
+  focusGeofenceRadius = false,
 }) => {
   const isEn = language === 'en';
   const [title, setTitle] = useState('');
@@ -74,6 +76,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [geofenceCustomMessage, setGeofenceCustomMessage] = useState<string>('');
   const [geofencePlayAudio, setGeofencePlayAudio] = useState<boolean>(true);
   const [showCollapsibleMediaAndGeofence, setShowCollapsibleMediaAndGeofence] = useState(false);
+  const geofenceRadiusSectionRef = useRef<HTMLDivElement>(null);
 
   // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
@@ -232,7 +235,18 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
           setGeofenceCustomMessage('');
           setGeofencePlayAudio(true);
         }
-        setShowCollapsibleMediaAndGeofence(!!(editingLocation.photoUrl || editingLocation.geofence?.enabled));
+        setShowCollapsibleMediaAndGeofence(
+          Boolean(editingLocation.photoUrl || editingLocation.geofence?.enabled || focusGeofenceRadius)
+        );
+        if (focusGeofenceRadius) {
+          setEnableGeofence(true);
+          setTimeout(() => {
+            geofenceRadiusSectionRef.current?.scrollIntoView({
+              behavior: 'smooth',
+              block: 'center',
+            });
+          }, 220);
+        }
       } else {
         // همیشه هنگام ثبت مکان جدید، مقادیر قبلی را پاک کن و موقعیت فعلی را از GPS دریافت کن
         titleRef.current = '';
@@ -255,7 +269,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
       setValidationError(null);
       setAlsoCreateReminder(false);
     }
-  }, [isOpen, editingLocation]);
+  }, [isOpen, editingLocation, focusGeofenceRadius]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -693,7 +707,12 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               {enableGeofence && (
                 <div className="mt-4 pt-4 border-t border-stone-800/80 space-y-4 animate-in fade-in duration-200">
                   {/* 1. تعیین محدوده شعاع (Radius) */}
-                  <div className="space-y-2.5">
+                  <div
+                    ref={geofenceRadiusSectionRef}
+                    className={`space-y-2.5 transition-all rounded-xl ${
+                      focusGeofenceRadius ? 'p-2.5 ring-2 ring-emerald-400/80 bg-emerald-500/10' : ''
+                    }`}
+                  >
                     <div className="flex items-center justify-between text-xs font-bold">
                       <span className="text-stone-300 flex items-center gap-1.5">
                         <Sliders className="w-3.5 h-3.5 text-emerald-400" />

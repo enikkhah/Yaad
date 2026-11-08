@@ -1246,11 +1246,39 @@ export function setupNotificationListeners(
     LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
       const actionId = action.actionId;
       const notifId = action.notification?.id;
-      const reminderId = action.notification?.extra?.reminderId;
+      const extraObj = action.notification?.extra || {};
+      const reminderId = extraObj.reminderId;
+      const isGeofenceNotif = Boolean(extraObj.geofence);
+      const geofenceItemId: string = extraObj.geofenceItemId || extraObj.locationId || '';
       const snoozedUntil =
         typeof (action as any).snoozedUntil === 'number' ? (action as any).snoozedUntil : undefined;
 
-      // Handle notifications without reminderId (e.g. Geofence alerts or 60s test notification)
+      // Dedicated handling for Geofence notifications (Status Bar & Lockscreen Edit / Got It)
+      if (isGeofenceNotif) {
+        try {
+          stopAlarmRinging();
+          const bridge = (window as any).YaadGeofenceBridge;
+          if (bridge && typeof bridge.stopGeofenceAlertAudio === 'function') {
+            bridge.stopGeofenceAlertAudio();
+          }
+        } catch {}
+        if (typeof notifId === 'number') {
+          LocalNotifications.cancel({ notifications: [{ id: notifId }] }).catch(() => {});
+          LocalNotifications.removeDeliveredNotifications({
+            notifications: [{ id: notifId, title: '', body: '' }],
+          }).catch(() => {});
+        }
+        if (actionId === 'edit' && geofenceItemId) {
+          window.dispatchEvent(
+            new CustomEvent('yaad:edit-geofence-radius', {
+              detail: { geofenceItemId },
+            })
+          );
+        }
+        return;
+      }
+
+      // Handle notifications without reminderId (e.g. 60s test notification)
       if (!reminderId) {
         if (
           actionId === 'done' ||

@@ -3457,6 +3457,7 @@ class YaadAlarmPopupActivity : Activity() {
     private var isGeofencePopup: Boolean = false
     private var isSub10mArrival: Boolean = false
     private var sonarRingAnimator: ObjectAnimator? = null
+    private var sonarOuterRingAnimator: ObjectAnimator? = null
     private var gpsPinPulseAnimator: ObjectAnimator? = null
 
     data class ThemePalette(
@@ -3540,7 +3541,7 @@ class YaadAlarmPopupActivity : Activity() {
                 WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
                 WindowManager.LayoutParams.FLAG_DIM_BEHIND
         )
-        window.setDimAmount(0.55f)
+        window.setDimAmount(0.65f)
         setFinishOnTouchOutside(false)
         volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
 
@@ -3592,8 +3593,8 @@ class YaadAlarmPopupActivity : Activity() {
                 secondaryBtnBorder = Color.parseColor("#059669"),
                 secondaryBtnText = Color.parseColor("#D1FAE5"),
                 editBtnBg = Color.parseColor("#052E28"),
-                editBtnBorder = Color.parseColor("#06B6D4"),
-                editBtnText = Color.parseColor("#67E8F9")
+                editBtnBorder = Color.parseColor("#14B8A6"),
+                editBtnText = Color.parseColor("#5EEAD4")
             )
             "geofence-sub10m" -> ThemePalette(
                 cardBg = Color.parseColor("#052B22"),
@@ -3770,11 +3771,12 @@ class YaadAlarmPopupActivity : Activity() {
     }
 
     private fun formatDistanceLabel(distanceMeters: Int, sub10m: Boolean): String {
-        val distText = if (isPersian) toPersianDigits(distanceMeters.toString()) else distanceMeters.toString()
+        val safeDist = distanceMeters.coerceAtLeast(0)
+        val distText = if (isPersian) toPersianDigits(safeDist.toString()) else safeDist.toString()
         return if (sub10m) {
-            if (isPersian) "🎯 در نقطه مقصد (فاصله: \$distText متر • زیر ۱۰ متر)" else "🎯 At Target (\$distText m • < 10m)"
+            if (isPersian) "\$distText متر  •  🎯 در نقطه مقصد" else "\$distText m  •  🎯 At Target"
         } else {
-            if (isPersian) "📡 فاصله فعلی: \$distText متر • ریتم سونار تطبیقی" else "📡 Distance: \$distText m • Adaptive Sonar"
+            if (isPersian) "\$distText متر" else "\$distText m"
         }
     }
 
@@ -3807,7 +3809,15 @@ class YaadAlarmPopupActivity : Activity() {
         isPersian = lang != "en"
         isGeofencePopup = extraObj?.optBoolean("geofence", false) == true
         isSub10mArrival = extraObj?.optBoolean("sub10m", false) == true
-        val initialDistance = extraObj?.optInt("distance", -1) ?: -1
+        val initialDistance = extraObj?.optInt("distance", 0) ?: 0
+        val radiusMeters = extraObj?.optInt("radius", 200) ?: 200
+
+        // If launched via Status Bar Notification "✎ ویرایش" ("Edit") action button,
+        // immediately stop sonar audio, cancel the notification, open the app, and navigate to Geofence Radius section.
+        if (data.getBooleanExtra("yaad_direct_geofence_edit", false)) {
+            performEditAction()
+            return
+        }
 
         val rawTitle = requestJson?.getString("title") ?: (if (isPersian) "یادآور" else "Reminder")
         val cleanTitle = rawTitle
@@ -3817,8 +3827,11 @@ class YaadAlarmPopupActivity : Activity() {
             .replaceFirst("📍 اعلام حصار مکانی: ", "")
             .replaceFirst("📍 رادار حصار مکانی: ", "")
             .replaceFirst("🎯 مقصد ثبت‌شده: ", "")
+            .replaceFirst("📍 مکان: ", "")
+            .replaceFirst("🎯 مقصد: ", "")
             .replaceFirst("🎯 ", "")
             .replaceFirst("📍 ", "")
+            .substringBefore("  |  ")
             .trim()
         val bodyText = requestJson?.getString("body") ?: ""
 
@@ -3828,7 +3841,11 @@ class YaadAlarmPopupActivity : Activity() {
             themeName
         }
         val palette = resolvePalette(effectiveTheme)
-        buildMinimalCardUI(palette, cleanTitle, bodyText, initialDistance)
+        if (isGeofencePopup) {
+            buildFullScreenGeofenceUI(palette, cleanTitle, bodyText, initialDistance, radiusMeters)
+        } else {
+            buildMinimalCardUI(palette, cleanTitle, bodyText, initialDistance)
+        }
         startOneMinuteCountdown()
     }
 
@@ -3836,10 +3853,387 @@ class YaadAlarmPopupActivity : Activity() {
         try {
             sonarRingAnimator?.cancel()
             sonarRingAnimator = null
+            sonarOuterRingAnimator?.cancel()
+            sonarOuterRingAnimator = null
             gpsPinPulseAnimator?.cancel()
             gpsPinPulseAnimator = null
         } catch (e: Exception) {
         }
+    }
+
+    /**
+     * Dedicated Full-Screen Geofence Alert for Screen-Off / Lock-Screen state:
+     * 1. Top: Clear & prominent Location Title
+     * 2. Center: Large pulsing YAAD App Logo with expanding submarine sonar rings & pulsing GPS pin
+     * 3. Below Logo: Distinct, readable Live Distance box
+     * 4. Bottom: Dual action buttons ("✓ متوجه شدم" and "✎ ویرایش")
+     */
+    private fun buildFullScreenGeofenceUI(
+        palette: ThemePalette,
+        titleStr: String,
+        bodyStr: String,
+        initialDistance: Int,
+        radiusMeters: Int
+    ) {
+        stopPulseAnimators()
+
+        val root = FrameLayout(this)
+        root.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        root.setBackgroundColor(Color.parseColor("#E6021411"))
+        root.setPadding(dp(16f), dp(28f), dp(16f), dp(20f))
+
+        val cardContainer = LinearLayout(this)
+        cardContainer.orientation = LinearLayout.VERTICAL
+        cardContainer.layoutDirection = if (isPersian) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+        cardContainer.background = makeRoundedDrawable(palette.cardBg, palette.cardBorder, 2.4f, 28f)
+        cardContainer.elevation = dp(22f).toFloat()
+        cardContainer.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+
+        // 1. Top 60s countdown progress bar
+        val track = FrameLayout(this)
+        val trackParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(5f)
+        )
+        trackParams.setMargins(dp(22f), dp(16f), dp(22f), 0)
+        track.layoutParams = trackParams
+        track.background = makeRoundedDrawable(Color.argb(55, 16, 185, 129), Color.TRANSPARENT, 0f, 3f)
+
+        val fill = View(this)
+        fill.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        fill.background = makeRoundedDrawable(palette.accentColor, Color.TRANSPARENT, 0f, 3f)
+        track.addView(fill)
+        progressTrackView = track
+        progressFillView = fill
+        cardContainer.addView(track)
+
+        val content = LinearLayout(this)
+        content.orientation = LinearLayout.VERTICAL
+        content.gravity = Gravity.CENTER_HORIZONTAL
+        content.setPadding(dp(20f), dp(16f), dp(20f), dp(20f))
+        content.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+
+        // 2. TOP SECTION: Radar status pill + Prominent Location Title at the top of the alert
+        val statusBadge = TextView(this)
+        statusBadge.text = if (isSub10mArrival) {
+            if (isPersian) "🎯 حضور در نقطه دقیق مکان ثبت‌شده (زیر ۱۰ متر)" else "🎯 Exact Saved Location Reached (< 10m)"
+        } else {
+            if (isPersian) "📡 رادار حصار مکانی هوشمند یاد" else "📡 YAAD Submarine Geofence Radar"
+        }
+        statusBadge.gravity = Gravity.CENTER
+        statusBadge.setTextColor(palette.accentColor)
+        statusBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        statusBadge.setTypeface(Typeface.DEFAULT_BOLD)
+        statusBadge.setPadding(dp(14f), dp(6f), dp(14f), dp(6f))
+        statusBadge.background = makeRoundedDrawable(
+            Color.parseColor("#063B32"),
+            Color.argb(120, 16, 185, 129),
+            1.2f,
+            50f
+        )
+        content.addView(statusBadge)
+
+        val topTitleBox = LinearLayout(this)
+        topTitleBox.orientation = LinearLayout.VERTICAL
+        topTitleBox.gravity = Gravity.CENTER
+        topTitleBox.setPadding(dp(16f), dp(12f), dp(16f), dp(12f))
+        topTitleBox.background = makeRoundedDrawable(
+            Color.parseColor("#063830"),
+            palette.accentColor,
+            1.6f,
+            20f
+        )
+        val topTitleBoxParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        topTitleBoxParams.topMargin = dp(12f)
+        topTitleBox.layoutParams = topTitleBoxParams
+
+        val locationHeaderLabel = TextView(this)
+        locationHeaderLabel.text = if (isPersian) "📍 عنوان مکان" else "📍 LOCATION TITLE"
+        locationHeaderLabel.gravity = Gravity.CENTER
+        locationHeaderLabel.setTextColor(palette.mutedColor)
+        locationHeaderLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+        locationHeaderLabel.setTypeface(Typeface.DEFAULT_BOLD)
+        topTitleBox.addView(locationHeaderLabel)
+
+        val titleTv = TextView(this)
+        titleTv.text = titleStr
+        titleTv.gravity = Gravity.CENTER
+        titleTv.setTextColor(palette.titleColor)
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f)
+        titleTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
+        titleTv.maxLines = 2
+        titleTv.ellipsize = TextUtils.TruncateAt.END
+        val titleTvParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        titleTvParams.topMargin = dp(4f)
+        titleTv.layoutParams = titleTvParams
+        topTitleBox.addView(titleTv)
+
+        if (bodyStr.isNotEmpty()) {
+            val cleanBody = bodyStr.substringAfter("\\n").trim().ifEmpty { bodyStr }
+            val bodyTv = TextView(this)
+            bodyTv.text = cleanBody
+            bodyTv.gravity = Gravity.CENTER
+            bodyTv.setTextColor(palette.bodyColor)
+            bodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            bodyTv.maxLines = 2
+            bodyTv.ellipsize = TextUtils.TruncateAt.END
+            val bodyParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            bodyParams.topMargin = dp(6f)
+            bodyTv.layoutParams = bodyParams
+            topTitleBox.addView(bodyTv)
+        }
+        content.addView(topTitleBox)
+
+        // 3. CENTER SECTION: Large Pulsing App Logo in the center + Live Distance Box right below Logo
+        val centerArea = LinearLayout(this)
+        centerArea.orientation = LinearLayout.VERTICAL
+        centerArea.gravity = Gravity.CENTER
+        centerArea.clipChildren = false
+        centerArea.clipToPadding = false
+        val centerParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        )
+        centerArea.layoutParams = centerParams
+
+        val emblemSize = dp(144f)
+        val emblemFrame = FrameLayout(this)
+        emblemFrame.layoutParams = LinearLayout.LayoutParams(emblemSize, emblemSize)
+        emblemFrame.clipChildren = false
+        emblemFrame.clipToPadding = false
+
+        // Outer Expanding Submarine Sonar Ring
+        val outerSonarRing = View(this)
+        val outerRingSize = dp(122f)
+        outerSonarRing.layoutParams = FrameLayout.LayoutParams(outerRingSize, outerRingSize, Gravity.CENTER)
+        outerSonarRing.background = makeOvalDrawable(
+            Color.argb(24, 16, 185, 129),
+            palette.accentColor,
+            1.5f
+        )
+        emblemFrame.addView(outerSonarRing)
+
+        // Inner Expanding Submarine Sonar Ring
+        val sonarRing = View(this)
+        val ringSize = dp(102f)
+        sonarRing.layoutParams = FrameLayout.LayoutParams(ringSize, ringSize, Gravity.CENTER)
+        sonarRing.background = makeOvalDrawable(
+            Color.argb(48, 16, 185, 129),
+            palette.accentColor,
+            2.0f
+        )
+        emblemFrame.addView(sonarRing)
+
+        // Large App Logo Box in the center
+        val logoBoxSize = dp(88f)
+        val logoBox = FrameLayout(this)
+        logoBox.layoutParams = FrameLayout.LayoutParams(logoBoxSize, logoBoxSize, Gravity.CENTER)
+        logoBox.background = makeRoundedDrawable(
+            Color.parseColor("#063B32"),
+            palette.accentColor,
+            2.2f,
+            24f
+        )
+        logoBox.elevation = dp(8f).toFloat()
+        try {
+            val appIconView = android.widget.ImageView(this)
+            val appDrawable = packageManager.getApplicationIcon(applicationInfo)
+            appIconView.setImageDrawable(appDrawable)
+            appIconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            val innerIconSize = dp(64f)
+            appIconView.layoutParams = FrameLayout.LayoutParams(innerIconSize, innerIconSize, Gravity.CENTER)
+            logoBox.addView(appIconView)
+        } catch (e: Exception) {
+        }
+        emblemFrame.addView(logoBox)
+
+        // Pulsing GPS Pin Badge on top-right corner of the large App Logo
+        val pinBadgeSize = dp(34f)
+        val pinBadge = GpsPinBadgeView(
+            this,
+            if (isSub10mArrival) Color.parseColor("#059669") else Color.parseColor("#10B981")
+        )
+        val pinParams = FrameLayout.LayoutParams(
+            pinBadgeSize,
+            pinBadgeSize,
+            Gravity.TOP or Gravity.RIGHT
+        )
+        pinParams.topMargin = dp(14f)
+        pinParams.rightMargin = dp(14f)
+        pinBadge.layoutParams = pinParams
+        pinBadge.elevation = dp(10f).toFloat()
+        emblemFrame.addView(pinBadge)
+
+        sonarOuterRingAnimator = ObjectAnimator.ofPropertyValuesHolder(
+            outerSonarRing,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 0.80f, 1.48f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.80f, 1.48f),
+            PropertyValuesHolder.ofFloat(View.ALPHA, 0.70f, 0.0f)
+        ).apply {
+            duration = 1900L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
+
+        sonarRingAnimator = ObjectAnimator.ofPropertyValuesHolder(
+            sonarRing,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 0.88f, 1.38f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.88f, 1.38f),
+            PropertyValuesHolder.ofFloat(View.ALPHA, 0.90f, 0.0f)
+        ).apply {
+            duration = 1350L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
+
+        gpsPinPulseAnimator = ObjectAnimator.ofPropertyValuesHolder(
+            pinBadge,
+            PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f, 1.32f, 0.94f, 1.22f, 1.0f),
+            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f, 1.32f, 0.94f, 1.22f, 1.0f)
+        ).apply {
+            duration = 1150L
+            repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.RESTART
+            interpolator = AccelerateDecelerateInterpolator()
+            start()
+        }
+
+        centerArea.addView(emblemFrame)
+
+        // Dedicated Large Live Distance Box directly below the pulsing Logo
+        val distanceCard = LinearLayout(this)
+        distanceCard.orientation = LinearLayout.VERTICAL
+        distanceCard.gravity = Gravity.CENTER
+        distanceCard.setPadding(dp(18f), dp(14f), dp(18f), dp(14f))
+        distanceCard.background = makeRoundedDrawable(
+            Color.parseColor("#021815"),
+            palette.accentColor,
+            2.0f,
+            22f
+        )
+        val distanceCardParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        distanceCardParams.topMargin = dp(18f)
+        distanceCard.layoutParams = distanceCardParams
+
+        val distHeaderTv = TextView(this)
+        distHeaderTv.text = if (isPersian) "📏 مسافت زنده تا مکان مورد نظر" else "📏 LIVE DISTANCE TO LOCATION"
+        distHeaderTv.gravity = Gravity.CENTER
+        distHeaderTv.setTextColor(palette.mutedColor)
+        distHeaderTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        distHeaderTv.setTypeface(Typeface.DEFAULT_BOLD)
+        distanceCard.addView(distHeaderTv)
+
+        val liveDistTv = TextView(this)
+        liveDistTv.text = formatDistanceLabel(initialDistance.coerceAtLeast(0), isSub10mArrival)
+        liveDistTv.gravity = Gravity.CENTER
+        liveDistTv.setTextColor(Color.parseColor("#ECFDF5"))
+        liveDistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
+        liveDistTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
+        val liveDistParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        liveDistParams.topMargin = dp(4f)
+        liveDistTv.layoutParams = liveDistParams
+        distanceBadgeTextView = liveDistTv
+        distanceCard.addView(liveDistTv)
+
+        val radiusFormatted = if (isPersian) toPersianDigits(radiusMeters.toString()) else radiusMeters.toString()
+        val radiusSubTv = TextView(this)
+        radiusSubTv.text = if (isPersian) {
+            "شعاع حصار مکانی: \$radiusFormatted متر  •  ریتم سونار تطبیقی"
+        } else {
+            "Geofence Radius: \$radiusFormatted m  •  Adaptive Sonar"
+        }
+        radiusSubTv.gravity = Gravity.CENTER
+        radiusSubTv.setTextColor(palette.bodyColor)
+        radiusSubTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+        val radiusSubParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        radiusSubParams.topMargin = dp(4f)
+        radiusSubTv.layoutParams = radiusSubParams
+        distanceCard.addView(radiusSubTv)
+
+        centerArea.addView(distanceCard)
+        content.addView(centerArea)
+
+        // 4. BOTTOM SECTION: Dual Action Buttons ("✓ متوجه شدم" and "✎ ویرایش")
+        val actionsRow = LinearLayout(this)
+        actionsRow.orientation = LinearLayout.HORIZONTAL
+        actionsRow.gravity = Gravity.CENTER
+        val actionsParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        actionsParams.topMargin = dp(12f)
+        actionsRow.layoutParams = actionsParams
+
+        val gotItBtn = buildActionButton(
+            text = if (isPersian) "✓ متوجه شدم" else "✓ Got It",
+            bgColor = palette.doneBtnBg,
+            borderColor = Color.TRANSPARENT,
+            textColor = palette.doneBtnText,
+            strokeDp = 0f
+        ) {
+            performBackgroundAction("done")
+        }
+        gotItBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
+        gotItBtn.setPadding(dp(12f), dp(14f), dp(12f), dp(14f))
+
+        val editBtn = buildActionButton(
+            text = if (isPersian) "✎ ویرایش" else "✎ Edit",
+            bgColor = palette.editBtnBg,
+            borderColor = palette.editBtnBorder,
+            textColor = palette.editBtnText,
+            strokeDp = 1.5f
+        ) {
+            performEditAction()
+        }
+        editBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
+        editBtn.setPadding(dp(12f), dp(14f), dp(12f), dp(14f))
+
+        val btnMargin = dp(6f)
+        (gotItBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+        (editBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+
+        actionsRow.addView(gotItBtn)
+        actionsRow.addView(editBtn)
+        content.addView(actionsRow)
+
+        cardContainer.addView(content)
+        root.addView(cardContainer)
+        setContentView(root)
     }
 
     private fun buildMinimalCardUI(palette: ThemePalette, titleStr: String, bodyStr: String, initialDistance: Int) {
@@ -3855,7 +4249,7 @@ class YaadAlarmPopupActivity : Activity() {
         val cardContainer = LinearLayout(this)
         cardContainer.orientation = LinearLayout.VERTICAL
         cardContainer.layoutDirection = if (isPersian) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
-        cardContainer.background = makeRoundedDrawable(palette.cardBg, palette.cardBorder, if (isGeofencePopup) 2.2f else 1.8f, 24f)
+        cardContainer.background = makeRoundedDrawable(palette.cardBg, palette.cardBorder, 1.8f, 24f)
         cardContainer.elevation = dp(18f).toFloat()
 
         val cardParams = FrameLayout.LayoutParams(
@@ -3892,123 +4286,31 @@ class YaadAlarmPopupActivity : Activity() {
         content.orientation = LinearLayout.VERTICAL
         content.setPadding(dp(18f), dp(14f), dp(18f), dp(18f))
 
-        // Header row: Official App Icon (or Radar Pulsing GPS Logo Emblem for Geofence) + Brand label + close button
+        // Header row: Official App Icon + Brand label + close button
         val headerRow = LinearLayout(this)
         headerRow.orientation = LinearLayout.HORIZONTAL
         headerRow.gravity = Gravity.CENTER_VERTICAL
 
-        if (isGeofencePopup) {
-            // Distinct Geofence Radar Emblem: App Logo + Expanding Sonar Ring + Pulsing GPS Pin Symbol
-            val emblemSize = dp(50f)
-            val emblemFrame = FrameLayout(this)
-            val emblemParams = LinearLayout.LayoutParams(emblemSize, emblemSize)
-            if (isPersian) {
-                emblemParams.leftMargin = dp(10f)
+        try {
+            val appIconView = android.widget.ImageView(this)
+            val notifIconResId = resources.getIdentifier("ic_stat_notification", "drawable", packageName)
+            if (notifIconResId != 0) {
+                appIconView.setImageResource(notifIconResId)
             } else {
-                emblemParams.rightMargin = dp(10f)
-            }
-            emblemFrame.layoutParams = emblemParams
-            emblemFrame.clipChildren = false
-            emblemFrame.clipToPadding = false
-
-            // Expanding Sonar Wave Ring behind App Logo
-            val sonarRing = View(this)
-            val ringSize = dp(40f)
-            val ringParams = FrameLayout.LayoutParams(ringSize, ringSize, Gravity.CENTER)
-            sonarRing.layoutParams = ringParams
-            sonarRing.background = makeOvalDrawable(
-                Color.argb(35, 16, 185, 129),
-                palette.accentColor,
-                1.5f
-            )
-            emblemFrame.addView(sonarRing)
-
-            // App Logo Container
-            val logoBoxSize = dp(38f)
-            val logoBox = FrameLayout(this)
-            logoBox.layoutParams = FrameLayout.LayoutParams(logoBoxSize, logoBoxSize, Gravity.CENTER)
-            logoBox.background = makeRoundedDrawable(
-                Color.parseColor("#063B32"),
-                palette.accentColor,
-                1.5f,
-                12f
-            )
-            try {
-                val appIconView = android.widget.ImageView(this)
                 val appDrawable = packageManager.getApplicationIcon(applicationInfo)
                 appIconView.setImageDrawable(appDrawable)
-                appIconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-                val innerIconSize = dp(28f)
-                appIconView.layoutParams = FrameLayout.LayoutParams(innerIconSize, innerIconSize, Gravity.CENTER)
-                logoBox.addView(appIconView)
-            } catch (e: Exception) {
             }
-            emblemFrame.addView(logoBox)
-
-            // Pulsing GPS Pin Badge on top-right corner of the App Logo
-            val pinBadgeSize = dp(20f)
-            val pinBadge = GpsPinBadgeView(
-                this,
-                if (isSub10mArrival) Color.parseColor("#059669") else Color.parseColor("#10B981")
-            )
-            val pinParams = FrameLayout.LayoutParams(
-                pinBadgeSize,
-                pinBadgeSize,
-                Gravity.TOP or Gravity.RIGHT
-            )
-            pinBadge.layoutParams = pinParams
-            pinBadge.elevation = dp(4f).toFloat()
-            emblemFrame.addView(pinBadge)
-
-            // Start continuous animations for Sonar Ring and Pulsing GPS Pin
-            sonarRingAnimator = ObjectAnimator.ofPropertyValuesHolder(
-                sonarRing,
-                PropertyValuesHolder.ofFloat(View.SCALE_X, 0.92f, 1.38f),
-                PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.92f, 1.38f),
-                PropertyValuesHolder.ofFloat(View.ALPHA, 0.85f, 0.0f)
-            ).apply {
-                duration = 1400L
-                repeatCount = ValueAnimator.INFINITE
-                repeatMode = ValueAnimator.RESTART
-                interpolator = AccelerateDecelerateInterpolator()
-                start()
+            appIconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            val iconSize = dp(24f)
+            val iconParams = LinearLayout.LayoutParams(iconSize, iconSize)
+            if (isPersian) {
+                iconParams.leftMargin = dp(8f)
+            } else {
+                iconParams.rightMargin = dp(8f)
             }
-
-            gpsPinPulseAnimator = ObjectAnimator.ofPropertyValuesHolder(
-                pinBadge,
-                PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f, 1.35f, 0.94f, 1.24f, 1.0f),
-                PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f, 1.35f, 0.94f, 1.24f, 1.0f)
-            ).apply {
-                duration = 1150L
-                repeatCount = ValueAnimator.INFINITE
-                repeatMode = ValueAnimator.RESTART
-                interpolator = AccelerateDecelerateInterpolator()
-                start()
-            }
-
-            headerRow.addView(emblemFrame)
-        } else {
-            try {
-                val appIconView = android.widget.ImageView(this)
-                val notifIconResId = resources.getIdentifier("ic_stat_notification", "drawable", packageName)
-                if (notifIconResId != 0) {
-                    appIconView.setImageResource(notifIconResId)
-                } else {
-                    val appDrawable = packageManager.getApplicationIcon(applicationInfo)
-                    appIconView.setImageDrawable(appDrawable)
-                }
-                appIconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-                val iconSize = dp(24f)
-                val iconParams = LinearLayout.LayoutParams(iconSize, iconSize)
-                if (isPersian) {
-                    iconParams.leftMargin = dp(8f)
-                } else {
-                    iconParams.rightMargin = dp(8f)
-                }
-                appIconView.layoutParams = iconParams
-                headerRow.addView(appIconView)
-            } catch (e: Exception) {
-            }
+            appIconView.layoutParams = iconParams
+            headerRow.addView(appIconView)
+        } catch (e: Exception) {
         }
 
         val brandColumn = LinearLayout(this)
@@ -4017,36 +4319,12 @@ class YaadAlarmPopupActivity : Activity() {
         brandColumn.layoutParams = brandColParams
 
         val brandTv = TextView(this)
-        brandTv.text = if (isGeofencePopup) {
-            if (isSub10mArrival) {
-                if (isPersian) "🎯 حضور در مکان ثبت‌شده (زیر ۱۰ متر)" else "🎯 Saved Location Reached (< 10m)"
-            } else {
-                if (isPersian) "رادار حصار مکانی یاد" else "YAAD Geofence Radar"
-            }
-        } else {
-            if (isPersian) "یادآور هوشمند یاد" else "YAAD Reminder"
-        }
+        brandTv.text = if (isPersian) "یادآور هوشمند یاد" else "YAAD Reminder"
         brandTv.setTextColor(palette.accentColor)
-        brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, if (isGeofencePopup) 13f else 12f)
+        brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
         brandTv.setTypeface(Typeface.DEFAULT_BOLD)
         brandColumn.addView(brandTv)
-
-        if (isGeofencePopup && initialDistance >= 0) {
-            val distTv = TextView(this)
-            distTv.text = formatDistanceLabel(initialDistance, isSub10mArrival)
-            distTv.setTextColor(palette.mutedColor)
-            distTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            val distParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-            distParams.topMargin = dp(2f)
-            distTv.layoutParams = distParams
-            distanceBadgeTextView = distTv
-            brandColumn.addView(distTv)
-        } else {
-            distanceBadgeTextView = null
-        }
+        distanceBadgeTextView = null
 
         headerRow.addView(brandColumn)
 
@@ -4087,7 +4365,7 @@ class YaadAlarmPopupActivity : Activity() {
         }
         content.addView(titleTv)
 
-        // Body / Saved Location Content
+        // Body / Saved Content
         if (bodyStr.isNotEmpty()) {
             val bodyTv = TextView(this)
             bodyTv.text = bodyStr
@@ -4108,7 +4386,7 @@ class YaadAlarmPopupActivity : Activity() {
             content.addView(bodyTv)
         }
 
-        // Action Buttons Row
+        // Standard Reminder Action Buttons Row: 1. Done (انجام شد), 2. Snooze (تعویق), 3. Edit (ویرایش)
         val actionsRow = LinearLayout(this)
         actionsRow.orientation = LinearLayout.HORIZONTAL
         actionsRow.gravity = Gravity.CENTER
@@ -4119,86 +4397,44 @@ class YaadAlarmPopupActivity : Activity() {
         actionsParams.topMargin = dp(16f)
         actionsRow.layoutParams = actionsParams
 
-        if (isGeofencePopup) {
-            val gotItBtn = buildActionButton(
-                text = if (isPersian) "✓ متوجه شدم" else "✓ Got It",
-                bgColor = palette.doneBtnBg,
-                borderColor = Color.TRANSPARENT,
-                textColor = palette.doneBtnText,
-                strokeDp = 0f
-            ) {
-                performBackgroundAction("done")
-            }
-
-            val muteSonarBtn = buildActionButton(
-                text = if (isPersian) "🔇 قطع صدای رادار" else "🔇 Mute Sonar",
-                bgColor = palette.secondaryBtnBg,
-                borderColor = palette.secondaryBtnBorder,
-                textColor = palette.secondaryBtnText,
-                strokeDp = 1.2f
-            ) {
-                performBackgroundAction("mute_after_1m")
-            }
-
-            val openAppBtn = buildActionButton(
-                text = if (isPersian) "📍 باز کردن اپ" else "📍 Open App",
-                bgColor = palette.editBtnBg,
-                borderColor = palette.editBtnBorder,
-                textColor = palette.editBtnText,
-                strokeDp = 1.2f
-            ) {
-                performTapOpenTimelineAction()
-            }
-
-            val btnMargin = dp(4f)
-            (gotItBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
-            (muteSonarBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
-            (openAppBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
-
-            actionsRow.addView(gotItBtn)
-            actionsRow.addView(muteSonarBtn)
-            actionsRow.addView(openAppBtn)
-        } else {
-            // Standard Reminder Buttons: 1. Done (انجام شد), 2. Snooze (تعویق), 3. Edit (ویرایش)
-            val doneBtn = buildActionButton(
-                text = if (isPersian) "✓ انجام شد" else "✓ Done",
-                bgColor = palette.doneBtnBg,
-                borderColor = Color.TRANSPARENT,
-                textColor = palette.doneBtnText,
-                strokeDp = 0f
-            ) {
-                performBackgroundAction("done")
-            }
-
-            val snoozeBtn = buildActionButton(
-                text = if (isPersian) "⏱ تعویق ۱۵ دقیقه" else "⏱ Snooze 15m",
-                bgColor = palette.secondaryBtnBg,
-                borderColor = palette.secondaryBtnBorder,
-                textColor = palette.secondaryBtnText,
-                strokeDp = 1.2f
-            ) {
-                performBackgroundAction("snooze")
-            }
-
-            val editBtn = buildActionButton(
-                text = if (isPersian) "✎ ویرایش" else "✎ Edit",
-                bgColor = palette.editBtnBg,
-                borderColor = palette.editBtnBorder,
-                textColor = palette.editBtnText,
-                strokeDp = 1.2f
-            ) {
-                performEditAction()
-            }
-
-            val btnMargin = dp(4f)
-            (doneBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
-            (snoozeBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
-            (editBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
-
-            actionsRow.addView(doneBtn)
-            actionsRow.addView(snoozeBtn)
-            actionsRow.addView(editBtn)
+        val doneBtn = buildActionButton(
+            text = if (isPersian) "✓ انجام شد" else "✓ Done",
+            bgColor = palette.doneBtnBg,
+            borderColor = Color.TRANSPARENT,
+            textColor = palette.doneBtnText,
+            strokeDp = 0f
+        ) {
+            performBackgroundAction("done")
         }
+
+        val snoozeBtn = buildActionButton(
+            text = if (isPersian) "⏱ تعویق ۱۵ دقیقه" else "⏱ Snooze 15m",
+            bgColor = palette.secondaryBtnBg,
+            borderColor = palette.secondaryBtnBorder,
+            textColor = palette.secondaryBtnText,
+            strokeDp = 1.2f
+        ) {
+            performBackgroundAction("snooze")
+        }
+
+        val editBtn = buildActionButton(
+            text = if (isPersian) "✎ ویرایش" else "✎ Edit",
+            bgColor = palette.editBtnBg,
+            borderColor = palette.editBtnBorder,
+            textColor = palette.editBtnText,
+            strokeDp = 1.2f
+        ) {
+            performEditAction()
+        }
+
+        val btnMargin = dp(4f)
+        (doneBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+        (snoozeBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+        (editBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+
+        actionsRow.addView(doneBtn)
+        actionsRow.addView(snoozeBtn)
+        actionsRow.addView(editBtn)
         content.addView(actionsRow)
 
         brandColumn.setOnClickListener {
@@ -4471,6 +4707,7 @@ const geofenceServicePath = path.join(pluginDir, 'YaadGeofenceService.kt');
 const geofenceServiceContent = `package com.capacitorjs.plugins.localnotifications
 
 import android.Manifest
+import android.app.KeyguardManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -4639,8 +4876,8 @@ class YaadGeofenceService : Service(), LocationListener {
                     if (lm.isProviderEnabled(provider)) {
                         lm.requestLocationUpdates(
                             provider,
-                            3500L,
-                            2f,
+                            3000L,
+                            1.5f,
                             this,
                             Looper.getMainLooper()
                         )
@@ -4702,6 +4939,36 @@ class YaadGeofenceService : Service(), LocationListener {
     override fun onProviderEnabled(provider: String) {}
     override fun onProviderDisabled(provider: String) {}
 
+    private fun isScreenOffOrLocked(): Boolean {
+        return try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+            val isInteractive = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT_WATCH) {
+                pm?.isInteractive ?: true
+            } else {
+                @Suppress("DEPRECATION")
+                pm?.isScreenOn ?: true
+            }
+            val isLocked = km?.isKeyguardLocked ?: false
+            !isInteractive || isLocked
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun toPersianDigits(input: String): String {
+        val persian = charArrayOf('۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹')
+        val sb = StringBuilder(input.length)
+        for (ch in input) {
+            if (ch in '0'..'9') {
+                sb.append(persian[ch - '0'])
+            } else {
+                sb.append(ch)
+            }
+        }
+        return sb.toString()
+    }
+
     private fun evaluateLocationAgainstGeofences(location: Location) {
         try {
             // When app is actively open in foreground, the WebView handles UI + notification directly
@@ -4722,6 +4989,7 @@ class YaadGeofenceService : Service(), LocationListener {
             var nearestDistance = Int.MAX_VALUE
             var nearestRadius = 200
             var bestRatio = Double.MAX_VALUE
+            var activeItemDistance: Int? = null
 
             for (i in 0 until arr.length()) {
                 val item = arr.optJSONObject(i) ?: continue
@@ -4745,6 +5013,10 @@ class YaadGeofenceService : Service(), LocationListener {
                     targetLat,
                     targetLon
                 )
+
+                if (id == activeGeofenceItemId) {
+                    activeItemDistance = distance
+                }
 
                 val ratio = distance.toDouble() / radius.toDouble()
                 if (ratio < bestRatio) {
@@ -4844,16 +5116,104 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             }
 
-            // Dynamically modulate live submarine sonar rhythm & lock-screen popup distance badge
-            // as the user gets closer to or farther from the target location!
-            if (nearestDistance != Int.MAX_VALUE) {
-                updateLiveSonarDistance(nearestDistance, nearestRadius)
-                YaadAlarmPopupActivity.updateLiveGeofenceDistance(nearestDistance, nearestDistance <= 10)
+            // Dynamically modulate live submarine sonar rhythm, full-screen lockscreen distance box,
+            // AND the live distance in the Status Bar Notification as GPS coordinates update!
+            val effectiveLiveDist = activeItemDistance ?: nearestDistance
+            if (effectiveLiveDist != Int.MAX_VALUE) {
+                updateLiveSonarDistance(effectiveLiveDist, nearestRadius)
+                YaadAlarmPopupActivity.updateLiveGeofenceDistance(effectiveLiveDist, effectiveLiveDist <= 10)
+                updateActiveStatusBarNotificationDistance(effectiveLiveDist)
             }
 
             if (prefsModified) {
                 editor.apply()
             }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun buildStatusBarTitleAndBody(
+        title: String,
+        description: String,
+        customMessage: String,
+        eventType: String,
+        distance: Int,
+        radius: Int,
+        isEn: Boolean
+    ): Pair<String, String> {
+        val isSub10m = eventType == "arrived_under_10m"
+        val distText = if (isEn) distance.toString() else toPersianDigits(distance.toString())
+        val radText = if (isEn) radius.toString() else toPersianDigits(radius.toString())
+
+        val notifTitle = if (isSub10m) {
+            if (isEn) "🎯 \$title  |  📏 Live: \${distText}m" else "🎯 مکان: \$title  |  📏 مسافت زنده: \$distText متر"
+        } else {
+            if (isEn) "📍 \$title  |  📏 Live: \${distText}m" else "📍 مکان: \$title  |  📏 مسافت زنده: \$distText متر"
+        }
+
+        val savedContentDetails = listOf(description.trim(), customMessage.trim())
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .joinToString(" — ")
+
+        val distanceLine = if (isEn) {
+            "📏 Live Distance: \${distText}m (Boundary Radius: \${radText}m)"
+        } else {
+            "📏 مسافت زنده تا «\$title»: \$distText متر (شعاع حصار: \$radText متر)"
+        }
+
+        val statusLine = if (isSub10m) {
+            if (savedContentDetails.isNotEmpty()) {
+                if (isEn) "🎯 \$savedContentDetails (Within 10m of target)" else "🎯 \$savedContentDetails (حضور در فاصله زیر ۱۰ متری مقصد)"
+            } else {
+                if (isEn) "🎯 You have reached the exact saved location «\$title»" else "🎯 شما در نقطه دقیق مکان ثبت‌شده «\$title» قرار دارید"
+            }
+        } else {
+            val actionLabel = if (eventType == "enter") {
+                if (isEn) "Entered geofence boundary" else "ورود به محدوده حصار مکانی"
+            } else {
+                if (isEn) "Exited geofence boundary" else "خروج از محدوده حصار مکانی"
+            }
+            if (savedContentDetails.isNotEmpty()) {
+                "\$actionLabel • \$savedContentDetails"
+            } else {
+                actionLabel
+            }
+        }
+
+        val notifBody = "\$distanceLine\\n\$statusLine"
+        return Pair(notifTitle, notifBody)
+    }
+
+    private fun updateActiveStatusBarNotificationDistance(newDistance: Int) {
+        val notifId = activeGeofenceNotificationId
+        if (notifId == Int.MIN_VALUE || activeGeofenceItemId.isEmpty()) return
+        if (newDistance == lastNotifiedStatusBarDistance) return
+        lastNotifiedStatusBarDistance = newDistance
+
+        try {
+            val (notifTitle, notifBody) = buildStatusBarTitleAndBody(
+                title = activeGeofenceTitle,
+                description = activeGeofenceDescription,
+                customMessage = activeGeofenceCustomMessage,
+                eventType = activeGeofenceEventType,
+                distance = newDistance,
+                radius = activeGeofenceRadius,
+                isEn = activeGeofenceIsEn
+            )
+
+            buildAndPostStatusBarNotification(
+                notificationId = notifId,
+                id = activeGeofenceItemId,
+                notifTitle = notifTitle,
+                notifBody = notifBody,
+                isSub10m = activeGeofenceEventType == "arrived_under_10m",
+                distance = newDistance,
+                radius = activeGeofenceRadius,
+                isEn = activeGeofenceIsEn,
+                isLiveUpdate = true,
+                showFullScreen = false
+            )
         } catch (e: Exception) {
         }
     }
@@ -4891,144 +5251,48 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             }
 
-            val notifTitle = if (isSub10m) {
-                if (isEn) "🎯 Saved Location Reached: \$title" else "🎯 مقصد ثبت‌شده: \$title"
-            } else {
-                if (isEn) "📍 Geofence Radar: \$title" else "📍 رادار حصار مکانی: \$title"
-            }
-
-            val savedContentDetails = listOf(description.trim(), customMessage.trim())
-                .filter { it.isNotEmpty() }
-                .distinct()
-                .joinToString(" — ")
-
-            val notifBody = if (isSub10m) {
-                if (savedContentDetails.isNotEmpty()) {
-                    if (isEn) {
-                        "\$savedContentDetails (Within 10m of \$title • \${distance}m)"
-                    } else {
-                        "\$savedContentDetails (حضور در فاصله زیر ۱۰ متری «\$title» • \${distance} متر)"
-                    }
-                } else {
-                    if (isEn) {
-                        "You have reached the exact saved location «\$title» (Distance: \${distance}m)"
-                    } else {
-                        "شما در نقطه دقیق مکان ثبت‌شده «\$title» قرار دارید (فاصله: \${distance} متر)"
-                    }
-                }
-            } else {
-                val actionLabel = if (eventType == "enter") {
-                    if (isEn) "Entered boundary of" else "ورود به محدوده"
-                } else {
-                    if (isEn) "Exited boundary of" else "خروج از محدوده"
-                }
-                if (savedContentDetails.isNotEmpty()) {
-                    if (isEn) {
-                        "\$savedContentDetails • \$actionLabel \$title (Distance: \${distance}m)"
-                    } else {
-                        "\$savedContentDetails • \$actionLabel «\$title» (فاصله: \${distance} متر)"
-                    }
-                } else if (isEn) {
-                    "\$actionLabel \$title (Distance: \${distance}m)"
-                } else {
-                    "\$actionLabel «\$title» (فاصله: \${distance} متر)"
-                }
-            }
+            val (notifTitle, notifBody) = buildStatusBarTitleAndBody(
+                title = title,
+                description = description,
+                customMessage = customMessage,
+                eventType = eventType,
+                distance = distance,
+                radius = radius,
+                isEn = isEn
+            )
 
             val notificationId = ((if (isSub10m) "u10m_\$id" else id).hashCode() and 0x7fffffff).coerceAtLeast(10000)
 
-            // Build sourceJson payload for YaadAlarmPopupActivity (lockscreen / screen-off card)
-            val extraJson = JSObject().apply {
-                put("geofence", true)
-                put("sub10m", isSub10m)
-                put("distance", distance)
-                put("radius", radius)
-                put("language", if (isEn) "en" else "fa")
-                put("theme", if (isSub10m) "geofence-sub10m" else "geofence-radar")
-            }
-            val sourceObj = JSObject().apply {
-                put("id", notificationId)
-                put("title", notifTitle)
-                put("body", notifBody)
-                put("extra", extraJson)
-            }
-            val sourceJsonStr = sourceObj.toString()
+            activeGeofenceItemId = id
+            activeGeofenceTitle = title
+            activeGeofenceDescription = description
+            activeGeofenceCustomMessage = customMessage
+            activeGeofenceEventType = eventType
+            activeGeofenceRadius = radius
+            activeGeofenceIsEn = isEn
+            lastNotifiedStatusBarDistance = distance
 
-            val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            } else {
-                PendingIntent.FLAG_UPDATE_CURRENT
-            }
+            // Check whether device screen is OFF or on Lock Screen:
+            // - If screen is OFF or locked: show dedicated Full-Screen Geofence Alert (with centered pulsing logo, top title, live distance below logo, 2 buttons).
+            // - If user is in Android environment or other apps (screen ON & unlocked): deliver via Status Bar Notification ONLY with 2 buttons ("✓ متوجه شدم" and "✎ ویرایش").
+            val screenOffOrLocked = isScreenOffOrLocked()
 
-            // Full-Screen / Lock-Screen Popup PendingIntent (wakes screen & shows Geofence Radar card)
-            val popupIntent = Intent(this, YaadAlarmPopupActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
-                    Intent.FLAG_ACTIVITY_NO_USER_ACTION
-                putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
-                putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJsonStr)
-            }
-            val fullScreenPi = PendingIntent.getActivity(
-                this,
-                notificationId + 100000,
-                popupIntent,
-                piFlags
+            val sourceJsonStr = buildAndPostStatusBarNotification(
+                notificationId = notificationId,
+                id = id,
+                notifTitle = notifTitle,
+                notifBody = notifBody,
+                isSub10m = isSub10m,
+                distance = distance,
+                radius = radius,
+                isEn = isEn,
+                isLiveUpdate = false,
+                showFullScreen = screenOffOrLocked
             )
 
-            // Stop / Acknowledge Action PendingIntent for Status Bar Notification
-            val stopIntent = Intent(this, YaadGeofenceService::class.java).apply {
-                action = ACTION_STOP_GEOFENCE_ALERT
-                putExtra(EXTRA_NOTIFICATION_ID, notificationId)
+            if (screenOffOrLocked) {
+                YaadAlarmPopupActivity.launch(this, notificationId, sourceJsonStr)
             }
-            val stopPi = PendingIntent.getService(
-                this,
-                notificationId + 200000,
-                stopIntent,
-                piFlags
-            )
-
-            // Open App PendingIntent
-            val launchIntent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            }
-            val contentPi = if (launchIntent != null) {
-                PendingIntent.getActivity(this, notificationId, launchIntent, piFlags)
-            } else fullScreenPi
-
-            val smallIconRes = resources.getIdentifier("ic_stat_icon_config_sample", "drawable", packageName)
-                .takeIf { it != 0 } ?: applicationInfo.icon
-
-            val builder = NotificationCompat.Builder(this, alertChannelId)
-                .setSmallIcon(smallIconRes)
-                .setContentTitle(notifTitle)
-                .setContentText(notifBody)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(notifBody))
-                .setColor(if (isSub10m) 0xFF059669.toInt() else 0xFF04231F.toInt())
-                .setColorized(true)
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_ALARM)
-                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setOngoing(true)
-                .setAutoCancel(true)
-                .setFullScreenIntent(fullScreenPi, true)
-                .setDeleteIntent(stopPi)
-                .setVibrate(longArrayOf(0, 450, 180, 450))
-                .addAction(
-                    0,
-                    if (isEn) "✓ Got It" else "✓ متوجه شدم",
-                    stopPi
-                )
-
-            if (contentPi != null) {
-                builder.setContentIntent(contentPi)
-            }
-
-            NotificationManagerCompat.from(this).notify(notificationId, builder.build())
-
-            // Launch Lock-Screen / Screen-Off Geofence Radar Popup Activity immediately
-            YaadAlarmPopupActivity.launch(this, notificationId, sourceJsonStr)
 
             // Play Distinct Audio Effect:
             // - Sub-10m Arrival: Distinct celebratory multi-tone Target-Lock Arrival Fanfare
@@ -5040,6 +5304,129 @@ class YaadGeofenceService : Service(), LocationListener {
             }
         } catch (e: Exception) {
         }
+    }
+
+    private fun buildAndPostStatusBarNotification(
+        notificationId: Int,
+        id: String,
+        notifTitle: String,
+        notifBody: String,
+        isSub10m: Boolean,
+        distance: Int,
+        radius: Int,
+        isEn: Boolean,
+        isLiveUpdate: Boolean,
+        showFullScreen: Boolean
+    ): String {
+        val alertChannelId = "yaad_channel_v7_geofence_lockscreen"
+
+        val extraJson = JSObject().apply {
+            put("geofence", true)
+            put("geofenceItemId", id)
+            put("sub10m", isSub10m)
+            put("distance", distance)
+            put("radius", radius)
+            put("language", if (isEn) "en" else "fa")
+            put("theme", if (isSub10m) "geofence-sub10m" else "geofence-radar")
+        }
+        val sourceObj = JSObject().apply {
+            put("id", notificationId)
+            put("title", notifTitle)
+            put("body", notifBody)
+            put("extra", extraJson)
+        }
+        val sourceJsonStr = sourceObj.toString()
+
+        val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+
+        // Full-Screen / Lock-Screen Popup PendingIntent
+        val popupIntent = Intent(this, YaadAlarmPopupActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS or
+                Intent.FLAG_ACTIVITY_NO_USER_ACTION
+            putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+            putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJsonStr)
+        }
+        val fullScreenPi = PendingIntent.getActivity(
+            this,
+            notificationId + 100000,
+            popupIntent,
+            piFlags
+        )
+
+        // Button 1: "✓ متوجه شدم" ("✓ Got It") -> Stops sonar audio & dismisses notification
+        val stopIntent = Intent(this, YaadGeofenceService::class.java).apply {
+            action = ACTION_STOP_GEOFENCE_ALERT
+            putExtra(EXTRA_NOTIFICATION_ID, notificationId)
+        }
+        val stopPi = PendingIntent.getService(
+            this,
+            notificationId + 200000,
+            stopIntent,
+            piFlags
+        )
+
+        // Button 2: "✎ ویرایش" ("✎ Edit") -> Stops sonar audio, dismisses notification, opens app to Geofence Radius section
+        val editIntent = Intent(this, YaadAlarmPopupActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+            putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+            putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJsonStr)
+            putExtra("yaad_direct_geofence_edit", true)
+        }
+        val editPi = PendingIntent.getActivity(
+            this,
+            notificationId + 300000,
+            editIntent,
+            piFlags
+        )
+
+        val smallIconRes = resources.getIdentifier("ic_stat_icon_config_sample", "drawable", packageName)
+            .takeIf { it != 0 } ?: applicationInfo.icon
+
+        val builder = NotificationCompat.Builder(this, alertChannelId)
+            .setSmallIcon(smallIconRes)
+            .setContentTitle(notifTitle)
+            .setContentText(notifBody.replace("\\n", " • "))
+            .setStyle(NotificationCompat.BigTextStyle().bigText(notifBody).setBigContentTitle(notifTitle))
+            .setColor(if (isSub10m) 0xFF059669.toInt() else 0xFF04231F.toInt())
+            .setColorized(true)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setOnlyAlertOnce(isLiveUpdate)
+            .setAutoCancel(true)
+            .setDeleteIntent(stopPi)
+            .setContentIntent(editPi)
+            .addAction(
+                0,
+                if (isEn) "✓ Got It" else "✓ متوجه شدم",
+                stopPi
+            )
+            .addAction(
+                0,
+                if (isEn) "✎ Edit" else "✎ ویرایش",
+                editPi
+            )
+
+        if (!isLiveUpdate) {
+            builder.setVibrate(longArrayOf(0, 450, 180, 450))
+        }
+        if (showFullScreen) {
+            builder.setFullScreenIntent(fullScreenPi, true)
+        }
+
+        NotificationManagerCompat.from(this).notify(notificationId, builder.build())
+        return sourceJsonStr
     }
 
     private fun calculateHaversineMeters(
@@ -5093,6 +5480,23 @@ class YaadGeofenceService : Service(), LocationListener {
         private var liveSonarRadiusMeters: Int = 200
         @Volatile
         private var activeGeofenceNotificationId: Int = Int.MIN_VALUE
+        @Volatile
+        private var activeGeofenceItemId: String = ""
+        @Volatile
+        private var activeGeofenceTitle: String = ""
+        @Volatile
+        private var activeGeofenceDescription: String = ""
+        @Volatile
+        private var activeGeofenceCustomMessage: String = ""
+        @Volatile
+        private var activeGeofenceEventType: String = "enter"
+        @Volatile
+        private var activeGeofenceRadius: Int = 200
+        @Volatile
+        private var activeGeofenceIsEn: Boolean = false
+        @Volatile
+        private var lastNotifiedStatusBarDistance: Int = Int.MIN_VALUE
+
         private var sonarThread: Thread? = null
         private var sonarWakeLock: PowerManager.WakeLock? = null
 
@@ -5141,6 +5545,8 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             }
             activeGeofenceNotificationId = Int.MIN_VALUE
+            activeGeofenceItemId = ""
+            lastNotifiedStatusBarDistance = Int.MIN_VALUE
         }
 
         private fun acquireTemporaryWakeLock(context: Context, timeoutMs: Long) {
@@ -5403,6 +5809,11 @@ class YaadGeofenceService : Service(), LocationListener {
         fun syncGeofences(payloadJson: String) {
             updateConfigAndSyncService(appContext, payloadJson)
         }
+
+        @android.webkit.JavascriptInterface
+        fun stopGeofenceAlertAudio() {
+            stopGeofenceAudio(appContext)
+        }
     }
 }
 `;
@@ -5463,7 +5874,119 @@ fs.writeFileSync(pluginPath, pluginContent, 'utf8');
 fs.writeFileSync(popupActivityPath, popupActivityContent, 'utf8');
 fs.writeFileSync(geofenceServicePath, geofenceServiceContent, 'utf8');
 
+// 11. Automated Kotlin Syntax, String Literal & Balanced Delimiter Validator
+// Ensures any generated/patched Kotlin file is 100% free of unescaped quotes or mismatched braces before GitHub Actions runs
+function validateKotlinFiles(dir) {
+  const files = fs.readdirSync(dir).filter((f) => f.endsWith('.kt'));
+  for (const file of files) {
+    const fullPath = path.join(dir, file);
+    const src = fs.readFileSync(fullPath, 'utf8');
+    let inString = false;
+    let inTripleString = false;
+    let inLineComment = false;
+    let inBlockComment = false;
+    let braceDepth = 0;
+    let parenDepth = 0;
+    let lineNum = 1;
+
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+      const next = src[i + 1] || '';
+      const next2 = src[i + 2] || '';
+
+      if (ch === '\n') {
+        if (inString && !inTripleString) {
+          throw new Error(`[KotlinValidator] Unclosed string literal in ${file} at line ${lineNum}`);
+        }
+        inLineComment = false;
+        lineNum++;
+        continue;
+      }
+      if (inLineComment) continue;
+
+      if (inBlockComment) {
+        if (ch === '*' && next === '/') {
+          inBlockComment = false;
+          i++;
+        }
+        continue;
+      }
+
+      if (!inString && !inTripleString) {
+        if (ch === '/' && next === '/') {
+          inLineComment = true;
+          i++;
+          continue;
+        }
+        if (ch === '/' && next === '*') {
+          inBlockComment = true;
+          i++;
+          continue;
+        }
+        if (ch === '"' && next === '"' && next2 === '"') {
+          inTripleString = true;
+          i += 2;
+          continue;
+        }
+        if (ch === '"') {
+          inString = true;
+          continue;
+        }
+        if (ch === "'") {
+          // Skip char literal
+          i++;
+          if (src[i] === '\\') i++;
+          if (src[i + 1] === "'") i++;
+          continue;
+        }
+        if (ch === '{') braceDepth++;
+        else if (ch === '}') {
+          braceDepth--;
+          if (braceDepth < 0) {
+            throw new Error(`[KotlinValidator] Unexpected closing brace '}' in ${file} at line ${lineNum}`);
+          }
+        } else if (ch === '(') parenDepth++;
+        else if (ch === ')') {
+          parenDepth--;
+          if (parenDepth < 0) {
+            throw new Error(`[KotlinValidator] Unexpected closing paren ')' in ${file} at line ${lineNum}`);
+          }
+        }
+      } else if (inTripleString) {
+        if (ch === '"' && next === '"' && next2 === '"') {
+          inTripleString = false;
+          i += 2;
+        }
+      } else if (inString) {
+        if (ch === '\\') {
+          i++;
+          continue;
+        }
+        if (ch === '"') {
+          inString = false;
+          // Check for accidental unescaped quote inside string like "foo "$bar" baz"
+          const afterQuote = src.slice(i + 1).match(/^[ \t]*(\$[A-Za-z_])/);
+          if (afterQuote) {
+            throw new Error(
+              `[KotlinValidator] Unescaped quote before ${afterQuote[1]} in ${file} at line ${lineNum}`
+            );
+          }
+        }
+      }
+    }
+
+    if (braceDepth !== 0) {
+      throw new Error(`[KotlinValidator] Unbalanced braces (depth=${braceDepth}) in ${file}`);
+    }
+    if (parenDepth !== 0) {
+      throw new Error(`[KotlinValidator] Unbalanced parentheses (depth=${parenDepth}) in ${file}`);
+    }
+  }
+}
+
+validateKotlinFiles(pluginDir);
+
 console.log(
-  `[patch-capacitor-notifications] Successfully patched and verified @capacitor/local-notifications@${pluginVersion} (with YaadAlarmPopupActivity & YaadGeofenceService).`
+  `[patch-capacitor-notifications] Successfully patched and verified @capacitor/local-notifications@${pluginVersion} (with YaadAlarmPopupActivity, YaadGeofenceService & Kotlin syntax check).`
 );
 

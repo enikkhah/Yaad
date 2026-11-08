@@ -62,6 +62,7 @@ interface ReminderFormProps {
   savedLocations?: SavedLocation[];
   language?: AppLanguage;
   defaultEnableGeofence?: boolean;
+  focusGeofenceRadius?: boolean;
 }
 
 
@@ -91,6 +92,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   savedLocations = [],
   language = 'fa',
   defaultEnableGeofence = false,
+  focusGeofenceRadius = false,
 }) => {
   const isEn = language === 'en';
   const [title, setTitle] = useState('');
@@ -128,6 +130,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [geofenceSavedLocId, setGeofenceSavedLocId] = useState<string>('');
   const [isDetectingGps, setIsDetectingGps] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
+  const geofenceRadiusSectionRef = useRef<HTMLDivElement>(null);
 
   // Calculate dynamic default time (+2 minutes from now)
   const getDynamicDefaultTime = () => {
@@ -274,9 +277,19 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         initialData.priority !== 'medium' ||
         (initialData.recurrence && initialData.recurrence !== 'none') ||
         initialData.imageUrl ||
-        initialData.geofence?.enabled
+        initialData.geofence?.enabled ||
+        focusGeofenceRadius
       );
       setShowMoreOptions(hasExtraData);
+      if (focusGeofenceRadius) {
+        setEnableGeofence(true);
+        setTimeout(() => {
+          geofenceRadiusSectionRef.current?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'center',
+          });
+        }, 220);
+      }
     } else {
       // Creating new reminder: default date & time is automatically set to current time + 2 minutes on each open
       const defaultTime = Date.now() + 2 * 60 * 1000;
@@ -323,7 +336,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     return () => {
       stopVoiceListening();
     };
-  }, [isOpen, initialData, defaultEnableGeofence]);
+  }, [isOpen, initialData, defaultEnableGeofence, focusGeofenceRadius]);
 
   // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
@@ -1840,7 +1853,12 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   </div>
 
                   {/* 5. Radius Selector */}
-                  <div className="space-y-2">
+                  <div
+                    ref={geofenceRadiusSectionRef}
+                    className={`space-y-2 transition-all rounded-xl ${
+                      focusGeofenceRadius ? 'p-2.5 ring-2 ring-emerald-400/80 bg-emerald-500/10' : ''
+                    }`}
+                  >
                     <div className="flex items-center justify-between mb-1">
                       <label className="text-[11px] font-bold text-stone-300">
                         {isEn ? 'Trigger Radius:' : 'محدوده شعاع حصار مکانی:'}
