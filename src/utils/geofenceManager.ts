@@ -14,14 +14,14 @@ export interface UserPosition {
 
 export interface GeofenceTriggerEvent {
   reminder: Reminder;
-  triggerType: 'enter' | 'exit';
+  triggerType: 'enter' | 'exit' | 'arrived_under_10m';
   distance: number;
   timestamp: number;
 }
 
 export interface SavedLocationTriggerEvent {
   location: SavedLocation;
-  triggerType: 'enter' | 'exit';
+  triggerType: 'enter' | 'exit' | 'arrived_under_10m';
   distance: number;
   timestamp: number;
 }
@@ -157,6 +157,7 @@ export function syncGeofencesWithNativeAndroid(
       id: string;
       type: 'location' | 'reminder';
       title: string;
+      description: string;
       latitude: number;
       longitude: number;
       radius: number;
@@ -173,6 +174,7 @@ export function syncGeofencesWithNativeAndroid(
           id: `loc_${loc.id}`,
           type: 'location',
           title: loc.title || (isEn ? 'Saved Location' : 'مکان ذخیره‌شده'),
+          description: loc.description || '',
           latitude: loc.latitude,
           longitude: loc.longitude,
           radius: loc.geofence.radius || 200,
@@ -196,6 +198,7 @@ export function syncGeofencesWithNativeAndroid(
           id: `rem_${rem.id}`,
           type: 'reminder',
           title: rem.title || (isEn ? 'Location Reminder' : 'یادآور مکانی'),
+          description: rem.description || '',
           latitude: rem.geofence.latitude,
           longitude: rem.geofence.longitude,
           radius: rem.geofence.radius || 200,
@@ -219,6 +222,54 @@ export function syncGeofencesWithNativeAndroid(
 }
 
 /**
+ * Returns the distance and radius of the nearest active geofence (for live submarine sonar rhythm modulation).
+ */
+export function getNearestActiveGeofenceDistance(
+  userPos: { latitude: number; longitude: number },
+  reminders: Reminder[] = [],
+  locations: SavedLocation[] = []
+): { distance: number; radius: number } | null {
+  let nearest: { distance: number; radius: number } | null = null;
+
+  for (const l of locations) {
+    if (l.deletedAt || !l.geofence || !l.geofence.enabled) continue;
+    const d = calculateHaversineDistance(
+      userPos.latitude,
+      userPos.longitude,
+      l.latitude,
+      l.longitude
+    );
+    const r = l.geofence.radius || 200;
+    if (!nearest || d < nearest.distance) {
+      nearest = { distance: d, radius: r };
+    }
+  }
+
+  for (const r of reminders) {
+    if (
+      r.deletedAt ||
+      (r.status !== 'pending' && r.status !== 'postponed') ||
+      !r.geofence ||
+      !r.geofence.enabled
+    ) {
+      continue;
+    }
+    const d = calculateHaversineDistance(
+      userPos.latitude,
+      userPos.longitude,
+      r.geofence.latitude,
+      r.geofence.longitude
+    );
+    const rad = r.geofence.radius || 200;
+    if (!nearest || d < nearest.distance) {
+      nearest = { distance: d, radius: rad };
+    }
+  }
+
+  return nearest;
+}
+
+/**
  * Calculates adaptive polling interval (in milliseconds) based on distance
  * to the nearest active geofence boundary (supports radii up to 10km) to preserve battery.
  */
@@ -239,6 +290,7 @@ export function getAdaptivePollingInterval(
   }
 
   let minBoundaryDistance = Infinity;
+  let minCenterDistance = Infinity;
   for (const r of activeReminderGeofences) {
     if (!r.geofence) continue;
     const centerDist = calculateHaversineDistance(
@@ -251,6 +303,9 @@ export function getAdaptivePollingInterval(
     const boundaryDist = Math.abs(centerDist - radius);
     if (boundaryDist < minBoundaryDistance) {
       minBoundaryDistance = boundaryDist;
+    }
+    if (centerDist < minCenterDistance) {
+      minCenterDistance = centerDist;
     }
   }
 
@@ -266,10 +321,15 @@ export function getAdaptivePollingInterval(
     if (boundaryDist < minBoundaryDistance) {
       minBoundaryDistance = boundaryDist;
     }
+    if (centerDist < minCenterDistance) {
+      minCenterDistance = centerDist;
+    }
   }
 
-  if (minBoundaryDistance < 350) {
-    return 10000; // 10 seconds: Very close to geofence boundary (< 350m)
+  if (minCenterDistance <= 120 || minBoundaryDistance < 150) {
+    return 5000; // 5 seconds: Very close to target (< 120m) for accurate < 10m arrival detection
+  } else if (minBoundaryDistance < 400) {
+    return 10000; // 10 seconds: Close to geofence boundary (< 400m)
   } else if (minBoundaryDistance < 1200) {
     return 25000; // 25 seconds: Nearby boundary (< 1.2km)
   } else if (minBoundaryDistance < 5000) {
@@ -304,12 +364,6 @@ export function evaluateGeofences(
 
     const { latitude, longitude, radius, triggerOn, lastTriggeredAt } = reminder.geofence;
 
-    // Minimum cooldown between repeated triggers for the exact same reminder: 10 minutes
-    const COOLDOWN_MS = 10 * 60 * 1000;
-    if (lastTriggeredAt && now - lastTriggeredAt < COOLDOWN_MS) {
-      continue;
-    }
-
     const distance = calculateHaversineDistance(
       userPos.latitude,
       userPos.longitude,
@@ -318,12 +372,45 @@ export function evaluateGeofences(
     );
 
     const isInsideNow = distance <= radius;
+    const isUnder10mNow = distance <= 10;
     const wasInsideBefore = proximityStateMap.get(reminder.id);
+    const under10mKey = `u10m_rem_${reminder.id}`;
+    const wasUnder10mBefore = proximityStateMap.get(under10mKey);
 
     // Save current status for future transitions
     if (wasInsideBefore !== isInsideNow) {
       proximityStateMap.set(reminder.id, isInsideNow);
       stateChanged = true;
+    }
+    if (wasUnder10mBefore !== isUnder10mNow) {
+      proximityStateMap.set(under10mKey, isUnder10mNow);
+      stateChanged = true;
+    }
+
+    // 1. Check sub-10m exact target arrival (independent of outer boundary entry cooldown)
+    if (isInsideNow && isUnder10mNow && !wasUnder10mBefore) {
+      const updatedReminder: Reminder = {
+        ...reminder,
+        geofence: {
+          ...reminder.geofence,
+          lastTriggeredAt: now,
+          hasTriggered: true,
+        },
+      };
+      updatedReminders.push(updatedReminder);
+      onTrigger({
+        reminder: updatedReminder,
+        triggerType: 'arrived_under_10m',
+        distance,
+        timestamp: now,
+      });
+      continue;
+    }
+
+    // Minimum cooldown between repeated boundary triggers for the exact same reminder: 10 minutes
+    const COOLDOWN_MS = 10 * 60 * 1000;
+    if (lastTriggeredAt && now - lastTriggeredAt < COOLDOWN_MS) {
+      continue;
     }
 
     let shouldTrigger = false;
@@ -399,12 +486,6 @@ export function evaluateSavedLocationGeofences(
 
     const { radius, triggerOn, lastTriggeredAt } = location.geofence;
 
-    // Minimum cooldown between repeated triggers for same location: 3 minutes
-    const COOLDOWN_MS = 3 * 60 * 1000;
-    if (lastTriggeredAt && now - lastTriggeredAt < COOLDOWN_MS) {
-      continue;
-    }
-
     const distance = calculateHaversineDistance(
       userPos.latitude,
       userPos.longitude,
@@ -413,13 +494,46 @@ export function evaluateSavedLocationGeofences(
     );
 
     const isInsideNow = distance <= radius;
+    const isUnder10mNow = distance <= 10;
     const proximityKey = `loc_${location.id}`;
+    const under10mKey = `u10m_loc_${location.id}`;
     const wasInsideBefore = proximityStateMap.get(proximityKey);
+    const wasUnder10mBefore = proximityStateMap.get(under10mKey);
 
     // Save current status for future transitions
     if (wasInsideBefore !== isInsideNow) {
       proximityStateMap.set(proximityKey, isInsideNow);
       stateChanged = true;
+    }
+    if (wasUnder10mBefore !== isUnder10mNow) {
+      proximityStateMap.set(under10mKey, isUnder10mNow);
+      stateChanged = true;
+    }
+
+    // 1. Sub-10m Target Arrival inside boundary: fires immediately when entering within <= 10m of saved location
+    if (isInsideNow && isUnder10mNow && !wasUnder10mBefore) {
+      const updatedLoc: SavedLocation = {
+        ...location,
+        geofence: {
+          ...location.geofence,
+          lastTriggeredAt: now,
+          hasTriggered: true,
+        },
+      };
+      updatedLocations.push(updatedLoc);
+      onTrigger({
+        location: updatedLoc,
+        triggerType: 'arrived_under_10m',
+        distance,
+        timestamp: now,
+      });
+      continue;
+    }
+
+    // Minimum cooldown between repeated boundary triggers for same location: 3 minutes
+    const COOLDOWN_MS = 3 * 60 * 1000;
+    if (lastTriggeredAt && now - lastTriggeredAt < COOLDOWN_MS) {
+      continue;
     }
 
     let shouldTrigger = false;
@@ -492,4 +606,5 @@ export function isLocationInGeofence(
     distance,
   };
 }
+
 

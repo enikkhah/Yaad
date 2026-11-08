@@ -660,6 +660,7 @@ export const stopAlarmRinging = () => {
     }
     activeAlarmAudio = null;
   }
+  stopSubmarineSonarLoop();
 
   if (!wasLooping) {
     return;
@@ -678,6 +679,164 @@ export const stopAlarmRinging = () => {
     } catch {
       // Ignore
     }
+  }
+};
+
+// ============================================================================
+// SUBMARINE SONAR RADAR AUDIO (DISTANCE-ADAPTIVE RHYTHM) & <10M ARRIVAL EFFECT
+// ============================================================================
+let sonarLoopTimeoutId: number | null = null;
+let sonarAutoStopTimeoutId: number | null = null;
+let isSonarActive = false;
+let currentSonarDistance = 150;
+let currentSonarRadius = 200;
+
+/**
+ * Calculates the delay (ms) between submarine sonar pings based on distance to target.
+ * Closer to target -> faster rhythm (down to 280ms near 10m).
+ * Farther from target -> slower rhythm (up to 2200ms near/beyond outer boundary).
+ */
+export const computeSubmarineSonarIntervalMs = (
+  distanceMeters: number,
+  radiusMeters: number = 200
+): number => {
+  const effectiveRadius = Math.max(30, radiusMeters || 200);
+  const clampedDist = Math.max(10, Math.min(effectiveRadius * 1.25, distanceMeters));
+  const ratio = Math.max(0, Math.min(1, (clampedDist - 10) / Math.max(20, effectiveRadius - 10)));
+  return Math.round(280 + ratio * 1920);
+};
+
+/**
+ * Plays a single Submarine Sonar Ping (resonant underwater metallic ping + harmonic echo tail).
+ */
+export const playSubmarineSonarPing = (
+  distanceMeters: number = 100,
+  radiusMeters: number = 200,
+  volumeOverride?: number
+) => {
+  try {
+    const vol = Math.max(0, Math.min(1, volumeOverride !== undefined ? volumeOverride : globalAlarmVolume));
+    if (vol <= 0.001) return;
+    const ctx = getAudioContext();
+    const now = ctx.currentTime + 0.01;
+
+    // Slight pitch rise as user gets closer to target (1280 Hz far -> 1560 Hz close)
+    const effectiveRadius = Math.max(30, radiusMeters || 200);
+    const closeness = 1 - Math.max(0, Math.min(1, (distanceMeters - 10) / Math.max(20, effectiveRadius - 10)));
+    const pingFreq = 1280 + closeness * 280;
+
+    // Primary Submarine Ping (sharp attack, resonant underwater decay)
+    playSoftTone(ctx, pingFreq, now, 0.006, 0.42, 'sine', 0.34, vol);
+    // Subtle 2nd harmonic metallic sheen
+    playSoftTone(ctx, pingFreq * 1.5, now, 0.008, 0.18, 'sine', 0.11, vol);
+    // Underwater reverberant echo ping (delayed by 130ms, lower amplitude)
+    playSoftTone(ctx, pingFreq * 0.995, now + 0.13, 0.012, 0.48, 'sine', 0.14, vol);
+  } catch {
+    // Ignore audio context errors
+  }
+};
+
+/**
+ * Starts a continuous Submarine Sonar loop whose rhythm dynamically speeds up as the user gets closer
+ * and slows down as the user moves away.
+ */
+export const startSubmarineSonarLoop = (
+  initialDistanceMeters: number,
+  radiusMeters: number = 200,
+  volumeOverride?: number
+) => {
+  stopSubmarineSonarLoop();
+  isSonarActive = true;
+  currentSonarDistance = initialDistanceMeters;
+  currentSonarRadius = radiusMeters || 200;
+
+  const tick = () => {
+    if (!isSonarActive) return;
+    playSubmarineSonarPing(currentSonarDistance, currentSonarRadius, volumeOverride);
+    if (getGlobalVibration() && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate(80);
+      } catch {
+        // ignore
+      }
+    }
+    const nextInterval = computeSubmarineSonarIntervalMs(currentSonarDistance, currentSonarRadius);
+    sonarLoopTimeoutId = window.setTimeout(tick, nextInterval);
+  };
+
+  tick();
+
+  // Auto-stop sonar loop after 60 seconds
+  sonarAutoStopTimeoutId = window.setTimeout(
+    () => {
+      stopSubmarineSonarLoop();
+    },
+    60000
+  );
+};
+
+/**
+ * Updates the live distance of the active submarine sonar loop so its rhythm immediately adapts.
+ */
+export const updateSubmarineSonarDistance = (distanceMeters: number, radiusMeters?: number) => {
+  currentSonarDistance = distanceMeters;
+  if (radiusMeters && radiusMeters > 0) {
+    currentSonarRadius = radiusMeters;
+  }
+};
+
+/**
+ * Stops the active submarine sonar loop.
+ */
+export const stopSubmarineSonarLoop = () => {
+  isSonarActive = false;
+  if (sonarLoopTimeoutId !== null) {
+    clearTimeout(sonarLoopTimeoutId);
+    sonarLoopTimeoutId = null;
+  }
+  if (sonarAutoStopTimeoutId !== null) {
+    clearTimeout(sonarAutoStopTimeoutId);
+    sonarAutoStopTimeoutId = null;
+  }
+};
+
+/**
+ * Plays a distinct Target-Reached (< 10 meters) audio effect:
+ * A triumphant multi-tone harmonic lock-on fanfare clearly distinct from the submarine sonar ping.
+ */
+export const playGeofenceArrivalUnder10mSound = (volumeOverride?: number) => {
+  stopSubmarineSonarLoop();
+  try {
+    const vol = Math.max(0, Math.min(1, volumeOverride !== undefined ? volumeOverride : globalAlarmVolume));
+    if (vol <= 0.001) return;
+    const ctx = getAudioContext();
+    const now = ctx.currentTime + 0.015;
+
+    // Distinct Target-Lock / Arrival Chime Sequence (C5 -> E5 -> G5 -> C6 -> E6 + warm chord sustain)
+    const sequence = [
+      { freq: 523.25, offset: 0.0, dur: 0.22, type: 'triangle' as OscillatorType, gain: 0.30 },
+      { freq: 659.25, offset: 0.13, dur: 0.22, type: 'triangle' as OscillatorType, gain: 0.30 },
+      { freq: 783.99, offset: 0.26, dur: 0.24, type: 'triangle' as OscillatorType, gain: 0.32 },
+      { freq: 1046.50, offset: 0.40, dur: 0.55, type: 'sine' as OscillatorType, gain: 0.36 },
+      { freq: 1318.51, offset: 0.54, dur: 0.75, type: 'sine' as OscillatorType, gain: 0.34 },
+      // Second celebratory pulse
+      { freq: 1046.50, offset: 0.92, dur: 0.25, type: 'triangle' as OscillatorType, gain: 0.28 },
+      { freq: 1567.98, offset: 1.08, dur: 0.85, type: 'sine' as OscillatorType, gain: 0.36 },
+    ];
+
+    sequence.forEach((n) => {
+      playTone(ctx, n.freq, now + n.offset, n.dur, n.type, n.gain, vol);
+    });
+
+    if (getGlobalVibration() && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+      try {
+        navigator.vibrate([180, 90, 180, 90, 450]);
+      } catch {
+        // ignore
+      }
+    }
+  } catch {
+    // Ignore
   }
 };
 

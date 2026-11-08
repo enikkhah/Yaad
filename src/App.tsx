@@ -2,7 +2,18 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { AnimatePresence, motion } from 'motion/react';
 import { Reminder, Category, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
 import { getJalaliComponents, getGregorianComponents, formatJalaliFull, toPersianDigits, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
-import { speakReminderText, playPhoneAlarmSound, setGlobalVolume, setGlobalVibration, stopAlarmRinging, unlockAudio } from './utils/audio';
+import {
+  speakReminderText,
+  playPhoneAlarmSound,
+  setGlobalVolume,
+  setGlobalVibration,
+  stopAlarmRinging,
+  unlockAudio,
+  startSubmarineSonarLoop,
+  updateSubmarineSonarDistance,
+  stopSubmarineSonarLoop,
+  playGeofenceArrivalUnder10mSound,
+} from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { ReminderForm } from './components/ReminderForm';
 import { AlarmModal } from './components/AlarmModal';
@@ -50,6 +61,7 @@ import {
   evaluateGeofences, 
   evaluateSavedLocationGeofences,
   getAdaptivePollingInterval, 
+  getNearestActiveGeofenceDistance,
   isGeofenceTrackingEnabled, 
   setGeofenceTrackingEnabled,
   saveLastKnownPosition, 
@@ -1531,29 +1543,83 @@ export default function App() {
       setCurrentUserPosition(userPos);
       saveLastKnownPosition(userPos);
 
+      // Update live submarine sonar distance so ping rhythm speeds up as user gets closer and slows down as user moves away
+      const nearestGeo = getNearestActiveGeofenceDistance(userPos, reminders, savedLocations);
+      if (nearestGeo && nearestGeo.distance <= nearestGeo.radius && nearestGeo.distance > 10) {
+        updateSubmarineSonarDistance(nearestGeo.distance, nearestGeo.radius);
+      } else if (!nearestGeo || nearestGeo.distance > nearestGeo.radius) {
+        stopSubmarineSonarLoop();
+      }
+
       // 1. Evaluate saved location geofences (حصارهای مکانی ثبت‌شده)
       if (hasActiveLocationCheckpoints) {
         evaluateSavedLocationGeofences(userPos, savedLocations, (event: SavedLocationTriggerEvent) => {
           const displayLocTitle = formatSavedLocationTitle(event.location.title, settings.language);
-          const actionText = event.triggerType === 'enter'
+          const isSub10mArrival = event.triggerType === 'arrived_under_10m';
+          const locDetails = [event.location.description, event.location.geofence?.customMessage]
+            .filter(Boolean)
+            .join(' — ');
+
+          const actionText = isSub10mArrival
+            ? (isEn ? 'Target Reached (< 10m):' : 'رسیدن به نقطه مقصد (زیر ۱۰ متر):')
+            : event.triggerType === 'enter'
             ? (isEn ? 'Entered radius of' : 'ورود به محدوده')
             : (isEn ? 'Exited radius of' : 'خروج از محدوده');
-          const titleText = isEn
-            ? `📍 Geofence Alert: ${displayLocTitle}`
-            : `📍 اعلام حصار مکانی: ${displayLocTitle}`;
-          const bodyText = event.location.geofence?.customMessage
-            ? event.location.geofence.customMessage
-            : `${actionText} ${displayLocTitle} (${isEn ? `Distance: ${Math.round(event.distance)}m` : `فاصله: ${toPersianDigits(Math.round(event.distance))} متر`})`;
 
-          // Native push notification (handles out-of-app & status bar sound)
-          fireImmediateLocalNotification(titleText, bodyText, { locationId: event.location.id, geofence: true });
+          const titleText = isSub10mArrival
+            ? (isEn ? `🎯 Arrived (<10m): ${displayLocTitle}` : `🎯 مقصد ثبت‌شده (<۱۰ متر): ${displayLocTitle}`)
+            : (isEn ? `📍 Geofence Radar: ${displayLocTitle}` : `📍 رادار حصار مکانی: ${displayLocTitle}`);
+
+          const distLabel = isEn
+            ? `Distance: ${Math.round(event.distance)}m`
+            : `فاصله: ${toPersianDigits(Math.round(event.distance))} متر`;
+
+          const bodyText = locDetails
+            ? `${locDetails} (${distLabel})`
+            : `${actionText} ${displayLocTitle} (${distLabel})`;
+
+          // Show distinct Geofence Radar card in-app as well
+          setActiveAlarmReminder({
+            id: `geofence_loc_${event.location.id}`,
+            title: titleText,
+            description: bodyText,
+            category: 'other',
+            priority: 'high',
+            dueTimestamp: Date.now(),
+            status: 'pending',
+            createdAt: Date.now(),
+            postponeCount: 0,
+            ringTune: 'radar',
+            voiceReadAloud: false,
+            geofence: {
+              enabled: true,
+              latitude: event.location.latitude,
+              longitude: event.location.longitude,
+              radius: event.location.geofence?.radius || 200,
+              triggerOn: event.location.geofence?.triggerOn || 'enter',
+              locationName: displayLocTitle,
+            },
+          });
+
+          // Native push notification
+          fireImmediateLocalNotification(titleText, bodyText, {
+            locationId: event.location.id,
+            geofence: true,
+            sub10m: isSub10mArrival,
+          });
           // In-app alert banner
           showSyncNotification(`${titleText} — ${bodyText}`);
 
-          // Audio alarm and speech when on web/PWA (on native Android, fireImmediateLocalNotification plays the sound)
-          if (event.location.geofence?.playAudio !== false && !Capacitor.isNativePlatform()) {
-            playPhoneAlarmSound('radar');
-            speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
+          // Submarine Sonar Audio (distance-adaptive rhythm) vs Distinct <10m Arrival Audio Effect
+          if (event.location.geofence?.playAudio !== false) {
+            if (isSub10mArrival) {
+              playGeofenceArrivalUnder10mSound();
+            } else {
+              startSubmarineSonarLoop(event.distance, event.location.geofence?.radius || 200);
+            }
+            if (!Capacitor.isNativePlatform()) {
+              speakReminderText(bodyText, undefined, settings.ttsVoiceRate ?? 0.95, settings.language || 'fa');
+            }
           }
 
           // Update savedLocation state
@@ -1578,14 +1644,28 @@ export default function App() {
       // 2. Evaluate reminder geofences if any exist
       if (hasActiveReminderGeofences) {
         evaluateGeofences(userPos, reminders, (event: GeofenceTriggerEvent) => {
+          const isSub10mArrival = event.triggerType === 'arrived_under_10m';
           setActiveAlarmReminder(event.reminder);
 
-          const actionText = event.triggerType === 'enter' ? 'رسیدن به محدوده' : 'خروج از محدوده';
+          const actionText = isSub10mArrival
+            ? 'رسیدن به نقطه مقصد (زیر ۱۰ متر)'
+            : event.triggerType === 'enter'
+            ? 'رسیدن به محدوده'
+            : 'خروج از محدوده';
+
           fireImmediateLocalNotification(
-            `📍 هشدار مکان: ${event.reminder.title}`,
-            `${actionText} ${event.reminder.geofence?.locationName || 'مکان ثبت‌شده'} (فاصله: ${event.distance} متر)`,
-            { reminderId: event.reminder.id, geofence: true }
+            isSub10mArrival
+              ? `🎯 مقصد (<۱۰ متر): ${event.reminder.title}`
+              : `📍 رادار مکان: ${event.reminder.title}`,
+            `${actionText} ${event.reminder.geofence?.locationName || 'مکان ثبت‌شده'} (فاصله: ${toPersianDigits(event.distance)} متر)`,
+            { reminderId: event.reminder.id, geofence: true, sub10m: isSub10mArrival }
           );
+
+          if (isSub10mArrival) {
+            playGeofenceArrivalUnder10mSound();
+          } else {
+            startSubmarineSonarLoop(event.distance, event.reminder.geofence?.radius || 200);
+          }
 
           setReminders((prev) =>
             prev.map((item) =>

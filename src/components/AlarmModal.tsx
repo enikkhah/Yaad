@@ -18,6 +18,7 @@ import {
   Repeat,
   Edit2,
   X,
+  MapPin,
 } from 'lucide-react';
 import appIcon from '../assets/images/icon.png';
 
@@ -241,7 +242,23 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     settings?.ttsVoiceRate,
   ]);
 
-  const palette = getAlarmCardPalette(settings?.theme);
+  const isGeofenceAlarm = Boolean(reminder?.geofence?.enabled);
+  const basePalette = getAlarmCardPalette(settings?.theme);
+  const palette: CardThemePalette = isGeofenceAlarm
+    ? {
+        cardBg: 'bg-[#04231F]',
+        cardBorder: 'border-emerald-400/90 shadow-emerald-950/80',
+        titleText: 'text-emerald-50',
+        bodyText: 'text-emerald-200/90',
+        mutedText: 'text-teal-300/80',
+        accentText: 'text-emerald-400',
+        accentBg: 'bg-emerald-500/20 border-emerald-400/60',
+        doneBtn: 'bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black',
+        secondaryBtn: 'bg-[#083832] hover:bg-[#0D4A42] text-emerald-100 border-emerald-500/40',
+        editBtn: 'bg-[#062E29] hover:bg-[#0A4039] text-cyan-300 border-cyan-400/50',
+        progressFill: 'bg-emerald-400',
+      }
+    : basePalette;
 
   const getCategoryIcon = () => {
     switch (reminder?.category) {
@@ -314,22 +331,60 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
         <div className="p-4 sm:p-5 space-y-4">
           {/* Header Row */}
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 min-w-0">
-              <div
-                className={`relative w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden ${palette.accentBg} ${palette.accentText}`}
-              >
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-xl opacity-20 bg-current" />
-                <img
-                  src={appIcon}
-                  alt="YAAD"
-                  className="relative z-10 w-full h-full object-contain rounded-[9px]"
-                  draggable={false}
-                />
-              </div>
+            <div className="flex items-center gap-2.5 min-w-0">
+              {isGeofenceAlarm ? (
+                <div className="relative w-12 h-12 rounded-2xl border border-emerald-400/70 bg-[#073831] flex items-center justify-center shrink-0 overflow-visible shadow-lg shadow-emerald-950/80">
+                  {/* Submarine Sonar Concentric Pulsing Rings */}
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-2xl opacity-35 bg-emerald-400" />
+                  <span
+                    className="animate-ping absolute inline-flex h-10 w-10 rounded-full opacity-40 border border-cyan-300"
+                    style={{ animationDuration: '1.6s' }}
+                  />
+                  <img
+                    src={appIcon}
+                    alt="YAAD"
+                    className="relative z-10 w-10 h-10 object-contain rounded-xl"
+                    draggable={false}
+                  />
+                  {/* Pulsing GPS Pin Symbol Overlay on App Logo */}
+                  <motion.div
+                    animate={{
+                      scale: [1, 1.32, 0.95, 1.25, 1],
+                      y: [0, -2, 0, -1.5, 0],
+                    }}
+                    transition={{
+                      duration: 1.25,
+                      repeat: Infinity,
+                      ease: 'easeInOut',
+                    }}
+                    className="absolute -top-1.5 -right-1.5 z-20 w-6 h-6 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-[0_0_12px_rgba(16,185,129,0.95)]"
+                  >
+                    <MapPin className="w-3.5 h-3.5 text-stone-950 fill-stone-950" />
+                  </motion.div>
+                </div>
+              ) : (
+                <div
+                  className={`relative w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden ${palette.accentBg} ${palette.accentText}`}
+                >
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-xl opacity-20 bg-current" />
+                  <img
+                    src={appIcon}
+                    alt="YAAD"
+                    className="relative z-10 w-full h-full object-contain rounded-[9px]"
+                    draggable={false}
+                  />
+                </div>
+              )}
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 text-xs font-bold">
                   <span className={palette.accentText}>
-                    {isEn ? 'YAAD Reminder' : 'یادآور هوشمند یاد'}
+                    {isGeofenceAlarm
+                      ? isEn
+                        ? '📡 YAAD Geofence Radar'
+                        : '📡 رادار حصار مکانی یاد'
+                      : isEn
+                      ? 'YAAD Reminder'
+                      : 'یادآور هوشمند یاد'}
                   </span>
                   <span className={palette.mutedText}>·</span>
                   <span className={`inline-flex items-center gap-1 ${palette.mutedText}`}>
@@ -369,7 +424,13 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
 
           {/* Main Reminder Content: Distinct Subject Font + Single Time in Date Line */}
           <div className="space-y-2 py-1">
-            <div className="px-3.5 py-2.5 rounded-2xl border border-[#FF8C00]/35 bg-[#FF8C00]/10">
+            <div
+              className={`px-3.5 py-2.5 rounded-2xl border ${
+                isGeofenceAlarm
+                  ? 'border-emerald-400/50 bg-emerald-500/15'
+                  : 'border-[#FF8C00]/35 bg-[#FF8C00]/10'
+              }`}
+            >
               <h2 className={`text-xl sm:text-2xl font-black tracking-tight leading-snug ${palette.titleText}`}>
                 {reminder.title}
               </h2>
