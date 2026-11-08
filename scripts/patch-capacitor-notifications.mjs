@@ -4911,7 +4911,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     }
                 } else {
                     if (isEn) {
-                        "You have reached the exact saved location \"\$title\" (Distance: \${distance}m)"
+                        "You have reached the exact saved location «\$title» (Distance: \${distance}m)"
                     } else {
                         "شما در نقطه دقیق مکان ثبت‌شده «\$title» قرار دارید (فاصله: \${distance} متر)"
                     }
@@ -5068,14 +5068,14 @@ class YaadGeofenceService : Service(), LocationListener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private class ToneNote(
-        val freq: Double,
-        val startSec: Double,
-        val durSec: Double,
-        val gain: Double
-    )
-
     companion object {
+        private class ToneNote(
+            val freq: Double,
+            val startSec: Double,
+            val durSec: Double,
+            val gain: Double
+        )
+
         private const val PREFS_NAME = "YAAD_GEOFENCE_PREFS"
         private const val KEY_ENABLED = "geofence_enabled"
         private const val KEY_LANGUAGE = "geofence_lang"
