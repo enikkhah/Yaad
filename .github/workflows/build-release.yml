@@ -101,7 +101,7 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Install Capacitor
-        run: npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem --legacy-peer-deps
+        run: npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem --legacy-peer-deps --ignore-scripts
 
       - name: Build web app with synced version
         env:
@@ -178,12 +178,10 @@ jobs:
 
       - name: Generate Android App Icon (Transparent Background)
         run: |
-          npm install @capacitor/assets --legacy-peer-deps
           mkdir -p resources
           cp public/logo-transparent.png resources/icon.png || true
           cp public/splash.png resources/splash.png || true
           cp public/splash.png resources/splash-dark.png || true
-          npx capacitor-assets generate --android --splashBackgroundColor '#000000' --splashBackgroundColorDark '#000000' || true
           node scripts/generate-transparent-icons.mjs
 
       - name: Patch Capacitor LocalNotifications for Background Actions

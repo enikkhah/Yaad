@@ -4535,7 +4535,7 @@ class YaadGeofenceService : Service(), LocationListener {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action
         if (action == ACTION_STOP_GEOFENCE_ALERT) {
-            val notifId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, Int.MIN_VALUE)
+            val notifId = intent?.getIntExtra(EXTRA_NOTIFICATION_ID, Int.MIN_VALUE) ?: Int.MIN_VALUE
             stopGeofenceAudio(applicationContext, notifId)
             YaadAlarmPopupActivity.dismissIfMatching(notifId)
             if (!shouldRun(applicationContext) || !hasLocationPermission(applicationContext)) {
@@ -4677,14 +4677,16 @@ class YaadGeofenceService : Service(), LocationListener {
             for (provider in providers) {
                 try {
                     val loc = lm.getLastKnownLocation(provider) ?: continue
-                    if (bestLocation == null || loc.time > bestLocation.time) {
+                    val currentBest = bestLocation
+                    if (currentBest == null || loc.time > currentBest.time) {
                         bestLocation = loc
                     }
                 } catch (e: Exception) {
                 }
             }
-            if (bestLocation != null && System.currentTimeMillis() - bestLocation.time <= 5 * 60 * 1000L) {
-                evaluateLocationAgainstGeofences(bestLocation)
+            val finalBest = bestLocation
+            if (finalBest != null && System.currentTimeMillis() - finalBest.time <= 5 * 60 * 1000L) {
+                evaluateLocationAgainstGeofences(finalBest)
             }
         } catch (e: SecurityException) {
         } catch (e: Exception) {
@@ -5066,6 +5068,13 @@ class YaadGeofenceService : Service(), LocationListener {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private class ToneNote(
+        val freq: Double,
+        val startSec: Double,
+        val durSec: Double,
+        val gain: Double
+    )
+
     companion object {
         private const val PREFS_NAME = "YAAD_GEOFENCE_PREFS"
         private const val KEY_ENABLED = "geofence_enabled"
@@ -5238,7 +5247,6 @@ class YaadGeofenceService : Service(), LocationListener {
                     val pcm = ShortArray(numSamples)
 
                     // Celebratory Target-Lock Arrival Fanfare (distinct from submarine sonar ping)
-                    data class ToneNote(val freq: Double, val startSec: Double, val durSec: Double, val gain: Double)
                     val notes = listOf(
                         ToneNote(523.25, 0.00, 0.14, 0.55), // C5
                         ToneNote(659.25, 0.11, 0.14, 0.60), // E5
