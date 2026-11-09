@@ -43,7 +43,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   onSave,
   onUpdateLocation,
   editingLocation,
-  googleMapsApiKey,
   language = 'fa',
   focusGeofenceRadius = false,
 }) => {

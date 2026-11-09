@@ -29,9 +29,3 @@ function resolveAppVersion(): string {
 
 export const APP_VERSION = resolveAppVersion();
 
-export const APP_VERSION_INFO = {
-  version: APP_VERSION,
-  name: 'YAAD (یاد)',
-  persianVersion: APP_VERSION.replace(/\d/g, (d) => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]),
-  type: 'Progressive Web App (PWA) & Android APK',
-};

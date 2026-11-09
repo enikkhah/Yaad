@@ -28,7 +28,7 @@ interface IdeaCardProps {
   language?: AppLanguage;
 }
 
-export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSetReminder, onSyncToGoogle, onViewImage, language = 'fa' }) => {
+export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSetReminder, onViewImage, language = 'fa' }) => {
   const [drawingLoaded, setDrawingLoaded] = useState(false);
 
   const getCategoryBadge = () => {

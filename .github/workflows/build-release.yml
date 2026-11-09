@@ -64,14 +64,14 @@ jobs:
                   s = s.replace(persian[i], str(i)).replace(arabic[i], str(i))
               return s.strip()
 
-          run_num_str = re.sub(r"\D", "", to_ascii_digits(os.environ.get("RUN_NUMBER", "85")))
-          run_num = int(run_num_str) if run_num_str else 85
+          run_num_str = re.sub(r"\D", "", to_ascii_digits(os.environ.get("RUN_NUMBER", "91")))
+          run_num = int(run_num_str) if run_num_str else 91
 
           raw_code_in = to_ascii_digits(os.environ.get("VERSION_CODE", "auto"))
           raw_name_in = to_ascii_digits(os.environ.get("VERSION_NAME", "auto"))
 
-          # Base version 1.2.5 at GitHub Actions run #85 (continuing from 1.2.4 at #84)
-          offset = max(0, run_num - 85)
+          # Base version 1.2.5 at GitHub Actions run #91 (continuing from 1.2.4)
+          offset = max(0, run_num - 91)
           auto_version_name = f"1.2.{5 + offset}"
           auto_version_code = 100 + run_num
 
@@ -266,6 +266,33 @@ jobs:
               raise RuntimeError("Release build type not found")
 
           path.write_text(text)
+
+          # Harden Gradle Wrapper download (use lighter -bin.zip instead of -all.zip and 120s timeout)
+          wrapper_props = Path("android/gradle/wrapper/gradle-wrapper.properties")
+          if wrapper_props.exists():
+              w_text = wrapper_props.read_text(encoding="utf-8")
+              w_text = w_text.replace("-all.zip", "-bin.zip")
+              if "networkTimeout=" in w_text:
+                  w_text = re.sub(r"networkTimeout=\d+", "networkTimeout=120000", w_text)
+              else:
+                  w_text += "\nnetworkTimeout=120000\n"
+              wrapper_props.write_text(w_text, encoding="utf-8")
+
+          # Add HTTP retry and timeout resilience to android/gradle.properties
+          gradle_props = Path("android/gradle.properties")
+          if gradle_props.exists():
+              g_text = gradle_props.read_text(encoding="utf-8")
+              extra_props = (
+                  "\norg.gradle.internal.http.connectionTimeout=120000\n"
+                  "org.gradle.internal.http.socketTimeout=120000\n"
+                  "systemProp.org.gradle.internal.http.connectionTimeout=120000\n"
+                  "systemProp.org.gradle.internal.http.socketTimeout=120000\n"
+                  "org.gradle.internal.repository.max.tentatives=5\n"
+                  "org.gradle.internal.repository.initial.backoff=2000\n"
+              )
+              if "org.gradle.internal.http.connectionTimeout" not in g_text:
+                  gradle_props.write_text(g_text + extra_props, encoding="utf-8")
+
           print(f"Configured Android Gradle versionCode={v_code}, versionName={v_name}")
           PY
 
@@ -276,7 +303,45 @@ jobs:
           KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
         run: |
-          ./gradlew bundleRelease assembleRelease --no-daemon
+          chmod +x ./gradlew
+          # 1. Pre-warm Gradle wrapper distribution with retry & mirror fallback
+          WRAPPER_OK=0
+          for attempt in 1 2 3 4 5; do
+            echo "Preparing Gradle distribution (attempt $attempt/5)..."
+            if ./gradlew --version --no-daemon; then
+              WRAPPER_OK=1
+              break
+            fi
+            echo "::warning::Gradle wrapper download attempt $attempt failed; cleaning partial files and retrying..."
+            rm -rf ~/.gradle/wrapper/dists/*/*/*.part ~/.gradle/wrapper/dists/*/*/*.lck || true
+            if [ "$attempt" -eq 2 ]; then
+              sed -i 's|services.gradle.org/distributions|downloads.gradle.org/distributions|g' gradle/wrapper/gradle-wrapper.properties || true
+            elif [ "$attempt" -eq 4 ]; then
+              sed -i 's|downloads.gradle.org/distributions|services.gradle.org/distributions|g' gradle/wrapper/gradle-wrapper.properties || true
+            fi
+            sleep 5
+          done
+          if [ "$WRAPPER_OK" -ne 1 ]; then
+            echo "::error::Failed to download Gradle distribution after 5 attempts."
+            exit 1
+          fi
+
+          # 2. Run release AAB + APK build with automatic retry on transient network timeouts
+          BUILD_OK=0
+          for attempt in 1 2 3; do
+            echo "Running Gradle bundleRelease assembleRelease (attempt $attempt/3)..."
+            if ./gradlew bundleRelease assembleRelease --no-daemon; then
+              BUILD_OK=1
+              break
+            fi
+            echo "::warning::Gradle build attempt $attempt failed; retrying in 5 seconds..."
+            sleep 5
+          done
+          if [ "$BUILD_OK" -ne 1 ]; then
+            echo "::error::Gradle release build failed after 3 attempts."
+            exit 1
+          fi
+
           mkdir -p ../dist-release/aab ../dist-release/apk
           AAB_FILE=$(find app/build/outputs/bundle/release -name "*.aab" | head -n 1)
           APK_FILE=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)

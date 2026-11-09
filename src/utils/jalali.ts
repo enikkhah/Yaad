@@ -17,16 +17,6 @@ export const PERSIAN_MONTHS = [
   'اسفند',
 ];
 
-export const PERSIAN_DAYS = [
-  'شنبه',
-  'یکشنبه',
-  'دوشنبه',
-  'سه‌شنبه',
-  'چهارشنبه',
-  'پنج‌شنبه',
-  'جمعه',
-];
-
 export function toPersianDigits(input: string | number): string {
   const farsiDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
   return String(input).replace(/\d/g, (x) => farsiDigits[parseInt(x, 10)]);
@@ -147,36 +137,6 @@ export function formatJalaliTime(timestamp: number, language: string = 'fa'): st
     return `${h}:${m}`;
   }
   return `${toPersianDigits(h)}:${toPersianDigits(m)}`;
-}
-
-/**
- * Returns a human friendly relative time in Persian or English
- */
-export function getPersianRelativeTime(timestamp: number, language: string = 'fa'): string {
-  const isEn = language === 'en';
-  const now = Date.now();
-  const diff = timestamp - now;
-  const absDiff = Math.abs(diff);
-
-  const minutes = Math.round(absDiff / 60000);
-  const hours = Math.round(absDiff / 3600000);
-  const days = Math.round(absDiff / 86400000);
-
-  if (diff > 0) {
-    // In future
-    if (minutes < 1) return isEn ? 'in a moment' : 'چند لحظه دیگر';
-    if (minutes < 60) return isEn ? `in ${minutes}m` : `${toPersianDigits(minutes)} دقیقه دیگر`;
-    if (hours < 24) return isEn ? `in ${hours}h` : `${toPersianDigits(hours)} ساعت دیگر`;
-    if (days === 1) return isEn ? 'tomorrow' : 'فردا';
-    return isEn ? `in ${days} days` : `${toPersianDigits(days)} روز دیگر`;
-  } else {
-    // In past
-    if (minutes < 1) return isEn ? 'just now' : 'همین الان';
-    if (minutes < 60) return isEn ? `${minutes}m ago` : `${toPersianDigits(minutes)} دقیقه پیش`;
-    if (hours < 24) return isEn ? `${hours}h ago` : `${toPersianDigits(hours)} ساعت پیش`;
-    if (days === 1) return isEn ? 'yesterday' : 'دیروز';
-    return isEn ? `${days} days ago` : `${toPersianDigits(days)} روز پیش`;
-  }
 }
 
 /**
@@ -341,21 +301,6 @@ export const GREGORIAN_MONTHS: readonly string[] = [
   'December',
 ] as const;
 
-export const GREGORIAN_MONTHS_SHORT: readonly string[] = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-] as const;
-
 export const GREGORIAN_WEEKDAYS: readonly string[] = [
   'Sunday',
   'Monday',
@@ -364,16 +309,6 @@ export const GREGORIAN_WEEKDAYS: readonly string[] = [
   'Thursday',
   'Friday',
   'Saturday',
-] as const;
-
-export const GREGORIAN_WEEKDAYS_SHORT: readonly string[] = [
-  'Sun',
-  'Mon',
-  'Tue',
-  'Wed',
-  'Thu',
-  'Fri',
-  'Sat',
 ] as const;
 
 /**
@@ -618,18 +553,6 @@ export function getGregorianComponents(timestamp: number) {
     timeString,
     dateString,
   };
-}
-
-/**
- * Formats date string respecting user language (Jalali for Persian, Gregorian for English)
- */
-export function formatDateByLanguage(timestamp: number, language: string = 'fa'): string {
-  if (language === 'en') {
-    const comp = getGregorianComponents(timestamp);
-    return `${comp.monthName} ${comp.day}, ${comp.year}`;
-  }
-  const comp = getJalaliComponents(timestamp);
-  return comp.dateString;
 }
 
 /**

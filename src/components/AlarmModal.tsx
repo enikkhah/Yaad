@@ -456,6 +456,25 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
                 {reminder.description}
               </p>
             )}
+
+            {typeof reminder.geofence?.latitude === 'number' &&
+              typeof reminder.geofence?.longitude === 'number' && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openGoogleMapsDirections(
+                      reminder.geofence!.latitude,
+                      reminder.geofence!.longitude,
+                      reminder.geofence?.locationName || reminder.title
+                    );
+                  }}
+                  className="w-full mt-2 min-h-[40px] py-2 px-3 rounded-xl font-bold text-xs sm:text-sm border border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
+                >
+                  <Navigation className="w-3.5 h-3.5 shrink-0" />
+                  <span>{isEn ? 'Directions in Google Maps' : 'مسیریابی در گوگل‌مپ'}</span>
+                </button>
+              )}
           </div>
 
           {/* 3 Minimal Theme-Matched Action Buttons */}

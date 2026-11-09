@@ -633,7 +633,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         }
         setIsDetectingGps(false);
       },
-      (err) => {
+      () => {
         setIsDetectingGps(false);
         setGpsError(
           isEn 

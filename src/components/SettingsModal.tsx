@@ -99,7 +99,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   settings,
   onUpdateSettings,
   googleUser,
-  googleToken,
   onGoogleSignIn,
   onGoogleSignOut,
   onOpenStats,

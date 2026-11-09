@@ -9,7 +9,7 @@
     "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit",
+    "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters && node scripts/verify-github-build.mjs",
     "postinstall": "node scripts/patch-capacitor-notifications.mjs"
   },
   "dependencies": {

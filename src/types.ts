@@ -141,24 +141,6 @@ export interface Reminder {
   deletedAt?: number;          // Recycle Bin deletion timestamp
 }
 
-export interface StatsData {
-  total: number;
-  completed: number;
-  postponed: number;
-  cancelled: number;
-  pending: number;
-  byCategory: {
-    work: number;
-    family: number;
-    other: number;
-  };
-  byPriority: {
-    high: number;
-    medium: number;
-    low: number;
-  };
-}
-
 export type StatsTimeframe = 'weekly' | 'monthly' | 'yearly';
 
 export type OccasionType = 
@@ -185,14 +167,4 @@ export interface Occasion {
   color?: string;               // تم رنگی
   createdAt: number;
   deletedAt?: number;           // Recycle Bin deletion timestamp
-}
-
-export type RecycleBinItemType = 'reminder' | 'location' | 'occasion' | 'idea';
-
-export interface RecycleBinItem {
-  id: string;
-  type: RecycleBinItemType;
-  title: string;
-  deletedAt: number;
-  originalItem: Reminder | SavedLocation | Occasion | IdeaNote;
 }

@@ -1016,28 +1016,3 @@ export async function retrieveLatestBackupWithPriority(
   }
   return { snapshot: null, source: null };
 }
-
-/**
- * Legacy helper alias for compatibility
- */
-export async function retrieveLatestBackup(): Promise<AutoBackupSnapshot | null> {
-  const res = await retrieveLatestBackupWithPriority();
-  return res.snapshot;
-}
-
-/**
- * Returns summary info of the latest stored auto backup.
- */
-export function getLatestBackupTimestamp(): number | null {
-  try {
-    const raw = localStorage.getItem(LAST_LOCAL_BACKUP_KEY) || localStorage.getItem(AUTO_BACKUP_STORAGE_KEY);
-    if (raw) {
-      if (/^\d+$/.test(raw)) return parseInt(raw, 10);
-      const parsed = JSON.parse(raw);
-      return parsed.updatedAt || null;
-    }
-  } catch {
-    // Ignore
-  }
-  return null;
-}
