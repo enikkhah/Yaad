@@ -236,7 +236,7 @@ jobs:
           text = path.read_text()
 
           v_code = int(os.environ.get("V_CODE", "1"))
-          v_name = os.environ.get("V_NAME", "1.68.5")
+          v_name = os.environ.get("V_NAME", "1.2.5")
 
           text = re.sub(r'versionCode\s+\d+', f'versionCode {v_code}', text, count=1)
           text = re.sub(r'versionName\s+"[^"]*"', f'versionName "{v_name}"', text, count=1)
@@ -267,17 +267,6 @@ jobs:
 
           path.write_text(text)
 
-          # Harden Gradle Wrapper download (use lighter -bin.zip instead of -all.zip and 120s timeout)
-          wrapper_props = Path("android/gradle/wrapper/gradle-wrapper.properties")
-          if wrapper_props.exists():
-              w_text = wrapper_props.read_text(encoding="utf-8")
-              w_text = w_text.replace("-all.zip", "-bin.zip")
-              if "networkTimeout=" in w_text:
-                  w_text = re.sub(r"networkTimeout=\d+", "networkTimeout=120000", w_text)
-              else:
-                  w_text += "\nnetworkTimeout=120000\n"
-              wrapper_props.write_text(w_text, encoding="utf-8")
-
           # Add HTTP retry and timeout resilience to android/gradle.properties
           gradle_props = Path("android/gradle.properties")
           if gradle_props.exists():
@@ -299,32 +288,57 @@ jobs:
       - name: Build Release AAB and APK
         working-directory: android
         env:
+          GH_TOKEN: ${{ github.token }}
           STORE_PASSWORD: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
         run: |
           chmod +x ./gradlew
-          # 1. Pre-warm Gradle wrapper distribution with retry & mirror fallback
-          WRAPPER_OK=0
-          for attempt in 1 2 3 4 5; do
-            echo "Preparing Gradle distribution (attempt $attempt/5)..."
-            if ./gradlew --version --no-daemon; then
-              WRAPPER_OK=1
-              break
-            fi
-            echo "::warning::Gradle wrapper download attempt $attempt failed; cleaning partial files and retrying..."
-            rm -rf ~/.gradle/wrapper/dists/*/*/*.part ~/.gradle/wrapper/dists/*/*/*.lck || true
-            if [ "$attempt" -eq 2 ]; then
-              sed -i 's|services.gradle.org/distributions|downloads.gradle.org/distributions|g' gradle/wrapper/gradle-wrapper.properties || true
-            elif [ "$attempt" -eq 4 ]; then
-              sed -i 's|downloads.gradle.org/distributions|services.gradle.org/distributions|g' gradle/wrapper/gradle-wrapper.properties || true
-            fi
-            sleep 5
-          done
-          if [ "$WRAPPER_OK" -ne 1 ]; then
-            echo "::error::Failed to download Gradle distribution after 5 attempts."
-            exit 1
+
+          # 1. Pre-download Gradle binary zip locally using authenticated GH_TOKEN or non-GitHub mirror
+          # so ./gradlew reads from local disk (file:///) and NEVER hits GitHub unauthenticated rate limits.
+          GRADLE_VER=$(grep -oE 'gradle-[0-9.]+-(all|bin)\.zip' gradle/wrapper/gradle-wrapper.properties | sed -E 's/gradle-([0-9.]+)-(all|bin)\.zip/\1/' | head -n 1)
+          GRADLE_VER=${GRADLE_VER:-8.14.3}
+          GRADLE_ZIP="gradle-${GRADLE_VER}-bin.zip"
+          LOCAL_ZIP="/tmp/gradle-dist/${GRADLE_ZIP}"
+          mkdir -p /tmp/gradle-dist
+
+          echo "Downloading ${GRADLE_ZIP} to local disk (${LOCAL_ZIP})..."
+          if [ ! -s "${LOCAL_ZIP}" ]; then
+            gh release download "v${GRADLE_VER}" --repo gradle/gradle-distributions --pattern "${GRADLE_ZIP}" --dir /tmp/gradle-dist --clobber || true
           fi
+
+          if [ ! -s "${LOCAL_ZIP}" ]; then
+            echo "Trying direct cloud mirror (mirrors.cloud.tencent.com)..."
+            curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 30 \
+              "https://mirrors.cloud.tencent.com/gradle/${GRADLE_ZIP}" -o "${LOCAL_ZIP}" || rm -f "${LOCAL_ZIP}"
+          fi
+
+          if [ ! -s "${LOCAL_ZIP}" ]; then
+            echo "Trying services.gradle.org with browser User-Agent..."
+            curl -fL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 \
+              -A "Mozilla/5.0" \
+              "https://services.gradle.org/distributions/${GRADLE_ZIP}" -o "${LOCAL_ZIP}" || rm -f "${LOCAL_ZIP}"
+          fi
+
+          if [ -s "${LOCAL_ZIP}" ]; then
+            ls -lh "${LOCAL_ZIP}"
+            GRADLE_ZIP="${GRADLE_ZIP}" python3 - <<'PY'
+            from pathlib import Path
+            import os
+            import re
+            gradle_zip = os.environ.get("GRADLE_ZIP", "gradle-8.14.3-bin.zip")
+            p = Path("gradle/wrapper/gradle-wrapper.properties")
+            txt = p.read_text(encoding="utf-8")
+            txt = re.sub(r"distributionUrl=.*", lambda _: f"distributionUrl=file\\:///tmp/gradle-dist/{gradle_zip}", txt)
+            txt = re.sub(r"validateDistributionUrl=.*", "validateDistributionUrl=false", txt)
+            txt = re.sub(r"distributionSha256Sum=.*\n?", "", txt)
+            p.write_text(txt, encoding="utf-8")
+            print(f"Updated gradle-wrapper.properties to use local file:///tmp/gradle-dist/{gradle_zip}")
+            PY
+          fi
+
+          ./gradlew --version --no-daemon
 
           # 2. Run release AAB + APK build with automatic retry on transient network timeouts
           BUILD_OK=0
