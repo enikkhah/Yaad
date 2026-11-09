@@ -471,7 +471,72 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
   };
 }
 
-export type AndroidPermissionType = 'notifications' | 'location' | 'microphone' | 'camera' | 'battery' | 'storage' | 'all_files' | 'app_details';
+export type AndroidPermissionType =
+  | 'notifications'
+  | 'location'
+  | 'gps_disabled'
+  | 'microphone'
+  | 'camera'
+  | 'battery'
+  | 'storage'
+  | 'all_files'
+  | 'app_details';
+
+/**
+ * Checks whether the device's hardware Location / GPS toggle is currently turned ON.
+ * Returns false if Location Services / GPS is turned OFF on the phone.
+ */
+export async function checkDeviceGpsEnabled(): Promise<boolean> {
+  if (typeof window === 'undefined') return true;
+
+  // 1. Check Native Android LocationManager directly via YaadGeofenceBridge
+  try {
+    const bridge = (window as any).YaadGeofenceBridge;
+    if (bridge && typeof bridge.isLocationEnabled === 'function') {
+      return Boolean(bridge.isLocationEnabled());
+    }
+  } catch {
+    // Fallback below
+  }
+
+  // 2. Fallback for Web / PWA: probe geolocation for POSITION_UNAVAILABLE (code 2)
+  if (typeof navigator === 'undefined' || !navigator.geolocation) {
+    return true;
+  }
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(true);
+      }
+    }, 3500);
+
+    navigator.geolocation.getCurrentPosition(
+      () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(true);
+        }
+      },
+      (err) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          // Code 2 = POSITION_UNAVAILABLE (GPS / Location service is turned off)
+          if (err && err.code === 2) {
+            resolve(false);
+          } else {
+            resolve(true);
+          }
+        }
+      },
+      { enableHighAccuracy: true, timeout: 3000, maximumAge: 5000 }
+    );
+  });
+}
 
 /**
  * Directs the user to the relevant Android Settings screen for the specified feature.
@@ -482,6 +547,18 @@ export type AndroidPermissionType = 'notifications' | 'location' | 'microphone' 
 export function openAndroidSettings(section: AndroidPermissionType = 'app_details'): void {
   if (typeof window === 'undefined') return;
 
+  if (section === 'location' || section === 'gps_disabled') {
+    try {
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge && typeof bridge.openLocationSettings === 'function') {
+        bridge.openLocationSettings();
+        return;
+      }
+    } catch {
+      // Fallback to intent URL below
+    }
+  }
+
   const pkg = 'com.yaad.reminder';
   let intentUrl = `intent:#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;data=package:${pkg};end`;
 
@@ -491,6 +568,7 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
       intentUrl = `intent:#Intent;action=android.settings.APP_NOTIFICATION_SETTINGS;S.android.provider.extra.APP_PACKAGE=${pkg};end`;
       break;
     case 'location':
+    case 'gps_disabled':
       // Directs to Android Location Source Settings
       intentUrl = `intent:#Intent;action=android.settings.LOCATION_SOURCE_SETTINGS;end`;
       break;

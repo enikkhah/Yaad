@@ -3318,7 +3318,7 @@ const legacyCompanionFireV6 = `        private const val BG_ACTION_PREFS = "YAAD
             }
         }`;
 
-const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+const legacyCompanionFireV7 = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
         private const val BG_ACTION_KEY = "queued_actions"
         private var activeMediaPlayer: android.media.MediaPlayer? = null
         private var isAppInForegroundState: Boolean = false
@@ -3391,14 +3391,101 @@ const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_
             }
         }`;
 
+const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+        private const val BG_ACTION_KEY = "queued_actions"
+        private var activeMediaPlayer: android.media.MediaPlayer? = null
+        private var isAppInForegroundState: Boolean = false
+
+        fun isAppInForeground(context: Context): Boolean {
+            val instance = getLocalNotificationsInstance() ?: return false
+            val act = instance.activity ?: return false
+            if (act.isFinishing || act.isDestroyed) return false
+            if (!isAppInForegroundState && !act.hasWindowFocus()) return false
+            try {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (pm != null && !pm.isInteractive) return false
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                if (km != null && km.isKeyguardLocked) return false
+            } catch (e: Exception) {
+            }
+            return true
+        }
+
+        fun evaluateJsInWebView(jsCode: String) {
+            try {
+                val instance = getLocalNotificationsInstance() ?: return
+                val wv = instance.bridge?.webView ?: return
+                wv.post {
+                    try {
+                        wv.evaluateJavascript(jsCode, null)
+                    } catch (e: Exception) {
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        fun stopActiveMediaPlayer() {
+            try {
+                activeMediaPlayer?.let { mp ->
+                    if (mp.isPlaying) {
+                        mp.stop()
+                    }
+                    mp.release()
+                }
+            } catch (e: Exception) {
+            } finally {
+                activeMediaPlayer = null
+            }
+        }
+
+        fun fireReceived(notification: JSObject?) {
+            getLocalNotificationsInstance()?.dispatchReceived(notification)
+        }
+
+        fun fireActionPerformed(dataJson: JSObject): Boolean {
+            val instance = getLocalNotificationsInstance()
+            val act = instance?.activity
+            if (instance != null && act != null && !act.isFinishing && !act.isDestroyed) {
+                instance.dispatchActionPerformed(dataJson)
+                return true
+            }
+            return false
+        }
+
+        fun queueBackgroundAction(context: Context, dataJson: JSObject) {
+            try {
+                val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BG_ACTION_KEY, "[]")
+                val arr = JSONArray(existing)
+                val newRemId = dataJson.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                val filteredArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val itemStr = arr.optString(i, null) ?: continue
+                    if (newRemId.isNotEmpty()) {
+                        try {
+                            val prevObj = JSObject(itemStr)
+                            val prevRemId = prevObj.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (prevRemId == newRemId) continue
+                        } catch (e: Exception) {
+                        }
+                    }
+                    filteredArr.put(itemStr)
+                }
+                filteredArr.put(dataJson.toString())
+                prefs.edit().putString(BG_ACTION_KEY, filteredArr.toString()).apply()
+            } catch (e: Exception) {
+            }
+        }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'companion isAppInForeground, stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
+  'companion isAppInForeground, evaluateJsInWebView, stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
   origCompanionFire,
   patchedCompanionFire,
-  'if (!isAppInForegroundState && !act.hasWindowFocus()) return false',
-  [legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3, legacyCompanionFireV4, legacyCompanionFireV5, legacyCompanionFireV6]
+  'fun evaluateJsInWebView(jsCode: String)',
+  [legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3, legacyCompanionFireV4, legacyCompanionFireV5, legacyCompanionFireV6, legacyCompanionFireV7]
 );
 
 // 8. Create standalone YaadAlarmPopupActivity.kt (Out-of-app minimal theme-matched 1-minute notification card)
@@ -3456,6 +3543,9 @@ class YaadAlarmPopupActivity : Activity() {
     private var isPersian: Boolean = true
     private var isGeofencePopup: Boolean = false
     private var isSub10mArrival: Boolean = false
+    private var targetLatitude: Double = Double.NaN
+    private var targetLongitude: Double = Double.NaN
+    private var cleanLocationTitle: String = ""
     private var sonarRingAnimator: ObjectAnimator? = null
     private var sonarOuterRingAnimator: ObjectAnimator? = null
     private var gpsPinPulseAnimator: ObjectAnimator? = null
@@ -3811,13 +3901,8 @@ class YaadAlarmPopupActivity : Activity() {
         isSub10mArrival = extraObj?.optBoolean("sub10m", false) == true
         val initialDistance = extraObj?.optInt("distance", 0) ?: 0
         val radiusMeters = extraObj?.optInt("radius", 200) ?: 200
-
-        // If launched via Status Bar Notification "✎ ویرایش" ("Edit") action button,
-        // immediately stop sonar audio, cancel the notification, open the app, and navigate to Geofence Radius section.
-        if (data.getBooleanExtra("yaad_direct_geofence_edit", false)) {
-            performEditAction()
-            return
-        }
+        targetLatitude = extraObj?.optDouble("latitude", Double.NaN) ?: Double.NaN
+        targetLongitude = extraObj?.optDouble("longitude", Double.NaN) ?: Double.NaN
 
         val rawTitle = requestJson?.getString("title") ?: (if (isPersian) "یادآور" else "Reminder")
         val cleanTitle = rawTitle
@@ -3833,6 +3918,22 @@ class YaadAlarmPopupActivity : Activity() {
             .replaceFirst("📍 ", "")
             .substringBefore("  |  ")
             .trim()
+        cleanLocationTitle = cleanTitle
+
+        // If launched via Status Bar Notification "✎ ویرایش" ("Edit") action button,
+        // immediately stop sonar audio, cancel the notification, open the app, and navigate to Geofence Radius section.
+        if (data.getBooleanExtra("yaad_direct_geofence_edit", false)) {
+            performEditAction()
+            return
+        }
+
+        // If launched via Status Bar Notification "🧭 مسیریابی" ("Directions") action button,
+        // immediately stop sonar audio, cancel the notification, and launch Google Maps turn-by-turn navigation.
+        if (data.getBooleanExtra("yaad_direct_geofence_directions", false)) {
+            performDirectionsAction()
+            return
+        }
+
         val bodyText = requestJson?.getString("body") ?: ""
 
         val effectiveTheme = if (isGeofencePopup) {
@@ -3866,7 +3967,7 @@ class YaadAlarmPopupActivity : Activity() {
      * 1. Top: Clear & prominent Location Title
      * 2. Center: Large pulsing YAAD App Logo with expanding submarine sonar rings & pulsing GPS pin
      * 3. Below Logo: Distinct, readable Live Distance box
-     * 4. Bottom: Dual action buttons ("✓ متوجه شدم" and "✎ ویرایش")
+     * 4. Bottom: Action buttons ("✓ متوجه شدم", "🧭 مسیریابی", and "✎ ویرایش")
      */
     private fun buildFullScreenGeofenceUI(
         palette: ThemePalette,
@@ -4188,7 +4289,7 @@ class YaadAlarmPopupActivity : Activity() {
         centerArea.addView(distanceCard)
         content.addView(centerArea)
 
-        // 4. BOTTOM SECTION: Dual Action Buttons ("✓ متوجه شدم" and "✎ ویرایش")
+        // 4. BOTTOM SECTION: Action Buttons ("✓ متوجه شدم", "🧭 مسیریابی", and "✎ ویرایش")
         val actionsRow = LinearLayout(this)
         actionsRow.orientation = LinearLayout.HORIZONTAL
         actionsRow.gravity = Gravity.CENTER
@@ -4208,8 +4309,20 @@ class YaadAlarmPopupActivity : Activity() {
         ) {
             performBackgroundAction("done")
         }
-        gotItBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
-        gotItBtn.setPadding(dp(12f), dp(14f), dp(12f), dp(14f))
+        gotItBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+        gotItBtn.setPadding(dp(8f), dp(14f), dp(8f), dp(14f))
+
+        val directionsBtn = buildActionButton(
+            text = if (isPersian) "🧭 مسیریابی" else "🧭 Directions",
+            bgColor = Color.parseColor("#0C4A6E"),
+            borderColor = Color.parseColor("#38BDF8"),
+            textColor = Color.parseColor("#E0F2FE"),
+            strokeDp = 1.5f
+        ) {
+            performDirectionsAction()
+        }
+        directionsBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+        directionsBtn.setPadding(dp(8f), dp(14f), dp(8f), dp(14f))
 
         val editBtn = buildActionButton(
             text = if (isPersian) "✎ ویرایش" else "✎ Edit",
@@ -4220,14 +4333,16 @@ class YaadAlarmPopupActivity : Activity() {
         ) {
             performEditAction()
         }
-        editBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
-        editBtn.setPadding(dp(12f), dp(14f), dp(12f), dp(14f))
+        editBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+        editBtn.setPadding(dp(8f), dp(14f), dp(8f), dp(14f))
 
-        val btnMargin = dp(6f)
+        val btnMargin = dp(4f)
         (gotItBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+        (directionsBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
         (editBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
 
         actionsRow.addView(gotItBtn)
+        actionsRow.addView(directionsBtn)
         actionsRow.addView(editBtn)
         content.addView(actionsRow)
 
@@ -4530,6 +4645,26 @@ class YaadAlarmPopupActivity : Activity() {
         overridePendingTransition(0, 0)
     }
 
+    private fun performDirectionsAction() {
+        countDownTimer?.cancel()
+        stopPulseAnimators()
+        stopGeofenceAlertIfNeeded(cancelStatusBarNotif = true)
+        try {
+            if (notificationId != Int.MIN_VALUE) {
+                NotificationManagerCompat.from(this).cancel(notificationId)
+            }
+        } catch (e: Exception) {
+        }
+        YaadGeofenceService.launchGoogleMapsDirections(
+            this,
+            targetLatitude,
+            targetLongitude,
+            cleanLocationTitle
+        )
+        finish()
+        overridePendingTransition(0, 0)
+    }
+
     private fun performTapOpenTimelineAction() {
         countDownTimer?.cancel()
         stopPulseAnimators()
@@ -4723,12 +4858,14 @@ import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -4754,13 +4891,15 @@ class YaadGeofenceService : Service(), LocationListener {
             try {
                 if (!shouldRun(applicationContext)) {
                     stopGeofenceAudio(applicationContext)
+                    cancelGpsDisabledWarningNotification(applicationContext)
                     stopSelf()
                     return
                 }
+                checkAndNotifyGpsStatus()
                 checkLastKnownLocations()
             } catch (e: Exception) {
             }
-            mainHandler.postDelayed(this, 8000L)
+            mainHandler.postDelayed(this, 5000L)
         }
     }
 
@@ -4785,16 +4924,33 @@ class YaadGeofenceService : Service(), LocationListener {
 
         if (!shouldRun(applicationContext) || !hasLocationPermission(applicationContext)) {
             stopGeofenceAudio(applicationContext)
+            cancelGpsDisabledWarningNotification(applicationContext)
             stopLocationUpdates()
             stopSelf()
             return START_NOT_STICKY
         }
 
         promoteToForegroundService()
+        checkAndNotifyGpsStatus()
         startLocationUpdates()
         mainHandler.removeCallbacks(periodicCheckRunnable)
         mainHandler.post(periodicCheckRunnable)
         return START_STICKY
+    }
+
+    private fun checkAndNotifyGpsStatus() {
+        try {
+            val gpsOn = isDeviceLocationEnabled(this)
+            LocalNotificationsPlugin.evaluateJsInWebView(
+                "window.dispatchEvent(new CustomEvent('yaad:gps-status-changed', { detail: { enabled: \$gpsOn } }));"
+            )
+            if (!gpsOn && shouldRun(this)) {
+                postGpsDisabledWarningNotification(this)
+            } else {
+                cancelGpsDisabledWarningNotification(this)
+            }
+        } catch (e: Exception) {
+        }
     }
 
     private fun promoteToForegroundService() {
@@ -4862,30 +5018,38 @@ class YaadGeofenceService : Service(), LocationListener {
     }
 
     private fun startLocationUpdates() {
-        if (isTrackingRegistered) return
         val lm = locationManager ?: return
         if (!hasLocationPermission(this)) return
         try {
+            if (isTrackingRegistered) {
+                try {
+                    lm.removeUpdates(this)
+                } catch (e: Exception) {
+                }
+                isTrackingRegistered = false
+            }
             val providers = listOf(
                 LocationManager.GPS_PROVIDER,
                 LocationManager.NETWORK_PROVIDER,
                 LocationManager.PASSIVE_PROVIDER
             )
+            var anyRegistered = false
             for (provider in providers) {
                 try {
-                    if (lm.isProviderEnabled(provider)) {
+                    if (lm.allProviders.contains(provider)) {
                         lm.requestLocationUpdates(
                             provider,
-                            3000L,
-                            1.5f,
+                            2000L,
+                            1.0f,
                             this,
                             Looper.getMainLooper()
                         )
+                        anyRegistered = true
                     }
                 } catch (e: Exception) {
                 }
             }
-            isTrackingRegistered = true
+            isTrackingRegistered = anyRegistered
             checkLastKnownLocations()
         } catch (e: SecurityException) {
         } catch (e: Exception) {
@@ -4936,8 +5100,15 @@ class YaadGeofenceService : Service(), LocationListener {
 
     @Deprecated("Deprecated in Java")
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
-    override fun onProviderEnabled(provider: String) {}
-    override fun onProviderDisabled(provider: String) {}
+
+    override fun onProviderEnabled(provider: String) {
+        checkAndNotifyGpsStatus()
+        startLocationUpdates()
+    }
+
+    override fun onProviderDisabled(provider: String) {
+        checkAndNotifyGpsStatus()
+    }
 
     private fun isScreenOffOrLocked(): Boolean {
         return try {
@@ -4971,8 +5142,16 @@ class YaadGeofenceService : Service(), LocationListener {
 
     private fun evaluateLocationAgainstGeofences(location: Location) {
         try {
-            // When app is actively open in foreground, the WebView handles UI + notification directly
+            // Always stream live native Android GPS fix to WebView if app is in foreground
+            // so the in-app Geofence engine and live distance cards update with zero lag!
             if (LocalNotificationsPlugin.isAppInForeground(this)) {
+                val lat = location.latitude
+                val lon = location.longitude
+                val acc = location.accuracy
+                val ts = System.currentTimeMillis()
+                LocalNotificationsPlugin.evaluateJsInWebView(
+                    "window.dispatchEvent(new CustomEvent('yaad:native-location', { detail: { latitude: \$lat, longitude: \$lon, accuracy: \$acc, timestamp: \$ts } }));"
+                )
                 return
             }
 
@@ -5005,7 +5184,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 val radius = item.optInt("radius", 200).coerceAtLeast(20)
                 val triggerOn = item.optString("triggerOn", "enter")
                 val customMessage = item.optString("customMessage", "")
-                val cooldownMs = item.optLong("cooldownMs", 180000L)
+                val debounceMs = 15_000L
 
                 val distance = calculateHaversineMeters(
                     location.latitude,
@@ -5025,22 +5204,23 @@ class YaadGeofenceService : Service(), LocationListener {
                     nearestRadius = radius
                 }
 
-                val isInsideNow = distance <= radius
-                val isUnder10mNow = distance <= 10
-
                 val insideKey = "inside_\$id"
                 val hasPreviousState = prefs.contains(insideKey)
                 val wasInsideBefore = prefs.getBoolean(insideKey, false)
 
+                // +8m exit hysteresis prevents GPS boundary jitter
+                val isInsideNow = if (wasInsideBefore) {
+                    distance <= radius + 8
+                } else {
+                    distance <= radius
+                }
+                val isUnder10mNow = distance <= 10
+
                 val u10mKey = "u10m_\$id"
                 val wasUnder10mBefore = prefs.getBoolean(u10mKey, false)
 
-                if (!hasPreviousState || wasInsideBefore != isInsideNow) {
-                    editor.putBoolean(insideKey, isInsideNow)
-                    prefsModified = true
-                }
-                if (wasUnder10mBefore != isUnder10mNow) {
-                    editor.putBoolean(u10mKey, isUnder10mNow)
+                if (!isUnder10mNow && wasUnder10mBefore) {
+                    editor.putBoolean(u10mKey, false)
                     prefsModified = true
                 }
 
@@ -5049,7 +5229,9 @@ class YaadGeofenceService : Service(), LocationListener {
                 if (isInsideNow && isUnder10mNow && !wasUnder10mBefore) {
                     val lastU10mKey = "last_u10m_trig_\$id"
                     val lastU10mTrig = prefs.getLong(lastU10mKey, 0L)
-                    if (lastU10mTrig == 0L || now - lastU10mTrig >= 60_000L) {
+                    if (lastU10mTrig == 0L || now - lastU10mTrig >= 30_000L) {
+                        editor.putBoolean(u10mKey, true)
+                        editor.putBoolean(insideKey, true)
                         editor.putLong(lastU10mKey, now)
                         prefsModified = true
                         fireOutOfAppGeofenceAlert(
@@ -5060,6 +5242,8 @@ class YaadGeofenceService : Service(), LocationListener {
                             eventType = "arrived_under_10m",
                             distance = distance,
                             radius = radius,
+                            targetLat = targetLat,
+                            targetLon = targetLon,
                             isEn = isEn
                         )
                         continue
@@ -5067,12 +5251,6 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
 
                 // 2. Boundary Entry / Exit Alert
-                val lastTrigKey = "last_trig_\$id"
-                val lastTriggeredAt = prefs.getLong(lastTrigKey, 0L)
-                if (lastTriggeredAt > 0L && now - lastTriggeredAt < cooldownMs) {
-                    continue
-                }
-
                 var shouldTrigger = false
                 var eventType = "enter"
 
@@ -5081,12 +5259,19 @@ class YaadGeofenceService : Service(), LocationListener {
                         if (isInsideNow && (!hasPreviousState || !wasInsideBefore)) {
                             shouldTrigger = true
                             eventType = "enter"
+                        } else if (!isInsideNow && wasInsideBefore) {
+                            // User exited the boundary (+8m hysteresis): reset insideKey to false so next entry triggers immediately!
+                            editor.putBoolean(insideKey, false)
+                            prefsModified = true
                         }
                     }
                     "exit" -> {
                         if (!isInsideNow && hasPreviousState && wasInsideBefore) {
                             shouldTrigger = true
                             eventType = "exit"
+                        } else if (isInsideNow && (!hasPreviousState || !wasInsideBefore)) {
+                            editor.putBoolean(insideKey, true)
+                            prefsModified = true
                         }
                     }
                     "both" -> {
@@ -5100,19 +5285,32 @@ class YaadGeofenceService : Service(), LocationListener {
                     }
                 }
 
-                if (shouldTrigger) {
-                    editor.putLong(lastTrigKey, now)
+                if (!hasPreviousState && !isInsideNow) {
+                    editor.putBoolean(insideKey, false)
                     prefsModified = true
-                    fireOutOfAppGeofenceAlert(
-                        id = id,
-                        title = title,
-                        description = description,
-                        customMessage = customMessage,
-                        eventType = eventType,
-                        distance = distance,
-                        radius = radius,
-                        isEn = isEn
-                    )
+                }
+
+                if (shouldTrigger) {
+                    val lastTrigKey = "last_trig_\$id"
+                    val lastTriggeredAt = prefs.getLong(lastTrigKey, 0L)
+                    // IMPORTANT: Only mark insideKey = isInsideNow AFTER debounce check passes so an entry is NEVER swallowed!
+                    if (lastTriggeredAt == 0L || now - lastTriggeredAt >= debounceMs) {
+                        editor.putBoolean(insideKey, isInsideNow)
+                        editor.putLong(lastTrigKey, now)
+                        prefsModified = true
+                        fireOutOfAppGeofenceAlert(
+                            id = id,
+                            title = title,
+                            description = description,
+                            customMessage = customMessage,
+                            eventType = eventType,
+                            distance = distance,
+                            radius = radius,
+                            targetLat = targetLat,
+                            targetLon = targetLon,
+                            isEn = isEn
+                        )
+                    }
                 }
             }
 
@@ -5210,6 +5408,8 @@ class YaadGeofenceService : Service(), LocationListener {
                 isSub10m = activeGeofenceEventType == "arrived_under_10m",
                 distance = newDistance,
                 radius = activeGeofenceRadius,
+                targetLat = activeGeofenceLat,
+                targetLon = activeGeofenceLon,
                 isEn = activeGeofenceIsEn,
                 isLiveUpdate = true,
                 showFullScreen = false
@@ -5226,6 +5426,8 @@ class YaadGeofenceService : Service(), LocationListener {
         eventType: String,
         distance: Int,
         radius: Int,
+        targetLat: Double,
+        targetLon: Double,
         isEn: Boolean
     ) {
         try {
@@ -5269,12 +5471,14 @@ class YaadGeofenceService : Service(), LocationListener {
             activeGeofenceCustomMessage = customMessage
             activeGeofenceEventType = eventType
             activeGeofenceRadius = radius
+            activeGeofenceLat = targetLat
+            activeGeofenceLon = targetLon
             activeGeofenceIsEn = isEn
             lastNotifiedStatusBarDistance = distance
 
             // Check whether device screen is OFF or on Lock Screen:
-            // - If screen is OFF or locked: show dedicated Full-Screen Geofence Alert (with centered pulsing logo, top title, live distance below logo, 2 buttons).
-            // - If user is in Android environment or other apps (screen ON & unlocked): deliver via Status Bar Notification ONLY with 2 buttons ("✓ متوجه شدم" and "✎ ویرایش").
+            // - If screen is OFF or locked: show dedicated Full-Screen Geofence Alert (with centered pulsing logo, top title, live distance below logo, 3 action buttons).
+            // - If user is in Android environment or other apps (screen ON & unlocked): deliver via Status Bar Notification with action buttons ("✓ متوجه شدم", "🧭 مسیریابی", and "✎ ویرایش").
             val screenOffOrLocked = isScreenOffOrLocked()
 
             val sourceJsonStr = buildAndPostStatusBarNotification(
@@ -5285,6 +5489,8 @@ class YaadGeofenceService : Service(), LocationListener {
                 isSub10m = isSub10m,
                 distance = distance,
                 radius = radius,
+                targetLat = targetLat,
+                targetLon = targetLon,
                 isEn = isEn,
                 isLiveUpdate = false,
                 showFullScreen = screenOffOrLocked
@@ -5314,6 +5520,8 @@ class YaadGeofenceService : Service(), LocationListener {
         isSub10m: Boolean,
         distance: Int,
         radius: Int,
+        targetLat: Double,
+        targetLon: Double,
         isEn: Boolean,
         isLiveUpdate: Boolean,
         showFullScreen: Boolean
@@ -5326,6 +5534,8 @@ class YaadGeofenceService : Service(), LocationListener {
             put("sub10m", isSub10m)
             put("distance", distance)
             put("radius", radius)
+            put("latitude", targetLat)
+            put("longitude", targetLon)
             put("language", if (isEn) "en" else "fa")
             put("theme", if (isSub10m) "geofence-sub10m" else "geofence-radar")
         }
@@ -5372,7 +5582,24 @@ class YaadGeofenceService : Service(), LocationListener {
             piFlags
         )
 
-        // Button 2: "✎ ویرایش" ("✎ Edit") -> Stops sonar audio, dismisses notification, opens app to Geofence Radius section
+        // Button 2: "🧭 مسیریابی" ("🧭 Directions") -> Stops sonar audio, dismisses notification, opens Google Maps navigation
+        val directionsIntent = Intent(this, YaadAlarmPopupActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+            putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+            putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJsonStr)
+            putExtra("yaad_direct_geofence_directions", true)
+        }
+        val directionsPi = PendingIntent.getActivity(
+            this,
+            notificationId + 400000,
+            directionsIntent,
+            piFlags
+        )
+
+        // Button 3: "✎ ویرایش" ("✎ Edit") -> Stops sonar audio, dismisses notification, opens app to Geofence Radius section
         val editIntent = Intent(this, YaadAlarmPopupActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -5411,6 +5638,11 @@ class YaadGeofenceService : Service(), LocationListener {
                 0,
                 if (isEn) "✓ Got It" else "✓ متوجه شدم",
                 stopPi
+            )
+            .addAction(
+                0,
+                if (isEn) "🧭 Directions" else "🧭 مسیریابی",
+                directionsPi
             )
             .addAction(
                 0,
@@ -5469,6 +5701,7 @@ class YaadGeofenceService : Service(), LocationListener {
         private const val KEY_ITEMS_JSON = "geofence_items_json"
         private const val RADAR_SERVICE_CHANNEL_ID = "yaad_geofence_radar_service_v1"
         private const val RADAR_FOREGROUND_NOTIFICATION_ID = 889911
+        private const val GPS_WARNING_NOTIFICATION_ID = 889912
         const val ACTION_STOP_GEOFENCE_ALERT = "com.capacitorjs.plugins.localnotifications.STOP_GEOFENCE_ALERT"
         const val EXTRA_NOTIFICATION_ID = "extra_geofence_notif_id"
 
@@ -5493,12 +5726,150 @@ class YaadGeofenceService : Service(), LocationListener {
         @Volatile
         private var activeGeofenceRadius: Int = 200
         @Volatile
+        private var activeGeofenceLat: Double = Double.NaN
+        @Volatile
+        private var activeGeofenceLon: Double = Double.NaN
+        @Volatile
         private var activeGeofenceIsEn: Boolean = false
         @Volatile
         private var lastNotifiedStatusBarDistance: Int = Int.MIN_VALUE
+        @Volatile
+        private var gpsWarningPosted: Boolean = false
 
         private var sonarThread: Thread? = null
         private var sonarWakeLock: PowerManager.WakeLock? = null
+
+        fun isDeviceLocationEnabled(context: Context): Boolean {
+            return try {
+                val lm = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager ?: return true
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    lm.isLocationEnabled
+                } else {
+                    lm.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                        lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER)
+                }
+            } catch (e: Exception) {
+                true
+            }
+        }
+
+        fun openDeviceLocationSettings(context: Context) {
+            try {
+                val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(intent)
+            } catch (e: Exception) {
+            }
+        }
+
+        fun launchGoogleMapsDirections(context: Context, lat: Double, lon: Double, label: String) {
+            try {
+                val uriStr = if (!lat.isNaN() && !lon.isNaN()) {
+                    "https://www.google.com/maps/dir/?api=1&destination=\$lat,\$lon&travelmode=driving"
+                } else {
+                    "https://www.google.com/maps/search/?api=1&query=" + Uri.encode(label)
+                }
+                val mapIntent = Intent(Intent.ACTION_VIEW, Uri.parse(uriStr)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(mapIntent)
+            } catch (e: Exception) {
+            }
+        }
+
+        fun postGpsDisabledWarningNotification(context: Context) {
+            if (gpsWarningPosted) return
+            gpsWarningPosted = true
+            try {
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    if (nm.getNotificationChannel(RADAR_SERVICE_CHANNEL_ID) == null) {
+                        val ch = NotificationChannel(
+                            RADAR_SERVICE_CHANNEL_ID,
+                            "Geofence Radar Service",
+                            NotificationManager.IMPORTANCE_HIGH
+                        )
+                        nm.createNotificationChannel(ch)
+                    }
+                }
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val isEn = prefs.getString(KEY_LANGUAGE, "fa") == "en"
+                val title = if (isEn) "⚠️ Device GPS is Turned OFF" else "⚠️ مکان‌یاب (GPS) گوشی خاموش است"
+                val body = if (isEn) {
+                    "Geofence alerts cannot detect location boundaries while GPS is off. Tap to turn on GPS."
+                } else {
+                    "برای کارکرد هشدار حصار مکانی لازم است مکان‌یاب (GPS) گوشی روشن باشد. برای روشن کردن ضربه بزنید."
+                }
+                val locSettingsIntent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                } else {
+                    PendingIntent.FLAG_UPDATE_CURRENT
+                }
+                val locPi = PendingIntent.getActivity(context, 909105, locSettingsIntent, piFlags)
+                val smallIconRes = context.resources.getIdentifier("ic_stat_icon_config_sample", "drawable", context.packageName)
+                    .takeIf { it != 0 } ?: context.applicationInfo.icon
+
+                val notif = NotificationCompat.Builder(context, RADAR_SERVICE_CHANNEL_ID)
+                    .setSmallIcon(smallIconRes)
+                    .setContentTitle(title)
+                    .setContentText(body)
+                    .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setAutoCancel(true)
+                    .setContentIntent(locPi)
+                    .addAction(
+                        0,
+                        if (isEn) "Turn On GPS" else "روشن کردن GPS",
+                        locPi
+                    )
+                    .build()
+
+                NotificationManagerCompat.from(context).notify(GPS_WARNING_NOTIFICATION_ID, notif)
+            } catch (e: Exception) {
+            }
+        }
+
+        fun cancelGpsDisabledWarningNotification(context: Context) {
+            if (!gpsWarningPosted) return
+            gpsWarningPosted = false
+            try {
+                NotificationManagerCompat.from(context).cancel(GPS_WARNING_NOTIFICATION_ID)
+            } catch (e: Exception) {
+            }
+        }
+
+        fun resetSavedGeofenceState(context: Context, itemId: String) {
+            try {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val editor = prefs.edit()
+                if (itemId.isNotEmpty()) {
+                    editor.remove("inside_\$itemId")
+                    editor.remove("u10m_\$itemId")
+                    editor.remove("last_trig_\$itemId")
+                    editor.remove("last_u10m_trig_\$itemId")
+                    editor.remove("inside_loc_\$itemId")
+                    editor.remove("u10m_loc_\$itemId")
+                    editor.remove("last_trig_loc_\$itemId")
+                    editor.remove("last_u10m_trig_loc_\$itemId")
+                    editor.remove("inside_rem_\$itemId")
+                    editor.remove("u10m_rem_\$itemId")
+                    editor.remove("last_trig_rem_\$itemId")
+                    editor.remove("last_u10m_trig_rem_\$itemId")
+                } else {
+                    for (key in prefs.all.keys.toList()) {
+                        if (key.startsWith("inside_") || key.startsWith("u10m_") || key.startsWith("last_trig_") || key.startsWith("last_u10m_trig_")) {
+                            editor.remove(key)
+                        }
+                    }
+                }
+                editor.apply()
+            } catch (e: Exception) {
+            }
+        }
 
         fun computeSonarIntervalMs(distanceMeters: Int, radiusMeters: Int): Long {
             val safeRadius = radiusMeters.coerceAtLeast(30).toDouble()
@@ -5774,7 +6145,36 @@ class YaadGeofenceService : Service(), LocationListener {
                 val itemsArr = obj.optJSONArray("items") ?: JSONArray()
 
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                prefs.edit()
+                val oldItemsRaw = prefs.getString(KEY_ITEMS_JSON, "[]") ?: "[]"
+                val oldMap = HashMap<String, String>()
+                try {
+                    val oldArr = JSONArray(oldItemsRaw)
+                    for (i in 0 until oldArr.length()) {
+                        val o = oldArr.optJSONObject(i) ?: continue
+                        val oid = o.optString("id", "")
+                        if (oid.isNotEmpty()) {
+                            oldMap[oid] = "\${o.optInt("radius", 200)}_\${o.optString("triggerOn", "enter")}_\${o.optDouble("latitude", 0.0)}_\${o.optDouble("longitude", 0.0)}"
+                        }
+                    }
+                } catch (e: Exception) {
+                }
+
+                val editor = prefs.edit()
+                for (i in 0 until itemsArr.length()) {
+                    val n = itemsArr.optJSONObject(i) ?: continue
+                    val nid = n.optString("id", "")
+                    if (nid.isEmpty()) continue
+                    val sig = "\${n.optInt("radius", 200)}_\${n.optString("triggerOn", "enter")}_\${n.optDouble("latitude", 0.0)}_\${n.optDouble("longitude", 0.0)}"
+                    if (!oldMap.containsKey(nid) || oldMap[nid] != sig) {
+                        // Newly enabled or modified geofence: clear cached state so it triggers immediately!
+                        editor.remove("inside_\$nid")
+                        editor.remove("u10m_\$nid")
+                        editor.remove("last_trig_\$nid")
+                        editor.remove("last_u10m_trig_\$nid")
+                    }
+                }
+
+                editor
                     .putBoolean(KEY_ENABLED, enabled && itemsArr.length() > 0)
                     .putString(KEY_LANGUAGE, lang)
                     .putString(KEY_ITEMS_JSON, itemsArr.toString())
@@ -5797,6 +6197,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     }
                 } else {
                     stopGeofenceAudio(appCtx)
+                    cancelGpsDisabledWarningNotification(appCtx)
                     appCtx.stopService(serviceIntent)
                 }
             } catch (e: Exception) {
@@ -5813,6 +6214,26 @@ class YaadGeofenceService : Service(), LocationListener {
         @android.webkit.JavascriptInterface
         fun stopGeofenceAlertAudio() {
             stopGeofenceAudio(appContext)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun isLocationEnabled(): Boolean {
+            return isDeviceLocationEnabled(appContext)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openLocationSettings() {
+            openDeviceLocationSettings(appContext)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun resetGeofenceState(itemId: String) {
+            resetSavedGeofenceState(appContext, itemId)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openGoogleMapsNavigation(lat: Double, lon: Double, label: String) {
+            launchGoogleMapsDirections(appContext, lat, lon, label)
         }
     }
 }

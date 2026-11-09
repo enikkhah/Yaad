@@ -3,7 +3,7 @@ import { Reminder, SavedLocation } from '../types';
 // Storage key for user preference on background geofence tracking
 export const GEOFENCE_TRACKING_ENABLED_KEY = 'yaad_geofence_tracking_enabled_v1';
 export const LAST_KNOWN_POSITION_KEY = 'yaad_last_known_user_position_v1';
-export const GEOFENCE_PROXIMITY_STATE_KEY = 'yaad_geofence_proximity_state_v1';
+export const GEOFENCE_PROXIMITY_STATE_KEY = 'yaad_geofence_proximity_state_v2';
 
 export interface UserPosition {
   latitude: number;
@@ -26,9 +26,9 @@ export interface SavedLocationTriggerEvent {
   timestamp: number;
 }
 
-// Memory + persisted tracking of previously checked status (inside or outside geofence)
-// Map of id -> boolean (true = currently inside, false = outside)
+// Memory + persisted tracking of notified status (true = inside & already notified for current stay, false = outside)
 const proximityStateMap = new Map<string, boolean>();
+const lastTransitionTimeMap = new Map<string, number>();
 
 function loadProximityStateFromStorage(): void {
   if (typeof window === 'undefined') return;
@@ -64,6 +64,77 @@ function saveProximityStateToStorage(): void {
 loadProximityStateFromStorage();
 
 /**
+ * Resets cached inside/outside proximity state for a specific location/reminder (or all items if omitted).
+ * Must be called whenever a geofence is created, edited, radius-adjusted, or re-activated so that
+ * if the user is currently inside the boundary, the alert triggers immediately.
+ */
+export function resetGeofenceProximityState(itemId?: string): void {
+  if (!itemId) {
+    proximityStateMap.clear();
+    lastTransitionTimeMap.clear();
+  } else {
+    const cleanId = itemId.replace(/^(loc_|rem_)/, '');
+    const keysToDelete = [
+      cleanId,
+      `loc_${cleanId}`,
+      `rem_${cleanId}`,
+      `u10m_loc_${cleanId}`,
+      `u10m_rem_${cleanId}`,
+    ];
+    for (const k of keysToDelete) {
+      proximityStateMap.delete(k);
+      lastTransitionTimeMap.delete(k);
+    }
+  }
+  saveProximityStateToStorage();
+
+  if (typeof window !== 'undefined') {
+    try {
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge && typeof bridge.resetGeofenceState === 'function') {
+        bridge.resetGeofenceState(itemId || '');
+      }
+    } catch {
+      // Ignore bridge error on web
+    }
+  }
+}
+
+/**
+ * Opens Google Maps turn-by-turn directions to the target coordinates.
+ * Uses Native Android Intent when running in the Android app, or standard Google Maps URL in browser.
+ */
+export function openGoogleMapsDirections(
+  latitude: number,
+  longitude: number,
+  label?: string
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const bridge = (window as any).YaadGeofenceBridge;
+    if (bridge && typeof bridge.openGoogleMapsNavigation === 'function') {
+      bridge.openGoogleMapsNavigation(latitude, longitude, label || '');
+      return;
+    }
+  } catch {
+    // Fallback to URL below
+  }
+
+  const navUrl = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving`;
+  try {
+    const link = document.createElement('a');
+    link.href = navUrl;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  } catch {
+    window.location.href = navUrl;
+  }
+}
+
+/**
  * Calculates distance between two coordinates in meters using the Haversine formula
  */
 export function calculateHaversineDistance(
@@ -93,7 +164,7 @@ export function isGeofenceTrackingEnabled(): boolean {
   if (typeof window === 'undefined') return false;
   try {
     const val = localStorage.getItem(GEOFENCE_TRACKING_ENABLED_KEY);
-    if (val === null) return false; // Disabled by default until enabled inside the app
+    if (val === null) return false;
     return JSON.parse(val) === true;
   } catch {
     return false;
@@ -177,11 +248,11 @@ export function syncGeofencesWithNativeAndroid(
           description: loc.description || '',
           latitude: loc.latitude,
           longitude: loc.longitude,
-          radius: loc.geofence.radius || 200,
-          triggerOn: loc.geofence.triggerOn || 'enter',
+          radius: loc.geofence.radius || 100,
+          triggerOn: loc.geofence.triggerOn || 'both',
           customMessage: loc.geofence.customMessage || '',
           playAudio: loc.geofence.playAudio !== false,
-          cooldownMs: 3 * 60 * 1000,
+          cooldownMs: 15 * 1000, // 15s anti-jitter debounce
         });
       }
 
@@ -201,11 +272,11 @@ export function syncGeofencesWithNativeAndroid(
           description: rem.description || '',
           latitude: rem.geofence.latitude,
           longitude: rem.geofence.longitude,
-          radius: rem.geofence.radius || 200,
+          radius: rem.geofence.radius || 100,
           triggerOn: rem.geofence.triggerOn || 'enter',
           customMessage: rem.description || rem.geofence.locationName || '',
           playAudio: true,
-          cooldownMs: 10 * 60 * 1000,
+          cooldownMs: 15 * 1000, // 15s anti-jitter debounce
         });
       }
     }
@@ -239,7 +310,7 @@ export function getNearestActiveGeofenceDistance(
       l.latitude,
       l.longitude
     );
-    const r = l.geofence.radius || 200;
+    const r = l.geofence.radius || 100;
     if (!nearest || d < nearest.distance) {
       nearest = { distance: d, radius: r };
     }
@@ -260,7 +331,7 @@ export function getNearestActiveGeofenceDistance(
       r.geofence.latitude,
       r.geofence.longitude
     );
-    const rad = r.geofence.radius || 200;
+    const rad = r.geofence.radius || 100;
     if (!nearest || d < nearest.distance) {
       nearest = { distance: d, radius: rad };
     }
@@ -271,7 +342,7 @@ export function getNearestActiveGeofenceDistance(
 
 /**
  * Calculates adaptive polling interval (in milliseconds) based on distance
- * to the nearest active geofence boundary (supports radii up to 10km) to preserve battery.
+ * to the nearest active geofence boundary.
  */
 export function getAdaptivePollingInterval(
   userPos: { latitude: number; longitude: number },
@@ -286,7 +357,7 @@ export function getAdaptivePollingInterval(
   );
 
   if (activeReminderGeofences.length === 0 && activeLocationGeofences.length === 0) {
-    return 60000 * 5; // 5 minutes when no location checkpoints are active
+    return 60000 * 2;
   }
 
   let minBoundaryDistance = Infinity;
@@ -299,7 +370,7 @@ export function getAdaptivePollingInterval(
       r.geofence.latitude,
       r.geofence.longitude
     );
-    const radius = r.geofence.radius || 200;
+    const radius = r.geofence.radius || 100;
     const boundaryDist = Math.abs(centerDist - radius);
     if (boundaryDist < minBoundaryDistance) {
       minBoundaryDistance = boundaryDist;
@@ -316,7 +387,7 @@ export function getAdaptivePollingInterval(
       l.latitude,
       l.longitude
     );
-    const radius = l.geofence?.radius || 200;
+    const radius = l.geofence?.radius || 100;
     const boundaryDist = Math.abs(centerDist - radius);
     if (boundaryDist < minBoundaryDistance) {
       minBoundaryDistance = boundaryDist;
@@ -326,22 +397,20 @@ export function getAdaptivePollingInterval(
     }
   }
 
-  if (minCenterDistance <= 120 || minBoundaryDistance < 150) {
-    return 5000; // 5 seconds: Very close to target (< 120m) for accurate < 10m arrival detection
-  } else if (minBoundaryDistance < 400) {
-    return 10000; // 10 seconds: Close to geofence boundary (< 400m)
-  } else if (minBoundaryDistance < 1200) {
-    return 25000; // 25 seconds: Nearby boundary (< 1.2km)
-  } else if (minBoundaryDistance < 5000) {
-    return 45000; // 45 seconds: Moderate distance (< 5km)
+  if (minCenterDistance <= 250 || minBoundaryDistance < 200) {
+    return 3000; // 3 seconds when inside or near boundary
+  } else if (minBoundaryDistance < 600) {
+    return 6000; // 6 seconds
+  } else if (minBoundaryDistance < 1500) {
+    return 15000; // 15 seconds
   } else {
-    return 120000; // 2 minutes: Far away (> 5km)
+    return 30000; // 30 seconds
   }
 }
 
 /**
  * Checks all active location-based reminders against the current user coordinates.
- * Returns a list of triggered reminders with trigger event details.
+ * Uses hysteresis and only records state transition AFTER an alert is actually triggered.
  */
 export function evaluateGeofences(
   userPos: UserPosition,
@@ -351,6 +420,7 @@ export function evaluateGeofences(
   const updatedReminders: Reminder[] = [];
   const now = Date.now();
   let stateChanged = false;
+  const DEBOUNCE_MS = 15 * 1000; // 15s debounce against GPS jitter
 
   for (const reminder of reminders) {
     if (
@@ -362,7 +432,7 @@ export function evaluateGeofences(
       continue;
     }
 
-    const { latitude, longitude, radius, triggerOn, lastTriggeredAt } = reminder.geofence;
+    const { latitude, longitude, radius = 100, triggerOn = 'enter' } = reminder.geofence;
 
     const distance = calculateHaversineDistance(
       userPos.latitude,
@@ -371,24 +441,32 @@ export function evaluateGeofences(
       longitude
     );
 
-    const isInsideNow = distance <= radius;
-    const isUnder10mNow = distance <= 10;
-    const wasInsideBefore = proximityStateMap.get(reminder.id);
+    const proximityKey = `rem_${reminder.id}`;
     const under10mKey = `u10m_rem_${reminder.id}`;
-    const wasUnder10mBefore = proximityStateMap.get(under10mKey);
 
-    // Save current status for future transitions
-    if (wasInsideBefore !== isInsideNow) {
-      proximityStateMap.set(reminder.id, isInsideNow);
+    // Entry matches exact radius (same as UI card). Exit uses +8m hysteresis so standing on the border doesn't flap.
+    const isInsideNow = distance <= radius;
+    const isDefinitelyOutside = distance > radius + 8;
+    const isUnder10mNow = distance <= 12; // 10m + 2m GPS accuracy margin
+    const isDefinitelyOutside10m = distance > 16;
+
+    const wasInsideNotified = proximityStateMap.get(proximityKey);
+    const wasUnder10mNotified = proximityStateMap.get(under10mKey);
+    const lastTrigTime = lastTransitionTimeMap.get(proximityKey) || 0;
+
+    // Reset sub-10m flag once user moves > 16m away
+    if (isDefinitelyOutside10m && wasUnder10mNotified === true) {
+      proximityStateMap.set(under10mKey, false);
       stateChanged = true;
     }
-    if (wasUnder10mBefore !== isUnder10mNow) {
-      proximityStateMap.set(under10mKey, isUnder10mNow);
-      stateChanged = true;
-    }
 
-    // 1. Check sub-10m exact target arrival (independent of outer boundary entry cooldown)
-    if (isInsideNow && isUnder10mNow && !wasUnder10mBefore) {
+    // 1. Sub-10m exact target arrival (fires whenever entering <= 10-12m and not yet notified for this stay)
+    if (isInsideNow && isUnder10mNow && wasUnder10mNotified !== true) {
+      proximityStateMap.set(under10mKey, true);
+      proximityStateMap.set(proximityKey, true);
+      lastTransitionTimeMap.set(proximityKey, now);
+      stateChanged = true;
+
       const updatedReminder: Reminder = {
         ...reminder,
         geofence: {
@@ -407,39 +485,48 @@ export function evaluateGeofences(
       continue;
     }
 
-    // Minimum cooldown between repeated boundary triggers for the exact same reminder: 10 minutes
-    const COOLDOWN_MS = 10 * 60 * 1000;
-    if (lastTriggeredAt && now - lastTriggeredAt < COOLDOWN_MS) {
-      continue;
-    }
-
+    // 2. Boundary Entry / Exit matching
     let shouldTrigger = false;
     let eventType: 'enter' | 'exit' = 'enter';
 
-    if (triggerOn === 'enter') {
-      // Trigger if user is inside AND either we just entered or first check inside
-      if (isInsideNow && (wasInsideBefore === false || wasInsideBefore === undefined)) {
-        shouldTrigger = true;
-        eventType = 'enter';
+    if (isInsideNow) {
+      // User is inside the geofence boundary: if we haven't notified them for this stay yet, trigger 'enter'!
+      if (wasInsideNotified !== true) {
+        if (triggerOn === 'enter' || triggerOn === 'both') {
+          if (now - lastTrigTime >= DEBOUNCE_MS) {
+            shouldTrigger = true;
+            eventType = 'enter';
+          }
+        } else {
+          // triggerOn === 'exit': silently record that user is now inside so we can detect their future exit
+          proximityStateMap.set(proximityKey, true);
+          stateChanged = true;
+        }
       }
-    } else if (triggerOn === 'exit') {
-      // Trigger if user just exited the zone
-      if (!isInsideNow && wasInsideBefore === true) {
-        shouldTrigger = true;
-        eventType = 'exit';
-      }
-    } else if (triggerOn === 'both') {
-      // Trigger on enter or exit transition
-      if (wasInsideBefore !== undefined && isInsideNow !== wasInsideBefore) {
-        shouldTrigger = true;
-        eventType = isInsideNow ? 'enter' : 'exit';
-      } else if (wasInsideBefore === undefined && isInsideNow) {
-        shouldTrigger = true;
-        eventType = 'enter';
+    } else if (isDefinitelyOutside) {
+      // User is outside the geofence boundary (beyond +8m hysteresis)
+      if (wasInsideNotified === true) {
+        if (triggerOn === 'exit' || triggerOn === 'both') {
+          if (now - lastTrigTime >= DEBOUNCE_MS) {
+            shouldTrigger = true;
+            eventType = 'exit';
+          }
+        } else {
+          // triggerOn === 'enter': reset state to false so next entry will trigger immediately!
+          proximityStateMap.set(proximityKey, false);
+          stateChanged = true;
+        }
+      } else if (wasInsideNotified === undefined) {
+        proximityStateMap.set(proximityKey, false);
+        stateChanged = true;
       }
     }
 
     if (shouldTrigger) {
+      proximityStateMap.set(proximityKey, eventType === 'enter');
+      lastTransitionTimeMap.set(proximityKey, now);
+      stateChanged = true;
+
       const updatedReminder: Reminder = {
         ...reminder,
         geofence: {
@@ -469,6 +556,8 @@ export function evaluateGeofences(
 
 /**
  * Checks all saved locations with active geofence checkpoints against current user coordinates.
+ * Guarantees that whenever a location's distance is inside `radius` (`distance <= radius`) and hasn't been
+ * notified for the current stay, the alert reliably triggers.
  */
 export function evaluateSavedLocationGeofences(
   userPos: UserPosition,
@@ -478,13 +567,15 @@ export function evaluateSavedLocationGeofences(
   const updatedLocations: SavedLocation[] = [];
   const now = Date.now();
   let stateChanged = false;
+  const DEBOUNCE_MS = 15 * 1000; // 15s debounce against GPS jitter
 
   for (const location of locations) {
     if (location.deletedAt || !location.geofence || !location.geofence.enabled) {
       continue;
     }
 
-    const { radius, triggerOn, lastTriggeredAt } = location.geofence;
+    const radius = location.geofence.radius || 100;
+    const triggerOn = location.geofence.triggerOn || 'both';
 
     const distance = calculateHaversineDistance(
       userPos.latitude,
@@ -493,25 +584,32 @@ export function evaluateSavedLocationGeofences(
       location.longitude
     );
 
-    const isInsideNow = distance <= radius;
-    const isUnder10mNow = distance <= 10;
     const proximityKey = `loc_${location.id}`;
     const under10mKey = `u10m_loc_${location.id}`;
-    const wasInsideBefore = proximityStateMap.get(proximityKey);
-    const wasUnder10mBefore = proximityStateMap.get(under10mKey);
 
-    // Save current status for future transitions
-    if (wasInsideBefore !== isInsideNow) {
-      proximityStateMap.set(proximityKey, isInsideNow);
+    // Entry matches exact `distance <= radius` (100% consistent with SavedLocationCard "🟢 داخل محدوده")
+    const isInsideNow = distance <= radius;
+    const isDefinitelyOutside = distance > radius + 8;
+    const isUnder10mNow = distance <= 12; // 10m + 2m GPS accuracy tolerance
+    const isDefinitelyOutside10m = distance > 16;
+
+    const wasInsideNotified = proximityStateMap.get(proximityKey);
+    const wasUnder10mNotified = proximityStateMap.get(under10mKey);
+    const lastTrigTime = lastTransitionTimeMap.get(proximityKey) || 0;
+
+    // Reset sub-10m flag once user moves > 16m away
+    if (isDefinitelyOutside10m && wasUnder10mNotified === true) {
+      proximityStateMap.set(under10mKey, false);
       stateChanged = true;
     }
-    if (wasUnder10mBefore !== isUnder10mNow) {
-      proximityStateMap.set(under10mKey, isUnder10mNow);
-      stateChanged = true;
-    }
 
-    // 1. Sub-10m Target Arrival inside boundary: fires immediately when entering within <= 10m of saved location
-    if (isInsideNow && isUnder10mNow && !wasUnder10mBefore) {
+    // 1. Sub-10m Target Arrival inside boundary
+    if (isInsideNow && isUnder10mNow && wasUnder10mNotified !== true) {
+      proximityStateMap.set(under10mKey, true);
+      proximityStateMap.set(proximityKey, true);
+      lastTransitionTimeMap.set(proximityKey, now);
+      stateChanged = true;
+
       const updatedLoc: SavedLocation = {
         ...location,
         geofence: {
@@ -530,36 +628,46 @@ export function evaluateSavedLocationGeofences(
       continue;
     }
 
-    // Minimum cooldown between repeated boundary triggers for same location: 3 minutes
-    const COOLDOWN_MS = 3 * 60 * 1000;
-    if (lastTriggeredAt && now - lastTriggeredAt < COOLDOWN_MS) {
-      continue;
-    }
-
+    // 2. Boundary Entry / Exit matching
     let shouldTrigger = false;
     let eventType: 'enter' | 'exit' = 'enter';
 
-    if (triggerOn === 'enter') {
-      if (isInsideNow && (wasInsideBefore === false || wasInsideBefore === undefined)) {
-        shouldTrigger = true;
-        eventType = 'enter';
+    if (isInsideNow) {
+      if (wasInsideNotified !== true) {
+        if (triggerOn === 'enter' || triggerOn === 'both') {
+          if (now - lastTrigTime >= DEBOUNCE_MS) {
+            shouldTrigger = true;
+            eventType = 'enter';
+          }
+        } else {
+          // triggerOn === 'exit': record inside state so subsequent exit triggers
+          proximityStateMap.set(proximityKey, true);
+          stateChanged = true;
+        }
       }
-    } else if (triggerOn === 'exit') {
-      if (!isInsideNow && wasInsideBefore === true) {
-        shouldTrigger = true;
-        eventType = 'exit';
-      }
-    } else if (triggerOn === 'both') {
-      if (wasInsideBefore !== undefined && isInsideNow !== wasInsideBefore) {
-        shouldTrigger = true;
-        eventType = isInsideNow ? 'enter' : 'exit';
-      } else if (wasInsideBefore === undefined && isInsideNow) {
-        shouldTrigger = true;
-        eventType = 'enter';
+    } else if (isDefinitelyOutside) {
+      if (wasInsideNotified === true) {
+        if (triggerOn === 'exit' || triggerOn === 'both') {
+          if (now - lastTrigTime >= DEBOUNCE_MS) {
+            shouldTrigger = true;
+            eventType = 'exit';
+          }
+        } else {
+          // triggerOn === 'enter': reset state to false so re-entering triggers reliably
+          proximityStateMap.set(proximityKey, false);
+          stateChanged = true;
+        }
+      } else if (wasInsideNotified === undefined) {
+        proximityStateMap.set(proximityKey, false);
+        stateChanged = true;
       }
     }
 
     if (shouldTrigger) {
+      proximityStateMap.set(proximityKey, eventType === 'enter');
+      lastTransitionTimeMap.set(proximityKey, now);
+      stateChanged = true;
+
       const updatedLoc: SavedLocation = {
         ...location,
         geofence: {
@@ -602,9 +710,7 @@ export function isLocationInGeofence(
     location.longitude
   );
   return {
-    isInside: distance <= (location.geofence.radius || 200),
+    isInside: distance <= (location.geofence.radius || 100),
     distance,
   };
 }
-
-

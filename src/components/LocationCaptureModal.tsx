@@ -21,8 +21,8 @@ import { SavedLocation, GeofenceTriggerType, LocationCheckpointConfig } from '..
 import { toPersianDigits } from '../utils/jalali';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { ValidationAlertModal } from './ValidationAlertModal';
-import { openAndroidSettings } from '../utils/nativePermissions';
-import { saveLastKnownPosition } from '../utils/geofenceManager';
+import { openAndroidSettings, checkDeviceGpsEnabled } from '../utils/nativePermissions';
+import { saveLastKnownPosition, resetGeofenceProximityState } from '../utils/geofenceManager';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 
@@ -63,6 +63,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [alsoCreateReminder, setAlsoCreateReminder] = useState(false);
   const [showValidationModal, setShowValidationModal] = useState(false);
   const [validationFieldName, setValidationFieldName] = useState(isEn ? 'Location Name' : 'نام / عنوان مکان');
+  const [isGpsOffWarning, setIsGpsOffWarning] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -121,6 +122,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         setLongitude(lng);
         setAccuracy(acc);
         setIsLocating(false);
+        setIsGpsOffWarning(false);
 
         saveLastKnownPosition({
           latitude: lat,
@@ -170,10 +172,11 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             );
             break;
           case error.POSITION_UNAVAILABLE:
+            setIsGpsOffWarning(true);
             setLocationError(
               isEn
-                ? 'GPS satellite signal is unavailable.'
-                : 'سیگنال موقعیت مکانی GPS در دسترس نیست.'
+                ? 'Device GPS is turned OFF or satellite signal is unavailable. Please turn on Location (GPS).'
+                : 'مکان‌یاب (GPS) گوشی خاموش است یا سیگنال ماهواره در دسترس نیست. لطفاً GPS گوشی را روشن کنید.'
             );
             break;
           case error.TIMEOUT:
@@ -212,6 +215,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
 
   useEffect(() => {
     if (isOpen) {
+      setIsGpsOffWarning(false);
       if (editingLocation) {
         const formattedTitle = formatSavedLocationTitle(editingLocation.title || '', language);
         titleRef.current = formattedTitle;
@@ -299,6 +303,14 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
     const finalTitle = title.trim();
     const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
 
+    // Always clear previous trigger timestamps and proximity state when saving/editing a geofence
+    // so that entering or currently being inside the newly saved/edited geofence triggers reliably!
+    if (editingLocation?.id) {
+      resetGeofenceProximityState(editingLocation.id);
+    } else {
+      resetGeofenceProximityState();
+    }
+
     const checkpointConfig: LocationCheckpointConfig | undefined = enableGeofence
       ? {
           enabled: true,
@@ -306,8 +318,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
           triggerOn: geofenceTriggerOn,
           customMessage: geofenceCustomMessage.trim() || undefined,
           playAudio: geofencePlayAudio,
-          lastTriggeredAt: editingLocation?.geofence?.lastTriggeredAt,
-          hasTriggered: editingLocation?.geofence?.hasTriggered,
+          lastTriggeredAt: undefined,
+          hasTriggered: false,
         }
       : undefined;
 
@@ -678,7 +690,20 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   type="button"
                   role="switch"
                   aria-checked={enableGeofence}
-                  onClick={() => setEnableGeofence(!enableGeofence)}
+                  onClick={() => {
+                    const willEnable = !enableGeofence;
+                    setEnableGeofence(willEnable);
+                    if (willEnable) {
+                      checkDeviceGpsEnabled().then((gpsOn) => {
+                        setIsGpsOffWarning(!gpsOn);
+                      }).catch(() => {});
+                      if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('yaad:verify-gps-for-geofence'));
+                      }
+                    } else {
+                      setIsGpsOffWarning(false);
+                    }
+                  }}
                   className="flex items-center gap-2 shrink-0 cursor-pointer group focus:outline-none"
                   title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار مکانی') : (isEn ? 'Enable Geofence' : 'فعال کردن حصار مکانی')}
                 >
@@ -702,6 +727,33 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   </div>
                 </button>
               </div>
+
+              {/* هشدار خاموش بودن GPS هنگام فعال کردن حصار مکانی */}
+              {enableGeofence && isGpsOffWarning && (
+                <div className="mt-3 p-3 rounded-xl bg-amber-500/15 border border-amber-400/50 text-amber-200 space-y-2.5 animate-in fade-in">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4.5 h-4.5 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5 text-xs">
+                      <p className="font-black text-amber-300">
+                        {isEn ? '⚠️ Device GPS (Location Services) is OFF!' : '⚠️ مکان‌یاب (GPS) گوشی شما خاموش است!'}
+                      </p>
+                      <p className="text-[11px] text-amber-100/90 leading-relaxed">
+                        {isEn
+                          ? 'Geofence alerts require device GPS to be turned ON to detect entry and exit accurately.'
+                          : 'برای کارکرد دقیق هشدار ورود و خروج حصار مکانی، لازم است مکان‌یاب (GPS) گوشی روشن باشد.'}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => openAndroidSettings('gps_disabled')}
+                    className="w-full py-2 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer active:scale-95"
+                  >
+                    <Navigation className="w-3.5 h-3.5" />
+                    <span>{isEn ? 'Turn On GPS in Settings' : 'روشن کردن GPS در تنظیمات گوشی'}</span>
+                  </button>
+                </div>
+              )}
 
               {/* وقتی حصار مکانی فعال است */}
               {enableGeofence && (

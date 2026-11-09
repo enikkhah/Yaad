@@ -56,6 +56,17 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
           sectionNameFa: 'بخش اعلان‌های برنامه در اندروید',
           sectionNameEn: 'Android App Notifications Section',
         };
+      case 'gps_disabled':
+        return {
+          icon: MapPin,
+          color: 'text-amber-400 bg-amber-500/15 border-amber-500/40',
+          titleFa: '⚠️ مکان‌یاب (GPS) گوشی خاموش است',
+          titleEn: '⚠️ Device Location (GPS) is Off',
+          descFa: 'حصار مکانی فعال شده است، اما مکان‌یاب (GPS / Location) گوشی شما خاموش است.\nبرای اینکه رادار حصار مکانی یاد بتواند مسافت زنده را پایش کند و به محض ورود یا خروج اعلان صادر نماید، لطفاً مکان‌یاب گوشی خود را روشن کنید.',
+          descEn: 'Geofencing is active, but your phone Location (GPS) is turned off.\nPlease turn on Location Services so the YAAD Geofence Radar can track live distance and trigger arrival/departure alerts.',
+          sectionNameFa: 'تنظیمات مکان‌یاب (Location / GPS) در اندروید',
+          sectionNameEn: 'Android Location Services (GPS) Settings',
+        };
       case 'location':
         return {
           icon: MapPin,

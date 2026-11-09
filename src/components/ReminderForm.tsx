@@ -700,6 +700,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               radius: Number(geofenceRadius) || 200,
               triggerOn: geofenceTriggerOn,
               savedLocationId: geofenceSavedLocId || undefined,
+              lastTriggeredAt: undefined,
+              hasTriggered: false,
             }
           : (initialData?.geofence ? { ...initialData.geofence, enabled: false } : undefined),
         sourceApp: isListening ? 'voice' : 'manual',
@@ -1700,6 +1702,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     const willEnable = !enableGeofence;
                     setEnableGeofence(willEnable);
                     if (willEnable) {
+                      if (typeof window !== 'undefined') {
+                        window.dispatchEvent(new CustomEvent('yaad:verify-gps-for-geofence'));
+                      }
                       if (!geofenceSavedLocId) {
                         handleGetQuickGps();
                       }

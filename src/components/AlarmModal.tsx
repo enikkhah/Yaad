@@ -19,7 +19,9 @@ import {
   Edit2,
   X,
   MapPin,
+  Navigation,
 } from 'lucide-react';
+import { openGoogleMapsDirections } from '../utils/geofenceManager';
 import appIcon from '../assets/images/icon.png';
 
 interface AlarmModalProps {

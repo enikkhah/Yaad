@@ -8,13 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       version_code:
-        description: 'کد نسخه عددی (مثلاً 1 یا 2)'
+        description: 'کد نسخه عددی (auto = افزایش خودکار در هر بیلد)'
         required: false
-        default: '1'
+        default: 'auto'
       version_name:
-        description: 'نام نسخه نمایشی در اپ، اسپلش و بازار/مایکت (مثلاً 1.68.5)'
+        description: 'نام نسخه نمایشی (auto = افزایش خودکار از 1.2.5 به بعد)'
         required: false
-        default: '1.68.5'
+        default: 'auto'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -47,8 +47,9 @@ jobs:
       - name: Sync App Version Before Web Build (Splash, About, Settings & Package)
         id: versioning
         env:
-          VERSION_CODE: ${{ inputs.version_code || github.event.inputs.version_code || '1' }}
-          VERSION_NAME: ${{ inputs.version_name || github.event.inputs.version_name || '1.68.5' }}
+          VERSION_CODE: ${{ inputs.version_code || github.event.inputs.version_code || 'auto' }}
+          VERSION_NAME: ${{ inputs.version_name || github.event.inputs.version_name || 'auto' }}
+          RUN_NUMBER: ${{ github.run_number }}
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -63,16 +64,32 @@ jobs:
                   s = s.replace(persian[i], str(i)).replace(arabic[i], str(i))
               return s.strip()
 
-          raw_code = to_ascii_digits(os.environ.get("VERSION_CODE", "1"))
-          raw_name = to_ascii_digits(os.environ.get("VERSION_NAME", "1.68.5")) or "1.68.5"
-          raw_name = re.sub(r'^[vV]\s*', '', raw_name).strip() or "1.68.5"
+          run_num_str = re.sub(r"\D", "", to_ascii_digits(os.environ.get("RUN_NUMBER", "85")))
+          run_num = int(run_num_str) if run_num_str else 85
 
-          digits_only = re.sub(r"\D", "", raw_code)
-          v_code = int(digits_only) if digits_only else 1
+          raw_code_in = to_ascii_digits(os.environ.get("VERSION_CODE", "auto"))
+          raw_name_in = to_ascii_digits(os.environ.get("VERSION_NAME", "auto"))
+
+          # Base version 1.2.5 at GitHub Actions run #85 (continuing from 1.2.4 at #84)
+          offset = max(0, run_num - 85)
+          auto_version_name = f"1.2.{5 + offset}"
+          auto_version_code = 100 + run_num
+
+          if not raw_name_in or raw_name_in.lower() == "auto":
+              raw_name = auto_version_name
+          else:
+              raw_name = re.sub(r'^[vV]\s*', '', raw_name_in).strip() or auto_version_name
+
+          if not raw_code_in or raw_code_in.lower() == "auto":
+              v_code = auto_version_code
+          else:
+              digits_only = re.sub(r"\D", "", raw_code_in)
+              v_code = int(digits_only) if digits_only else auto_version_code
+
           if v_code < 1:
-              v_code = 1
+              v_code = auto_version_code
           if v_code > 2100000000:
-              v_code = 1
+              v_code = auto_version_code
 
           # 1. Update package.json version so Vite injects it into __APP_VERSION__
           pkg_path = Path("package.json")
@@ -88,7 +105,7 @@ jobs:
               ver_text = re.sub(r"'1\.\d+\.\d+'", f"'{raw_name}'", ver_text)
               ver_ts_path.write_text(ver_text, encoding="utf-8")
 
-          print(f"Synced app version across web app: versionName={raw_name}, versionCode={v_code}")
+          print(f"Synced app version across web app: versionName={raw_name}, versionCode={v_code} (run_number={run_num})")
 
           gh_out = os.environ.get("GITHUB_OUTPUT")
           if gh_out:

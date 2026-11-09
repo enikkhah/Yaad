@@ -4,6 +4,7 @@ import { CheckCircle2, Edit2, MapPin, Navigation } from 'lucide-react';
 import appIcon from '../assets/images/icon.png';
 import {
   calculateHaversineDistance,
+  openGoogleMapsDirections,
   saveLastKnownPosition,
 } from '../utils/geofenceManager';
 import {
@@ -135,6 +136,13 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     if (!alert) return;
     stopAllGeofenceSounds();
     onEditRadius(alert);
+  };
+
+  const handleDirections = () => {
+    if (!alert) return;
+    stopAllGeofenceSounds();
+    openGoogleMapsDirections(alert.latitude, alert.longitude, alert.locationTitle);
+    onGotIt();
   };
 
   const formatDistanceText = (meters: number): { value: string; unit: string } => {
@@ -295,26 +303,36 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               </div>
             </div>
 
-            {/* 4. BOTTOM: Only Two Buttons ("متوجه شدم" and "ویرایش") */}
-            <div className="w-full grid grid-cols-2 gap-3 pt-1">
+            {/* 4. BOTTOM: Action Buttons ("متوجه شدم", "مسیریابی" in Google Maps, and "ویرایش") */}
+            <div className="w-full grid grid-cols-3 gap-2.5 pt-1">
               {/* Got It Button */}
               <button
                 type="button"
                 onClick={handleGotIt}
-                className="min-h-[48px] py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-sm sm:text-base transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30"
+                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/30"
               >
-                <CheckCircle2 className="w-5 h-5 stroke-[2.5] shrink-0" />
-                <span>{isEn ? 'Got It' : 'متوجه شدم'}</span>
+                <CheckCircle2 className="w-4 h-4 stroke-[2.5] shrink-0" />
+                <span className="truncate">{isEn ? 'Got It' : 'متوجه شدم'}</span>
+              </button>
+
+              {/* Google Maps Directions Button */}
+              <button
+                type="button"
+                onClick={handleDirections}
+                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border-2 border-sky-400/80 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md"
+              >
+                <Navigation className="w-4 h-4 shrink-0 text-sky-300" />
+                <span className="truncate">{isEn ? 'Directions' : 'مسیریابی'}</span>
               </button>
 
               {/* Edit Radius Button */}
               <button
                 type="button"
                 onClick={handleEdit}
-                className="min-h-[48px] py-3 px-4 rounded-2xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border-2 border-cyan-400/70 font-black text-sm sm:text-base transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-md"
+                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border-2 border-cyan-400/70 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md"
               >
                 <Edit2 className="w-4 h-4 shrink-0 text-cyan-300" />
-                <span>{isEn ? 'Edit' : 'ویرایش'}</span>
+                <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
               </button>
             </div>
           </motion.div>

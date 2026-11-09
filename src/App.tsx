@@ -25,7 +25,7 @@ import { SavedLocationCard } from './components/SavedLocationCard';
 import { OccasionsView } from './components/OccasionsView';
 import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
-import { AndroidPermissionType, requestNotificationPermission, requestLocationPermission } from './utils/nativePermissions';
+import { AndroidPermissionType, requestNotificationPermission, requestLocationPermission, checkDeviceGpsEnabled } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
 import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
@@ -65,6 +65,7 @@ import {
   saveLastKnownPosition, 
   getLastKnownPosition,
   syncGeofencesWithNativeAndroid,
+  resetGeofenceProximityState,
   UserPosition,
   GeofenceTriggerEvent,
   SavedLocationTriggerEvent
@@ -1544,6 +1545,53 @@ export default function App() {
     };
   }, [reminders]);
 
+  const verifyGpsTurnedOnForGeofence = useCallback(async () => {
+    try {
+      const gpsEnabled = await checkDeviceGpsEnabled();
+      if (!gpsEnabled) {
+        setAndroidPermissionModal({
+          isOpen: true,
+          type: 'gps_disabled',
+          onRetry: () => {
+            verifyGpsTurnedOnForGeofence();
+          },
+        });
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Listen for GPS verification requests (e.g. when toggling geofence ON inside modals or when native Android detects GPS turned off)
+  useEffect(() => {
+    const handleVerifyGpsEvent = () => {
+      verifyGpsTurnedOnForGeofence();
+    };
+    const handleNativeGpsStatusChanged = (e: Event) => {
+      const customEv = e as CustomEvent<{ enabled?: boolean }>;
+      if (customEv.detail && customEv.detail.enabled === false && isGeofenceActive) {
+        const hasAnyActiveGeo =
+          remindersRef.current.some(
+            (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence?.enabled
+          ) ||
+          savedLocationsRef.current.some((l) => !l.deletedAt && l.geofence?.enabled);
+        if (hasAnyActiveGeo) {
+          setAndroidPermissionModal({
+            isOpen: true,
+            type: 'gps_disabled',
+            onRetry: () => verifyGpsTurnedOnForGeofence(),
+          });
+        }
+      }
+    };
+    window.addEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
+    window.addEventListener('yaad:gps-status-changed', handleNativeGpsStatusChanged);
+    return () => {
+      window.removeEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
+      window.removeEventListener('yaad:gps-status-changed', handleNativeGpsStatusChanged);
+    };
+  }, [isGeofenceActive, verifyGpsTurnedOnForGeofence]);
+
   // Sync active geofences with Native Android Background Service (YaadGeofenceService)
   useEffect(() => {
     syncGeofencesWithNativeAndroid(
@@ -1554,38 +1602,27 @@ export default function App() {
     );
   }, [isGeofenceActive, reminders, savedLocations, settings.language]);
 
-  // Geofence Evaluation Engine: Monitors user coordinates in-app & in background and evaluates both location-based reminders and saved location geofences
-  useEffect(() => {
-    if (!isGeofenceActive) return;
-    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
-
-    // Check if there are any active location reminders or saved location checkpoints
-    const hasActiveReminderGeofences = reminders.some(
+  const hasActiveGeofences = useMemo(() => {
+    const hasRemGeo = reminders.some(
       (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
     );
-    const hasActiveLocationCheckpoints = savedLocations.some(
+    const hasLocGeo = savedLocations.some(
       (l) => !l.deletedAt && l.geofence && l.geofence.enabled
     );
-    if (!hasActiveReminderGeofences && !hasActiveLocationCheckpoints) return;
+    return hasRemGeo || hasLocGeo;
+  }, [reminders, savedLocations]);
 
-    let isMounted = true;
-    let timerId: any = null;
-    let watchId: number | null = null;
-
-    const handlePositionUpdate = (pos: GeolocationPosition) => {
-      if (!isMounted) return;
-      const userPos: UserPosition = {
-        latitude: pos.coords.latitude,
-        longitude: pos.coords.longitude,
-        accuracy: pos.coords.accuracy,
-        timestamp: pos.timestamp || Date.now(),
-      };
+  const evaluateUserPositionAgainstAllGeofences = useCallback(
+    (userPos: UserPosition) => {
+      const curReminders = remindersRef.current;
+      const curSavedLocations = savedLocationsRef.current;
+      const curLang = settingsRef.current.language || 'fa';
 
       setCurrentUserPosition(userPos);
       saveLastKnownPosition(userPos);
 
       // Update live submarine sonar distance so ping rhythm speeds up as user gets closer and slows down as user moves away
-      const nearestGeo = getNearestActiveGeofenceDistance(userPos, reminders, savedLocations);
+      const nearestGeo = getNearestActiveGeofenceDistance(userPos, curReminders, curSavedLocations);
       if (nearestGeo && nearestGeo.distance <= nearestGeo.radius && nearestGeo.distance > 10) {
         updateSubmarineSonarDistance(nearestGeo.distance, nearestGeo.radius);
       } else if (!nearestGeo || nearestGeo.distance > nearestGeo.radius) {
@@ -1593,9 +1630,12 @@ export default function App() {
       }
 
       // 1. Evaluate saved location geofences (حصارهای مکانی ثبت‌شده)
-      if (hasActiveLocationCheckpoints) {
-        evaluateSavedLocationGeofences(userPos, savedLocations, (event: SavedLocationTriggerEvent) => {
-          const displayLocTitle = formatSavedLocationTitle(event.location.title, settings.language);
+      const hasLocCheckpoints = curSavedLocations.some(
+        (l) => !l.deletedAt && l.geofence && l.geofence.enabled
+      );
+      if (hasLocCheckpoints) {
+        evaluateSavedLocationGeofences(userPos, curSavedLocations, (event: SavedLocationTriggerEvent) => {
+          const displayLocTitle = formatSavedLocationTitle(event.location.title, curLang);
           const isSub10mArrival = event.triggerType === 'arrived_under_10m';
           const locDetails = [event.location.description, event.location.geofence?.customMessage]
             .filter(Boolean)
@@ -1644,8 +1684,11 @@ export default function App() {
       }
 
       // 2. Evaluate reminder geofences if any exist
-      if (hasActiveReminderGeofences) {
-        evaluateGeofences(userPos, reminders, (event: GeofenceTriggerEvent) => {
+      const hasRemGeofences = curReminders.some(
+        (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
+      );
+      if (hasRemGeofences) {
+        evaluateGeofences(userPos, curReminders, (event: GeofenceTriggerEvent) => {
           const isSub10mArrival = event.triggerType === 'arrived_under_10m';
           const locName = event.reminder.geofence?.locationName || event.reminder.title;
 
@@ -1685,7 +1728,59 @@ export default function App() {
           triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
         });
       }
+    },
+    []
+  );
+
+  // Whenever reminders or savedLocations are added/edited/toggled while geofence radar is active,
+  // immediately re-evaluate against the latest known GPS position so entering/being inside a geofence triggers without delay!
+  useEffect(() => {
+    if (!isGeofenceActive || !hasActiveGeofences) return;
+    const pos = currentUserPosition || getLastKnownPosition();
+    if (pos && Date.now() - pos.timestamp <= 5 * 60 * 1000) {
+      evaluateUserPositionAgainstAllGeofences(pos);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reminders, savedLocations, isGeofenceActive, hasActiveGeofences]);
+
+  // Geofence Evaluation Engine: Monitors user coordinates in-app & in background and evaluates both location-based reminders and saved location geofences
+  useEffect(() => {
+    if (!isGeofenceActive || !hasActiveGeofences) return;
+    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
+
+    let isMounted = true;
+    let timerId: any = null;
+    let watchId: number | null = null;
+
+    const handlePositionUpdate = (pos: GeolocationPosition) => {
+      if (!isMounted) return;
+      const userPos: UserPosition = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+        timestamp: pos.timestamp || Date.now(),
+      };
+      evaluateUserPositionAgainstAllGeofences(userPos);
     };
+
+    // Also listen for direct native Android LocationManager fixes dispatched from YaadGeofenceService
+    const handleNativeLocationEvent = (e: Event) => {
+      if (!isMounted) return;
+      const customEv = e as CustomEvent<UserPosition>;
+      if (
+        customEv.detail &&
+        typeof customEv.detail.latitude === 'number' &&
+        typeof customEv.detail.longitude === 'number'
+      ) {
+        evaluateUserPositionAgainstAllGeofences({
+          latitude: customEv.detail.latitude,
+          longitude: customEv.detail.longitude,
+          accuracy: customEv.detail.accuracy || 10,
+          timestamp: customEv.detail.timestamp || Date.now(),
+        });
+      }
+    };
+    window.addEventListener('yaad:native-location', handleNativeLocationEvent);
 
     const runGeofenceCheck = async () => {
       if (navigator.permissions && navigator.permissions.query) {
@@ -1710,16 +1805,23 @@ export default function App() {
             accuracy: pos.coords.accuracy,
             timestamp: pos.timestamp || Date.now(),
           };
-          const nextInterval = getAdaptivePollingInterval(userPos, reminders, savedLocations);
+          const nextInterval = getAdaptivePollingInterval(
+            userPos,
+            remindersRef.current,
+            savedLocationsRef.current
+          );
           if (timerId) clearTimeout(timerId);
           timerId = setTimeout(runGeofenceCheck, nextInterval);
         },
-        () => {
+        (err) => {
           if (!isMounted) return;
+          if (err && err.code === 2) {
+            verifyGpsTurnedOnForGeofence();
+          }
           if (timerId) clearTimeout(timerId);
-          timerId = setTimeout(runGeofenceCheck, 45000);
+          timerId = setTimeout(runGeofenceCheck, 15000);
         },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 10000 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
       );
     };
 
@@ -1729,8 +1831,12 @@ export default function App() {
         (pos) => {
           handlePositionUpdate(pos);
         },
-        () => {},
-        { enableHighAccuracy: true, maximumAge: 10000, timeout: 20000 }
+        (err) => {
+          if (err && err.code === 2) {
+            verifyGpsTurnedOnForGeofence();
+          }
+        },
+        { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 }
       );
     } catch {
       // ignore if watchPosition fails
@@ -1771,19 +1877,31 @@ export default function App() {
           // ignore
         }
       }
+      window.removeEventListener('yaad:native-location', handleNativeLocationEvent);
       document.removeEventListener('visibilitychange', handleVisibilityOrAppResume);
       if (appStateListener) {
         appStateListener.remove().catch(() => {});
       }
     };
-  }, [reminders, savedLocations, isGeofenceActive, isEn, settings.language, settings.ttsVoiceRate]);
+  }, [isGeofenceActive, hasActiveGeofences, evaluateUserPositionAgainstAllGeofences, verifyGpsTurnedOnForGeofence]);
 
   const handleToggleGeofenceService = (newState?: boolean) => {
     setIsGeofenceActive((prev) => {
       const nextVal = typeof newState === 'boolean' ? newState : !prev;
       setGeofenceTrackingEnabled(nextVal);
       if (nextVal) {
-        requestLocationPermission().catch(() => {});
+        resetGeofenceProximityState();
+        requestLocationPermission().then((granted) => {
+          if (!granted) {
+            setAndroidPermissionModal({
+              isOpen: true,
+              type: 'location',
+              onRetry: () => requestLocationPermission(),
+            });
+          } else {
+            verifyGpsTurnedOnForGeofence();
+          }
+        }).catch(() => {});
       }
       showSyncNotification(
         nextVal
@@ -1795,11 +1913,27 @@ export default function App() {
   };
 
   const handleToggleLocationCheckpoint = (locationId: string) => {
+    resetGeofenceProximityState(locationId);
     setSavedLocations((prev) =>
       prev.map((loc) => {
         if (loc.id !== locationId) return loc;
         if (!loc.geofence) return loc;
         const willBeActive = !loc.geofence.enabled;
+        if (willBeActive) {
+          setIsGeofenceActive(true);
+          setGeofenceTrackingEnabled(true);
+          requestLocationPermission().then((granted) => {
+            if (!granted) {
+              setAndroidPermissionModal({
+                isOpen: true,
+                type: 'location',
+                onRetry: () => requestLocationPermission(),
+              });
+            } else {
+              verifyGpsTurnedOnForGeofence();
+            }
+          }).catch(() => {});
+        }
         showSyncNotification(
           willBeActive
             ? (isEn ? `Geofence activated for ${loc.title}` : `حصار مکانی ${loc.title} فعال شد`)
@@ -1807,7 +1941,12 @@ export default function App() {
         );
         return {
           ...loc,
-          geofence: { ...loc.geofence, enabled: willBeActive },
+          geofence: {
+            ...loc.geofence,
+            enabled: willBeActive,
+            lastTriggeredAt: undefined,
+            hasTriggered: false,
+          },
         };
       })
     );
@@ -1902,8 +2041,9 @@ export default function App() {
       });
     }
 
-    // If geofence is enabled, ensure location permission is active and enable geofence tracking
+    // If geofence is enabled, ensure location permission & device GPS are active and enable geofence tracking
     if (data.geofence?.enabled) {
+      resetGeofenceProximityState(editingReminder?.id);
       setIsGeofenceActive(true);
       setGeofenceTrackingEnabled(true);
       requestLocationPermission().then((locGranted) => {
@@ -1913,6 +2053,8 @@ export default function App() {
             type: 'location',
             onRetry: () => requestLocationPermission(),
           });
+        } else {
+          verifyGpsTurnedOnForGeofence();
         }
       });
     }
@@ -2067,11 +2209,23 @@ export default function App() {
     alsoCreateReminder?: boolean
   ) => {
     if (newLocData.geofence?.enabled) {
+      resetGeofenceProximityState(editingLocation?.id);
       setIsGeofenceActive(true);
       setGeofenceTrackingEnabled(true);
-      requestLocationPermission().catch(() => {});
+      requestLocationPermission().then((locGranted) => {
+        if (!locGranted) {
+          setAndroidPermissionModal({
+            isOpen: true,
+            type: 'location',
+            onRetry: () => requestLocationPermission(),
+          });
+        } else {
+          verifyGpsTurnedOnForGeofence();
+        }
+      }).catch(() => {});
     }
     if (editingLocation) {
+      resetGeofenceProximityState(editingLocation.id);
       setSavedLocations((prev) =>
         prev.map((l) => (l.id === editingLocation.id ? { ...l, ...newLocData } : l))
       );
@@ -2083,6 +2237,7 @@ export default function App() {
         id: 'loc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
         createdAt: Date.now(),
       };
+      resetGeofenceProximityState(newLocation.id);
       setSavedLocations((prev) => [newLocation, ...prev]);
       showSyncNotification('موقعیت مکانی با موفقیت ذخیره شد.');
 
