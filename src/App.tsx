@@ -65,6 +65,9 @@ import {
   getLastKnownPosition,
   syncGeofencesWithNativeAndroid,
   resetGeofenceProximityState,
+  acknowledgeGeofenceAlert,
+  calculateHaversineDistance,
+  shouldAcceptLocationUpdate,
   UserPosition,
   GeofenceTriggerEvent,
   SavedLocationTriggerEvent
@@ -1561,35 +1564,130 @@ export default function App() {
     }
   }, []);
 
-  // Listen for GPS verification requests (e.g. when toggling geofence ON inside modals or when native Android detects GPS turned off)
+  // Stops a geofence operation completely (both in-app and out-of-app) and disables the geofence for that item
+  const handleStopGeofenceOperation = useCallback(
+    (rawItemId?: string) => {
+      stopSubmarineSonarLoop();
+      stopAlarmRinging();
+      if (!rawItemId) {
+        setActiveGeofenceAlert(null);
+        return;
+      }
+
+      const cleanId = rawItemId.replace(/^(loc_|rem_)/, '');
+      acknowledgeGeofenceAlert(cleanId);
+
+      setSavedLocations((prev) => {
+        let changed = false;
+        const next = prev.map((loc) => {
+          if ((loc.id === cleanId || loc.id === rawItemId) && loc.geofence?.enabled) {
+            changed = true;
+            return {
+              ...loc,
+              geofence: {
+                ...loc.geofence,
+                enabled: false,
+                lastTriggeredAt: undefined,
+                hasTriggered: false,
+              },
+            };
+          }
+          return loc;
+        });
+        if (changed) {
+          savedLocationsRef.current = next;
+          syncGeofencesWithNativeAndroid(
+            isGeofenceActive,
+            remindersRef.current,
+            next,
+            settings.language || 'fa'
+          );
+        }
+        return changed ? next : prev;
+      });
+
+      setReminders((prev) => {
+        let changed = false;
+        const next = prev.map((rem) => {
+          if ((rem.id === cleanId || rem.id === rawItemId) && rem.geofence?.enabled) {
+            changed = true;
+            return {
+              ...rem,
+              geofence: {
+                ...rem.geofence,
+                enabled: false,
+                lastTriggeredAt: undefined,
+                hasTriggered: false,
+              },
+            };
+          }
+          return rem;
+        });
+        if (changed) {
+          remindersRef.current = next;
+          syncGeofencesWithNativeAndroid(
+            isGeofenceActive,
+            next,
+            savedLocationsRef.current,
+            settings.language || 'fa'
+          );
+        }
+        return changed ? next : prev;
+      });
+
+      setActiveGeofenceAlert((prev) => {
+        if (!prev) return null;
+        const prevClean = prev.targetId.replace(/^(loc_|rem_)/, '');
+        if (prevClean === cleanId || prev.targetId === rawItemId) {
+          return null;
+        }
+        return prev;
+      });
+    },
+    [isGeofenceActive, settings.language]
+  );
+
+  // Listen ONLY to explicit one-shot GPS check requests when a user activates a geofence,
+  // and listen for native out-of-app "توقف عملیات" (Stop Operation) events.
   useEffect(() => {
     const handleVerifyGpsEvent = () => {
       verifyGpsTurnedOnForGeofence();
     };
-    const handleNativeGpsStatusChanged = (e: Event) => {
-      const customEv = e as CustomEvent<{ enabled?: boolean }>;
-      if (customEv.detail && customEv.detail.enabled === false && isGeofenceActive) {
-        const hasAnyActiveGeo =
-          remindersRef.current.some(
-            (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence?.enabled
-          ) ||
-          savedLocationsRef.current.some((l) => !l.deletedAt && l.geofence?.enabled);
-        if (hasAnyActiveGeo) {
-          setAndroidPermissionModal({
-            isOpen: true,
-            type: 'gps_disabled',
-            onRetry: () => verifyGpsTurnedOnForGeofence(),
-          });
-        }
+    const handleNativeStopGeofenceItem = (e: Event) => {
+      const customEv = e as CustomEvent<{ itemId?: string }>;
+      if (customEv.detail?.itemId) {
+        handleStopGeofenceOperation(customEv.detail.itemId);
       }
     };
+    const flushNativeStoppedGeofenceItems = () => {
+      try {
+        const bridge = (window as any).YaadGeofenceBridge;
+        if (bridge && typeof bridge.consumeStoppedGeofenceItems === 'function') {
+          const rawJson = bridge.consumeStoppedGeofenceItems();
+          if (rawJson) {
+            const ids: string[] = JSON.parse(rawJson);
+            if (Array.isArray(ids)) {
+              ids.forEach((id) => {
+                if (id) handleStopGeofenceOperation(id);
+              });
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    flushNativeStoppedGeofenceItems();
     window.addEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
-    window.addEventListener('yaad:gps-status-changed', handleNativeGpsStatusChanged);
+    window.addEventListener('yaad:stop-geofence-item', handleNativeStopGeofenceItem);
+    document.addEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
     return () => {
       window.removeEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
-      window.removeEventListener('yaad:gps-status-changed', handleNativeGpsStatusChanged);
+      window.removeEventListener('yaad:stop-geofence-item', handleNativeStopGeofenceItem);
+      document.removeEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
     };
-  }, [isGeofenceActive, verifyGpsTurnedOnForGeofence]);
+  }, [verifyGpsTurnedOnForGeofence, handleStopGeofenceOperation]);
 
   // Sync active geofences with Native Android Background Service (YaadGeofenceService)
   useEffect(() => {
@@ -1612,7 +1710,11 @@ export default function App() {
   }, [reminders, savedLocations]);
 
   const evaluateUserPositionAgainstAllGeofences = useCallback(
-    (userPos: UserPosition) => {
+    (userPos: UserPosition, bypassStabilizer: boolean = false) => {
+      if (!bypassStabilizer && !shouldAcceptLocationUpdate(userPos)) {
+        return;
+      }
+
       const curReminders = remindersRef.current;
       const curSavedLocations = savedLocationsRef.current;
       const curLang = settingsRef.current.language || 'fa';
@@ -1802,15 +1904,12 @@ export default function App() {
           if (timerId) clearTimeout(timerId);
           timerId = setTimeout(runGeofenceCheck, nextInterval);
         },
-        (err) => {
+        () => {
           if (!isMounted) return;
-          if (err && err.code === 2) {
-            verifyGpsTurnedOnForGeofence();
-          }
           if (timerId) clearTimeout(timerId);
           timerId = setTimeout(runGeofenceCheck, 15000);
         },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 5000 }
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 2000 }
       );
     };
 
@@ -1820,12 +1919,8 @@ export default function App() {
         (pos) => {
           handlePositionUpdate(pos);
         },
-        (err) => {
-          if (err && err.code === 2) {
-            verifyGpsTurnedOnForGeofence();
-          }
-        },
-        { enableHighAccuracy: true, maximumAge: 3000, timeout: 20000 }
+        () => {},
+        { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 }
       );
     } catch {
       // ignore if watchPosition fails
@@ -1947,11 +2042,11 @@ export default function App() {
       .filter(Boolean)
       .join(' — ');
     const simDist = currentUserPosition
-      ? Math.round(
-          Math.hypot(
-            (currentUserPosition.latitude - location.latitude) * 111320,
-            (currentUserPosition.longitude - location.longitude) * 111320
-          )
+      ? calculateHaversineDistance(
+          currentUserPosition.latitude,
+          currentUserPosition.longitude,
+          location.latitude,
+          location.longitude
         )
       : Math.round((location.geofence?.radius || 100) * 0.6);
 
@@ -2069,6 +2164,7 @@ export default function App() {
     if (editingReminder) {
       triggeredAlarmsRef.current.delete(editingReminder.id);
       recentNotificationActionsRef.current.delete(editingReminder.id);
+      resetGeofenceProximityState(editingReminder.id);
       const updatedReminder: Reminder = {
         ...editingReminder,
         ...data,
@@ -2081,11 +2177,58 @@ export default function App() {
       // Reschedule Android Local Notification
       rescheduleReminderNotification(editingReminder.id, updatedReminder, settings).catch(() => {});
 
-      setReminders((prev) =>
-        prev.map((r) =>
-          r.id === editingReminder.id ? updatedReminder : r
-        )
+      const nextReminders = remindersRef.current.map((r) =>
+        r.id === editingReminder.id ? updatedReminder : r
       );
+      remindersRef.current = nextReminders;
+      setReminders(nextReminders);
+
+      syncGeofencesWithNativeAndroid(
+        Boolean(isGeofenceActive || updatedReminder.geofence?.enabled),
+        nextReminders,
+        savedLocationsRef.current,
+        settings.language
+      );
+
+      // Apply changes immediately to any active geofence alert or re-evaluate against current position
+      const latestPos = currentUserPosition || getLastKnownPosition();
+      setActiveGeofenceAlert((prevAlert) => {
+        if (!prevAlert || prevAlert.targetId !== editingReminder.id) return prevAlert;
+        if (!updatedReminder.geofence?.enabled) {
+          stopSubmarineSonarLoop();
+          return null;
+        }
+        const newDist = latestPos
+          ? calculateHaversineDistance(
+              latestPos.latitude,
+              latestPos.longitude,
+              updatedReminder.geofence.latitude,
+              updatedReminder.geofence.longitude
+            )
+          : prevAlert.initialDistance;
+        const newRadius = updatedReminder.geofence.radius || 200;
+        if (newDist > newRadius) {
+          stopSubmarineSonarLoop();
+          return null;
+        }
+        updateSubmarineSonarDistance(newDist, newRadius);
+        return {
+          ...prevAlert,
+          locationTitle: updatedReminder.geofence.locationName || updatedReminder.title,
+          description: updatedReminder.description || updatedReminder.title,
+          radius: newRadius,
+          latitude: updatedReminder.geofence.latitude,
+          longitude: updatedReminder.geofence.longitude,
+          initialDistance: newDist,
+        };
+      });
+
+      if (latestPos && updatedReminder.geofence?.enabled) {
+        setTimeout(() => {
+          evaluateUserPositionAgainstAllGeofences(latestPos, true);
+        }, 30);
+      }
+
       setEditingReminder(null);
     } else {
       const newId = 'rem_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
@@ -2103,7 +2246,24 @@ export default function App() {
       // Schedule Android Local Notification
       scheduleReminderNotification(newReminder, settings).catch(() => {});
 
-      setReminders((prev) => [newReminder, ...prev]);
+      const nextReminders = [newReminder, ...remindersRef.current];
+      remindersRef.current = nextReminders;
+      setReminders(nextReminders);
+
+      if (newReminder.geofence?.enabled) {
+        syncGeofencesWithNativeAndroid(
+          true,
+          nextReminders,
+          savedLocationsRef.current,
+          settings.language
+        );
+        const latestPos = currentUserPosition || getLastKnownPosition();
+        if (latestPos) {
+          setTimeout(() => {
+            evaluateUserPositionAgainstAllGeofences(latestPos, true);
+          }, 30);
+        }
+      }
     }
     if (!stayOnCurrentTab && activeMainTab === 'reminders') {
       triggerScrollToNow();
@@ -2214,10 +2374,66 @@ export default function App() {
       }).catch(() => {});
     }
     if (editingLocation) {
-      resetGeofenceProximityState(editingLocation.id);
-      setSavedLocations((prev) =>
-        prev.map((l) => (l.id === editingLocation.id ? { ...l, ...newLocData } : l))
+      const editedId = editingLocation.id;
+      const updatedLoc: SavedLocation = { ...editingLocation, ...newLocData };
+      resetGeofenceProximityState(editedId);
+
+      const nextLocations = savedLocationsRef.current.map((l) =>
+        l.id === editedId ? updatedLoc : l
       );
+      savedLocationsRef.current = nextLocations;
+      setSavedLocations(nextLocations);
+
+      syncGeofencesWithNativeAndroid(
+        Boolean(isGeofenceActive || updatedLoc.geofence?.enabled),
+        remindersRef.current,
+        nextLocations,
+        settings.language
+      );
+
+      // Immediately propagate changes to the active geofence alert and re-evaluate against latest position
+      const latestPos = currentUserPosition || getLastKnownPosition();
+      setActiveGeofenceAlert((prevAlert) => {
+        if (!prevAlert || prevAlert.targetId !== editedId) return prevAlert;
+        if (!updatedLoc.geofence?.enabled) {
+          stopSubmarineSonarLoop();
+          return null;
+        }
+        const newDist = latestPos
+          ? calculateHaversineDistance(
+              latestPos.latitude,
+              latestPos.longitude,
+              updatedLoc.latitude,
+              updatedLoc.longitude
+            )
+          : prevAlert.initialDistance;
+        const newRadius = updatedLoc.geofence.radius || 200;
+        if (newDist > newRadius) {
+          stopSubmarineSonarLoop();
+          return null;
+        }
+        updateSubmarineSonarDistance(newDist, newRadius);
+        const displayLocTitle = formatSavedLocationTitle(updatedLoc.title, settings.language);
+        const locDetails = [updatedLoc.description, updatedLoc.geofence?.customMessage]
+          .filter(Boolean)
+          .join(' — ');
+        return {
+          ...prevAlert,
+          locationTitle: displayLocTitle,
+          description: locDetails || undefined,
+          radius: newRadius,
+          latitude: updatedLoc.latitude,
+          longitude: updatedLoc.longitude,
+          initialDistance: newDist,
+        };
+      });
+
+      if (latestPos && updatedLoc.geofence?.enabled) {
+        setTimeout(() => {
+          evaluateUserPositionAgainstAllGeofences(latestPos, true);
+        }, 30);
+      }
+
       setEditingLocation(null);
       showSyncNotification('موقعیت مکانی با موفقیت ویرایش شد.');
     } else {
@@ -2227,7 +2443,25 @@ export default function App() {
         createdAt: Date.now(),
       };
       resetGeofenceProximityState(newLocation.id);
-      setSavedLocations((prev) => [newLocation, ...prev]);
+      const nextLocations = [newLocation, ...savedLocationsRef.current];
+      savedLocationsRef.current = nextLocations;
+      setSavedLocations(nextLocations);
+
+      if (newLocation.geofence?.enabled) {
+        syncGeofencesWithNativeAndroid(
+          true,
+          remindersRef.current,
+          nextLocations,
+          settings.language
+        );
+        const latestPos = currentUserPosition || getLastKnownPosition();
+        if (latestPos) {
+          setTimeout(() => {
+            evaluateUserPositionAgainstAllGeofences(latestPos, true);
+          }, 30);
+        }
+      }
+
       showSyncNotification('موقعیت مکانی با موفقیت ذخیره شد.');
 
       // If user checked "ثبت همزمان در لیست یادآورها"
@@ -4251,7 +4485,16 @@ export default function App() {
         userPosition={currentUserPosition}
         language={settings.language}
         onGotIt={() => {
-          setActiveGeofenceAlert(null);
+          if (activeGeofenceAlert?.targetId) {
+            handleStopGeofenceOperation(activeGeofenceAlert.targetId);
+            showSyncNotification(
+              isEn
+                ? `Geofence operation stopped for ${activeGeofenceAlert.locationTitle}`
+                : `عملیات حصار مکانی برای «${activeGeofenceAlert.locationTitle}» متوقف شد`
+            );
+          } else {
+            setActiveGeofenceAlert(null);
+          }
         }}
         onEditRadius={(alertData) => {
           setActiveGeofenceAlert(null);

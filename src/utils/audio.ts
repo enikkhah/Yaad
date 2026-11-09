@@ -544,14 +544,14 @@ let lastSonarPingTime = 0;
 
 /**
  * Calculates the delay (ms) between submarine sonar pings and pulse beats based on distance percentage of radius:
- * - At boundary (100% distance): 1 time per minute (60,000 ms)
- * - At 90% distance: 2 times per minute (30,000 ms)
- * - At 80% distance: 3 times per minute (20,000 ms)
- * - At 70% distance: 4 times per minute (15,000 ms)
- * - At 60% distance: 5 times per minute (12,000 ms)
- * - At 50% distance: 6 times per minute (10,000 ms)
- * - Below 50% down to >10%: +1 time per minute for every 5% closer (45%->7/min, 40%->8/min, ..., 15%->13/min)
- * - In the remaining 10% (<=10% of radius): 5 Hz frequency (5 times per second = 200 ms)
+ * - At boundary (100% distance): 5 times per minute (12,000 ms) [5x of 1/min]
+ * - At 90% distance: 10 times per minute (6,000 ms) [5x of 2/min]
+ * - At 80% distance: 15 times per minute (4,000 ms) [5x of 3/min]
+ * - At 70% distance: 20 times per minute (3,000 ms) [5x of 4/min]
+ * - At 60% distance: 25 times per minute (2,400 ms) [5x of 5/min]
+ * - At 50% distance: 30 times per minute (2,000 ms) [5x of 6/min]
+ * - Below 50% down to >10%: 5x of (6 + 1 per 5% closer) -> (45%->35/min, 40%->40/min, ..., 15%->65/min)
+ * - In the remaining 10% (<=10% of radius): 4 Hz frequency (4 times per second = 250 ms)
  */
 export const computeSubmarineSonarIntervalMs = (
   distanceMeters: number,
@@ -561,27 +561,30 @@ export const computeSubmarineSonarIntervalMs = (
   const clampedDist = Math.max(0, distanceMeters);
   const pct = Math.max(0, Math.min(100, (clampedDist / safeRadius) * 100));
 
-  // Remaining 10% of distance: 5 Hz (5 times per second = 200 ms)
+  // Remaining 10% of distance: 4 Hz (4 times per second = 250 ms)
   if (pct <= 10) {
-    return 200;
+    return 250;
   }
 
-  let pingsPerMinute: number;
+  let basePingsPerMinute: number;
   if (pct < 50) {
-    // Below 50%: add 1 ping/min for each 5% reduction below 50%
+    // Below 50%: add 1 base ping/min for each 5% reduction below 50%
     const stepsBelow50 = Math.max(1, Math.floor((50 - pct) / 5));
-    pingsPerMinute = 6 + stepsBelow50;
+    basePingsPerMinute = 6 + stepsBelow50;
   } else {
-    // 100% down to 50%: 1/min at 100%, 2/min at 90%, 3/min at 80%, 4/min at 70%, 5/min at 60%, 6/min at 50%
+    // 100% down to 50%: base 1/min at 100%, 2/min at 90%, 3/min at 80%, 4/min at 70%, 5/min at 60%, 6/min at 50%
     const stepsFrom100 = Math.max(0, Math.floor((100 - pct) / 10));
-    pingsPerMinute = 1 + stepsFrom100;
+    basePingsPerMinute = 1 + stepsFrom100;
   }
 
+  const pingsPerMinute = basePingsPerMinute * 5;
   return Math.round(60000 / pingsPerMinute);
 };
 
 /**
  * Plays a single Submarine Sonar Ping (resonant underwater metallic ping + harmonic echo tail).
+ * On Android native platform, delegates to YaadGeofenceBridge.playSonarPing so the sound
+ * plays on Android's Notification stream (STREAM_NOTIFICATION) and is controlled by phone notification volume.
  */
 export const playSubmarineSonarPing = (
   distanceMeters: number = 100,
@@ -597,10 +600,18 @@ export const playSubmarineSonarPing = (
             distanceMeters,
             radiusMeters,
             intervalMs,
-            is5Hz: intervalMs <= 200,
+            is4Hz: intervalMs <= 250,
           },
         })
       );
+
+      // Route through Native Android Notification Stream (USAGE_NOTIFICATION / STREAM_NOTIFICATION)
+      // when running inside the Android app so the phone's Notification volume slider controls sonar volume.
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge && typeof bridge.playSonarPing === 'function') {
+        bridge.playSonarPing(Math.round(distanceMeters), Math.round(radiusMeters));
+        return;
+      }
     }
 
     const vol = Math.max(0, Math.min(1, volumeOverride !== undefined ? volumeOverride : globalAlarmVolume));
@@ -613,11 +624,11 @@ export const playSubmarineSonarPing = (
     const closeness = 1 - Math.max(0, Math.min(1, distanceMeters / safeRadius));
     const pingFreq = 1280 + closeness * 280;
 
-    if (intervalMs <= 200) {
-      // 5 Hz rapid submarine sonar ping (200ms cycle): crisp attack & tight underwater decay
-      playSoftTone(ctx, pingFreq, now, 0.004, 0.11, 'sine', 0.36, vol);
-      playSoftTone(ctx, pingFreq * 1.5, now, 0.005, 0.06, 'sine', 0.12, vol);
-      playSoftTone(ctx, pingFreq * 0.995, now + 0.055, 0.006, 0.09, 'sine', 0.15, vol);
+    if (intervalMs <= 250) {
+      // 4 Hz rapid submarine sonar ping (250ms cycle): crisp attack & tight underwater decay
+      playSoftTone(ctx, pingFreq, now, 0.004, 0.13, 'sine', 0.36, vol);
+      playSoftTone(ctx, pingFreq * 1.5, now, 0.005, 0.07, 'sine', 0.12, vol);
+      playSoftTone(ctx, pingFreq * 0.995, now + 0.065, 0.006, 0.10, 'sine', 0.15, vol);
     } else {
       // Standard Submarine Ping (sharp attack, resonant underwater decay + reverberant echo)
       playSoftTone(ctx, pingFreq, now, 0.006, 0.42, 'sine', 0.36, vol);
@@ -636,7 +647,7 @@ const runSonarTick = () => {
   const nextInterval = computeSubmarineSonarIntervalMs(currentSonarDistance, currentSonarRadius);
   if (getGlobalVibration() && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
     try {
-      navigator.vibrate(nextInterval <= 200 ? 45 : 80);
+      navigator.vibrate(nextInterval <= 250 ? 45 : 80);
     } catch {
       // ignore
     }

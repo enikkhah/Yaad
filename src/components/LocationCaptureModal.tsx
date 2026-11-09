@@ -22,7 +22,12 @@ import { toPersianDigits } from '../utils/jalali';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { openAndroidSettings, checkDeviceGpsEnabled } from '../utils/nativePermissions';
-import { saveLastKnownPosition, resetGeofenceProximityState } from '../utils/geofenceManager';
+import {
+  saveLastKnownPosition,
+  resetGeofenceProximityState,
+  radiusToLogSliderPosition,
+  logSliderPositionToRadius,
+} from '../utils/geofenceManager';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 
@@ -761,9 +766,9 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                       </span>
                     </div>
 
-                    {/* Quick Preset Buttons (including 5 km) */}
+                    {/* Quick Preset Buttons (up to 25 km) */}
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-                      {[50, 100, 200, 500, 1000, 5000].map((rVal) => (
+                      {[100, 500, 1000, 5000, 10000, 25000].map((rVal) => (
                         <button
                           key={rVal}
                           type="button"
@@ -781,33 +786,33 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                       ))}
                     </div>
 
-                    {/* Interactive Distance Slider (20m up to 10km) */}
-                    <div className="pt-2 pb-1 px-1 space-y-1.5">
-                      <input
-                        type="range"
-                        min="20"
-                        max="10000"
-                        step="10"
-                        dir="ltr"
-                        value={geofenceRadius}
-                        onChange={(e) => setGeofenceRadius(Number(e.target.value))}
-                        style={{
-                          background: `linear-gradient(to right, #10b981 0%, #10b981 ${Math.min(
-                            100,
-                            Math.max(0, ((geofenceRadius - 20) / (10000 - 20)) * 100)
-                          )}%, rgba(41, 37, 36, 0.9) ${Math.min(
-                            100,
-                            Math.max(0, ((geofenceRadius - 20) / (10000 - 20)) * 100)
-                          )}%, rgba(41, 37, 36, 0.9) 100%)`,
-                        }}
-                        className="geofence-radius-slider cursor-pointer"
-                      />
-                      <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 px-0.5" dir="ltr">
-                        <span>{isEn ? '20m' : '۲۰ متر'}</span>
-                        <span>{isEn ? '5km' : '۵ کیلومتر'}</span>
-                        <span>{isEn ? '10km' : '۱۰ کیلومتر'}</span>
-                      </div>
-                    </div>
+                    {/* Logarithmic Distance Slider (20m up to 25km, with 5km at 50% midpoint) */}
+                    {(() => {
+                      const sliderPos = radiusToLogSliderPosition(geofenceRadius);
+                      const fillPct = Math.min(100, Math.max(0, (sliderPos / 1000) * 100));
+                      return (
+                        <div className="pt-2 pb-1 px-1 space-y-1.5">
+                          <input
+                            type="range"
+                            min="0"
+                            max="1000"
+                            step="1"
+                            dir="ltr"
+                            value={sliderPos}
+                            onChange={(e) => setGeofenceRadius(logSliderPositionToRadius(Number(e.target.value)))}
+                            style={{
+                              background: `linear-gradient(to right, #10b981 0%, #10b981 ${fillPct}%, rgba(41, 37, 36, 0.9) ${fillPct}%, rgba(41, 37, 36, 0.9) 100%)`,
+                            }}
+                            className="geofence-radius-slider cursor-pointer"
+                          />
+                          <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 px-0.5" dir="ltr">
+                            <span>{isEn ? '0 - 20m' : '۰ تا ۲۰ متر'}</span>
+                            <span>{isEn ? '5km' : '۵ کیلومتر'}</span>
+                            <span>{isEn ? '25km' : '۲۵ کیلومتر'}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* 2. شرط اعلام هشدار (Trigger on: enter / exit / both) */}

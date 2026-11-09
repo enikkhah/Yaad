@@ -52,6 +52,7 @@ import { WheelPicker } from './WheelPicker';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
+import { radiusToLogSliderPosition, logSliderPositionToRadius } from '../utils/geofenceManager';
 
 interface ReminderFormProps {
   isOpen: boolean;
@@ -1879,7 +1880,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       </span>
                     </div>
                     <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-                      {[50, 100, 200, 500, 1000, 5000].map((r) => (
+                      {[100, 500, 1000, 5000, 10000, 25000].map((r) => (
                         <button
                           key={r}
                           type="button"
@@ -1900,32 +1901,32 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         </button>
                       ))}
                     </div>
-                    <div className="pt-2 pb-1 px-1 space-y-1.5">
-                      <input
-                        type="range"
-                        min="20"
-                        max="10000"
-                        step="10"
-                        dir="ltr"
-                        value={geofenceRadius}
-                        onChange={(e) => setGeofenceRadius(Number(e.target.value))}
-                        style={{
-                          background: `linear-gradient(to right, #10b981 0%, #10b981 ${Math.min(
-                            100,
-                            Math.max(0, ((geofenceRadius - 20) / (10000 - 20)) * 100)
-                          )}%, rgba(41, 37, 36, 0.9) ${Math.min(
-                            100,
-                            Math.max(0, ((geofenceRadius - 20) / (10000 - 20)) * 100)
-                          )}%, rgba(41, 37, 36, 0.9) 100%)`,
-                        }}
-                        className="geofence-radius-slider cursor-pointer"
-                      />
-                      <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 px-0.5" dir="ltr">
-                        <span>{isEn ? '20m' : '۲۰ متر'}</span>
-                        <span>{isEn ? '5km' : '۵ کیلومتر'}</span>
-                        <span>{isEn ? '10km' : '۱۰ کیلومتر'}</span>
-                      </div>
-                    </div>
+                    {(() => {
+                      const sliderPos = radiusToLogSliderPosition(geofenceRadius);
+                      const fillPct = Math.min(100, Math.max(0, (sliderPos / 1000) * 100));
+                      return (
+                        <div className="pt-2 pb-1 px-1 space-y-1.5">
+                          <input
+                            type="range"
+                            min="0"
+                            max="1000"
+                            step="1"
+                            dir="ltr"
+                            value={sliderPos}
+                            onChange={(e) => setGeofenceRadius(logSliderPositionToRadius(Number(e.target.value)))}
+                            style={{
+                              background: `linear-gradient(to right, #10b981 0%, #10b981 ${fillPct}%, rgba(41, 37, 36, 0.9) ${fillPct}%, rgba(41, 37, 36, 0.9) 100%)`,
+                            }}
+                            className="geofence-radius-slider cursor-pointer"
+                          />
+                          <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 px-0.5" dir="ltr">
+                            <span>{isEn ? '0 - 20m' : '۰ تا ۲۰ متر'}</span>
+                            <span>{isEn ? '5km' : '۵ کیلومتر'}</span>
+                            <span>{isEn ? '25km' : '۲۵ کیلومتر'}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               )}

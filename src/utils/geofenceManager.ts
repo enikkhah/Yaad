@@ -213,6 +213,117 @@ export function setGeofenceTrackingEnabled(enabled: boolean): void {
 }
 
 /**
+ * Logarithmic Geofence Radius Slider Mapping (20m to 25km, with 5km at exact 50% midpoint):
+ * Slider position is 0..1000:
+ * - 0 -> 20 meters
+ * - 500 (50% midpoint) -> 5,000 meters (5 km)
+ * - 1000 (100% end) -> 25,000 meters (25 km)
+ */
+export function radiusToLogSliderPosition(radiusMeters: number): number {
+  const r = Math.max(20, Math.min(25000, radiusMeters || 100));
+  if (r <= 5000) {
+    // Logarithmic mapping from 20m (pos=0) to 5000m (pos=500): r = 20 * (250)^(pos/500)
+    const ratio = Math.log(r / 20) / Math.log(250);
+    return Math.round(Math.max(0, Math.min(500, ratio * 500)));
+  } else {
+    // Logarithmic mapping from 5000m (pos=500) to 25000m (pos=1000): r = 5000 * (5)^((pos-500)/500)
+    const ratio = Math.log(r / 5000) / Math.log(5);
+    return Math.round(Math.max(500, Math.min(1000, 500 + ratio * 500)));
+  }
+}
+
+export function logSliderPositionToRadius(sliderPos: number): number {
+  const pos = Math.max(0, Math.min(1000, sliderPos));
+  if (pos === 0) return 20;
+  if (pos === 500) return 5000;
+  if (pos === 1000) return 25000;
+
+  let rawRadius: number;
+  if (pos < 500) {
+    const t = pos / 500;
+    rawRadius = 20 * Math.pow(250, t);
+  } else {
+    const u = (pos - 500) / 500;
+    rawRadius = 5000 * Math.pow(5, u);
+  }
+
+  if (rawRadius < 100) {
+    return Math.max(20, Math.round(rawRadius / 5) * 5);
+  } else if (rawRadius < 1000) {
+    return Math.round(rawRadius / 10) * 10;
+  } else if (rawRadius < 5000) {
+    return Math.round(rawRadius / 50) * 50;
+  } else {
+    return Math.min(25000, Math.round(rawRadius / 100) * 100);
+  }
+}
+
+// High-accuracy GPS stabilizer to prevent live distance from jumping back and forth
+// between fine satellite GPS fixes and coarse cell-tower/network fixes.
+let lastAcceptedPosition: UserPosition | null = null;
+
+export function shouldAcceptLocationUpdate(newPos: UserPosition): boolean {
+  if (
+    !newPos ||
+    typeof newPos.latitude !== 'number' ||
+    typeof newPos.longitude !== 'number' ||
+    Number.isNaN(newPos.latitude) ||
+    Number.isNaN(newPos.longitude)
+  ) {
+    return false;
+  }
+
+  const now = Date.now();
+  const normalizedPos: UserPosition = {
+    latitude: newPos.latitude,
+    longitude: newPos.longitude,
+    accuracy: newPos.accuracy && newPos.accuracy > 0 ? newPos.accuracy : 15,
+    timestamp: newPos.timestamp && newPos.timestamp > 0 ? newPos.timestamp : now,
+  };
+
+  if (!lastAcceptedPosition) {
+    lastAcceptedPosition = normalizedPos;
+    return true;
+  }
+
+  // Reject out-of-order stale fixes
+  if (normalizedPos.timestamp < lastAcceptedPosition.timestamp - 1500) {
+    return false;
+  }
+
+  const ageSinceLastMs = Math.max(0, now - lastAcceptedPosition.timestamp);
+  const jumpMeters = calculateHaversineDistance(
+    lastAcceptedPosition.latitude,
+    lastAcceptedPosition.longitude,
+    normalizedPos.latitude,
+    normalizedPos.longitude
+  );
+
+  // If we have a recent (<15s) high-accuracy GPS fix (<=35m) and a sudden coarse fix (>65m accuracy)
+  // jumps the position by >35m, reject the coarse network/cell-tower jump!
+  if (
+    ageSinceLastMs < 15000 &&
+    lastAcceptedPosition.accuracy <= 35 &&
+    normalizedPos.accuracy > 65 &&
+    jumpMeters > 35
+  ) {
+    return false;
+  }
+
+  // Also reject implausible instantaneous jumps (>250m in <4 seconds) when accuracy is worse than previous fix
+  if (
+    ageSinceLastMs < 4000 &&
+    jumpMeters > 250 &&
+    normalizedPos.accuracy > lastAcceptedPosition.accuracy * 1.5
+  ) {
+    return false;
+  }
+
+  lastAcceptedPosition = normalizedPos;
+  return true;
+}
+
+/**
  * Saves last known position to localStorage for quick restore
  */
 export function saveLastKnownPosition(pos: UserPosition): void {
