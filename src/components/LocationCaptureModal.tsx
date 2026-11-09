@@ -396,9 +396,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                     ? (isEn ? 'Edit Saved Place' : 'ویرایش مکان ثبت‌شده') 
                     : (isEn ? 'Save GPS Location' : 'ثبت موقعیت مکانی (GPS)')}
                 </h3>
-                <p className="text-[11px] text-stone-400">
-                  {isEn ? 'GPS coordinates, Google Maps & camera photo' : 'با تکیه بر GPS و سرویس Google Maps همراه با عکس دوربین'}
-                </p>
               </div>
             </div>
 
@@ -594,23 +591,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               </div>
             )}
 
-            {/* Description Field */}
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-bold text-stone-300 mb-1.5">
-                  {isEn ? 'Notes & Details (Field Description):' : 'توضیحات و جزئیات تکمیلی (فیلد توضیح):'}
-                </label>
-                <textarea
-                  rows={3}
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder={isEn ? 'Floor number, buzzer code, contact person, access notes...' : 'توضیحات تکمیلی، شماره طبقه، کد زنگ، نام شخص مسئول، یادداشت دسترسی یا نکات مهم...'}
-                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-500 text-sm focus:outline-none focus:border-emerald-500/70 focus:ring-1 focus:ring-emerald-500/50 resize-none leading-relaxed"
-                />
-              </div>
-            </div>
-
-            {/* Collapsible Section: Geofence (حصار مکانی) - Larger & More Distinct Frame with White Text & Lighter Background */}
+            {/* Collapsible Section: Geofence (حصار مکانی) - Moved above Camera Photo & Description */}
             <div className="pt-1.5">
               <button
                 type="button"
@@ -635,9 +616,9 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   <span style={{ color: '#FFFFFF' }} className="tracking-wide text-sm sm:text-base font-black !text-white drop-shadow-xs">
                     {isEn ? 'Geofence' : 'حصار مکانی'}
                   </span>
-                  {(photoUrl || enableGeofence) && (
+                  {enableGeofence && (
                     <span style={{ color: '#FFFFFF' }} className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/35 !text-white border border-emerald-300/50 font-bold">
-                      {enableGeofence ? (isEn ? 'Active' : 'فعال') : (isEn ? 'Attached' : 'ثبت‌شده')}
+                      {isEn ? 'Active' : 'فعال'}
                     </span>
                   )}
                 </span>
@@ -911,8 +892,11 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 </div>
               )}
             </div>
+                </div>
+              )}
+            </div>
 
-            {/* Camera Photo Capture Field */}
+            {/* Camera Photo Capture Field (Independent section between Geofence and Description) */}
             <div className="space-y-2">
               <label className="block text-xs font-bold text-stone-300">
                 {isEn ? 'Camera Photo of Location:' : 'عکس از محل توسط دوربین:'}
@@ -980,8 +964,21 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 </div>
               )}
             </div>
-                </div>
-              )}
+
+            {/* Description Field */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-stone-300 mb-1.5">
+                  {isEn ? 'Notes & Details (Field Description):' : 'توضیحات و جزئیات تکمیلی (فیلد توضیح):'}
+                </label>
+                <textarea
+                  rows={3}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder={isEn ? 'Floor number, buzzer code, contact person, access notes...' : 'توضیحات تکمیلی، شماره طبقه، کد زنگ، نام شخص مسئول، یادداشت دسترسی یا نکات مهم...'}
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-white placeholder-stone-500 text-sm focus:outline-none focus:border-emerald-500/70 focus:ring-1 focus:ring-emerald-500/50 resize-none leading-relaxed"
+                />
+              </div>
             </div>
 
             {/* Also Create Reminder Toggle */}
@@ -995,9 +992,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               <div className="flex-1">
                 <span className="text-xs font-bold text-white block">
                   {isEn ? 'Also add to Reminders list' : 'ثبت همزمان در لیست یادآورها'}
-                </span>
-                <span className="text-[10px] text-stone-400 block">
-                  {isEn ? 'Creates a reminder with this place title & Google Maps link' : 'یک یادآور با عنوان همین مکان و لینک گوگل‌مپ ایجاد می‌کند'}
                 </span>
               </div>
             </label>

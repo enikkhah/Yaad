@@ -101,6 +101,35 @@ export function resetGeofenceProximityState(itemId?: string): void {
 }
 
 /**
+ * Marks a geofence item as acknowledged by the user ("متوجه شدم") for the current stay inside the boundary,
+ * ensuring the alert process and submarine sonar stop completely and do not re-trigger until the user exits and re-enters.
+ */
+export function acknowledgeGeofenceAlert(itemId?: string): void {
+  if (itemId) {
+    const cleanId = itemId.replace(/^(loc_|rem_)/, '');
+    const now = Date.now();
+    proximityStateMap.set(`loc_${cleanId}`, true);
+    proximityStateMap.set(`rem_${cleanId}`, true);
+    proximityStateMap.set(`u10m_loc_${cleanId}`, true);
+    proximityStateMap.set(`u10m_rem_${cleanId}`, true);
+    lastTransitionTimeMap.set(`loc_${cleanId}`, now);
+    lastTransitionTimeMap.set(`rem_${cleanId}`, now);
+    saveProximityStateToStorage();
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge && typeof bridge.stopGeofenceAlertAudio === 'function') {
+        bridge.stopGeofenceAlertAudio();
+      }
+    } catch {
+      // Ignore bridge error on web
+    }
+  }
+}
+
+/**
  * Opens Google Maps turn-by-turn directions to the target coordinates.
  * Uses Native Android Intent when running in the Android app, or standard Google Maps URL in browser.
  */
@@ -447,21 +476,20 @@ export function evaluateGeofences(
     // Entry matches exact radius (same as UI card). Exit uses +8m hysteresis so standing on the border doesn't flap.
     const isInsideNow = distance <= radius;
     const isDefinitelyOutside = distance > radius + 8;
-    const isUnder10mNow = distance <= 12; // 10m + 2m GPS accuracy margin
-    const isDefinitelyOutside10m = distance > 16;
+    const isUnder10mNow = distance <= Math.max(10, Math.round(radius * 0.1));
 
     const wasInsideNotified = proximityStateMap.get(proximityKey);
     const wasUnder10mNotified = proximityStateMap.get(under10mKey);
     const lastTrigTime = lastTransitionTimeMap.get(proximityKey) || 0;
 
-    // Reset sub-10m flag once user moves > 16m away
-    if (isDefinitelyOutside10m && wasUnder10mNotified === true) {
+    // Reset sub-10m flag only when user exits the geofence boundary so "متوجه شدم" stops alerts for the entire stay
+    if (isDefinitelyOutside && wasUnder10mNotified === true) {
       proximityStateMap.set(under10mKey, false);
       stateChanged = true;
     }
 
-    // 1. Sub-10m exact target arrival (fires whenever entering <= 10-12m and not yet notified for this stay)
-    if (isInsideNow && isUnder10mNow && wasUnder10mNotified !== true) {
+    // 1. Sub-10m / <=10% exact target arrival (fires if user starts/enters directly within <=10% and has not been notified for this stay)
+    if (isInsideNow && isUnder10mNow && wasInsideNotified !== true && wasUnder10mNotified !== true) {
       proximityStateMap.set(under10mKey, true);
       proximityStateMap.set(proximityKey, true);
       lastTransitionTimeMap.set(proximityKey, now);
@@ -590,21 +618,20 @@ export function evaluateSavedLocationGeofences(
     // Entry matches exact `distance <= radius` (100% consistent with SavedLocationCard "🟢 داخل محدوده")
     const isInsideNow = distance <= radius;
     const isDefinitelyOutside = distance > radius + 8;
-    const isUnder10mNow = distance <= 12; // 10m + 2m GPS accuracy tolerance
-    const isDefinitelyOutside10m = distance > 16;
+    const isUnder10mNow = distance <= Math.max(10, Math.round(radius * 0.1));
 
     const wasInsideNotified = proximityStateMap.get(proximityKey);
     const wasUnder10mNotified = proximityStateMap.get(under10mKey);
     const lastTrigTime = lastTransitionTimeMap.get(proximityKey) || 0;
 
-    // Reset sub-10m flag once user moves > 16m away
-    if (isDefinitelyOutside10m && wasUnder10mNotified === true) {
+    // Reset sub-10m flag only when user exits the geofence boundary so "متوجه شدم" stops alerts for the entire stay
+    if (isDefinitelyOutside && wasUnder10mNotified === true) {
       proximityStateMap.set(under10mKey, false);
       stateChanged = true;
     }
 
-    // 1. Sub-10m Target Arrival inside boundary
-    if (isInsideNow && isUnder10mNow && wasUnder10mNotified !== true) {
+    // 1. Sub-10m / <=10% Target Arrival inside boundary (fires if user starts/enters directly within <=10% and has not been notified for this stay)
+    if (isInsideNow && isUnder10mNow && wasInsideNotified !== true && wasUnder10mNotified !== true) {
       proximityStateMap.set(under10mKey, true);
       proximityStateMap.set(proximityKey, true);
       lastTransitionTimeMap.set(proximityKey, now);

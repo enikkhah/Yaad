@@ -10,7 +10,6 @@ import {
   startSubmarineSonarLoop,
   updateSubmarineSonarDistance,
   stopSubmarineSonarLoop,
-  playGeofenceArrivalUnder10mSound,
 } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { ReminderForm } from './components/ReminderForm';
@@ -1621,9 +1620,9 @@ export default function App() {
       setCurrentUserPosition(userPos);
       saveLastKnownPosition(userPos);
 
-      // Update live submarine sonar distance so ping rhythm speeds up as user gets closer and slows down as user moves away
+      // Update live submarine sonar distance so ping rhythm speeds up as user gets closer (up to 5Hz at <=10%) and slows down as user moves away
       const nearestGeo = getNearestActiveGeofenceDistance(userPos, curReminders, curSavedLocations);
-      if (nearestGeo && nearestGeo.distance <= nearestGeo.radius && nearestGeo.distance > 10) {
+      if (nearestGeo && nearestGeo.distance <= nearestGeo.radius) {
         updateSubmarineSonarDistance(nearestGeo.distance, nearestGeo.radius);
       } else if (!nearestGeo || nearestGeo.distance > nearestGeo.radius) {
         stopSubmarineSonarLoop();
@@ -1636,7 +1635,6 @@ export default function App() {
       if (hasLocCheckpoints) {
         evaluateSavedLocationGeofences(userPos, curSavedLocations, (event: SavedLocationTriggerEvent) => {
           const displayLocTitle = formatSavedLocationTitle(event.location.title, curLang);
-          const isSub10mArrival = event.triggerType === 'arrived_under_10m';
           const locDetails = [event.location.description, event.location.geofence?.customMessage]
             .filter(Boolean)
             .join(' — ');
@@ -1655,13 +1653,9 @@ export default function App() {
             longitude: event.location.longitude,
           });
 
-          // Submarine Sonar Audio (distance-adaptive rhythm) vs Distinct <10m Arrival Audio Effect
+          // Submarine Sonar Audio (distance-adaptive rhythm: 1/min at 100% down to 5Hz in remaining 10%)
           if (event.location.geofence?.playAudio !== false) {
-            if (isSub10mArrival) {
-              playGeofenceArrivalUnder10mSound();
-            } else {
-              startSubmarineSonarLoop(event.distance, event.location.geofence?.radius || 200);
-            }
+            startSubmarineSonarLoop(event.distance, event.location.geofence?.radius || 200);
           }
 
           // Update savedLocation state
@@ -1689,7 +1683,6 @@ export default function App() {
       );
       if (hasRemGeofences) {
         evaluateGeofences(userPos, curReminders, (event: GeofenceTriggerEvent) => {
-          const isSub10mArrival = event.triggerType === 'arrived_under_10m';
           const locName = event.reminder.geofence?.locationName || event.reminder.title;
 
           setActiveGeofenceAlert({
@@ -1705,11 +1698,7 @@ export default function App() {
             longitude: event.reminder.geofence?.longitude || userPos.longitude,
           });
 
-          if (isSub10mArrival) {
-            playGeofenceArrivalUnder10mSound();
-          } else {
-            startSubmarineSonarLoop(event.distance, event.reminder.geofence?.radius || 200);
-          }
+          startSubmarineSonarLoop(event.distance, event.reminder.geofence?.radius || 200);
 
           setReminders((prev) =>
             prev.map((item) =>
@@ -3679,29 +3668,52 @@ export default function App() {
           return (
             <section className="space-y-4 animate-in fade-in">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-stone-800/80">
-                <div className="flex items-center gap-2">
-                  <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center flex-shrink-0">
-                    <MapPin className="w-4 h-4" />
-                  </div>
-                  <div>
+                <div className="flex items-center justify-between sm:justify-start gap-2.5 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center flex-shrink-0">
+                      <MapPin className="w-4 h-4" />
+                    </div>
                     <h3 className="font-bold text-base sm:text-lg text-white flex items-center gap-2 flex-wrap">
-                      <span>{isEn ? 'Saved Places with GPS & Google Maps' : 'مکان‌های ثبت‌شده با GPS و Google Maps'}</span>
+                      <span>{isEn ? 'Saved Places with GPS' : 'مکان‌های ثبت‌شده با GPS'}</span>
                       <span className="text-xs px-2 py-0.5 rounded-full bg-stone-800 text-stone-300 border border-stone-700 font-mono">
                         {formatNumber(activeSavedLocations.length)}
                       </span>
-                      {activeGeofencesCount > 0 && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 flex items-center gap-1">
-                          <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
-                          <span>{isEn ? `${activeGeofencesCount} Active Geofences` : `${toPersianDigits(activeGeofencesCount)} حصار مکانی فعال`}</span>
-                        </span>
-                      )}
                     </h3>
-                    <p className="text-[11px] text-stone-400">
-                      {isEn 
-                        ? 'Satellite coordinates, Google Maps preview, camera photo and radius boundary alerts' 
-                        : 'ذخیره خودکار مختصات ماهواره‌ای، پیش‌نمایش در گوگل‌مپ، عکاسی و هشدارهای حصار مکانی'}
-                    </p>
                   </div>
+
+                  {/* Sliding Geofence Toggle Switch in Header next to Title (دکمه کشویی فعال‌سازی حصار مکانی کنار عنوان) */}
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isGeofenceActive}
+                    onClick={() => handleToggleGeofenceService()}
+                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-2xl bg-stone-900/90 border border-stone-800 hover:border-emerald-500/40 cursor-pointer group focus:outline-none transition-all"
+                    title={
+                      isGeofenceActive
+                        ? (isEn ? 'Disable Geofence Radar' : 'غیرفعال کردن رادار حصار مکانی')
+                        : (isEn ? 'Enable Geofence Radar' : 'فعال کردن رادار حصار مکانی')
+                    }
+                  >
+                    <Radio className={`w-3.5 h-3.5 ${isGeofenceActive ? 'text-emerald-400 animate-pulse' : 'text-stone-400'}`} />
+                    <span className={`text-xs font-black transition-colors ${
+                      isGeofenceActive ? 'text-emerald-300' : 'text-stone-300 group-hover:text-white'
+                    }`}>
+                      {isEn ? 'Geofence' : 'حصار مکانی'}
+                    </span>
+                    <div
+                      dir="ltr"
+                      className={`w-12 h-6.5 rounded-full border-2 p-0.5 flex items-center transition-all duration-200 shadow-inner ${
+                        isGeofenceActive
+                          ? 'bg-emerald-500 border-emerald-200 justify-end shadow-[0_0_12px_rgba(16,185,129,0.5)]'
+                          : 'bg-stone-700 border-stone-400 justify-start hover:border-white'
+                      }`}
+                    >
+                      <span
+                        style={{ backgroundColor: '#FFFFFF' }}
+                        className="w-4.5 h-4.5 rounded-full !bg-white shadow-md transition-all duration-200"
+                      />
+                    </div>
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2 self-stretch sm:self-auto">
@@ -3748,7 +3760,7 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Location Search Bar & Geofence Active Indicator */}
+              {/* Location Search Bar */}
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5">
                 <div
                   dir={isEn ? 'ltr' : 'rtl'}
@@ -3773,59 +3785,6 @@ export default function App() {
                     </button>
                   )}
                 </div>
-
-                {/* Geofence Engine Status Toggle */}
-                <button
-                  type="button"
-                  onClick={() => handleToggleGeofenceService()}
-                  style={
-                    isGeofenceActive
-                      ? {
-                          background: 'linear-gradient(135deg, rgba(6, 78, 59, 0.92) 0%, rgba(16, 185, 129, 0.35) 100%)',
-                          borderColor: '#34d399',
-                          color: '#ffffff',
-                        }
-                      : undefined
-                  }
-                  className={`flex items-center justify-between sm:justify-start gap-2.5 px-3.5 py-2 rounded-xl border text-xs transition-all cursor-pointer active:scale-95 ${
-                    isGeofenceActive
-                      ? 'geofence-radar-active shadow-md shadow-emerald-950/50'
-                      : 'bg-stone-900 border-stone-800 text-stone-400 hover:border-stone-700'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="relative flex h-2.5 w-2.5">
-                      {isGeofenceActive && (
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-75" />
-                      )}
-                      <span
-                        style={{ backgroundColor: isGeofenceActive ? '#34d399' : '#78716c' }}
-                        className="relative inline-flex rounded-full h-2.5 w-2.5"
-                      />
-                    </span>
-                    <Radio className={`w-3.5 h-3.5 ${isGeofenceActive ? 'text-emerald-300 animate-pulse' : 'text-stone-400'}`} />
-                    <span
-                      style={isGeofenceActive ? { color: '#ffffff' } : undefined}
-                      className="text-[11px] font-black"
-                    >
-                      {isEn ? 'Geofence Radar:' : 'پایش ورود/خروج حصارها:'}
-                    </span>
-                  </div>
-                  <span
-                    style={
-                      isGeofenceActive
-                        ? { backgroundColor: '#10b981', borderColor: '#a7f3d0', color: '#ffffff' }
-                        : undefined
-                    }
-                    className={`text-[10px] px-2.5 py-0.5 rounded-lg font-black border transition-colors ${
-                      isGeofenceActive
-                        ? 'shadow-xs'
-                        : 'bg-stone-800 text-stone-400 border-stone-700'
-                    }`}
-                  >
-                    {isGeofenceActive ? (isEn ? 'ACTIVE ✓' : 'فعال ✓') : (isEn ? 'PAUSED' : 'غیرفعال')}
-                  </span>
-                </button>
               </div>
 
               {displayedLocations.length > 0 ? (

@@ -3,11 +3,13 @@ import { AnimatePresence, motion } from 'motion/react';
 import { CheckCircle2, Edit2, MapPin, Navigation } from 'lucide-react';
 import appIcon from '../assets/images/icon.png';
 import {
+  acknowledgeGeofenceAlert,
   calculateHaversineDistance,
   openGoogleMapsDirections,
   saveLastKnownPosition,
 } from '../utils/geofenceManager';
 import {
+  computeSubmarineSonarIntervalMs,
   stopAlarmRinging,
   stopSubmarineSonarLoop,
   updateSubmarineSonarDistance,
@@ -44,12 +46,26 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
 }) => {
   const isEn = language === 'en';
   const [liveDistance, setLiveDistance] = useState<number>(alert?.initialDistance ?? 0);
+  const [pingBeat, setPingBeat] = useState<number>(0);
 
   // Sync initial distance when alert opens
   useEffect(() => {
     if (!alert) return;
     setLiveDistance(alert.initialDistance);
-  }, [alert?.id, alert?.initialDistance]);
+    updateSubmarineSonarDistance(alert.initialDistance, alert.radius || 200);
+  }, [alert?.id, alert?.initialDistance, alert?.radius]);
+
+  // Listen to submarine sonar ping events to keep the pulse animation in exact lockstep with each sonar ping
+  useEffect(() => {
+    if (!alert || typeof window === 'undefined') return;
+    const handleSonarPing = () => {
+      setPingBeat((prev) => prev + 1);
+    };
+    window.addEventListener('yaad:sonar-ping', handleSonarPing);
+    return () => {
+      window.removeEventListener('yaad:sonar-ping', handleSonarPing);
+    };
+  }, [alert?.id]);
 
   // Update live distance whenever parent userPosition updates
   useEffect(() => {
@@ -61,9 +77,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
       alert.longitude
     );
     setLiveDistance(d);
-    if (d > 10) {
-      updateSubmarineSonarDistance(d, alert.radius || 200);
-    }
+    updateSubmarineSonarDistance(d, alert.radius || 200);
   }, [
     alert?.id,
     alert?.latitude,
@@ -92,9 +106,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
           });
           const d = calculateHaversineDistance(lat, lng, alert.latitude, alert.longitude);
           setLiveDistance(d);
-          if (d > 10) {
-            updateSubmarineSonarDistance(d, alert.radius || 200);
-          }
+          updateSubmarineSonarDistance(d, alert.radius || 200);
         },
         () => {},
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 10000 }
@@ -114,33 +126,26 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     };
   }, [alert?.id, alert?.latitude, alert?.longitude, alert?.radius]);
 
-  const stopAllGeofenceSounds = () => {
+  const stopAllGeofenceSounds = (targetId?: string) => {
     stopSubmarineSonarLoop();
     stopAlarmRinging();
-    try {
-      const bridge = (window as any).YaadGeofenceBridge;
-      if (bridge && typeof bridge.stopGeofenceAlertAudio === 'function') {
-        bridge.stopGeofenceAlertAudio();
-      }
-    } catch {
-      // ignore
-    }
+    acknowledgeGeofenceAlert(targetId || alert?.targetId);
   };
 
   const handleGotIt = () => {
-    stopAllGeofenceSounds();
+    stopAllGeofenceSounds(alert?.targetId);
     onGotIt();
   };
 
   const handleEdit = () => {
     if (!alert) return;
-    stopAllGeofenceSounds();
+    stopAllGeofenceSounds(alert.targetId);
     onEditRadius(alert);
   };
 
   const handleDirections = () => {
     if (!alert) return;
-    stopAllGeofenceSounds();
+    stopAllGeofenceSounds(alert.targetId);
     openGoogleMapsDirections(alert.latitude, alert.longitude, alert.locationTitle);
     onGotIt();
   };
@@ -168,15 +173,26 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     return isEn ? `${meters} m` : `${toPersianDigits(meters)} متر`;
   };
 
-  const isSub10m = alert?.triggerType === 'arrived_under_10m' || liveDistance <= 10;
+  const effectiveRadius = Math.max(1, alert?.radius || 200);
+  const sonarIntervalMs = computeSubmarineSonarIntervalMs(liveDistance, effectiveRadius);
+  const is5HzMode = sonarIntervalMs <= 200;
+  const isSub10m = alert?.triggerType === 'arrived_under_10m' || liveDistance <= 10 || is5HzMode;
   const distFormatted = formatDistanceText(liveDistance);
+
+  // Pulse animation timing:
+  // - In <=10% remaining distance (5 Hz mode): 0.2s (200ms) continuous 5 Hz pulse
+  // - Above 10%: synchronized pulse beat on each sonar ping with repeatDelay matching the exact sonar interval
+  const activeBeatDurationSec = is5HzMode ? 0.2 : 0.9;
+  const activeRepeatDelaySec = is5HzMode
+    ? 0
+    : Math.max(0.1, sonarIntervalMs / 1000 - activeBeatDurationSec);
 
   const triggerBadgeLabel = !alert
     ? ''
     : isSub10m
     ? isEn
-      ? '🎯 Target Reached (Within 10m)'
-      : '🎯 حضور در نقطه مقصد (زیر ۱۰ متر)'
+      ? '🎯 Target Reached (5 Hz Sonar)'
+      : '🎯 در محدوده ۱۰٪ پایانی مقصد (سونار ۵ هرتز)'
     : alert.triggerType === 'exit'
     ? isEn
       ? '📡 Geofence Exit Alert'
@@ -224,24 +240,42 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
 
             {/* 2. CENTER: Large Pulsing App Logo + Submarine Sonar Rings + Pulsing GPS Pin */}
             <div className="relative my-2 flex items-center justify-center py-3">
-              {/* Outer Expanding Submarine Sonar Rings */}
-              <span
-                className="animate-ping absolute inline-flex w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-emerald-400/25 border border-emerald-300/60"
-                style={{ animationDuration: '1.8s' }}
+              {/* Outer Expanding Submarine Sonar Rings synchronized with distance frequency */}
+              <motion.span
+                key={`outer-ring-${is5HzMode ? '5hz' : pingBeat}`}
+                initial={{ scale: 0.85, opacity: 0.8 }}
+                animate={{ scale: 1.55, opacity: 0 }}
+                transition={{
+                  duration: activeBeatDurationSec,
+                  repeat: Infinity,
+                  repeatDelay: activeRepeatDelaySec,
+                  ease: 'easeOut',
+                }}
+                className="absolute inline-flex w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-emerald-400/25 border border-emerald-300/60"
               />
-              <span
-                className="animate-ping absolute inline-flex w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-cyan-400/20 border border-cyan-300/50"
-                style={{ animationDuration: '1.35s' }}
+              <motion.span
+                key={`inner-ring-${is5HzMode ? '5hz' : pingBeat}`}
+                initial={{ scale: 0.9, opacity: 0.85 }}
+                animate={{ scale: 1.38, opacity: 0 }}
+                transition={{
+                  duration: activeBeatDurationSec * 0.85,
+                  repeat: Infinity,
+                  repeatDelay: activeRepeatDelaySec,
+                  ease: 'easeOut',
+                }}
+                className="absolute inline-flex w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-cyan-400/20 border border-cyan-300/50"
               />
 
               {/* Main App Logo Container */}
               <motion.div
+                key={`logo-pulse-${is5HzMode ? '5hz' : pingBeat}`}
                 animate={{
-                  scale: [1, 1.06, 1],
+                  scale: [1, 1.09, 1],
                 }}
                 transition={{
-                  duration: 1.5,
+                  duration: activeBeatDurationSec,
                   repeat: Infinity,
+                  repeatDelay: activeRepeatDelaySec,
                   ease: 'easeInOut',
                 }}
                 className="relative z-10 w-24 h-24 sm:w-28 sm:h-28 rounded-3xl border-2 border-emerald-400 bg-[#063830] flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.55)]"
@@ -255,13 +289,15 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
 
                 {/* Pulsing GPS Symbol Badge on Logo */}
                 <motion.div
+                  key={`pin-pulse-${is5HzMode ? '5hz' : pingBeat}`}
                   animate={{
                     scale: [1, 1.35, 0.94, 1.25, 1],
                     y: [0, -3, 0, -2, 0],
                   }}
                   transition={{
-                    duration: 1.2,
+                    duration: activeBeatDurationSec,
                     repeat: Infinity,
+                    repeatDelay: activeRepeatDelaySec,
                     ease: 'easeInOut',
                   }}
                   className="absolute -top-2.5 -right-2.5 z-20 w-9 h-9 rounded-full bg-emerald-400 border-2 border-[#031D19] flex items-center justify-center shadow-[0_0_16px_rgba(16,185,129,1)]"

@@ -3946,8 +3946,8 @@ class YaadAlarmPopupActivity : Activity() {
             buildFullScreenGeofenceUI(palette, cleanTitle, bodyText, initialDistance, radiusMeters)
         } else {
             buildMinimalCardUI(palette, cleanTitle, bodyText, initialDistance)
+            startOneMinuteCountdown()
         }
-        startOneMinuteCountdown()
     }
 
     private fun stopPulseAnimators() {
@@ -3958,6 +3958,16 @@ class YaadAlarmPopupActivity : Activity() {
             sonarOuterRingAnimator = null
             gpsPinPulseAnimator?.cancel()
             gpsPinPulseAnimator = null
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun applyAdaptivePulseDuration(distanceMeters: Int, radiusMeters: Int) {
+        try {
+            val intervalMs = YaadGeofenceService.computeSonarIntervalMs(distanceMeters, radiusMeters).coerceAtLeast(200L)
+            sonarOuterRingAnimator?.duration = intervalMs
+            sonarRingAnimator?.duration = intervalMs
+            gpsPinPulseAnimator?.duration = intervalMs
         } catch (e: Exception) {
         }
     }
@@ -4187,13 +4197,15 @@ class YaadAlarmPopupActivity : Activity() {
         pinBadge.elevation = dp(10f).toFloat()
         emblemFrame.addView(pinBadge)
 
+        val initialPulseMs = YaadGeofenceService.computeSonarIntervalMs(initialDistance, radiusMeters).coerceAtLeast(200L)
+
         sonarOuterRingAnimator = ObjectAnimator.ofPropertyValuesHolder(
             outerSonarRing,
             PropertyValuesHolder.ofFloat(View.SCALE_X, 0.80f, 1.48f),
             PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.80f, 1.48f),
             PropertyValuesHolder.ofFloat(View.ALPHA, 0.70f, 0.0f)
         ).apply {
-            duration = 1900L
+            duration = initialPulseMs
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.RESTART
             interpolator = AccelerateDecelerateInterpolator()
@@ -4206,7 +4218,7 @@ class YaadAlarmPopupActivity : Activity() {
             PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.88f, 1.38f),
             PropertyValuesHolder.ofFloat(View.ALPHA, 0.90f, 0.0f)
         ).apply {
-            duration = 1350L
+            duration = initialPulseMs
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.RESTART
             interpolator = AccelerateDecelerateInterpolator()
@@ -4218,7 +4230,7 @@ class YaadAlarmPopupActivity : Activity() {
             PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f, 1.32f, 0.94f, 1.22f, 1.0f),
             PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f, 1.32f, 0.94f, 1.22f, 1.0f)
         ).apply {
-            duration = 1150L
+            duration = initialPulseMs
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.RESTART
             interpolator = AccelerateDecelerateInterpolator()
@@ -4783,7 +4795,7 @@ class YaadAlarmPopupActivity : Activity() {
         private var activeInstance: WeakReference<YaadAlarmPopupActivity>? = null
         private var activeNotificationId: Int = Int.MIN_VALUE
 
-        fun updateLiveGeofenceDistance(distanceMeters: Int, sub10m: Boolean) {
+        fun updateLiveGeofenceDistance(distanceMeters: Int, radiusMeters: Int, sub10m: Boolean) {
             val act = activeInstance?.get() ?: return
             if (!act.isGeofencePopup) return
             act.runOnUiThread {
@@ -4793,6 +4805,7 @@ class YaadAlarmPopupActivity : Activity() {
                             distanceMeters,
                             sub10m || act.isSub10mArrival
                         )
+                        act.applyAdaptivePulseDuration(distanceMeters, radiusMeters)
                     }
                 } catch (e: Exception) {
                 }
@@ -5214,19 +5227,19 @@ class YaadGeofenceService : Service(), LocationListener {
                 } else {
                     distance <= radius
                 }
-                val isUnder10mNow = distance <= 10
+                val isUnder10mNow = distance <= (radius * 0.1).roundToInt().coerceAtLeast(10)
 
                 val u10mKey = "u10m_\$id"
                 val wasUnder10mBefore = prefs.getBoolean(u10mKey, false)
 
-                if (!isUnder10mNow && wasUnder10mBefore) {
+                // Only reset u10mKey when user exits the geofence boundary so "متوجه شدم" stops alerts for the entire stay
+                if (!isInsideNow && wasUnder10mBefore) {
                     editor.putBoolean(u10mKey, false)
                     prefsModified = true
                 }
 
-                // 1. Sub-10m Target Arrival Alert (< 10 meters inside the boundary)
-                // Fires with the saved location's content and a distinct arrival sound effect!
-                if (isInsideNow && isUnder10mNow && !wasUnder10mBefore) {
+                // 1. Sub-10m / <=10% Target Arrival Alert (fires if user starts/enters directly within <=10% and was not yet inside)
+                if (isInsideNow && isUnder10mNow && !wasInsideBefore && !wasUnder10mBefore) {
                     val lastU10mKey = "last_u10m_trig_\$id"
                     val lastU10mTrig = prefs.getLong(lastU10mKey, 0L)
                     if (lastU10mTrig == 0L || now - lastU10mTrig >= 30_000L) {
@@ -5317,9 +5330,11 @@ class YaadGeofenceService : Service(), LocationListener {
             // Dynamically modulate live submarine sonar rhythm, full-screen lockscreen distance box,
             // AND the live distance in the Status Bar Notification as GPS coordinates update!
             val effectiveLiveDist = activeItemDistance ?: nearestDistance
+            val effectiveLiveRad = if (activeGeofenceItemId.isNotEmpty()) activeGeofenceRadius else nearestRadius
             if (effectiveLiveDist != Int.MAX_VALUE) {
-                updateLiveSonarDistance(effectiveLiveDist, nearestRadius)
-                YaadAlarmPopupActivity.updateLiveGeofenceDistance(effectiveLiveDist, effectiveLiveDist <= 10)
+                updateLiveSonarDistance(effectiveLiveDist, effectiveLiveRad)
+                val isWithin10Pct = effectiveLiveDist <= (effectiveLiveRad * 0.1).roundToInt().coerceAtLeast(10)
+                YaadAlarmPopupActivity.updateLiveGeofenceDistance(effectiveLiveDist, effectiveLiveRad, isWithin10Pct)
                 updateActiveStatusBarNotificationDistance(effectiveLiveDist)
             }
 
@@ -5500,14 +5515,9 @@ class YaadGeofenceService : Service(), LocationListener {
                 YaadAlarmPopupActivity.launch(this, notificationId, sourceJsonStr)
             }
 
-            // Play Distinct Audio Effect:
-            // - Sub-10m Arrival: Distinct celebratory multi-tone Target-Lock Arrival Fanfare
-            // - Boundary Alert: Submarine Sonar Loop whose rhythm speeds up/slows down with live GPS distance
-            if (isSub10m) {
-                playNativeSub10mArrivalSound(applicationContext, notificationId)
-            } else {
-                startNativeSubmarineSonarLoop(applicationContext, distance, radius, notificationId)
-            }
+            // Play Submarine Sonar Loop whose rhythm speeds up/slows down with live GPS distance
+            // (1/min at 100%, 2/min at 90%, ..., 6/min at 50%, +1/min per 5% below 50%, and 5 Hz in remaining 10%)
+            startNativeSubmarineSonarLoop(applicationContext, distance, radius, notificationId)
         } catch (e: Exception) {
         }
     }
@@ -5688,13 +5698,6 @@ class YaadGeofenceService : Service(), LocationListener {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private class ToneNote(
-            val freq: Double,
-            val startSec: Double,
-            val durSec: Double,
-            val gain: Double
-        )
-
         private const val PREFS_NAME = "YAAD_GEOFENCE_PREFS"
         private const val KEY_ENABLED = "geofence_enabled"
         private const val KEY_LANGUAGE = "geofence_lang"
@@ -5872,13 +5875,20 @@ class YaadGeofenceService : Service(), LocationListener {
         }
 
         fun computeSonarIntervalMs(distanceMeters: Int, radiusMeters: Int): Long {
-            val safeRadius = radiusMeters.coerceAtLeast(30).toDouble()
+            val safeRadius = radiusMeters.coerceAtLeast(1).toDouble()
             val clampedDist = distanceMeters.coerceAtLeast(0).toDouble()
-            val ratio = (clampedDist / safeRadius).coerceIn(0.0, 1.5)
-            val minMs = 280.0
-            val maxMs = 2200.0
-            val normalized = (ratio / 1.5).coerceIn(0.0, 1.0)
-            return (minMs + (maxMs - minMs) * Math.pow(normalized, 0.85)).roundToInt().toLong()
+            val pct = ((clampedDist / safeRadius) * 100.0).coerceIn(0.0, 100.0)
+            if (pct <= 10.0) {
+                return 200L // 5 Hz (5 times per second) in the remaining 10% distance
+            }
+            val pingsPerMinute = if (pct < 50.0) {
+                val stepsBelow50 = ((50.0 - pct) / 5.0).toInt().coerceAtLeast(1)
+                6 + stepsBelow50
+            } else {
+                val stepsFrom100 = ((100.0 - pct) / 10.0).toInt().coerceAtLeast(0)
+                1 + stepsFrom100
+            }
+            return (60_000.0 / pingsPerMinute.toDouble()).roundToInt().toLong()
         }
 
         fun updateLiveSonarDistance(distanceMeters: Int, radiusMeters: Int) {
@@ -5905,6 +5915,14 @@ class YaadGeofenceService : Service(), LocationListener {
 
             if (context != null) {
                 try {
+                    if (activeGeofenceItemId.isNotEmpty()) {
+                        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                        prefs.edit()
+                            .putBoolean("inside_\$activeGeofenceItemId", true)
+                            .putBoolean("u10m_\$activeGeofenceItemId", true)
+                            .putLong("last_trig_\$activeGeofenceItemId", System.currentTimeMillis())
+                            .apply()
+                    }
                     val nm = NotificationManagerCompat.from(context)
                     if (notificationIdToCancel != Int.MIN_VALUE) {
                         nm.cancel(notificationIdToCancel)
@@ -5938,44 +5956,48 @@ class YaadGeofenceService : Service(), LocationListener {
             radius: Int,
             notificationId: Int
         ) {
+            val savedItemId = activeGeofenceItemId
             stopGeofenceAudio(context)
+            activeGeofenceItemId = savedItemId
             liveSonarDistanceMeters = initialDistance
-            liveSonarRadiusMeters = radius.coerceAtLeast(30)
+            liveSonarRadiusMeters = radius.coerceAtLeast(1)
             activeGeofenceNotificationId = notificationId
             sonarLoopActive = true
-            acquireTemporaryWakeLock(context, 62_000L)
+            acquireTemporaryWakeLock(context, 10 * 60_000L)
 
             val t = Thread {
                 val sampleRate = 24000
-                val pingDurationSec = 0.42
-                val numSamples = (sampleRate * pingDurationSec).toInt()
-                val pcmBuffer = ShortArray(numSamples)
-                val startedAt = System.currentTimeMillis()
-
-                while (sonarLoopActive && System.currentTimeMillis() - startedAt < 60_000L) {
+                while (sonarLoopActive) {
+                    var pingDurationMs = 450L
                     try {
                         val dist = liveSonarDistanceMeters
-                        val rad = liveSonarRadiusMeters.coerceAtLeast(30)
-                        val closeness = (1.0 - (dist.toDouble() / (rad.toDouble() * 1.2)).coerceIn(0.0, 1.0))
-                        // Pitch rises slightly as user gets closer to target (1260 Hz -> 1480 Hz)
-                        val baseFreq = 1260.0 + closeness * 220.0
-                        val echoDelaySamples = (0.13 * sampleRate).toInt()
+                        val rad = liveSonarRadiusMeters.coerceAtLeast(1)
+                        val currentIntervalMs = computeSonarIntervalMs(dist, rad)
+                        val is5Hz = currentIntervalMs <= 200L
+                        val pingDurationSec = if (is5Hz) 0.14 else 0.42
+                        pingDurationMs = (pingDurationSec * 1000.0).toLong() + 30L
+                        val numSamples = (sampleRate * pingDurationSec).toInt()
+                        val pcmBuffer = ShortArray(numSamples)
+
+                        val closeness = (1.0 - (dist.toDouble() / rad.toDouble()).coerceIn(0.0, 1.0))
+                        // Pitch rises slightly as user gets closer to target (1280 Hz -> 1560 Hz)
+                        val baseFreq = 1280.0 + closeness * 280.0
+                        val echoDelaySamples = ((if (is5Hz) 0.055 else 0.13) * sampleRate).toInt()
+                        val decayRate = if (is5Hz) 24.0 else 10.5
 
                         for (i in 0 until numSamples) {
                             val timeSec = i.toDouble() / sampleRate.toDouble()
-                            // Primary submarine sonar ping with fast attack and underwater decay
-                            val attack1 = (timeSec / 0.008).coerceIn(0.0, 1.0)
-                            val env1 = attack1 * exp(-timeSec * 10.5)
+                            val attack1 = (timeSec / (if (is5Hz) 0.004 else 0.008)).coerceIn(0.0, 1.0)
+                            val env1 = attack1 * exp(-timeSec * decayRate)
                             val sig1 = sin(2.0 * PI * baseFreq * timeSec) * 0.72 +
-                                sin(2.0 * PI * (baseFreq * 2.0) * timeSec) * 0.16
+                                sin(2.0 * PI * (baseFreq * 1.5) * timeSec) * 0.16
 
-                            // Secondary hull reflection echo 130ms later
                             var sig2 = 0.0
                             if (i >= echoDelaySamples) {
                                 val echoTime = (i - echoDelaySamples).toDouble() / sampleRate.toDouble()
-                                val attack2 = (echoTime / 0.008).coerceIn(0.0, 1.0)
-                                val env2 = attack2 * exp(-echoTime * 11.5) * 0.36
-                                sig2 = sin(2.0 * PI * (baseFreq * 0.992) * echoTime) * env2
+                                val attack2 = (echoTime / 0.006).coerceIn(0.0, 1.0)
+                                val env2 = attack2 * exp(-echoTime * (decayRate * 1.1)) * 0.36
+                                sig2 = sin(2.0 * PI * (baseFreq * 0.995) * echoTime) * env2
                             }
 
                             val combined = ((sig1 * env1) + sig2).coerceIn(-0.98, 0.98)
@@ -5988,15 +6010,15 @@ class YaadGeofenceService : Service(), LocationListener {
                     } catch (e: Exception) {
                     }
 
-                    // Dynamic sleep in 40ms slices so if GPS updates distance to be closer,
+                    // Dynamic sleep in 20ms slices so if GPS updates distance to be closer,
                     // the sonar rhythm accelerates immediately without waiting out an old long interval!
-                    var sleptMs = 0L
+                    var sleptMs = pingDurationMs
                     while (sonarLoopActive) {
                         val targetWaitMs = computeSonarIntervalMs(liveSonarDistanceMeters, liveSonarRadiusMeters)
                         if (sleptMs >= targetWaitMs) break
                         try {
-                            Thread.sleep(40L)
-                            sleptMs += 40L
+                            Thread.sleep(20L)
+                            sleptMs += 20L
                         } catch (ie: InterruptedException) {
                             break
                         }
@@ -6009,59 +6031,6 @@ class YaadGeofenceService : Service(), LocationListener {
                 start()
             }
             sonarThread = t
-        }
-
-        fun playNativeSub10mArrivalSound(context: Context, notificationId: Int) {
-            stopGeofenceAudio(context)
-            activeGeofenceNotificationId = notificationId
-            acquireTemporaryWakeLock(context, 15_000L)
-
-            Thread {
-                try {
-                    val sampleRate = 24000
-                    val totalDurationSec = 1.35
-                    val numSamples = (sampleRate * totalDurationSec).toInt()
-                    val pcm = ShortArray(numSamples)
-
-                    // Celebratory Target-Lock Arrival Fanfare (distinct from submarine sonar ping)
-                    val notes = listOf(
-                        ToneNote(523.25, 0.00, 0.14, 0.55), // C5
-                        ToneNote(659.25, 0.11, 0.14, 0.60), // E5
-                        ToneNote(783.99, 0.22, 0.16, 0.65), // G5
-                        ToneNote(1046.50, 0.35, 0.28, 0.75), // C6
-                        ToneNote(1318.51, 0.56, 0.24, 0.70), // E6
-                        ToneNote(1567.98, 0.74, 0.55, 0.82)  // G6 target lock chime
-                    )
-
-                    // Play fanfare twice with a short pause so user unmistakably hears the <10m arrival
-                    for (repeatIdx in 0..1) {
-                        for (i in 0 until numSamples) {
-                            val t = i.toDouble() / sampleRate.toDouble()
-                            var sampleVal = 0.0
-                            for (note in notes) {
-                                if (t >= note.startSec && t <= note.startSec + note.durSec) {
-                                    val localT = t - note.startSec
-                                    val attack = (localT / 0.012).coerceIn(0.0, 1.0)
-                                    val decay = exp(-localT * (4.2 / note.durSec))
-                                    val wave = sin(2.0 * PI * note.freq * localT) * 0.75 +
-                                        sin(2.0 * PI * (note.freq * 2.0) * localT) * 0.25
-                                    sampleVal += wave * attack * decay * note.gain
-                                }
-                            }
-                            pcm[i] = (sampleVal.coerceIn(-0.98, 0.98) * Short.MAX_VALUE).toInt().toShort()
-                        }
-                        playPcmBufferOnce(pcm, sampleRate)
-                        if (repeatIdx == 0) {
-                            Thread.sleep(280L)
-                        }
-                    }
-                } catch (e: Exception) {
-                }
-            }.apply {
-                name = "yaad-sub10m-arrival"
-                isDaemon = true
-                start()
-            }
         }
 
         private fun playPcmBufferOnce(pcmBuffer: ShortArray, sampleRate: Int) {
