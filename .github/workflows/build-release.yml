@@ -64,14 +64,14 @@ jobs:
                   s = s.replace(persian[i], str(i)).replace(arabic[i], str(i))
               return s.strip()
 
-          run_num_str = re.sub(r"\D", "", to_ascii_digits(os.environ.get("RUN_NUMBER", "91")))
-          run_num = int(run_num_str) if run_num_str else 91
+          run_num_str = re.sub(r"\D", "", to_ascii_digits(os.environ.get("RUN_NUMBER", "95")))
+          run_num = int(run_num_str) if run_num_str else 95
 
           raw_code_in = to_ascii_digits(os.environ.get("VERSION_CODE", "auto"))
           raw_name_in = to_ascii_digits(os.environ.get("VERSION_NAME", "auto"))
 
-          # Base version 1.2.5 at GitHub Actions run #91 (continuing from 1.2.4)
-          offset = max(0, run_num - 91)
+          # Base version 1.2.5 at GitHub Actions run #95 (continuing from 1.2.4)
+          offset = max(0, run_num - 95)
           auto_version_name = f"1.2.{5 + offset}"
           auto_version_code = 100 + run_num
 
@@ -323,19 +323,10 @@ jobs:
 
           if [ -s "${LOCAL_ZIP}" ]; then
             ls -lh "${LOCAL_ZIP}"
-            GRADLE_ZIP="${GRADLE_ZIP}" python3 - <<'PY'
-            from pathlib import Path
-            import os
-            import re
-            gradle_zip = os.environ.get("GRADLE_ZIP", "gradle-8.14.3-bin.zip")
-            p = Path("gradle/wrapper/gradle-wrapper.properties")
-            txt = p.read_text(encoding="utf-8")
-            txt = re.sub(r"distributionUrl=.*", lambda _: f"distributionUrl=file\\:///tmp/gradle-dist/{gradle_zip}", txt)
-            txt = re.sub(r"validateDistributionUrl=.*", "validateDistributionUrl=false", txt)
-            txt = re.sub(r"distributionSha256Sum=.*\n?", "", txt)
-            p.write_text(txt, encoding="utf-8")
-            print(f"Updated gradle-wrapper.properties to use local file:///tmp/gradle-dist/{gradle_zip}")
-            PY
+            sed -i -E "s|^distributionUrl=.*|distributionUrl=file\\\\:///tmp/gradle-dist/${GRADLE_ZIP}|" gradle/wrapper/gradle-wrapper.properties
+            sed -i -E "s|^validateDistributionUrl=.*|validateDistributionUrl=false|" gradle/wrapper/gradle-wrapper.properties
+            sed -i -E "/^distributionSha256Sum=/d" gradle/wrapper/gradle-wrapper.properties
+            cat gradle/wrapper/gradle-wrapper.properties
           fi
 
           ./gradlew --version --no-daemon

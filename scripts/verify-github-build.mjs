@@ -16,12 +16,33 @@ if (workflowFiles.length === 0) {
   process.exit(1);
 }
 
+function validateBashBlock(file, startLine, bashLines) {
+  // Replace GitHub Actions ${{ ... }} expressions with safe placeholder token for bash -n syntax check
+  const sanitized = bashLines
+    .join('\n')
+    .replace(/\$\{\{[^}]*\}\}/g, 'GH_EXPR_VAL') + '\n';
+  try {
+    execFileSync('bash', ['-n'], {
+      input: sanitized,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    console.error(`[verify-github-build] Bash syntax error (exit code 2) in ${file} (run block starting at line ${startLine}):`);
+    console.error(err.stderr ? err.stderr.toString() : err.message);
+    process.exit(1);
+  }
+}
+
 for (const file of workflowFiles) {
   const fullPath = path.join(workflowsDir, file);
   const lines = fs.readFileSync(fullPath, 'utf8').split(/\r?\n/);
 
   let inRunBlock = false;
   let runIndent = 0;
+  let runBlockIndent = 0;
+  let runStartLine = 0;
+  let bashLines = [];
+
   let inPythonBlock = false;
   let pythonIndent = 0;
   let pythonLines = [];
@@ -34,8 +55,17 @@ for (const file of workflowFiles) {
 
     if (inRunBlock) {
       if (trimmed.length > 0 && indent <= runIndent) {
+        validateBashBlock(file, runStartLine, bashLines);
         inRunBlock = false;
+        bashLines = [];
       } else {
+        if (runBlockIndent === 0 && trimmed.length > 0) {
+          runBlockIndent = indent;
+        }
+        const strippedBashLine =
+          runBlockIndent > 0 ? line.slice(Math.min(line.length, runBlockIndent)) : line;
+        bashLines.push(strippedBashLine);
+
         // Check embedded python heredocs inside run: |
         if (!inPythonBlock && /python3\s+-\s+<<['"]?PY['"]?/.test(trimmed)) {
           inPythonBlock = true;
@@ -77,7 +107,14 @@ for (const file of workflowFiles) {
     if (/^\s*run:\s*\|/.test(line)) {
       inRunBlock = true;
       runIndent = indent;
+      runBlockIndent = 0;
+      runStartLine = i + 1;
+      bashLines = [];
     }
+  }
+
+  if (inRunBlock && bashLines.length > 0) {
+    validateBashBlock(file, runStartLine, bashLines);
   }
 }
 
@@ -99,4 +136,4 @@ execFileSync('node', [path.join(rootDir, 'scripts/patch-capacitor-notifications.
   stdio: 'inherit',
 });
 
-console.log(`[verify-github-build] Verified ${workflowFiles.join(', ')} and all Android/Kotlin build scripts.`);
+console.log(`[verify-github-build] Verified ${workflowFiles.join(', ')} (Bash -n + Python + Kotlin) and all Android build scripts.`);
