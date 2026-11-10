@@ -1,4 +1,5 @@
 import { Reminder, SavedLocation } from '../types';
+import { computeSubmarineSonarIntervalMs, SonarScenarioMode } from './audio';
 
 // Storage key for user preference on background geofence tracking
 export const GEOFENCE_TRACKING_ENABLED_KEY = 'yaad_geofence_tracking_enabled_v1';
@@ -24,6 +25,145 @@ export interface SavedLocationTriggerEvent {
   triggerType: 'enter' | 'exit' | 'arrived_under_10m';
   distance: number;
   timestamp: number;
+}
+
+export type GeofenceScenarioPhase =
+  | 'enter_approaching'        // Scenario 'enter': 10% < d <= 100% R (adaptive sonar)
+  | 'enter_center_5hz'         // Scenario 'enter': d <= 10% R for 10 seconds (5 Hz sonar)
+  | 'enter_center_visual_10s'  // Scenario 'enter': after 10s of 5Hz, visual-only 10s ("شما در مرکز حصار مکانی ... هستید.")
+  | 'exit_moving_out'          // Scenario 'exit': 10% < d < 90% R (reverse adaptive sonar)
+  | 'exit_border_5hz'          // Scenario 'exit': 90% <= d <= 100% R (5 Hz sonar)
+  | 'exit_crossed_visual_10s'  // Scenario 'exit': d > 100% R after being inside, visual-only 10s ("شما از حصار مکانی ... خارج شدید.")
+  | 'both_approaching_enter'   // Scenario 'both': 102% R < d <= 120% R moving inward (scaled enter sonar)
+  | 'both_enter_border_5hz'    // Scenario 'both': 100% R < d <= 102% R moving inward (5 Hz sonar, max 10s)
+  | 'both_entered_visual_10s'  // Scenario 'both': crossed border into <= 100% R, visual-only 10s ("شما وارد حصار مکانی ... شدید.")
+  | 'both_approaching_exit'    // Scenario 'both': 80% R <= d < 98% R moving outward (scaled exit sonar)
+  | 'both_exit_border_5hz'     // Scenario 'both': 98% R <= d <= 100% R moving outward (5 Hz sonar, max 10s)
+  | 'both_exited_visual_10s';  // Scenario 'both': crossed border to > 100% R, visual-only 10s ("شما از حصار مکانی ... خارج شدید.")
+
+export interface EvaluatedGeofenceAlertItem {
+  id: string;
+  targetType: 'location' | 'reminder';
+  targetId: string;
+  locationTitle: string;
+  description?: string;
+  triggerType: 'enter' | 'exit' | 'arrived_under_10m';
+  triggerOn: 'enter' | 'exit' | 'both';
+  scenarioPhase: GeofenceScenarioPhase;
+  sonarMode: SonarScenarioMode;
+  sonarIntervalMs: number;
+  isVisualOnly: boolean;
+  visualBannerMessage?: string;
+  phaseRemainingSeconds?: number;
+  initialDistance: number;
+  targetDistance: number; // Distance to scenario target (center for 'enter', boundary |R - d| for 'exit' & 'both')
+  radius: number;
+  latitude: number;
+  longitude: number;
+  playAudio: boolean;
+}
+
+interface DistanceSample {
+  distance: number;
+  timestamp: number;
+}
+
+interface ItemScenarioRuntimeState {
+  samples: DistanceSample[];
+  trend: 'inward' | 'outward' | 'stationary';
+  // Scenario 'enter'
+  enterCycleCompleted: boolean;
+  center5HzStartMs: number;
+  // Scenario 'exit'
+  wasInsideForExit: boolean;
+  exitCycleCompleted: boolean;
+  // Scenario 'both'
+  wasInsideBorder?: boolean;
+  bothDirectionLock: 'inward' | 'outward' | null;
+  border5HzStartMs: number;
+  // Shared 10-second visual-only completion banner timer
+  visual10sStartMs: number;
+  visualCrossingType: 'enter_center' | 'exit_crossed' | 'both_entered' | 'both_exited' | null;
+  // Dismissed / acknowledged for current phase
+  acknowledgedUntilExit: boolean;
+}
+
+const scenarioRuntimeMap = new Map<string, ItemScenarioRuntimeState>();
+
+function getOrCreateRuntimeState(key: string): ItemScenarioRuntimeState {
+  let st = scenarioRuntimeMap.get(key);
+  if (!st) {
+    st = {
+      samples: [],
+      trend: 'stationary',
+      enterCycleCompleted: false,
+      center5HzStartMs: 0,
+      wasInsideForExit: false,
+      exitCycleCompleted: false,
+      wasInsideBorder: undefined,
+      bothDirectionLock: null,
+      border5HzStartMs: 0,
+      visual10sStartMs: 0,
+      visualCrossingType: null,
+      acknowledgedUntilExit: false,
+    };
+    scenarioRuntimeMap.set(key, st);
+  }
+  return st;
+}
+
+/**
+ * 5-Sample Moving Average Trend Detector:
+ * Records up to 5 position/distance samples and computes whether the user's averaged distance
+ * to the center/border is decreasing ('inward') or increasing ('outward').
+ */
+export function recordAndAnalyzeDistanceTrend(
+  itemKey: string,
+  distanceMeters: number,
+  nowMs: number = Date.now()
+): 'inward' | 'outward' | 'stationary' {
+  const st = getOrCreateRuntimeState(itemKey);
+  const lastSample = st.samples[st.samples.length - 1];
+
+  // Record sample if first sample, or if at least 800ms elapsed or distance changed by >= 1m
+  if (
+    !lastSample ||
+    nowMs - lastSample.timestamp >= 800 ||
+    Math.abs(distanceMeters - lastSample.distance) >= 1
+  ) {
+    st.samples.push({ distance: distanceMeters, timestamp: nowMs });
+    if (st.samples.length > 5) {
+      st.samples.shift();
+    }
+  }
+
+  if (st.samples.length < 2) {
+    return st.trend;
+  }
+
+  // Compare smoothed moving average of older half vs newer half across the up-to-5 sample window
+  const n = st.samples.length;
+  const splitIdx = Math.max(1, Math.floor(n / 2));
+  const olderSlice = st.samples.slice(0, splitIdx);
+  const newerSlice = st.samples.slice(splitIdx);
+
+  const olderAvg =
+    olderSlice.reduce((sum, s) => sum + s.distance, 0) / Math.max(1, olderSlice.length);
+  const newerAvg =
+    newerSlice.reduce((sum, s) => sum + s.distance, 0) / Math.max(1, newerSlice.length);
+  const totalDelta = st.samples[n - 1].distance - st.samples[0].distance;
+  const avgDelta = newerAvg - olderAvg;
+
+  // Threshold of 1.5m net change prevents stationary GPS jitter from flipping direction
+  if (avgDelta <= -1.2 || totalDelta <= -2.0) {
+    st.trend = 'inward';
+  } else if (avgDelta >= 1.2 || totalDelta >= 2.0) {
+    st.trend = 'outward';
+  } else {
+    st.trend = 'stationary';
+  }
+
+  return st.trend;
 }
 
 // Memory + persisted tracking of notified status (true = inside & already notified for current stay, false = outside)
@@ -72,6 +212,7 @@ export function resetGeofenceProximityState(itemId?: string): void {
   if (!itemId) {
     proximityStateMap.clear();
     lastTransitionTimeMap.clear();
+    scenarioRuntimeMap.clear();
   } else {
     const cleanId = itemId.replace(/^(loc_|rem_)/, '');
     const keysToDelete = [
@@ -84,6 +225,7 @@ export function resetGeofenceProximityState(itemId?: string): void {
     for (const k of keysToDelete) {
       proximityStateMap.delete(k);
       lastTransitionTimeMap.delete(k);
+      scenarioRuntimeMap.delete(k);
     }
   }
   saveProximityStateToStorage();
@@ -101,8 +243,8 @@ export function resetGeofenceProximityState(itemId?: string): void {
 }
 
 /**
- * Marks a geofence item as acknowledged by the user ("متوجه شدم") for the current stay inside the boundary,
- * ensuring the alert process and submarine sonar stop completely and do not re-trigger until the user exits and re-enters.
+ * Marks a geofence item as acknowledged by the user ("توقف عملیات") for the current stay,
+ * ensuring the alert process and submarine sonar stop completely.
  */
 export function acknowledgeGeofenceAlert(itemId?: string): void {
   if (itemId) {
@@ -114,6 +256,22 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
     proximityStateMap.set(`u10m_rem_${cleanId}`, true);
     lastTransitionTimeMap.set(`loc_${cleanId}`, now);
     lastTransitionTimeMap.set(`rem_${cleanId}`, now);
+
+    const locState = scenarioRuntimeMap.get(`loc_${cleanId}`);
+    if (locState) {
+      locState.acknowledgedUntilExit = true;
+      locState.visual10sStartMs = 0;
+      locState.center5HzStartMs = 0;
+      locState.border5HzStartMs = 0;
+    }
+    const remState = scenarioRuntimeMap.get(`rem_${cleanId}`);
+    if (remState) {
+      remState.acknowledgedUntilExit = true;
+      remState.visual10sStartMs = 0;
+      remState.center5HzStartMs = 0;
+      remState.border5HzStartMs = 0;
+    }
+
     saveProximityStateToStorage();
   }
 
@@ -127,6 +285,574 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
       // Ignore bridge error on web
     }
   }
+}
+
+/**
+ * Evaluates a single geofence item (location or reminder) against the 3 scenarios ('enter', 'exit', 'both')
+ * and returns an EvaluatedGeofenceAlertItem if an audio or visual alert should be shown right now.
+ */
+function evaluateSingleItemScenario(params: {
+  itemKey: string;
+  targetType: 'location' | 'reminder';
+  targetId: string;
+  title: string;
+  description?: string;
+  latitude: number;
+  longitude: number;
+  radius: number;
+  triggerOn: 'enter' | 'exit' | 'both';
+  playAudio: boolean;
+  distance: number;
+  now: number;
+  isEn: boolean;
+}): EvaluatedGeofenceAlertItem | null {
+  const {
+    itemKey,
+    targetType,
+    targetId,
+    title,
+    description,
+    latitude,
+    longitude,
+    radius,
+    triggerOn,
+    playAudio,
+    distance,
+    now,
+    isEn,
+  } = params;
+
+  const safeRadius = Math.max(20, radius || 100);
+  const st = getOrCreateRuntimeState(itemKey);
+  const trend = recordAndAnalyzeDistanceTrend(itemKey, distance, now);
+
+  const center10PctMeters = Math.max(10, Math.round(safeRadius * 0.1));
+  const border90PctMeters = Math.round(safeRadius * 0.9);
+  const outer20PctMeters = Math.round(safeRadius * 1.2);
+  const outer2PctMeters = Math.max(safeRadius + 2, Math.round(safeRadius * 1.02));
+  const inner20PctMeters = Math.round(safeRadius * 0.8);
+  const inner2PctMeters = Math.min(safeRadius - 2, Math.round(safeRadius * 0.98));
+
+  // =========================================================================
+  // SCENARIO 1: ENTER ONLY ('enter')
+  // =========================================================================
+  if (triggerOn === 'enter') {
+    // Reset cycle when user is clearly outside the boundary (+8m hysteresis)
+    if (distance > safeRadius + 8) {
+      st.enterCycleCompleted = false;
+      st.center5HzStartMs = 0;
+      st.visual10sStartMs = 0;
+      st.visualCrossingType = null;
+      st.acknowledgedUntilExit = false;
+      return null;
+    }
+
+    if (st.acknowledgedUntilExit || st.enterCycleCompleted) {
+      return null;
+    }
+
+    // Once user reaches the central 10% (or is already running the center 5Hz -> 10s visual sequence):
+    if (distance <= center10PctMeters || st.center5HzStartMs > 0) {
+      if (st.center5HzStartMs === 0) {
+        st.center5HzStartMs = now;
+      }
+      const elapsed5Hz = now - st.center5HzStartMs;
+      if (elapsed5Hz < 10_000) {
+        // 10 seconds of 5 Hz alarm upon entering the central 10%
+        const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'arrived_under_10m',
+          triggerOn: 'enter',
+          scenarioPhase: 'enter_center_5hz',
+          sonarMode: 'enter',
+          sonarIntervalMs: 200, // 5 Hz
+          isVisualOnly: false,
+          phaseRemainingSeconds: remSec,
+          initialDistance: distance,
+          targetDistance: distance,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio,
+        };
+      }
+
+      // After 10 seconds of 5 Hz, show visual-only banner for 10 seconds: "شما در مرکز حصار مکانی ... هستید."
+      if (st.visual10sStartMs === 0) {
+        st.visual10sStartMs = now;
+        st.visualCrossingType = 'enter_center';
+      }
+      const elapsedVisual = now - st.visual10sStartMs;
+      if (elapsedVisual < 10_000) {
+        const remSec = Math.max(1, Math.ceil((10_000 - elapsedVisual) / 1000));
+        const msg = isEn
+          ? `You are at the center of geofence «${title}».`
+          : `شما در مرکز حصار مکانی «${title}» هستید.`;
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'arrived_under_10m',
+          triggerOn: 'enter',
+          scenarioPhase: 'enter_center_visual_10s',
+          sonarMode: 'enter',
+          sonarIntervalMs: 200,
+          isVisualOnly: true,
+          visualBannerMessage: msg,
+          phaseRemainingSeconds: remSec,
+          initialDistance: distance,
+          targetDistance: distance,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio: false,
+        };
+      }
+
+      // 10s visual completed: finish cycle for this stay, keep geofence switch enabled
+      st.enterCycleCompleted = true;
+      st.center5HzStartMs = 0;
+      st.visual10sStartMs = 0;
+      return null;
+    }
+
+    // Inside boundary (10% < d <= 100% R)
+    if (distance <= safeRadius) {
+      const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'enter');
+      return {
+        id: `alert_${itemKey}`,
+        targetType,
+        targetId,
+        locationTitle: title,
+        description,
+        triggerType: 'enter',
+        triggerOn: 'enter',
+        scenarioPhase: 'enter_approaching',
+        sonarMode: 'enter',
+        sonarIntervalMs: intervalMs,
+        isVisualOnly: false,
+        initialDistance: distance,
+        targetDistance: distance, // Distance to center
+        radius: safeRadius,
+        latitude,
+        longitude,
+        playAudio,
+      };
+    }
+
+    return null;
+  }
+
+  // =========================================================================
+  // SCENARIO 2: EXIT ONLY ('exit') — Opposite of Enter
+  // =========================================================================
+  if (triggerOn === 'exit') {
+    // 1. In the central 10% (0% to 10% R): NO alarm and NO notification, armed for exit
+    if (distance <= center10PctMeters) {
+      st.wasInsideForExit = true;
+      st.exitCycleCompleted = false;
+      st.visual10sStartMs = 0;
+      st.acknowledgedUntilExit = false;
+      return null;
+    }
+
+    // 2. Inside between 10% R and 100% R: active exit sonar
+    if (distance <= safeRadius) {
+      st.wasInsideForExit = true;
+      st.exitCycleCompleted = false;
+      st.visual10sStartMs = 0;
+      if (st.acknowledgedUntilExit) {
+        return null;
+      }
+
+      const distToBorder = Math.max(0, safeRadius - distance);
+      const isBorder10Pct = distance >= border90PctMeters;
+      const intervalMs = isBorder10Pct
+        ? 200 // 5 Hz in the 10% adjacent to the border (90%..100% R)
+        : computeSubmarineSonarIntervalMs(distance, safeRadius, 'exit');
+
+      return {
+        id: `alert_${itemKey}`,
+        targetType,
+        targetId,
+        locationTitle: title,
+        description,
+        triggerType: 'exit',
+        triggerOn: 'exit',
+        scenarioPhase: isBorder10Pct ? 'exit_border_5hz' : 'exit_moving_out',
+        sonarMode: 'exit',
+        sonarIntervalMs: intervalMs,
+        isVisualOnly: false,
+        initialDistance: distance,
+        targetDistance: distToBorder, // Distance to boundary
+        radius: safeRadius,
+        latitude,
+        longitude,
+        playAudio,
+      };
+    }
+
+    // 3. Just exited the boundary (distance > safeRadius) after being inside
+    if (st.wasInsideForExit && !st.exitCycleCompleted && !st.acknowledgedUntilExit) {
+      if (st.visual10sStartMs === 0) {
+        st.visual10sStartMs = now;
+        st.visualCrossingType = 'exit_crossed';
+      }
+      const elapsedVisual = now - st.visual10sStartMs;
+      if (elapsedVisual < 10_000) {
+        const remSec = Math.max(1, Math.ceil((10_000 - elapsedVisual) / 1000));
+        const msg = isEn
+          ? `You exited geofence «${title}».`
+          : `شما از حصار مکانی «${title}» خارج شدید.`;
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'exit',
+          triggerOn: 'exit',
+          scenarioPhase: 'exit_crossed_visual_10s',
+          sonarMode: 'exit',
+          sonarIntervalMs: 200,
+          isVisualOnly: true,
+          visualBannerMessage: msg,
+          phaseRemainingSeconds: remSec,
+          initialDistance: distance,
+          targetDistance: 0,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio: false,
+        };
+      }
+
+      // 10 seconds finished
+      st.exitCycleCompleted = true;
+      st.wasInsideForExit = false;
+      st.visual10sStartMs = 0;
+    }
+
+    return null;
+  }
+
+  // =========================================================================
+  // SCENARIO 3: BOTH ENTER & EXIT ('both') — Boundary-Referenced + 5-Sample Moving Average
+  // =========================================================================
+  const isCurrentlyInside = distance <= safeRadius;
+  const isClearlyOutside = distance > safeRadius + 4;
+
+  // Detect boundary crossing transition
+  if (st.wasInsideBorder === undefined) {
+    st.wasInsideBorder = isCurrentlyInside;
+  } else if (!st.wasInsideBorder && isCurrentlyInside) {
+    // Crossed boundary from outside to inside! Stop sonar & show 10s visual entry message
+    st.wasInsideBorder = true;
+    st.bothDirectionLock = null;
+    st.border5HzStartMs = 0;
+    st.visual10sStartMs = now;
+    st.visualCrossingType = 'both_entered';
+  } else if (st.wasInsideBorder && isClearlyOutside) {
+    // Crossed boundary from inside to outside! Stop sonar & show 10s visual exit message
+    st.wasInsideBorder = false;
+    st.bothDirectionLock = null;
+    st.border5HzStartMs = 0;
+    st.visual10sStartMs = now;
+    st.visualCrossingType = 'both_exited';
+  }
+
+  // If currently in the 10-second visual-only border-crossing notification:
+  if (
+    st.visual10sStartMs > 0 &&
+    (st.visualCrossingType === 'both_entered' || st.visualCrossingType === 'both_exited')
+  ) {
+    const elapsedVisual = now - st.visual10sStartMs;
+    if (elapsedVisual < 10_000) {
+      const remSec = Math.max(1, Math.ceil((10_000 - elapsedVisual) / 1000));
+      const isEntered = st.visualCrossingType === 'both_entered';
+      const msg = isEntered
+        ? isEn
+          ? `You entered geofence «${title}».`
+          : `شما وارد حصار مکانی «${title}» شدید.`
+        : isEn
+        ? `You exited geofence «${title}».`
+        : `شما از حصار مکانی «${title}» خارج شدید.`;
+
+      return {
+        id: `alert_${itemKey}`,
+        targetType,
+        targetId,
+        locationTitle: title,
+        description,
+        triggerType: isEntered ? 'enter' : 'exit',
+        triggerOn: 'both',
+        scenarioPhase: isEntered ? 'both_entered_visual_10s' : 'both_exited_visual_10s',
+        sonarMode: isEntered ? 'both_enter' : 'both_exit',
+        sonarIntervalMs: 200,
+        isVisualOnly: true,
+        visualBannerMessage: msg,
+        phaseRemainingSeconds: remSec,
+        initialDistance: distance,
+        targetDistance: 0,
+        radius: safeRadius,
+        latitude,
+        longitude,
+        playAudio: false,
+      };
+    } else {
+      st.visual10sStartMs = 0;
+      st.visualCrossingType = null;
+    }
+  }
+
+  // 3A. Outside boundary within the 20% approach band (100% R < d <= 120% R)
+  if (distance > safeRadius && distance <= outer20PctMeters) {
+    if (trend === 'inward') {
+      st.bothDirectionLock = 'inward';
+    } else if (trend === 'outward') {
+      st.bothDirectionLock = null;
+      st.border5HzStartMs = 0;
+    }
+
+    if (st.bothDirectionLock === 'inward') {
+      const distToBorder = Math.max(0, distance - safeRadius);
+      const isOuter2Pct = distance <= outer2PctMeters;
+
+      if (isOuter2Pct) {
+        if (st.border5HzStartMs === 0) {
+          st.border5HzStartMs = now;
+        }
+        const elapsed5Hz = now - st.border5HzStartMs;
+        if (elapsed5Hz >= 10_000) {
+          // 10-second cap reached on the 2% outer border band
+          return null;
+        }
+        const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'enter',
+          triggerOn: 'both',
+          scenarioPhase: 'both_enter_border_5hz',
+          sonarMode: 'both_enter',
+          sonarIntervalMs: 200, // 5 Hz
+          isVisualOnly: false,
+          phaseRemainingSeconds: remSec,
+          initialDistance: distance,
+          targetDistance: distToBorder,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio,
+        };
+      } else {
+        st.border5HzStartMs = 0;
+        const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'both_enter');
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'enter',
+          triggerOn: 'both',
+          scenarioPhase: 'both_approaching_enter',
+          sonarMode: 'both_enter',
+          sonarIntervalMs: intervalMs,
+          isVisualOnly: false,
+          initialDistance: distance,
+          targetDistance: distToBorder,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio,
+        };
+      }
+    }
+    return null;
+  }
+
+  // 3B. Inside boundary within the 20% exit band (80% R <= d <= 100% R)
+  if (distance >= inner20PctMeters && distance <= safeRadius) {
+    if (trend === 'outward') {
+      st.bothDirectionLock = 'outward';
+    } else if (trend === 'inward') {
+      st.bothDirectionLock = null;
+      st.border5HzStartMs = 0;
+    }
+
+    if (st.bothDirectionLock === 'outward') {
+      const distToBorder = Math.max(0, safeRadius - distance);
+      const isInner2Pct = distance >= inner2PctMeters;
+
+      if (isInner2Pct) {
+        if (st.border5HzStartMs === 0) {
+          st.border5HzStartMs = now;
+        }
+        const elapsed5Hz = now - st.border5HzStartMs;
+        if (elapsed5Hz >= 10_000) {
+          // 10-second cap reached on the 2% inner border band
+          return null;
+        }
+        const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'exit',
+          triggerOn: 'both',
+          scenarioPhase: 'both_exit_border_5hz',
+          sonarMode: 'both_exit',
+          sonarIntervalMs: 200, // 5 Hz
+          isVisualOnly: false,
+          phaseRemainingSeconds: remSec,
+          initialDistance: distance,
+          targetDistance: distToBorder,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio,
+        };
+      } else {
+        st.border5HzStartMs = 0;
+        const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'both_exit');
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'exit',
+          triggerOn: 'both',
+          scenarioPhase: 'both_approaching_exit',
+          sonarMode: 'both_exit',
+          sonarIntervalMs: intervalMs,
+          isVisualOnly: false,
+          initialDistance: distance,
+          targetDistance: distToBorder,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio,
+        };
+      }
+    }
+    return null;
+  }
+
+  // Outside the ±20% boundary bands
+  st.bothDirectionLock = null;
+  st.border5HzStartMs = 0;
+  return null;
+}
+
+/**
+ * Evaluates all active saved locations and location-based reminders across the 3 scenarios
+ * ('enter', 'exit', 'both') and returns all currently active alerts sorted by shortest targetDistance
+ * (so the highest-priority alert is always at index 0).
+ */
+export function evaluateAllActiveGeofenceScenarios(
+  userPos: { latitude: number; longitude: number },
+  reminders: Reminder[] = [],
+  locations: SavedLocation[] = [],
+  language: 'fa' | 'en' = 'fa',
+  formatLocTitle?: (title: string, lang?: 'fa' | 'en') => string
+): EvaluatedGeofenceAlertItem[] {
+  const now = Date.now();
+  const isEn = language === 'en';
+  const activeAlerts: EvaluatedGeofenceAlertItem[] = [];
+
+  for (const loc of locations) {
+    if (loc.deletedAt || !loc.geofence || !loc.geofence.enabled) continue;
+    const distance = calculateHaversineDistance(
+      userPos.latitude,
+      userPos.longitude,
+      loc.latitude,
+      loc.longitude
+    );
+    const displayTitle = formatLocTitle ? formatLocTitle(loc.title, language) : loc.title;
+    const details = [loc.description, loc.geofence.customMessage].filter(Boolean).join(' — ');
+
+    const evaluated = evaluateSingleItemScenario({
+      itemKey: `loc_${loc.id}`,
+      targetType: 'location',
+      targetId: loc.id,
+      title: displayTitle,
+      description: details || undefined,
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      radius: loc.geofence.radius || 100,
+      triggerOn: loc.geofence.triggerOn || 'both',
+      playAudio: loc.geofence.playAudio !== false,
+      distance,
+      now,
+      isEn,
+    });
+
+    if (evaluated) {
+      activeAlerts.push(evaluated);
+    }
+  }
+
+  for (const rem of reminders) {
+    if (
+      rem.deletedAt ||
+      (rem.status !== 'pending' && rem.status !== 'postponed') ||
+      !rem.geofence ||
+      !rem.geofence.enabled
+    ) {
+      continue;
+    }
+    const distance = calculateHaversineDistance(
+      userPos.latitude,
+      userPos.longitude,
+      rem.geofence.latitude,
+      rem.geofence.longitude
+    );
+    const locName = rem.geofence.locationName || rem.title;
+
+    const evaluated = evaluateSingleItemScenario({
+      itemKey: `rem_${rem.id}`,
+      targetType: 'reminder',
+      targetId: rem.id,
+      title: locName,
+      description: rem.description || rem.title,
+      latitude: rem.geofence.latitude,
+      longitude: rem.geofence.longitude,
+      radius: rem.geofence.radius || 100,
+      triggerOn: rem.geofence.triggerOn || 'enter',
+      playAudio: true,
+      distance,
+      now,
+      isEn,
+    });
+
+    if (evaluated) {
+      activeAlerts.push(evaluated);
+    }
+  }
+
+  // Sort by shortest targetDistance (center for 'enter', boundary for 'exit' and 'both')
+  activeAlerts.sort((a, b) => {
+    if (a.targetDistance !== b.targetDistance) {
+      return a.targetDistance - b.targetDistance;
+    }
+    return a.initialDistance - b.initialDistance;
+  });
+
+  return activeAlerts;
 }
 
 /**
@@ -222,11 +948,9 @@ export function setGeofenceTrackingEnabled(enabled: boolean): void {
 export function radiusToLogSliderPosition(radiusMeters: number): number {
   const r = Math.max(20, Math.min(25000, radiusMeters || 100));
   if (r <= 5000) {
-    // Logarithmic mapping from 20m (pos=0) to 5000m (pos=500): r = 20 * (250)^(pos/500)
     const ratio = Math.log(r / 20) / Math.log(250);
     return Math.round(Math.max(0, Math.min(500, ratio * 500)));
   } else {
-    // Logarithmic mapping from 5000m (pos=500) to 25000m (pos=1000): r = 5000 * (5)^((pos-500)/500)
     const ratio = Math.log(r / 5000) / Math.log(5);
     return Math.round(Math.max(500, Math.min(1000, 500 + ratio * 500)));
   }
@@ -286,7 +1010,6 @@ export function shouldAcceptLocationUpdate(newPos: UserPosition): boolean {
     return true;
   }
 
-  // Reject out-of-order stale fixes
   if (normalizedPos.timestamp < lastAcceptedPosition.timestamp - 1500) {
     return false;
   }
@@ -299,8 +1022,6 @@ export function shouldAcceptLocationUpdate(newPos: UserPosition): boolean {
     normalizedPos.longitude
   );
 
-  // If we have a recent (<15s) high-accuracy GPS fix (<=35m) and a sudden coarse fix (>65m accuracy)
-  // jumps the position by >35m, reject the coarse network/cell-tower jump!
   if (
     ageSinceLastMs < 15000 &&
     lastAcceptedPosition.accuracy <= 35 &&
@@ -310,7 +1031,6 @@ export function shouldAcceptLocationUpdate(newPos: UserPosition): boolean {
     return false;
   }
 
-  // Also reject implausible instantaneous jumps (>250m in <4 seconds) when accuracy is worse than previous fix
   if (
     ageSinceLastMs < 4000 &&
     jumpMeters > 250 &&
@@ -392,7 +1112,7 @@ export function syncGeofencesWithNativeAndroid(
           triggerOn: loc.geofence.triggerOn || 'both',
           customMessage: loc.geofence.customMessage || '',
           playAudio: loc.geofence.playAudio !== false,
-          cooldownMs: 15 * 1000, // 15s anti-jitter debounce
+          cooldownMs: 15 * 1000,
         });
       }
 
@@ -416,7 +1136,7 @@ export function syncGeofencesWithNativeAndroid(
           triggerOn: rem.geofence.triggerOn || 'enter',
           customMessage: rem.description || rem.geofence.locationName || '',
           playAudio: true,
-          cooldownMs: 15 * 1000, // 15s anti-jitter debounce
+          cooldownMs: 15 * 1000,
         });
       }
     }
@@ -433,7 +1153,7 @@ export function syncGeofencesWithNativeAndroid(
 }
 
 /**
- * Returns the distance and radius of the nearest active geofence (for live submarine sonar rhythm modulation).
+ * Returns the distance and radius of the nearest active geofence.
  */
 export function getNearestActiveGeofenceDistance(
   userPos: { latitude: number; longitude: number },
@@ -490,7 +1210,11 @@ export function getAdaptivePollingInterval(
   locations: SavedLocation[] = []
 ): number {
   const activeReminderGeofences = reminders.filter(
-    (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
+    (r) =>
+      !r.deletedAt &&
+      (r.status === 'pending' || r.status === 'postponed') &&
+      r.geofence &&
+      r.geofence.enabled
   );
   const activeLocationGeofences = locations.filter(
     (l) => !l.deletedAt && l.geofence && l.geofence.enabled
@@ -537,21 +1261,17 @@ export function getAdaptivePollingInterval(
     }
   }
 
-  if (minCenterDistance <= 250 || minBoundaryDistance < 200) {
-    return 3000; // 3 seconds when inside or near boundary
+  if (minCenterDistance <= 250 || minBoundaryDistance < 250) {
+    return 2000; // 2 seconds when inside or within 250m of boundary for smooth 5-sample trend detection
   } else if (minBoundaryDistance < 600) {
-    return 6000; // 6 seconds
+    return 5000;
   } else if (minBoundaryDistance < 1500) {
-    return 15000; // 15 seconds
+    return 12000;
   } else {
-    return 30000; // 30 seconds
+    return 25000;
   }
 }
 
-/**
- * Checks all active location-based reminders against the current user coordinates.
- * Uses hysteresis and only records state transition AFTER an alert is actually triggered.
- */
 export function evaluateGeofences(
   userPos: UserPosition,
   reminders: Reminder[],
@@ -560,7 +1280,7 @@ export function evaluateGeofences(
   const updatedReminders: Reminder[] = [];
   const now = Date.now();
   let stateChanged = false;
-  const DEBOUNCE_MS = 15 * 1000; // 15s debounce against GPS jitter
+  const DEBOUNCE_MS = 15 * 1000;
 
   for (const reminder of reminders) {
     if (
@@ -573,7 +1293,6 @@ export function evaluateGeofences(
     }
 
     const { latitude, longitude, radius = 100, triggerOn = 'enter' } = reminder.geofence;
-
     const distance = calculateHaversineDistance(
       userPos.latitude,
       userPos.longitude,
@@ -583,8 +1302,6 @@ export function evaluateGeofences(
 
     const proximityKey = `rem_${reminder.id}`;
     const under10mKey = `u10m_rem_${reminder.id}`;
-
-    // Entry matches exact radius (same as UI card). Exit uses +8m hysteresis so standing on the border doesn't flap.
     const isInsideNow = distance <= radius;
     const isDefinitelyOutside = distance > radius + 8;
     const isUnder10mNow = distance <= Math.max(10, Math.round(radius * 0.1));
@@ -593,14 +1310,18 @@ export function evaluateGeofences(
     const wasUnder10mNotified = proximityStateMap.get(under10mKey);
     const lastTrigTime = lastTransitionTimeMap.get(proximityKey) || 0;
 
-    // Reset sub-10m flag only when user exits the geofence boundary so "متوجه شدم" stops alerts for the entire stay
     if (isDefinitelyOutside && wasUnder10mNotified === true) {
       proximityStateMap.set(under10mKey, false);
       stateChanged = true;
     }
 
-    // 1. Sub-10m / <=10% exact target arrival (fires if user starts/enters directly within <=10% and has not been notified for this stay)
-    if (isInsideNow && isUnder10mNow && wasInsideNotified !== true && wasUnder10mNotified !== true) {
+    if (
+      triggerOn === 'enter' &&
+      isInsideNow &&
+      isUnder10mNow &&
+      wasInsideNotified !== true &&
+      wasUnder10mNotified !== true
+    ) {
       proximityStateMap.set(under10mKey, true);
       proximityStateMap.set(proximityKey, true);
       lastTransitionTimeMap.set(proximityKey, now);
@@ -624,12 +1345,10 @@ export function evaluateGeofences(
       continue;
     }
 
-    // 2. Boundary Entry / Exit matching
     let shouldTrigger = false;
     let eventType: 'enter' | 'exit' = 'enter';
 
     if (isInsideNow) {
-      // User is inside the geofence boundary: if we haven't notified them for this stay yet, trigger 'enter'!
       if (wasInsideNotified !== true) {
         if (triggerOn === 'enter' || triggerOn === 'both') {
           if (now - lastTrigTime >= DEBOUNCE_MS) {
@@ -637,13 +1356,11 @@ export function evaluateGeofences(
             eventType = 'enter';
           }
         } else {
-          // triggerOn === 'exit': silently record that user is now inside so we can detect their future exit
           proximityStateMap.set(proximityKey, true);
           stateChanged = true;
         }
       }
     } else if (isDefinitelyOutside) {
-      // User is outside the geofence boundary (beyond +8m hysteresis)
       if (wasInsideNotified === true) {
         if (triggerOn === 'exit' || triggerOn === 'both') {
           if (now - lastTrigTime >= DEBOUNCE_MS) {
@@ -651,7 +1368,6 @@ export function evaluateGeofences(
             eventType = 'exit';
           }
         } else {
-          // triggerOn === 'enter': reset state to false so next entry will trigger immediately!
           proximityStateMap.set(proximityKey, false);
           stateChanged = true;
         }
@@ -693,11 +1409,6 @@ export function evaluateGeofences(
   return updatedReminders;
 }
 
-/**
- * Checks all saved locations with active geofence checkpoints against current user coordinates.
- * Guarantees that whenever a location's distance is inside `radius` (`distance <= radius`) and hasn't been
- * notified for the current stay, the alert reliably triggers.
- */
 export function evaluateSavedLocationGeofences(
   userPos: UserPosition,
   locations: SavedLocation[],
@@ -706,7 +1417,7 @@ export function evaluateSavedLocationGeofences(
   const updatedLocations: SavedLocation[] = [];
   const now = Date.now();
   let stateChanged = false;
-  const DEBOUNCE_MS = 15 * 1000; // 15s debounce against GPS jitter
+  const DEBOUNCE_MS = 15 * 1000;
 
   for (const location of locations) {
     if (location.deletedAt || !location.geofence || !location.geofence.enabled) {
@@ -715,7 +1426,6 @@ export function evaluateSavedLocationGeofences(
 
     const radius = location.geofence.radius || 100;
     const triggerOn = location.geofence.triggerOn || 'both';
-
     const distance = calculateHaversineDistance(
       userPos.latitude,
       userPos.longitude,
@@ -725,8 +1435,6 @@ export function evaluateSavedLocationGeofences(
 
     const proximityKey = `loc_${location.id}`;
     const under10mKey = `u10m_loc_${location.id}`;
-
-    // Entry matches exact `distance <= radius` (100% consistent with SavedLocationCard "🟢 داخل محدوده")
     const isInsideNow = distance <= radius;
     const isDefinitelyOutside = distance > radius + 8;
     const isUnder10mNow = distance <= Math.max(10, Math.round(radius * 0.1));
@@ -735,14 +1443,18 @@ export function evaluateSavedLocationGeofences(
     const wasUnder10mNotified = proximityStateMap.get(under10mKey);
     const lastTrigTime = lastTransitionTimeMap.get(proximityKey) || 0;
 
-    // Reset sub-10m flag only when user exits the geofence boundary so "متوجه شدم" stops alerts for the entire stay
     if (isDefinitelyOutside && wasUnder10mNotified === true) {
       proximityStateMap.set(under10mKey, false);
       stateChanged = true;
     }
 
-    // 1. Sub-10m / <=10% Target Arrival inside boundary (fires if user starts/enters directly within <=10% and has not been notified for this stay)
-    if (isInsideNow && isUnder10mNow && wasInsideNotified !== true && wasUnder10mNotified !== true) {
+    if (
+      triggerOn === 'enter' &&
+      isInsideNow &&
+      isUnder10mNow &&
+      wasInsideNotified !== true &&
+      wasUnder10mNotified !== true
+    ) {
       proximityStateMap.set(under10mKey, true);
       proximityStateMap.set(proximityKey, true);
       lastTransitionTimeMap.set(proximityKey, now);
@@ -766,7 +1478,6 @@ export function evaluateSavedLocationGeofences(
       continue;
     }
 
-    // 2. Boundary Entry / Exit matching
     let shouldTrigger = false;
     let eventType: 'enter' | 'exit' = 'enter';
 
@@ -778,7 +1489,6 @@ export function evaluateSavedLocationGeofences(
             eventType = 'enter';
           }
         } else {
-          // triggerOn === 'exit': record inside state so subsequent exit triggers
           proximityStateMap.set(proximityKey, true);
           stateChanged = true;
         }
@@ -791,7 +1501,6 @@ export function evaluateSavedLocationGeofences(
             eventType = 'exit';
           }
         } else {
-          // triggerOn === 'enter': reset state to false so re-entering triggers reliably
           proximityStateMap.set(proximityKey, false);
           stateChanged = true;
         }

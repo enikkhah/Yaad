@@ -1,23 +1,26 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, Edit2, MapPin, Navigation } from 'lucide-react';
+import { CheckCircle2, Edit2, MapPin, Navigation, Volume2, VolumeX } from 'lucide-react';
 import appIcon from '../assets/images/icon.png';
 import {
   acknowledgeGeofenceAlert,
   calculateHaversineDistance,
+  EvaluatedGeofenceAlertItem,
+  GeofenceScenarioPhase,
   openGoogleMapsDirections,
   saveLastKnownPosition,
   shouldAcceptLocationUpdate,
 } from '../utils/geofenceManager';
 import {
   computeSubmarineSonarIntervalMs,
+  SonarScenarioMode,
   stopAlarmRinging,
   stopSubmarineSonarLoop,
   updateSubmarineSonarDistance,
 } from '../utils/audio';
 import { toPersianDigits } from '../utils/jalali';
 
-export interface GeofenceAlertData {
+export interface GeofenceAlertData extends Partial<EvaluatedGeofenceAlertItem> {
   id: string;
   targetType: 'location' | 'reminder';
   targetId: string;
@@ -31,34 +34,116 @@ export interface GeofenceAlertData {
 }
 
 interface GeofenceAlertModalProps {
-  alert: GeofenceAlertData | null;
+  alert?: GeofenceAlertData | null;
+  alerts?: GeofenceAlertData[];
   userPosition?: { latitude: number; longitude: number } | null;
   language?: 'fa' | 'en';
-  onGotIt: () => void;
+  onGotIt: (targetId?: string, locationTitle?: string) => void;
   onEditRadius: (alert: GeofenceAlertData) => void;
 }
 
 export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   alert,
+  alerts,
   userPosition,
   language = 'fa',
   onGotIt,
   onEditRadius,
 }) => {
   const isEn = language === 'en';
-  const [liveDistance, setLiveDistance] = useState<number>(alert?.initialDistance ?? 0);
+  const [liveUserPos, setLiveUserPos] = useState<{ latitude: number; longitude: number } | null>(
+    userPosition || null
+  );
   const [pingBeat, setPingBeat] = useState<number>(0);
 
-  // Sync initial distance when alert opens or is edited
   useEffect(() => {
-    if (!alert) return;
-    setLiveDistance(alert.initialDistance);
-    updateSubmarineSonarDistance(alert.initialDistance, alert.radius || 200);
-  }, [alert?.id, alert?.initialDistance, alert?.radius, alert?.latitude, alert?.longitude]);
+    if (userPosition) {
+      setLiveUserPos(userPosition);
+    }
+  }, [userPosition?.latitude, userPosition?.longitude]);
+
+  // Normalize single or multiple alerts into a priority-sorted list (shortest targetDistance at index 0)
+  const sortedAlerts = useMemo<GeofenceAlertData[]>(() => {
+    const rawList: GeofenceAlertData[] =
+      alerts && alerts.length > 0 ? alerts : alert ? [alert] : [];
+    if (rawList.length === 0) return [];
+
+    const enriched = rawList.map((item) => {
+      const liveDist = liveUserPos
+        ? calculateHaversineDistance(
+            liveUserPos.latitude,
+            liveUserPos.longitude,
+            item.latitude,
+            item.longitude
+          )
+        : item.initialDistance;
+      const safeRad = Math.max(20, item.radius || 200);
+      const triggerOn = item.triggerOn || (item.triggerType === 'exit' ? 'exit' : 'enter');
+      const computedTargetDist =
+        item.targetDistance !== undefined
+          ? item.targetDistance
+          : triggerOn === 'enter'
+          ? liveDist
+          : Math.abs(safeRad - liveDist);
+
+      const sonarMode: SonarScenarioMode =
+        item.sonarMode || (triggerOn === 'exit' ? 'exit' : 'enter');
+      const sonarIntervalMs =
+        item.sonarIntervalMs || computeSubmarineSonarIntervalMs(liveDist, safeRad, sonarMode);
+
+      return {
+        ...item,
+        initialDistance: liveDist,
+        targetDistance: computedTargetDist,
+        sonarMode,
+        sonarIntervalMs,
+      };
+    });
+
+    enriched.sort((a, b) => {
+      const tdA = a.targetDistance ?? a.initialDistance;
+      const tdB = b.targetDistance ?? b.initialDistance;
+      if (tdA !== tdB) return tdA - tdB;
+      return a.initialDistance - b.initialDistance;
+    });
+
+    return enriched;
+  }, [alerts, alert, liveUserPos]);
+
+  const topPriorityAlert = sortedAlerts[0] || null;
+  const isMultiMode = sortedAlerts.length > 1;
+
+  // Drive submarine sonar audio strictly from the #1 priority alert (when not in 10s visual-only phase)
+  useEffect(() => {
+    if (!topPriorityAlert) {
+      stopSubmarineSonarLoop();
+      return;
+    }
+
+    if (topPriorityAlert.isVisualOnly || topPriorityAlert.playAudio === false) {
+      stopSubmarineSonarLoop();
+      return;
+    }
+
+    const mode: SonarScenarioMode = topPriorityAlert.sonarMode || 'enter';
+    updateSubmarineSonarDistance(
+      topPriorityAlert.initialDistance,
+      topPriorityAlert.radius || 200,
+      mode
+    );
+  }, [
+    topPriorityAlert?.id,
+    topPriorityAlert?.targetId,
+    topPriorityAlert?.initialDistance,
+    topPriorityAlert?.radius,
+    topPriorityAlert?.isVisualOnly,
+    topPriorityAlert?.playAudio,
+    topPriorityAlert?.sonarMode,
+  ]);
 
   // Listen to submarine sonar ping events to keep the pulse animation in exact lockstep with each sonar ping
   useEffect(() => {
-    if (!alert || typeof window === 'undefined') return;
+    if (sortedAlerts.length === 0 || typeof window === 'undefined') return;
     const handleSonarPing = () => {
       setPingBeat((prev) => prev + 1);
     };
@@ -66,31 +151,11 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     return () => {
       window.removeEventListener('yaad:sonar-ping', handleSonarPing);
     };
-  }, [alert?.id]);
-
-  // Update live distance whenever parent userPosition updates
-  useEffect(() => {
-    if (!alert || !userPosition) return;
-    const d = calculateHaversineDistance(
-      userPosition.latitude,
-      userPosition.longitude,
-      alert.latitude,
-      alert.longitude
-    );
-    setLiveDistance(d);
-    updateSubmarineSonarDistance(d, alert.radius || 200);
-  }, [
-    alert?.id,
-    alert?.latitude,
-    alert?.longitude,
-    alert?.radius,
-    userPosition?.latitude,
-    userPosition?.longitude,
-  ]);
+  }, [sortedAlerts.length]);
 
   // Stabilized high-accuracy GPS watcher while GeofenceAlertModal is open
   useEffect(() => {
-    if (!alert) return;
+    if (sortedAlerts.length === 0) return;
     if (typeof navigator === 'undefined' || !navigator.geolocation) return;
 
     let watchId: number | null = null;
@@ -107,14 +172,10 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
             return;
           }
           saveLastKnownPosition(candidatePos);
-          const d = calculateHaversineDistance(
-            candidatePos.latitude,
-            candidatePos.longitude,
-            alert.latitude,
-            alert.longitude
-          );
-          setLiveDistance(d);
-          updateSubmarineSonarDistance(d, alert.radius || 200);
+          setLiveUserPos({
+            latitude: candidatePos.latitude,
+            longitude: candidatePos.longitude,
+          });
         },
         () => {},
         { enableHighAccuracy: true, maximumAge: 1000, timeout: 10000 }
@@ -132,30 +193,32 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
         }
       }
     };
-  }, [alert?.id, alert?.latitude, alert?.longitude, alert?.radius]);
+  }, [sortedAlerts.length]);
 
-  const stopAllGeofenceSounds = (targetId?: string) => {
+  const handleStopItemOperation = (item: GeofenceAlertData) => {
+    if (sortedAlerts.length <= 1) {
+      stopSubmarineSonarLoop();
+      stopAlarmRinging();
+    }
+    acknowledgeGeofenceAlert(item.targetId);
+    onGotIt(item.targetId, item.locationTitle);
+  };
+
+  const handleEditItem = (item: GeofenceAlertData) => {
     stopSubmarineSonarLoop();
     stopAlarmRinging();
-    acknowledgeGeofenceAlert(targetId || alert?.targetId);
+    acknowledgeGeofenceAlert(item.targetId);
+    onEditRadius(item);
   };
 
-  const handleStopOperation = () => {
-    stopAllGeofenceSounds(alert?.targetId);
-    onGotIt();
-  };
-
-  const handleEdit = () => {
-    if (!alert) return;
-    stopAllGeofenceSounds(alert.targetId);
-    onEditRadius(alert);
-  };
-
-  const handleDirections = () => {
-    if (!alert) return;
-    stopAllGeofenceSounds(alert.targetId);
-    openGoogleMapsDirections(alert.latitude, alert.longitude, alert.locationTitle);
-    onGotIt();
+  const handleDirectionsItem = (item: GeofenceAlertData) => {
+    if (sortedAlerts.length <= 1) {
+      stopSubmarineSonarLoop();
+      stopAlarmRinging();
+    }
+    acknowledgeGeofenceAlert(item.targetId);
+    openGoogleMapsDirections(item.latitude, item.longitude, item.locationTitle);
+    onGotIt(item.targetId, item.locationTitle);
   };
 
   const formatDistanceText = (meters: number): { value: string; unit: string } => {
@@ -181,209 +244,432 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     return isEn ? `${meters} m` : `${toPersianDigits(meters)} متر`;
   };
 
-  const effectiveRadius = Math.max(1, alert?.radius || 200);
-  const sonarIntervalMs = computeSubmarineSonarIntervalMs(liveDistance, effectiveRadius);
-  const is4HzMode = sonarIntervalMs <= 250;
-  const isSub10m = alert?.triggerType === 'arrived_under_10m' || liveDistance <= 10 || is4HzMode;
-  const distFormatted = formatDistanceText(liveDistance);
+  const getScenarioBadgeLabel = (item: GeofenceAlertData): string => {
+    const phase: GeofenceScenarioPhase | undefined = item.scenarioPhase;
+    if (item.isVisualOnly) {
+      if (phase === 'enter_center_visual_10s') {
+        return isEn ? '🎯 Center of Geofence Reached' : '🎯 حضور در مرکز حصار مکانی';
+      }
+      if (phase === 'both_entered_visual_10s') {
+        return isEn ? '✅ Entered Geofence Boundary' : '✅ ورود به حصار مکانی';
+      }
+      return isEn ? '🚪 Exited Geofence Boundary' : '🚪 خروج از حصار مکانی';
+    }
 
-  // Pulse animation timing:
-  // - In <=10% remaining distance (4 Hz mode): 0.25s (250ms) continuous 4 Hz pulse
-  // - Above 10%: synchronized pulse beat on each sonar ping with repeatDelay matching the exact sonar interval
-  const activeBeatDurationSec = is4HzMode
-    ? 0.25
-    : Math.min(0.75, Math.max(0.25, (sonarIntervalMs / 1000) * 0.65));
-  const activeRepeatDelaySec = is4HzMode
+    const is5Hz = (item.sonarIntervalMs || 1000) <= 200;
+    if (phase === 'enter_center_5hz') {
+      return isEn
+        ? '🎯 Central 10% Zone (5 Hz Sonar - 10s)'
+        : '🎯 محدوده ۱۰٪ مرکزی مقصد (آلارم ۵ هرتزی)';
+    }
+    if (phase === 'exit_border_5hz') {
+      return isEn
+        ? '📡 10% Adjacent to Exit Border (5 Hz Sonar)'
+        : '📡 محدوده ۱۰٪ مجاور مرز خروج (آلارم ۵ هرتزی)';
+    }
+    if (phase === 'both_enter_border_5hz') {
+      return isEn
+        ? '📡 2% Outer Border Band (5 Hz Entry Sonar)'
+        : '📡 باند ۲٪ چسبیده به مرز ورود (آلارم ۵ هرتزی)';
+    }
+    if (phase === 'both_exit_border_5hz') {
+      return isEn
+        ? '📡 2% Inner Border Band (5 Hz Exit Sonar)'
+        : '📡 باند ۲٪ مانده به مرز خروج (آلارم ۵ هرتزی)';
+    }
+    if (phase === 'both_approaching_enter') {
+      return isEn
+        ? '📡 Approaching Border to Enter (20% Outer Band)'
+        : '📡 نزدیک شدن به مرز برای ورود (باند ۲۰٪ بیرونی)';
+    }
+    if (phase === 'both_approaching_exit') {
+      return isEn
+        ? '📡 Approaching Border to Exit (20% Inner Band)'
+        : '📡 حرکت به سمت خروج از مرز (باند ۲۰٪ داخلی)';
+    }
+    if (phase === 'exit_moving_out' || item.triggerType === 'exit') {
+      return isEn
+        ? '📡 Moving Toward Geofence Exit'
+        : '📡 رادار حرکت به سمت خروج از محدوده';
+    }
+    if (is5Hz) {
+      return isEn ? '🎯 Final Proximity Stage (5 Hz)' : '🎯 مرحله نهایی مجاورت (سونار ۵ هرتز)';
+    }
+    return isEn ? '📡 Geofence Arrival Radar' : '📡 رادار ورود به محدوده حصار مکانی';
+  };
+
+  if (sortedAlerts.length === 0) return null;
+
+  // Single-Card Mode Timing
+  const primaryItem = sortedAlerts[0];
+  const primaryIntervalMs = primaryItem.sonarIntervalMs || 1000;
+  const isPrimary5Hz = !primaryItem.isVisualOnly && primaryIntervalMs <= 200;
+  const activeBeatDurationSec = isPrimary5Hz
+    ? 0.2
+    : Math.min(0.75, Math.max(0.2, (primaryIntervalMs / 1000) * 0.65));
+  const activeRepeatDelaySec = isPrimary5Hz
     ? 0
-    : Math.max(0.05, sonarIntervalMs / 1000 - activeBeatDurationSec);
-
-  const triggerBadgeLabel = !alert
-    ? ''
-    : isSub10m
-    ? isEn
-      ? '🎯 Target Reached (4 Hz Sonar)'
-      : '🎯 در محدوده ۱۰٪ پایانی مقصد (سونار ۴ هرتز)'
-    : alert.triggerType === 'exit'
-    ? isEn
-      ? '📡 Geofence Exit Alert'
-      : '📡 اعلان خروج از محدوده حصار مکانی'
-    : isEn
-    ? '📡 Geofence Arrival Radar'
-    : '📡 رادار ورود به محدوده حصار مکانی';
+    : Math.max(0.04, primaryIntervalMs / 1000 - activeBeatDurationSec);
 
   return (
     <AnimatePresence>
-      {alert && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          transition={{ duration: 0.22 }}
-          className="fixed inset-0 z-[110] bg-black/80 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 select-none"
-          dir={isEn ? 'ltr' : 'rtl'}
-        >
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        className="fixed inset-0 z-[110] bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 select-none overflow-y-auto"
+        dir={isEn ? 'ltr' : 'rtl'}
+      >
+        {!isMultiMode ? (
+          /* =====================================================================
+             SINGLE ACTIVE GEOFENCE ALERT CARD (FULL-SIZE)
+             ===================================================================== */
           <motion.div
-            initial={{ scale: 0.92, y: 24, opacity: 0 }}
+            key={primaryItem.id}
+            initial={{ scale: 0.92, y: 20, opacity: 0 }}
             animate={{ scale: 1, y: 0, opacity: 1 }}
-            exit={{ scale: 0.92, y: 24, opacity: 0 }}
+            exit={{ scale: 0.92, y: 20, opacity: 0 }}
             transition={{ type: 'spring', damping: 26, stiffness: 320 }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden p-5 sm:p-6 flex flex-col items-center text-center space-y-5"
+            className="w-full max-w-md rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden p-5 sm:p-6 flex flex-col items-center text-center space-y-4"
           >
-            {/* 1. TOP: Location Title Clearly & Prominently Displayed */}
+            {/* 1. TOP: Scenario Status & Prominent Location Title */}
             <div className="w-full space-y-2">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-xs font-black">
-                <span>{triggerBadgeLabel}</span>
+              <div className="flex items-center justify-center gap-2 flex-wrap">
+                <span className="text-xs font-extrabold text-emerald-300 tracking-wide">
+                  {getScenarioBadgeLabel(primaryItem)}
+                </span>
+                {primaryItem.phaseRemainingSeconds !== undefined && (
+                  <span className="text-xs font-black font-mono tabular-nums text-amber-300">
+                    ·{' '}
+                    {isEn
+                      ? `${primaryItem.phaseRemainingSeconds}s`
+                      : `${toPersianDigits(primaryItem.phaseRemainingSeconds)} ثانیه`}
+                  </span>
+                )}
               </div>
 
               <div className="w-full px-4 py-3 rounded-2xl bg-[#073B33]/90 border-2 border-emerald-400/60 shadow-inner">
                 <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight leading-snug break-words">
-                  {alert.locationTitle}
+                  {primaryItem.locationTitle}
                 </h2>
-                {alert.description && (
+                {primaryItem.description && (
                   <p className="text-xs sm:text-sm font-medium text-emerald-100/90 mt-1.5 leading-relaxed line-clamp-2">
-                    {alert.description}
+                    {primaryItem.description}
                   </p>
                 )}
               </div>
             </div>
 
-            {/* 2. CENTER: Large Pulsing App Logo + Submarine Sonar Rings + Pulsing GPS Pin */}
-            <div className="relative my-2 flex items-center justify-center py-3">
-              {/* Outer Expanding Submarine Sonar Rings synchronized with distance frequency */}
-              <motion.span
-                key={`outer-ring-${is4HzMode ? '4hz' : pingBeat}`}
-                initial={{ scale: 0.85, opacity: 0.8 }}
-                animate={{ scale: 1.55, opacity: 0 }}
-                transition={{
-                  duration: activeBeatDurationSec,
-                  repeat: Infinity,
-                  repeatDelay: activeRepeatDelaySec,
-                  ease: 'easeOut',
-                }}
-                className="absolute inline-flex w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-emerald-400/25 border border-emerald-300/60"
-              />
-              <motion.span
-                key={`inner-ring-${is4HzMode ? '4hz' : pingBeat}`}
-                initial={{ scale: 0.9, opacity: 0.85 }}
-                animate={{ scale: 1.38, opacity: 0 }}
-                transition={{
-                  duration: activeBeatDurationSec * 0.85,
-                  repeat: Infinity,
-                  repeatDelay: activeRepeatDelaySec,
-                  ease: 'easeOut',
-                }}
-                className="absolute inline-flex w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-cyan-400/20 border border-cyan-300/50"
-              />
-
-              {/* Main App Logo Container */}
-              <motion.div
-                key={`logo-pulse-${is4HzMode ? '4hz' : pingBeat}`}
-                animate={{
-                  scale: [1, 1.09, 1],
-                }}
-                transition={{
-                  duration: activeBeatDurationSec,
-                  repeat: Infinity,
-                  repeatDelay: activeRepeatDelaySec,
-                  ease: 'easeInOut',
-                }}
-                className="relative z-10 w-24 h-24 sm:w-28 sm:h-28 rounded-3xl border-2 border-emerald-400 bg-[#063830] flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.55)]"
-              >
-                <img
-                  src={appIcon}
-                  alt="YAAD"
-                  className="w-20 h-20 sm:w-24 sm:h-24 object-contain rounded-2xl"
-                  draggable={false}
+            {/* 2. VISUAL-ONLY 10-SECOND COMPLETION BANNER OR PULSING SONAR RADAR */}
+            {primaryItem.isVisualOnly && primaryItem.visualBannerMessage ? (
+              <div className="w-full rounded-2xl border-2 border-amber-400/80 bg-[#07382F] p-5 space-y-3 shadow-lg">
+                <div className="flex items-center justify-center gap-2 text-amber-300 text-xs font-extrabold">
+                  <VolumeX className="w-4 h-4 shrink-0" />
+                  <span>
+                    {isEn
+                      ? 'Visual Notification (10 Seconds - Audio Stopped)'
+                      : 'اعلان دیداری ۱۰ ثانیه‌ای (توقف صدای سونار)'}
+                  </span>
+                </div>
+                <p className="text-lg sm:text-xl font-black text-white leading-relaxed">
+                  {primaryItem.visualBannerMessage}
+                </p>
+                {primaryItem.phaseRemainingSeconds !== undefined && (
+                  <div className="text-xs font-bold text-emerald-200/90 font-mono tabular-nums">
+                    {isEn
+                      ? `Closing automatically in ${primaryItem.phaseRemainingSeconds}s`
+                      : `بسته شدن خودکار تا ${toPersianDigits(primaryItem.phaseRemainingSeconds)} ثانیه دیگر`}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="relative my-1 flex items-center justify-center py-3">
+                <motion.span
+                  key={`outer-ring-${isPrimary5Hz ? '5hz' : pingBeat}`}
+                  initial={{ scale: 0.85, opacity: 0.8 }}
+                  animate={{ scale: 1.55, opacity: 0 }}
+                  transition={{
+                    duration: activeBeatDurationSec,
+                    repeat: Infinity,
+                    repeatDelay: activeRepeatDelaySec,
+                    ease: 'easeOut',
+                  }}
+                  className="absolute inline-flex w-28 h-28 sm:w-32 sm:h-32 rounded-full bg-emerald-400/25 border border-emerald-300/60"
+                />
+                <motion.span
+                  key={`inner-ring-${isPrimary5Hz ? '5hz' : pingBeat}`}
+                  initial={{ scale: 0.9, opacity: 0.85 }}
+                  animate={{ scale: 1.38, opacity: 0 }}
+                  transition={{
+                    duration: activeBeatDurationSec * 0.85,
+                    repeat: Infinity,
+                    repeatDelay: activeRepeatDelaySec,
+                    ease: 'easeOut',
+                  }}
+                  className="absolute inline-flex w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-cyan-400/20 border border-cyan-300/50"
                 />
 
-                {/* Pulsing GPS Symbol Badge on Logo */}
                 <motion.div
-                  key={`pin-pulse-${is4HzMode ? '4hz' : pingBeat}`}
-                  animate={{
-                    scale: [1, 1.35, 0.94, 1.25, 1],
-                    y: [0, -3, 0, -2, 0],
-                  }}
+                  key={`logo-pulse-${isPrimary5Hz ? '5hz' : pingBeat}`}
+                  animate={{ scale: [1, 1.09, 1] }}
                   transition={{
                     duration: activeBeatDurationSec,
                     repeat: Infinity,
                     repeatDelay: activeRepeatDelaySec,
                     ease: 'easeInOut',
                   }}
-                  className="absolute -top-2.5 -right-2.5 z-20 w-9 h-9 rounded-full bg-emerald-400 border-2 border-[#031D19] flex items-center justify-center shadow-[0_0_16px_rgba(16,185,129,1)]"
+                  className="relative z-10 w-24 h-24 sm:w-28 sm:h-28 rounded-3xl border-2 border-emerald-400 bg-[#063830] flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.55)]"
                 >
-                  <MapPin className="w-5 h-5 text-stone-950 fill-stone-950" />
+                  <img
+                    src={appIcon}
+                    alt="YAAD"
+                    referrerPolicy="no-referrer"
+                    className="w-20 h-20 sm:w-24 sm:h-24 object-contain rounded-2xl"
+                    draggable={false}
+                  />
+
+                  <motion.div
+                    key={`pin-pulse-${isPrimary5Hz ? '5hz' : pingBeat}`}
+                    animate={{
+                      scale: [1, 1.35, 0.94, 1.25, 1],
+                      y: [0, -3, 0, -2, 0],
+                    }}
+                    transition={{
+                      duration: activeBeatDurationSec,
+                      repeat: Infinity,
+                      repeatDelay: activeRepeatDelaySec,
+                      ease: 'easeInOut',
+                    }}
+                    className="absolute -top-2.5 -right-2.5 z-20 w-9 h-9 rounded-full bg-emerald-400 border-2 border-[#031D19] flex items-center justify-center shadow-[0_0_16px_rgba(16,185,129,1)]"
+                  >
+                    <MapPin className="w-5 h-5 text-stone-950 fill-stone-950" />
+                  </motion.div>
                 </motion.div>
-              </motion.div>
-            </div>
-
-            {/* 3. BELOW LOGO: Dedicated Large Live Distance Box */}
-            <div className="w-full rounded-2xl border-2 border-cyan-400/75 bg-[#052E28]/95 px-4 py-3.5 shadow-[0_0_24px_rgba(6,182,212,0.2)] space-y-1.5">
-              <div className="flex items-center justify-center gap-1.5 text-xs font-extrabold text-cyan-300">
-                <Navigation className="w-3.5 h-3.5 animate-pulse text-emerald-400" />
-                <span>
-                  {isEn ? 'LIVE DISTANCE TO LOCATION' : 'مسافت زنده تا مکان مورد نظر'}
-                </span>
               </div>
+            )}
 
-              <div className="flex items-baseline justify-center gap-2 py-0.5">
-                <span className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]">
-                  {distFormatted.value}
-                </span>
-                <span className="text-base sm:text-lg font-black text-emerald-100">
-                  {distFormatted.unit}
-                </span>
-              </div>
+            {/* 3. LIVE DISTANCE BOX */}
+            {(() => {
+              const distFormatted = formatDistanceText(primaryItem.initialDistance);
+              const borderDistFormatted = formatDistanceText(
+                Math.abs((primaryItem.radius || 200) - primaryItem.initialDistance)
+              );
+              return (
+                <div className="w-full rounded-2xl border-2 border-cyan-400/75 bg-[#052E28]/95 px-4 py-3 shadow-[0_0_24px_rgba(6,182,212,0.2)] space-y-1.5">
+                  <div className="flex items-center justify-center gap-1.5 text-xs font-extrabold text-cyan-300">
+                    <Navigation className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>
+                      {isEn ? 'LIVE DISTANCE TO CENTER' : 'مسافت زنده تا مرکز مکان'}
+                    </span>
+                  </div>
 
-              <div className="flex items-center justify-center gap-2 text-[11px] font-bold text-teal-200/85 pt-0.5">
-                <span>
-                  {isEn
-                    ? `Geofence Radius: ${formatRadiusText(alert.radius || 200)}`
-                    : `شعاع حصار مکانی: ${formatRadiusText(alert.radius || 200)}`}
-                </span>
-                {isSub10m && (
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/25 border border-emerald-400/50 text-emerald-200 font-black">
-                    {isEn ? 'At Destination (<10m)' : 'در نقطه مقصد (<۱۰ متر)'}
-                  </span>
-                )}
-              </div>
-            </div>
+                  <div className="flex items-baseline justify-center gap-2 py-0.5 tabular-nums">
+                    <span className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-emerald-300 drop-shadow-[0_0_10px_rgba(52,211,153,0.5)]">
+                      {distFormatted.value}
+                    </span>
+                    <span className="text-base sm:text-lg font-black text-emerald-100">
+                      {distFormatted.unit}
+                    </span>
+                  </div>
 
-            {/* 4. BOTTOM: Action Buttons ("توقف عملیات", "مسیریابی" in Google Maps, and "ویرایش") */}
+                  <div className="flex items-center justify-center gap-2 flex-wrap text-[11px] font-bold text-teal-200/90 pt-0.5">
+                    <span>
+                      {isEn
+                        ? `Radius: ${formatRadiusText(primaryItem.radius || 200)}`
+                        : `شعاع حصار: ${formatRadiusText(primaryItem.radius || 200)}`}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      {isEn
+                        ? `To Border: ${borderDistFormatted.value} ${borderDistFormatted.unit}`
+                        : `فاصله تا مرز: ${borderDistFormatted.value} ${borderDistFormatted.unit}`}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* 4. INDEPENDENT ACTION BUTTONS */}
             <div className="w-full grid grid-cols-3 gap-2.5 pt-1">
-              {/* Stop Operation Button */}
               <button
                 type="button"
-                onClick={handleStopOperation}
-                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/30"
+                onClick={() => handleStopItemOperation(primaryItem)}
+                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/30 whitespace-nowrap"
               >
                 <CheckCircle2 className="w-4 h-4 stroke-[2.5] shrink-0" />
                 <span className="truncate">{isEn ? 'Stop Operation' : 'توقف عملیات'}</span>
               </button>
 
-              {/* Google Maps Directions Button */}
               <button
                 type="button"
-                onClick={handleDirections}
-                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border-2 border-sky-400/80 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md"
+                onClick={() => handleDirectionsItem(primaryItem)}
+                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border-2 border-sky-400/80 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md whitespace-nowrap"
               >
                 <Navigation className="w-4 h-4 shrink-0 text-sky-300" />
                 <span className="truncate">{isEn ? 'Directions' : 'مسیریابی'}</span>
               </button>
 
-              {/* Edit Radius Button */}
               <button
                 type="button"
-                onClick={handleEdit}
-                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border-2 border-cyan-400/70 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md"
+                onClick={() => handleEditItem(primaryItem)}
+                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border-2 border-cyan-400/70 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md whitespace-nowrap"
               >
                 <Edit2 className="w-4 h-4 shrink-0 text-cyan-300" />
                 <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
               </button>
             </div>
           </motion.div>
-        </motion.div>
-      )}
+        ) : (
+          /* =====================================================================
+             MULTI-GEOFENCE COMPACT STACKED CARDS (N >= 2 SIMULTANEOUS ALERTS)
+             Sorted by shortest distance to target; #1 at top drives audio!
+             ===================================================================== */
+          <motion.div
+            initial={{ scale: 0.95, y: 16, opacity: 0 }}
+            animate={{ scale: 1, y: 0, opacity: 1 }}
+            exit={{ scale: 0.95, y: 16, opacity: 0 }}
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg max-h-[92vh] flex flex-col rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden p-4 sm:p-5 space-y-3"
+          >
+            {/* Multi-Alert Header */}
+            <div className="flex items-center justify-between gap-2 pb-2 border-b border-emerald-500/30">
+              <div className="flex items-center gap-2">
+                <img
+                  src={appIcon}
+                  alt="YAAD"
+                  referrerPolicy="no-referrer"
+                  className="w-8 h-8 rounded-xl border border-emerald-400/70 object-contain bg-[#063830]"
+                />
+                <div className="text-start">
+                  <h2 className="text-sm sm:text-base font-black text-white">
+                    {isEn
+                      ? `${sortedAlerts.length} Active Geofence Alerts`
+                      : `${toPersianDigits(sortedAlerts.length)} اعلان حصار مکانی همزمان`}
+                  </h2>
+                  <p className="text-[11px] font-bold text-emerald-300/90">
+                    {isEn
+                      ? 'Sorted by shortest distance · Sonar plays for #1 priority'
+                      : 'مرتب‌شده بر اساس کمترین مسافت · پخش صدای سونار برای اولویت اول'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Scrollable Stack of Compact N Cards */}
+            <div className="flex-1 overflow-y-auto space-y-3 pr-0.5">
+              {sortedAlerts.map((item, idx) => {
+                const isTopPriority = idx === 0;
+                const distFormatted = formatDistanceText(item.initialDistance);
+                const borderDistFormatted = formatDistanceText(
+                  Math.abs((item.radius || 200) - item.initialDistance)
+                );
+                const rankStr = isEn ? `#${idx + 1}` : `اولویت ${toPersianDigits(idx + 1)}`;
+
+                return (
+                  <div
+                    key={item.id || item.targetId}
+                    className={`w-full rounded-2xl p-3.5 transition-all space-y-2.5 ${
+                      isTopPriority
+                        ? 'bg-[#063830] border-2 border-emerald-400 shadow-[0_0_25px_rgba(16,185,129,0.28)]'
+                        : 'bg-[#04241F]/90 border border-emerald-500/40'
+                    }`}
+                  >
+                    {/* Card Top Metadata Row */}
+                    <div className="flex items-center justify-between gap-2 text-xs">
+                      <div className="flex items-center gap-1.5 font-black text-emerald-300">
+                        <span>{rankStr}</span>
+                        <span aria-hidden="true">·</span>
+                        {isTopPriority && !item.isVisualOnly && item.playAudio !== false ? (
+                          <span className="inline-flex items-center gap-1 text-amber-300">
+                            <Volume2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>{isEn ? 'Active Sonar Audio' : 'پخش سونار فعال'}</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-teal-200/75">
+                            <VolumeX className="w-3.5 h-3.5 shrink-0" />
+                            <span>{isEn ? 'Visual Only' : 'فقط دیداری'}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <span className="text-[11px] font-bold text-cyan-200 truncate">
+                        {getScenarioBadgeLabel(item)}
+                      </span>
+                    </div>
+
+                    {/* Title + Live Distance Compact Row */}
+                    <div className="flex items-center justify-between gap-3 bg-[#031D19]/90 rounded-xl px-3 py-2.5 border border-emerald-400/35">
+                      <div className="min-w-0 flex-1 text-start">
+                        <h3 className="text-base sm:text-lg font-black text-white truncate">
+                          {item.locationTitle}
+                        </h3>
+                        {item.isVisualOnly && item.visualBannerMessage ? (
+                          <p className="text-xs font-extrabold text-amber-300 mt-0.5 leading-snug">
+                            {item.visualBannerMessage}
+                            {item.phaseRemainingSeconds !== undefined &&
+                              ` (${
+                                isEn
+                                  ? `${item.phaseRemainingSeconds}s`
+                                  : `${toPersianDigits(item.phaseRemainingSeconds)} ثانیه`
+                              })`}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] font-bold text-teal-200/80 mt-0.5 truncate">
+                            {isEn
+                              ? `Radius: ${formatRadiusText(item.radius || 200)} · Border: ${borderDistFormatted.value} ${borderDistFormatted.unit}`
+                              : `شعاع: ${formatRadiusText(item.radius || 200)} · تا مرز: ${borderDistFormatted.value} ${borderDistFormatted.unit}`}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="shrink-0 text-end font-mono tabular-nums bg-[#052E28] px-3 py-1.5 rounded-xl border border-cyan-400/50">
+                        <div className="text-xl sm:text-2xl font-black text-emerald-300 leading-none">
+                          {distFormatted.value}
+                        </div>
+                        <div className="text-[10px] font-bold text-emerald-100 mt-0.5">
+                          {distFormatted.unit}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Independent 3 Action Buttons for this Card */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleStopItemOperation(item)}
+                        className="min-h-[42px] py-2 px-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 shadow-md whitespace-nowrap"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5] shrink-0" />
+                        <span className="truncate">{isEn ? 'Stop Operation' : 'توقف عملیات'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleDirectionsItem(item)}
+                        className="min-h-[42px] py-2 px-2 rounded-xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border border-sky-400/80 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 whitespace-nowrap"
+                      >
+                        <Navigation className="w-3.5 h-3.5 shrink-0 text-sky-300" />
+                        <span className="truncate">{isEn ? 'Directions' : 'مسیریابی'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleEditItem(item)}
+                        className="min-h-[42px] py-2 px-2 rounded-xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border border-cyan-400/70 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 whitespace-nowrap"
+                      >
+                        <Edit2 className="w-3.5 h-3.5 shrink-0 text-cyan-300" />
+                        <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+        )}
+      </motion.div>
     </AnimatePresence>
   );
 };

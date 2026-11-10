@@ -55,10 +55,8 @@ import {
   clearOutOfAppPersistentNotification
 } from './utils/nativeLocalNotifications';
 import { 
-  evaluateGeofences, 
-  evaluateSavedLocationGeofences,
+  evaluateAllActiveGeofenceScenarios,
   getAdaptivePollingInterval, 
-  getNearestActiveGeofenceDistance,
   isGeofenceTrackingEnabled, 
   setGeofenceTrackingEnabled,
   saveLastKnownPosition, 
@@ -69,8 +67,6 @@ import {
   calculateHaversineDistance,
   shouldAcceptLocationUpdate,
   UserPosition,
-  GeofenceTriggerEvent,
-  SavedLocationTriggerEvent
 } from './utils/geofenceManager';
 import { getT, formatSavedLocationTitle } from './utils/i18n';
 import { APP_VERSION } from './utils/version';
@@ -645,7 +641,25 @@ export default function App() {
   const [isCreateChoiceOpen, setIsCreateChoiceOpen] = useState(false);
   const [locationFilter, setLocationFilter] = useState<'all' | 'checkpoints'>('all');
   const [activeAlarmReminder, setActiveAlarmReminder] = useState<Reminder | null>(null);
-  const [activeGeofenceAlert, setActiveGeofenceAlert] = useState<GeofenceAlertData | null>(null);
+  const [activeGeofenceAlerts, setActiveGeofenceAlerts] = useState<GeofenceAlertData[]>([]);
+  const activeGeofenceAlert = activeGeofenceAlerts[0] || null;
+  const setActiveGeofenceAlert = useCallback(
+    (
+      updater:
+        | GeofenceAlertData
+        | null
+        | ((prev: GeofenceAlertData | null) => GeofenceAlertData | null)
+    ) => {
+      setActiveGeofenceAlerts((prevList) => {
+        const prevFirst = prevList[0] || null;
+        const nextVal = typeof updater === 'function' ? updater(prevFirst) : updater;
+        if (!nextVal) return [];
+        const filtered = prevList.filter((item) => item.targetId !== nextVal.targetId);
+        return [nextVal, ...filtered];
+      });
+    },
+    []
+  );
   const [focusGeofenceRadius, setFocusGeofenceRadius] = useState<boolean>(false);
   const [viewingImageUrl, setViewingImageUrl] = useState<string | null>(null);
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null);
@@ -1567,10 +1581,10 @@ export default function App() {
   // Stops a geofence operation completely (both in-app and out-of-app) and disables the geofence for that item
   const handleStopGeofenceOperation = useCallback(
     (rawItemId?: string) => {
-      stopSubmarineSonarLoop();
-      stopAlarmRinging();
       if (!rawItemId) {
-        setActiveGeofenceAlert(null);
+        stopSubmarineSonarLoop();
+        stopAlarmRinging();
+        setActiveGeofenceAlerts([]);
         return;
       }
 
@@ -1635,13 +1649,16 @@ export default function App() {
         return changed ? next : prev;
       });
 
-      setActiveGeofenceAlert((prev) => {
-        if (!prev) return null;
-        const prevClean = prev.targetId.replace(/^(loc_|rem_)/, '');
-        if (prevClean === cleanId || prev.targetId === rawItemId) {
-          return null;
+      setActiveGeofenceAlerts((prevList) => {
+        const remaining = prevList.filter((item) => {
+          const itemClean = item.targetId.replace(/^(loc_|rem_)/, '');
+          return itemClean !== cleanId && item.targetId !== rawItemId;
+        });
+        if (remaining.length === 0) {
+          stopSubmarineSonarLoop();
+          stopAlarmRinging();
         }
-        return prev;
+        return remaining;
       });
     },
     [isGeofenceActive, settings.language]
@@ -1722,106 +1739,56 @@ export default function App() {
       setCurrentUserPosition(userPos);
       saveLastKnownPosition(userPos);
 
-      // Update live submarine sonar distance so ping rhythm speeds up as user gets closer (up to 5Hz at <=10%) and slows down as user moves away
-      const nearestGeo = getNearestActiveGeofenceDistance(userPos, curReminders, curSavedLocations);
-      if (nearestGeo && nearestGeo.distance <= nearestGeo.radius) {
-        updateSubmarineSonarDistance(nearestGeo.distance, nearestGeo.radius);
-      } else if (!nearestGeo || nearestGeo.distance > nearestGeo.radius) {
+      const evaluatedAlerts = evaluateAllActiveGeofenceScenarios(
+        userPos,
+        curReminders,
+        curSavedLocations,
+        curLang,
+        formatSavedLocationTitle
+      );
+
+      setActiveGeofenceAlerts(evaluatedAlerts);
+
+      if (evaluatedAlerts.length === 0) {
         stopSubmarineSonarLoop();
+        return;
       }
 
-      // 1. Evaluate saved location geofences (حصارهای مکانی ثبت‌شده)
-      const hasLocCheckpoints = curSavedLocations.some(
-        (l) => !l.deletedAt && l.geofence && l.geofence.enabled
-      );
-      if (hasLocCheckpoints) {
-        evaluateSavedLocationGeofences(userPos, curSavedLocations, (event: SavedLocationTriggerEvent) => {
-          const displayLocTitle = formatSavedLocationTitle(event.location.title, curLang);
-          const locDetails = [event.location.description, event.location.geofence?.customMessage]
-            .filter(Boolean)
-            .join(' — ');
-
-          // Show dedicated in-app Geofence Alert (completely separate from Reminder AlarmModal)
-          setActiveGeofenceAlert({
-            id: `geo_loc_${event.location.id}_${Date.now()}`,
-            targetType: 'location',
-            targetId: event.location.id,
-            locationTitle: displayLocTitle,
-            description: locDetails || undefined,
-            triggerType: event.triggerType,
-            initialDistance: Math.round(event.distance),
-            radius: event.location.geofence?.radius || 200,
-            latitude: event.location.latitude,
-            longitude: event.location.longitude,
-          });
-
-          // Submarine Sonar Audio (distance-adaptive rhythm: 1/min at 100% down to 5Hz in remaining 10%)
-          if (event.location.geofence?.playAudio !== false) {
-            startSubmarineSonarLoop(event.distance, event.location.geofence?.radius || 200);
-          }
-
-          // Update savedLocation state
-          setSavedLocations((prev) =>
-            prev.map((loc) =>
-              loc.id === event.location.id
-                ? {
-                    ...loc,
-                    geofence: loc.geofence
-                      ? { ...loc.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
-                      : undefined,
-                  }
-                : loc
-            )
-          );
-
-          // Trigger two-step review flow after successful geofence execution
-          triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
-        });
-      }
-
-      // 2. Evaluate reminder geofences if any exist
-      const hasRemGeofences = curReminders.some(
-        (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
-      );
-      if (hasRemGeofences) {
-        evaluateGeofences(userPos, curReminders, (event: GeofenceTriggerEvent) => {
-          const locName = event.reminder.geofence?.locationName || event.reminder.title;
-
-          setActiveGeofenceAlert({
-            id: `geo_rem_${event.reminder.id}_${Date.now()}`,
-            targetType: 'reminder',
-            targetId: event.reminder.id,
-            locationTitle: locName,
-            description: event.reminder.description || event.reminder.title,
-            triggerType: event.triggerType,
-            initialDistance: Math.round(event.distance),
-            radius: event.reminder.geofence?.radius || 200,
-            latitude: event.reminder.geofence?.latitude || userPos.latitude,
-            longitude: event.reminder.geofence?.longitude || userPos.longitude,
-          });
-
-          startSubmarineSonarLoop(event.distance, event.reminder.geofence?.radius || 200);
-
-          setReminders((prev) =>
-            prev.map((item) =>
-              item.id === event.reminder.id
-                ? {
-                    ...item,
-                    geofence: item.geofence
-                      ? { ...item.geofence, lastTriggeredAt: Date.now(), hasTriggered: true }
-                      : undefined,
-                  }
-                : item
-            )
-          );
-
-          // Trigger two-step review flow after successful reminder geofence execution
-          triggerReviewFlow({ delayMs: 1200 }).catch(() => {});
-        });
+      // Priority #1 alert (index 0) drives the submarine sonar audio if not in a 10s visual-only phase
+      const topPriority = evaluatedAlerts[0];
+      if (!topPriority.isVisualOnly && topPriority.playAudio !== false) {
+        updateSubmarineSonarDistance(
+          topPriority.initialDistance,
+          topPriority.radius || 200,
+          topPriority.sonarMode || 'enter'
+        );
+      } else {
+        stopSubmarineSonarLoop();
       }
     },
     []
   );
+
+  // 1-second live scenario ticker while geofence radar or any 10-second timer (5Hz or visual-only banner) is active
+  useEffect(() => {
+    if (!isGeofenceActive && activeGeofenceAlerts.length === 0) return;
+    const tickInterval = setInterval(() => {
+      const pos = currentUserPosition || getLastKnownPosition();
+      if (!pos) return;
+      const evaluated = evaluateAllActiveGeofenceScenarios(
+        pos,
+        remindersRef.current,
+        savedLocationsRef.current,
+        settingsRef.current.language || 'fa',
+        formatSavedLocationTitle
+      );
+      setActiveGeofenceAlerts(evaluated);
+      if (evaluated.length === 0) {
+        stopSubmarineSonarLoop();
+      }
+    }, 1000);
+    return () => clearInterval(tickInterval);
+  }, [isGeofenceActive, activeGeofenceAlerts.length, currentUserPosition]);
 
   // Whenever reminders or savedLocations are added/edited/toggled while geofence radar is active,
   // immediately re-evaluate against the latest known GPS position so entering/being inside a geofence triggers without delay!
@@ -4479,25 +4446,30 @@ export default function App() {
         }}
       />
 
-      {/* DEDICATED IN-APP GEOFENCE ALERT MODAL */}
+      {/* DEDICATED IN-APP GEOFENCE ALERT MODAL (SINGLE & MULTI-CARD PRIORITY STACK) */}
       <GeofenceAlertModal
         alert={activeGeofenceAlert}
+        alerts={activeGeofenceAlerts}
         userPosition={currentUserPosition}
         language={settings.language}
-        onGotIt={() => {
-          if (activeGeofenceAlert?.targetId) {
-            handleStopGeofenceOperation(activeGeofenceAlert.targetId);
+        onGotIt={(targetId, locTitle) => {
+          const idToStop = targetId || activeGeofenceAlert?.targetId;
+          const titleToShow = locTitle || activeGeofenceAlert?.locationTitle || '';
+          if (idToStop) {
+            handleStopGeofenceOperation(idToStop);
             showSyncNotification(
               isEn
-                ? `Geofence operation stopped for ${activeGeofenceAlert.locationTitle}`
-                : `عملیات حصار مکانی برای «${activeGeofenceAlert.locationTitle}» متوقف شد`
+                ? `Geofence operation stopped for ${titleToShow}`
+                : `عملیات حصار مکانی برای «${titleToShow}» متوقف شد`
             );
           } else {
-            setActiveGeofenceAlert(null);
+            setActiveGeofenceAlerts([]);
           }
         }}
         onEditRadius={(alertData) => {
-          setActiveGeofenceAlert(null);
+          setActiveGeofenceAlerts((prev) =>
+            prev.filter((item) => item.targetId !== alertData.targetId)
+          );
           if (alertData.targetType === 'location') {
             const foundLoc = savedLocations.find((l) => l.id === alertData.targetId);
             if (foundLoc) {
