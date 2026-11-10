@@ -71,6 +71,11 @@ interface DistanceSample {
 interface ItemScenarioRuntimeState {
   samples: DistanceSample[];
   trend: 'inward' | 'outward' | 'stationary';
+  lastMoveRefDistance: number;
+  lastSignificantMoveMs: number;
+  lastInwardMoveMs: number;
+  lastOutwardMoveMs: number;
+  lastPhaseTransitionMs: number;
   // Scenario 'enter'
   enterCycleCompleted: boolean;
   center5HzStartMs: number;
@@ -90,12 +95,17 @@ interface ItemScenarioRuntimeState {
 
 const scenarioRuntimeMap = new Map<string, ItemScenarioRuntimeState>();
 
-function getOrCreateRuntimeState(key: string): ItemScenarioRuntimeState {
+function getOrCreateRuntimeState(key: string, nowMs: number = Date.now()): ItemScenarioRuntimeState {
   let st = scenarioRuntimeMap.get(key);
   if (!st) {
     st = {
       samples: [],
       trend: 'stationary',
+      lastMoveRefDistance: Number.NaN,
+      lastSignificantMoveMs: nowMs,
+      lastInwardMoveMs: nowMs,
+      lastOutwardMoveMs: 0,
+      lastPhaseTransitionMs: 0,
       enterCycleCompleted: false,
       center5HzStartMs: 0,
       wasInsideForExit: false,
@@ -113,17 +123,34 @@ function getOrCreateRuntimeState(key: string): ItemScenarioRuntimeState {
 }
 
 /**
- * 5-Sample Moving Average Trend Detector:
- * Records up to 5 position/distance samples and computes whether the user's averaged distance
- * to the center/border is decreasing ('inward') or increasing ('outward').
+ * 5-Sample Moving Average Trend & Stationary Detector:
+ * Records up to 5 position/distance samples, computes smoothed distance, and determines
+ * whether the user's distance is decreasing ('inward'), increasing ('outward'), or 'stationary'.
  */
 export function recordAndAnalyzeDistanceTrend(
   itemKey: string,
   distanceMeters: number,
   nowMs: number = Date.now()
 ): 'inward' | 'outward' | 'stationary' {
-  const st = getOrCreateRuntimeState(itemKey);
+  const st = getOrCreateRuntimeState(itemKey, nowMs);
   const lastSample = st.samples[st.samples.length - 1];
+
+  if (Number.isNaN(st.lastMoveRefDistance)) {
+    st.lastMoveRefDistance = distanceMeters;
+    st.lastSignificantMoveMs = nowMs;
+    st.lastInwardMoveMs = nowMs;
+  } else {
+    const diffFromRef = distanceMeters - st.lastMoveRefDistance;
+    if (Math.abs(diffFromRef) >= 2.0) {
+      if (diffFromRef <= -2.0) {
+        st.lastInwardMoveMs = nowMs;
+      } else if (diffFromRef >= 2.0) {
+        st.lastOutwardMoveMs = nowMs;
+      }
+      st.lastMoveRefDistance = distanceMeters;
+      st.lastSignificantMoveMs = nowMs;
+    }
+  }
 
   // Record sample if first sample, or if at least 800ms elapsed or distance changed by >= 1m
   if (
@@ -154,16 +181,25 @@ export function recordAndAnalyzeDistanceTrend(
   const totalDelta = st.samples[n - 1].distance - st.samples[0].distance;
   const avgDelta = newerAvg - olderAvg;
 
-  // Threshold of 1.5m net change prevents stationary GPS jitter from flipping direction
+  // Threshold of 1.2m net change prevents stationary GPS jitter from flipping direction
   if (avgDelta <= -1.2 || totalDelta <= -2.0) {
     st.trend = 'inward';
+    st.lastInwardMoveMs = nowMs;
   } else if (avgDelta >= 1.2 || totalDelta >= 2.0) {
     st.trend = 'outward';
-  } else {
+    st.lastOutwardMoveMs = nowMs;
+  } else if (nowMs - st.lastSignificantMoveMs >= 15_000) {
     st.trend = 'stationary';
   }
 
   return st.trend;
+}
+
+function getSmoothedDistance(itemKey: string, rawDistance: number): number {
+  const st = scenarioRuntimeMap.get(itemKey);
+  if (!st || st.samples.length === 0) return rawDistance;
+  const sum = st.samples.reduce((acc, s) => acc + s.distance, 0);
+  return Math.round(sum / st.samples.length);
 }
 
 // Memory + persisted tracking of notified status (true = inside & already notified for current stay, false = outside)
@@ -288,8 +324,10 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
 }
 
 /**
- * Evaluates a single geofence item (location or reminder) against the 3 scenarios ('enter', 'exit', 'both')
- * and returns an EvaluatedGeofenceAlertItem if an audio or visual alert should be shown right now.
+ * Evaluates a single geofence item (location or reminder) against the unified 3 scenarios ('enter', 'exit', 'both'):
+ * - Golden Rule 1: Direction-aware trend (5-sample moving average) + 15s stationary pause so parked/still users never get endless alarms.
+ * - Golden Rule 2: Unified boundary R (100% map circle is always the true boundary across enter, exit, and both).
+ * - Golden Rule 3: Minimum physical zone width max(10% R, 15m) for 5 Hz + 10s phase cooldown hysteresis.
  */
 function evaluateSingleItemScenario(params: {
   itemKey: string;
@@ -317,21 +355,20 @@ function evaluateSingleItemScenario(params: {
     radius,
     triggerOn,
     playAudio,
-    distance,
+    distance: rawDistance,
     now,
     isEn,
   } = params;
 
   const safeRadius = Math.max(20, radius || 100);
-  const st = getOrCreateRuntimeState(itemKey);
-  const trend = recordAndAnalyzeDistanceTrend(itemKey, distance, now);
+  const st = getOrCreateRuntimeState(itemKey, now);
+  const trend = recordAndAnalyzeDistanceTrend(itemKey, rawDistance, now);
+  const distance = getSmoothedDistance(itemKey, rawDistance);
 
-  const center10PctMeters = Math.max(10, Math.round(safeRadius * 0.1));
-  const border90PctMeters = Math.round(safeRadius * 0.9);
-  const outer20PctMeters = Math.round(safeRadius * 1.2);
-  const outer2PctMeters = Math.max(safeRadius + 2, Math.round(safeRadius * 1.02));
-  const inner20PctMeters = Math.round(safeRadius * 0.8);
-  const inner2PctMeters = Math.min(safeRadius - 2, Math.round(safeRadius * 0.98));
+  // Golden Rule 3: Physical minimum width max(10% R, 15m) so GPS never skips the 5 Hz zone
+  const zoneWidthMeters = Math.min(Math.floor(safeRadius * 0.45), Math.max(15, Math.round(safeRadius * 0.1)));
+  const centerZoneMeters = zoneWidthMeters;
+  const borderZoneStartMeters = Math.max(centerZoneMeters + 2, safeRadius - zoneWidthMeters);
 
   // =========================================================================
   // SCENARIO 1: ENTER ONLY ('enter')
@@ -351,14 +388,13 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    // Once user reaches the central 10% (or is already running the center 5Hz -> 10s visual sequence):
-    if (distance <= center10PctMeters || st.center5HzStartMs > 0) {
+    // 1A. Central target zone (d <= max(10% R, 15m)) -> 10s of 5 Hz then 10s visual banner
+    if (distance <= centerZoneMeters || st.center5HzStartMs > 0) {
       if (st.center5HzStartMs === 0) {
         st.center5HzStartMs = now;
       }
       const elapsed5Hz = now - st.center5HzStartMs;
       if (elapsed5Hz < 10_000) {
-        // 10 seconds of 5 Hz alarm upon entering the central 10%
         const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
         return {
           id: `alert_${itemKey}`,
@@ -382,7 +418,7 @@ function evaluateSingleItemScenario(params: {
         };
       }
 
-      // After 10 seconds of 5 Hz, show visual-only banner for 10 seconds: "شما در مرکز حصار مکانی ... هستید."
+      // After 10s of 5 Hz -> 10s visual-only banner: "شما در مرکز حصار مکانی ... هستید."
       if (st.visual10sStartMs === 0) {
         st.visual10sStartMs = now;
         st.visualCrossingType = 'enter_center';
@@ -423,8 +459,15 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    // Inside boundary (10% < d <= 100% R)
+    // 1B. Inside boundary (centerZone < d <= R):
+    // Golden Rule 1: Play sonar only when moving inward or within 15s of last inward movement (pauses if parked >=15s or moving outward)
     if (distance <= safeRadius) {
+      const isActivelyApproaching =
+        trend === 'inward' || (trend !== 'outward' && now - st.lastInwardMoveMs < 15_000);
+      if (!isActivelyApproaching) {
+        return null;
+      }
+
       const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'enter');
       return {
         id: `alert_${itemKey}`,
@@ -451,19 +494,20 @@ function evaluateSingleItemScenario(params: {
   }
 
   // =========================================================================
-  // SCENARIO 2: EXIT ONLY ('exit') — Opposite of Enter
+  // SCENARIO 2: EXIT ONLY ('exit') — Direction-Aware Outward Departure
   // =========================================================================
   if (triggerOn === 'exit') {
-    // 1. In the central 10% (0% to 10% R): NO alarm and NO notification, armed for exit
-    if (distance <= center10PctMeters) {
+    // 2A. In the central zone (d <= max(10% R, 15m)): silent & armed for exit
+    if (distance <= centerZoneMeters) {
       st.wasInsideForExit = true;
       st.exitCycleCompleted = false;
+      st.border5HzStartMs = 0;
       st.visual10sStartMs = 0;
       st.acknowledgedUntilExit = false;
       return null;
     }
 
-    // 2. Inside between 10% R and 100% R: active exit sonar
+    // 2B. Inside boundary (centerZone < d <= R):
     if (distance <= safeRadius) {
       st.wasInsideForExit = true;
       st.exitCycleCompleted = false;
@@ -472,12 +516,51 @@ function evaluateSingleItemScenario(params: {
         return null;
       }
 
-      const distToBorder = Math.max(0, safeRadius - distance);
-      const isBorder10Pct = distance >= border90PctMeters;
-      const intervalMs = isBorder10Pct
-        ? 200 // 5 Hz in the 10% adjacent to the border (90%..100% R)
-        : computeSubmarineSonarIntervalMs(distance, safeRadius, 'exit');
+      // Golden Rule 1: Only trigger exit sonar when actively moving outward (or within 10s of outward movement)
+      const isActivelyMovingOutward =
+        trend === 'outward' || (trend !== 'inward' && st.lastOutwardMoveMs > 0 && now - st.lastOutwardMoveMs < 10_000);
+      if (!isActivelyMovingOutward) {
+        st.border5HzStartMs = 0;
+        return null;
+      }
 
+      const distToBorder = Math.max(0, safeRadius - distance);
+      const isBorderZone = distance >= borderZoneStartMeters;
+
+      if (isBorderZone) {
+        if (st.border5HzStartMs === 0) {
+          st.border5HzStartMs = now;
+        }
+        const elapsed5Hz = now - st.border5HzStartMs;
+        if (elapsed5Hz >= 10_000) {
+          // 10s cap reached while waiting near border
+          return null;
+        }
+        const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'exit',
+          triggerOn: 'exit',
+          scenarioPhase: 'exit_border_5hz',
+          sonarMode: 'exit',
+          sonarIntervalMs: 200, // 5 Hz
+          isVisualOnly: false,
+          phaseRemainingSeconds: remSec,
+          initialDistance: distance,
+          targetDistance: distToBorder,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio,
+        };
+      }
+
+      st.border5HzStartMs = 0;
+      const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'exit');
       return {
         id: `alert_${itemKey}`,
         targetType,
@@ -486,12 +569,12 @@ function evaluateSingleItemScenario(params: {
         description,
         triggerType: 'exit',
         triggerOn: 'exit',
-        scenarioPhase: isBorder10Pct ? 'exit_border_5hz' : 'exit_moving_out',
+        scenarioPhase: 'exit_moving_out',
         sonarMode: 'exit',
         sonarIntervalMs: intervalMs,
         isVisualOnly: false,
         initialDistance: distance,
-        targetDistance: distToBorder, // Distance to boundary
+        targetDistance: distToBorder,
         radius: safeRadius,
         latitude,
         longitude,
@@ -499,8 +582,9 @@ function evaluateSingleItemScenario(params: {
       };
     }
 
-    // 3. Just exited the boundary (distance > safeRadius) after being inside
+    // 2C. Crossed outside the boundary (distance > safeRadius) after being inside
     if (st.wasInsideForExit && !st.exitCycleCompleted && !st.acknowledgedUntilExit) {
+      st.border5HzStartMs = 0;
       if (st.visual10sStartMs === 0) {
         st.visual10sStartMs = now;
         st.visualCrossingType = 'exit_crossed';
@@ -534,7 +618,6 @@ function evaluateSingleItemScenario(params: {
         };
       }
 
-      // 10 seconds finished
       st.exitCycleCompleted = true;
       st.wasInsideForExit = false;
       st.visual10sStartMs = 0;
@@ -544,217 +627,259 @@ function evaluateSingleItemScenario(params: {
   }
 
   // =========================================================================
-  // SCENARIO 3: BOTH ENTER & EXIT ('both') — Boundary-Referenced + 5-Sample Moving Average
+  // SCENARIO 3: BOTH ENTER & EXIT ('both') — Unified Boundary R + Direction-Aware
   // =========================================================================
   const isCurrentlyInside = distance <= safeRadius;
-  const isClearlyOutside = distance > safeRadius + 4;
+  const isClearlyOutside = distance > safeRadius + 6;
 
-  // Detect boundary crossing transition
+  // Detect boundary crossing transition (with 10s phase cooldown hysteresis)
   if (st.wasInsideBorder === undefined) {
     st.wasInsideBorder = isCurrentlyInside;
+    if (isCurrentlyInside) {
+      st.wasInsideForExit = true;
+    }
   } else if (!st.wasInsideBorder && isCurrentlyInside) {
-    // Crossed boundary from outside to inside! Stop sonar & show 10s visual entry message
+    // Just entered boundary from outside!
     st.wasInsideBorder = true;
-    st.bothDirectionLock = null;
+    st.wasInsideForExit = true;
+    st.enterCycleCompleted = false;
+    st.exitCycleCompleted = false;
+    st.acknowledgedUntilExit = false;
+    st.bothDirectionLock = 'inward';
+    st.lastInwardMoveMs = now;
+    st.lastPhaseTransitionMs = now;
     st.border5HzStartMs = 0;
     st.visual10sStartMs = now;
     st.visualCrossingType = 'both_entered';
   } else if (st.wasInsideBorder && isClearlyOutside) {
-    // Crossed boundary from inside to outside! Stop sonar & show 10s visual exit message
+    // Just exited boundary from inside! Stop sonar & show 10s visual exit banner
     st.wasInsideBorder = false;
     st.bothDirectionLock = null;
+    st.lastPhaseTransitionMs = now;
     st.border5HzStartMs = 0;
+    st.center5HzStartMs = 0;
     st.visual10sStartMs = now;
     st.visualCrossingType = 'both_exited';
   }
 
-  // If currently in the 10-second visual-only border-crossing notification:
-  if (
-    st.visual10sStartMs > 0 &&
-    (st.visualCrossingType === 'both_entered' || st.visualCrossingType === 'both_exited')
-  ) {
+  // Active 10-second visual-only banner (on border entry, center arrival, or border exit)
+  if (st.visual10sStartMs > 0 && st.visualCrossingType !== null) {
     const elapsedVisual = now - st.visual10sStartMs;
     if (elapsedVisual < 10_000) {
       const remSec = Math.max(1, Math.ceil((10_000 - elapsedVisual) / 1000));
-      const isEntered = st.visualCrossingType === 'both_entered';
-      const msg = isEntered
-        ? isEn
-          ? `You entered geofence «${title}».`
-          : `شما وارد حصار مکانی «${title}» شدید.`
-        : isEn
-        ? `You exited geofence «${title}».`
-        : `شما از حصار مکانی «${title}» خارج شدید.`;
+      const cType = st.visualCrossingType;
+      const msg =
+        cType === 'enter_center'
+          ? isEn
+            ? `You are at the center of geofence «${title}».`
+            : `شما در مرکز حصار مکانی «${title}» هستید.`
+          : cType === 'both_entered'
+          ? isEn
+            ? `You entered geofence «${title}».`
+            : `شما وارد حصار مکانی «${title}» شدید.`
+          : isEn
+          ? `You exited geofence «${title}».`
+          : `شما از حصار مکانی «${title}» خارج شدید.`;
 
+      // Note: If the user just crossed inward ('both_entered') and is actively moving toward the center,
+      // once the 10s entry visual finishes (or if they reach the center), the inward sonar continues seamlessly.
+      if (cType === 'both_exited' || cType === 'enter_center') {
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: cType === 'enter_center' ? 'arrived_under_10m' : 'exit',
+          triggerOn: 'both',
+          scenarioPhase: cType === 'enter_center' ? 'enter_center_visual_10s' : 'both_exited_visual_10s',
+          sonarMode: cType === 'enter_center' ? 'enter' : 'exit',
+          sonarIntervalMs: 200,
+          isVisualOnly: true,
+          visualBannerMessage: msg,
+          phaseRemainingSeconds: remSec,
+          initialDistance: distance,
+          targetDistance: 0,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio: false,
+        };
+      }
+    } else {
+      if (st.visualCrossingType === 'enter_center') {
+        st.enterCycleCompleted = true;
+      } else if (st.visualCrossingType === 'both_exited') {
+        st.exitCycleCompleted = true;
+      }
+      st.visual10sStartMs = 0;
+      st.visualCrossingType = null;
+    }
+  }
+
+  if (!isCurrentlyInside || st.acknowledgedUntilExit) {
+    return null;
+  }
+
+  // Inside the boundary (d <= R):
+  // 3A. Reached central target zone (d <= max(10% R, 15m))
+  if (!st.enterCycleCompleted && (distance <= centerZoneMeters || st.center5HzStartMs > 0)) {
+    if (st.center5HzStartMs === 0) {
+      st.center5HzStartMs = now;
+      st.lastPhaseTransitionMs = now;
+    }
+    const elapsed5Hz = now - st.center5HzStartMs;
+    if (elapsed5Hz < 10_000) {
+      const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
       return {
         id: `alert_${itemKey}`,
         targetType,
         targetId,
         locationTitle: title,
         description,
-        triggerType: isEntered ? 'enter' : 'exit',
+        triggerType: 'arrived_under_10m',
         triggerOn: 'both',
-        scenarioPhase: isEntered ? 'both_entered_visual_10s' : 'both_exited_visual_10s',
-        sonarMode: isEntered ? 'both_enter' : 'both_exit',
-        sonarIntervalMs: 200,
-        isVisualOnly: true,
-        visualBannerMessage: msg,
+        scenarioPhase: 'enter_center_5hz',
+        sonarMode: 'enter',
+        sonarIntervalMs: 200, // 5 Hz
+        isVisualOnly: false,
         phaseRemainingSeconds: remSec,
         initialDistance: distance,
-        targetDistance: 0,
+        targetDistance: distance,
         radius: safeRadius,
         latitude,
         longitude,
-        playAudio: false,
+        playAudio,
       };
-    } else {
-      st.visual10sStartMs = 0;
-      st.visualCrossingType = null;
     }
+
+    // Transition to 10s visual center banner
+    st.center5HzStartMs = 0;
+    st.visual10sStartMs = now;
+    st.visualCrossingType = 'enter_center';
+    st.lastPhaseTransitionMs = now;
+    const msg = isEn
+      ? `You are at the center of geofence «${title}».`
+      : `شما در مرکز حصار مکانی «${title}» هستید.`;
+    return {
+      id: `alert_${itemKey}`,
+      targetType,
+      targetId,
+      locationTitle: title,
+      description,
+      triggerType: 'arrived_under_10m',
+      triggerOn: 'both',
+      scenarioPhase: 'enter_center_visual_10s',
+      sonarMode: 'enter',
+      sonarIntervalMs: 200,
+      isVisualOnly: true,
+      visualBannerMessage: msg,
+      phaseRemainingSeconds: 10,
+      initialDistance: distance,
+      targetDistance: distance,
+      radius: safeRadius,
+      latitude,
+      longitude,
+      playAudio: false,
+    };
   }
 
-  // 3A. Outside boundary within the 20% approach band (100% R < d <= 120% R)
-  if (distance > safeRadius && distance <= outer20PctMeters) {
-    if (trend === 'inward') {
-      st.bothDirectionLock = 'inward';
-    } else if (trend === 'outward') {
-      st.bothDirectionLock = null;
-      st.border5HzStartMs = 0;
-    }
+  // 3B. Moving Outward toward the boundary (after 10s phase cooldown from entry/center)
+  const cooldownElapsed = now - st.lastPhaseTransitionMs >= 10_000;
+  const isMovingOutward =
+    cooldownElapsed &&
+    distance > centerZoneMeters &&
+    (trend === 'outward' || (st.bothDirectionLock === 'outward' && trend !== 'inward' && now - st.lastOutwardMoveMs < 10_000));
 
-    if (st.bothDirectionLock === 'inward') {
-      const distToBorder = Math.max(0, distance - safeRadius);
-      const isOuter2Pct = distance <= outer2PctMeters;
+  if (isMovingOutward) {
+    st.bothDirectionLock = 'outward';
+    const distToBorder = Math.max(0, safeRadius - distance);
+    const isBorderZone = distance >= borderZoneStartMeters;
 
-      if (isOuter2Pct) {
-        if (st.border5HzStartMs === 0) {
-          st.border5HzStartMs = now;
-        }
-        const elapsed5Hz = now - st.border5HzStartMs;
-        if (elapsed5Hz >= 10_000) {
-          // 10-second cap reached on the 2% outer border band
-          return null;
-        }
-        const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
-        return {
-          id: `alert_${itemKey}`,
-          targetType,
-          targetId,
-          locationTitle: title,
-          description,
-          triggerType: 'enter',
-          triggerOn: 'both',
-          scenarioPhase: 'both_enter_border_5hz',
-          sonarMode: 'both_enter',
-          sonarIntervalMs: 200, // 5 Hz
-          isVisualOnly: false,
-          phaseRemainingSeconds: remSec,
-          initialDistance: distance,
-          targetDistance: distToBorder,
-          radius: safeRadius,
-          latitude,
-          longitude,
-          playAudio,
-        };
-      } else {
-        st.border5HzStartMs = 0;
-        const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'both_enter');
-        return {
-          id: `alert_${itemKey}`,
-          targetType,
-          targetId,
-          locationTitle: title,
-          description,
-          triggerType: 'enter',
-          triggerOn: 'both',
-          scenarioPhase: 'both_approaching_enter',
-          sonarMode: 'both_enter',
-          sonarIntervalMs: intervalMs,
-          isVisualOnly: false,
-          initialDistance: distance,
-          targetDistance: distToBorder,
-          radius: safeRadius,
-          latitude,
-          longitude,
-          playAudio,
-        };
+    if (isBorderZone) {
+      if (st.border5HzStartMs === 0) {
+        st.border5HzStartMs = now;
       }
-    }
-    return null;
-  }
-
-  // 3B. Inside boundary within the 20% exit band (80% R <= d <= 100% R)
-  if (distance >= inner20PctMeters && distance <= safeRadius) {
-    if (trend === 'outward') {
-      st.bothDirectionLock = 'outward';
-    } else if (trend === 'inward') {
-      st.bothDirectionLock = null;
-      st.border5HzStartMs = 0;
-    }
-
-    if (st.bothDirectionLock === 'outward') {
-      const distToBorder = Math.max(0, safeRadius - distance);
-      const isInner2Pct = distance >= inner2PctMeters;
-
-      if (isInner2Pct) {
-        if (st.border5HzStartMs === 0) {
-          st.border5HzStartMs = now;
-        }
-        const elapsed5Hz = now - st.border5HzStartMs;
-        if (elapsed5Hz >= 10_000) {
-          // 10-second cap reached on the 2% inner border band
-          return null;
-        }
-        const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
-        return {
-          id: `alert_${itemKey}`,
-          targetType,
-          targetId,
-          locationTitle: title,
-          description,
-          triggerType: 'exit',
-          triggerOn: 'both',
-          scenarioPhase: 'both_exit_border_5hz',
-          sonarMode: 'both_exit',
-          sonarIntervalMs: 200, // 5 Hz
-          isVisualOnly: false,
-          phaseRemainingSeconds: remSec,
-          initialDistance: distance,
-          targetDistance: distToBorder,
-          radius: safeRadius,
-          latitude,
-          longitude,
-          playAudio,
-        };
-      } else {
-        st.border5HzStartMs = 0;
-        const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'both_exit');
-        return {
-          id: `alert_${itemKey}`,
-          targetType,
-          targetId,
-          locationTitle: title,
-          description,
-          triggerType: 'exit',
-          triggerOn: 'both',
-          scenarioPhase: 'both_approaching_exit',
-          sonarMode: 'both_exit',
-          sonarIntervalMs: intervalMs,
-          isVisualOnly: false,
-          initialDistance: distance,
-          targetDistance: distToBorder,
-          radius: safeRadius,
-          latitude,
-          longitude,
-          playAudio,
-        };
+      const elapsed5Hz = now - st.border5HzStartMs;
+      if (elapsed5Hz >= 10_000) {
+        return null;
       }
+      const remSec = Math.max(1, Math.ceil((10_000 - elapsed5Hz) / 1000));
+      return {
+        id: `alert_${itemKey}`,
+        targetType,
+        targetId,
+        locationTitle: title,
+        description,
+        triggerType: 'exit',
+        triggerOn: 'both',
+        scenarioPhase: 'both_exit_border_5hz',
+        sonarMode: 'exit',
+        sonarIntervalMs: 200, // 5 Hz
+        isVisualOnly: false,
+        phaseRemainingSeconds: remSec,
+        initialDistance: distance,
+        targetDistance: distToBorder,
+        radius: safeRadius,
+        latitude,
+        longitude,
+        playAudio,
+      };
     }
-    return null;
+
+    st.border5HzStartMs = 0;
+    const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'exit');
+    return {
+      id: `alert_${itemKey}`,
+      targetType,
+      targetId,
+      locationTitle: title,
+      description,
+      triggerType: 'exit',
+      triggerOn: 'both',
+      scenarioPhase: 'both_approaching_exit',
+      sonarMode: 'exit',
+      sonarIntervalMs: intervalMs,
+      isVisualOnly: false,
+      initialDistance: distance,
+      targetDistance: distToBorder,
+      radius: safeRadius,
+      latitude,
+      longitude,
+      playAudio,
+    };
   }
 
-  // Outside the ±20% boundary bands
-  st.bothDirectionLock = null;
-  st.border5HzStartMs = 0;
+  // 3C. Moving Inward toward the center (when entry cycle not yet completed and not stationary >= 15s)
+  const isMovingInward =
+    !st.enterCycleCompleted &&
+    (trend === 'inward' || (trend !== 'outward' && now - st.lastInwardMoveMs < 15_000));
+
+  if (isMovingInward) {
+    st.bothDirectionLock = 'inward';
+    st.border5HzStartMs = 0;
+    const intervalMs = computeSubmarineSonarIntervalMs(distance, safeRadius, 'enter');
+    return {
+      id: `alert_${itemKey}`,
+      targetType,
+      targetId,
+      locationTitle: title,
+      description,
+      triggerType: 'enter',
+      triggerOn: 'both',
+      scenarioPhase: 'enter_approaching',
+      sonarMode: 'enter',
+      sonarIntervalMs: intervalMs,
+      isVisualOnly: false,
+      initialDistance: distance,
+      targetDistance: distance,
+      radius: safeRadius,
+      latitude,
+      longitude,
+      playAudio,
+    };
+  }
+
   return null;
 }
 

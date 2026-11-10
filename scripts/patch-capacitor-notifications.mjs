@@ -5560,10 +5560,14 @@ class YaadGeofenceService : Service(), LocationListener {
                     targetLon
                 )
 
-                // 5-sample moving average for smooth distance & boundary trend detection
-                val (smoothedDistDouble, deltaMeters) = recordAndAnalyzeNativeTrend(id, rawDistance.toDouble())
+                // 5-sample moving average + stationary & direction detector
+                val (smoothedDistDouble, deltaMeters) = recordAndAnalyzeNativeTrend(id, rawDistance.toDouble(), now)
                 val distance = smoothedDistDouble.roundToInt()
-                val pct = (smoothedDistDouble / radius.toDouble()) * 100.0
+
+                // Golden Rule 3: Minimum physical zone width max(10% R, 15m) so 5 Hz stage is never skipped
+                val zoneWidthMeters = kotlin.math.min((radius * 0.45).toInt(), kotlin.math.max(15, (radius * 0.1).roundToInt()))
+                val centerZoneMeters = zoneWidthMeters
+                val borderZoneStartMeters = kotlin.math.max(centerZoneMeters + 2, radius - zoneWidthMeters)
 
                 val insideKey = "inside_\$id"
                 val hasPreviousState = prefs.contains(insideKey)
@@ -5578,11 +5582,18 @@ class YaadGeofenceService : Service(), LocationListener {
                 val bannerStartKey = "banner_start_\$id"
                 val bannerTextKey = "banner_text_\$id"
                 val completedCycleKey = "completed_cycle_\$id"
+                val phaseTransitionKey = "phase_trans_\$id"
 
                 var fiveHzStart = prefs.getLong(fiveHzKey, 0L)
                 var bannerStart = prefs.getLong(bannerStartKey, 0L)
                 var bannerText = prefs.getString(bannerTextKey, "") ?: ""
                 var completedCycle = prefs.getBoolean(completedCycleKey, false)
+                val lastPhaseTrans = prefs.getLong(phaseTransitionKey, 0L)
+
+                val lastInwardMs = lastInwardMoveTimeMap[id] ?: now
+                val lastOutwardMs = lastOutwardMoveTimeMap[id] ?: 0L
+                val isMovingInward = deltaMeters <= -1.0 || (deltaMeters < 1.0 && now - lastInwardMs < 15_000L)
+                val isMovingOutward = deltaMeters >= 1.0 || (deltaMeters > -1.0 && lastOutwardMs > 0L && now - lastOutwardMs < 10_000L)
 
                 // Check if an active 10-second visual-only banner is currently running
                 if (bannerStart > 0L) {
@@ -5612,6 +5623,7 @@ class YaadGeofenceService : Service(), LocationListener {
                         editor.remove(bannerStartKey)
                         editor.remove(bannerTextKey)
                         editor.putBoolean(completedCycleKey, true)
+                        editor.putLong(phaseTransitionKey, now)
                         prefsModified = true
                         bannerStart = 0L
                         completedCycle = true
@@ -5637,10 +5649,11 @@ class YaadGeofenceService : Service(), LocationListener {
                         }
                         if (!wasInsideBefore) {
                             editor.putBoolean(insideKey, true)
+                            lastInwardMoveTimeMap[id] = now
                             prefsModified = true
                         }
                         if (completedCycle) {
-                            if (pct > 15.0) {
+                            if (distance > centerZoneMeters + 10) {
                                 editor.putBoolean(completedCycleKey, false)
                                 prefsModified = true
                             } else {
@@ -5648,7 +5661,7 @@ class YaadGeofenceService : Service(), LocationListener {
                             }
                         }
 
-                        if (pct <= 10.0) {
+                        if (distance <= centerZoneMeters || fiveHzStart > 0L) {
                             if (fiveHzStart == 0L) {
                                 fiveHzStart = now
                                 editor.putLong(fiveHzKey, now)
@@ -5703,11 +5716,7 @@ class YaadGeofenceService : Service(), LocationListener {
                                     )
                                 )
                             }
-                        } else {
-                            if (fiveHzStart > 0L) {
-                                editor.remove(fiveHzKey)
-                                prefsModified = true
-                            }
+                        } else if (isMovingInward) {
                             activeCandidates.add(
                                 NativeAlertCandidate(
                                     id = id,
@@ -5730,18 +5739,35 @@ class YaadGeofenceService : Service(), LocationListener {
                     }
 
                     "exit" -> {
-                        val distToBoundary = kotlin.math.abs(distance - radius)
+                        val distToBoundary = kotlin.math.max(0, radius - distance)
                         if (isInsideNow) {
                             if (!wasInsideBefore || completedCycle) {
                                 editor.putBoolean(insideKey, true)
                                 editor.putBoolean(completedCycleKey, false)
                                 prefsModified = true
                             }
-                            // Silent inside central 10% of radius
-                            if (pct <= 10.0) {
+                            // Silent inside central zone or when NOT moving outward
+                            if (distance <= centerZoneMeters || !isMovingOutward) {
+                                if (!isMovingOutward && fiveHzStart > 0L) {
+                                    editor.remove(fiveHzKey)
+                                    prefsModified = true
+                                }
                                 continue
                             }
-                            val isNearBorder10Pct = pct >= 90.0
+                            val isNearBorder = distance >= borderZoneStartMeters
+                            if (isNearBorder) {
+                                if (fiveHzStart == 0L) {
+                                    fiveHzStart = now
+                                    editor.putLong(fiveHzKey, now)
+                                    prefsModified = true
+                                }
+                                if (now - fiveHzStart >= 10_000L) {
+                                    continue
+                                }
+                            } else if (fiveHzStart > 0L) {
+                                editor.remove(fiveHzKey)
+                                prefsModified = true
+                            }
                             activeCandidates.add(
                                 NativeAlertCandidate(
                                     id = id,
@@ -5757,7 +5783,7 @@ class YaadGeofenceService : Service(), LocationListener {
                                     targetLon = targetLon,
                                     visualOnlyBanner = false,
                                     visualBannerText = "",
-                                    is5Hz = isNearBorder10Pct
+                                    is5Hz = isNearBorder
                                 )
                             )
                         } else {
@@ -5768,6 +5794,7 @@ class YaadGeofenceService : Service(), LocationListener {
                                     "شما از حصار مکانی «\$title» خارج شدید."
                                 }
                                 editor.putBoolean(insideKey, false)
+                                editor.remove(fiveHzKey)
                                 editor.putLong(bannerStartKey, now)
                                 editor.putString(bannerTextKey, msg)
                                 prefsModified = true
@@ -5781,7 +5808,7 @@ class YaadGeofenceService : Service(), LocationListener {
                                         sonarMode = "exit",
                                         distance = distance,
                                         radius = radius,
-                                        targetDistance = distToBoundary,
+                                        targetDistance = 0,
                                         targetLat = targetLat,
                                         targetLon = targetLon,
                                         visualOnlyBanner = true,
@@ -5797,18 +5824,27 @@ class YaadGeofenceService : Service(), LocationListener {
                     }
 
                     "both" -> {
-                        val distToBoundary = kotlin.math.abs(distance - radius)
+                        val distToBoundary = kotlin.math.max(0, radius - distance)
                         if (!hasPreviousState) {
                             editor.putBoolean(insideKey, isInsideNow)
                             prefsModified = true
-                        } else if (isInsideNow != wasInsideBefore) {
-                            // Crossed boundary! Stop sonar and fire 10-second visual-only notification
-                            val msg = if (isInsideNow) {
-                                if (isEn) "You have entered geofence «\$title»." else "شما وارد حصار مکانی «\$title» شدید."
+                        } else if (!wasInsideBefore && isInsideNow) {
+                            // Entered boundary from outside!
+                            editor.putBoolean(insideKey, true)
+                            editor.putBoolean(completedCycleKey, false)
+                            editor.putLong(phaseTransitionKey, now)
+                            editor.remove(fiveHzKey)
+                            lastInwardMoveTimeMap[id] = now
+                            prefsModified = true
+                        } else if (wasInsideBefore && !isInsideNow) {
+                            // Exited boundary from inside! Stop sonar and fire 10s visual exit banner
+                            val msg = if (isEn) {
+                                "You have exited geofence «\$title»."
                             } else {
-                                if (isEn) "You have exited geofence «\$title»." else "شما از حصار مکانی «\$title» خارج شدید."
+                                "شما از حصار مکانی «\$title» خارج شدید."
                             }
-                            editor.putBoolean(insideKey, isInsideNow)
+                            editor.putBoolean(insideKey, false)
+                            editor.putLong(phaseTransitionKey, now)
                             editor.remove(fiveHzKey)
                             editor.putLong(bannerStartKey, now)
                             editor.putString(bannerTextKey, msg)
@@ -5820,10 +5856,10 @@ class YaadGeofenceService : Service(), LocationListener {
                                     description = description,
                                     customMessage = customMessage,
                                     eventType = "visual_banner",
-                                    sonarMode = if (isInsideNow) "both_enter" else "both_exit",
+                                    sonarMode = "exit",
                                     distance = distance,
                                     radius = radius,
-                                    targetDistance = distToBoundary,
+                                    targetDistance = 0,
                                     targetLat = targetLat,
                                     targetLon = targetLon,
                                     visualOnlyBanner = true,
@@ -5834,44 +5870,73 @@ class YaadGeofenceService : Service(), LocationListener {
                             continue
                         }
 
-                        // Outside approaching boundary within 100%..120%
-                        if (!isInsideNow && pct > 100.0 && pct <= 120.0 && deltaMeters <= 0.35) {
-                            val in2PctBorder = pct <= 102.0
-                            if (in2PctBorder) {
-                                if (fiveHzStart == 0L) {
-                                    fiveHzStart = now
-                                    editor.putLong(fiveHzKey, now)
-                                    prefsModified = true
-                                }
-                                if (now - fiveHzStart >= 10_000L) {
-                                    continue
-                                }
-                            } else if (fiveHzStart > 0L) {
-                                editor.remove(fiveHzKey)
+                        if (!isInsideNow) {
+                            continue
+                        }
+
+                        // Inside boundary (d <= R):
+                        // 1. Center arrival (d <= max(10% R, 15m))
+                        if (!completedCycle && (distance <= centerZoneMeters || (fiveHzStart > 0L && distance <= centerZoneMeters + 6))) {
+                            if (fiveHzStart == 0L) {
+                                fiveHzStart = now
+                                editor.putLong(fiveHzKey, now)
+                                editor.putLong(phaseTransitionKey, now)
                                 prefsModified = true
                             }
-                            activeCandidates.add(
-                                NativeAlertCandidate(
-                                    id = id,
-                                    title = title,
-                                    description = description,
-                                    customMessage = customMessage,
-                                    eventType = "enter",
-                                    sonarMode = "both_enter",
-                                    distance = distance,
-                                    radius = radius,
-                                    targetDistance = distToBoundary,
-                                    targetLat = targetLat,
-                                    targetLon = targetLon,
-                                    visualOnlyBanner = false,
-                                    visualBannerText = "",
-                                    is5Hz = in2PctBorder
+                            val elapsed5Hz = now - fiveHzStart
+                            if (elapsed5Hz < 10_000L) {
+                                activeCandidates.add(
+                                    NativeAlertCandidate(
+                                        id = id,
+                                        title = title,
+                                        description = description,
+                                        customMessage = customMessage,
+                                        eventType = "arrived_under_10m",
+                                        sonarMode = "enter",
+                                        distance = distance,
+                                        radius = radius,
+                                        targetDistance = distance,
+                                        targetLat = targetLat,
+                                        targetLon = targetLon,
+                                        visualOnlyBanner = false,
+                                        visualBannerText = "",
+                                        is5Hz = true
+                                    )
                                 )
-                            )
-                        } else if (isInsideNow && pct >= 80.0 && pct <= 100.0 && deltaMeters >= -0.35) {
-                            // Inside approaching boundary within 80%..100%
-                            val in2PctBorder = pct >= 98.0
-                            if (in2PctBorder) {
+                            } else {
+                                val msg = if (isEn) {
+                                    "You are at the center of geofence «\$title»."
+                                } else {
+                                    "شما در مرکز حصار مکانی «\$title» هستید."
+                                }
+                                editor.remove(fiveHzKey)
+                                editor.putLong(bannerStartKey, now)
+                                editor.putString(bannerTextKey, msg)
+                                editor.putLong(phaseTransitionKey, now)
+                                prefsModified = true
+                                activeCandidates.add(
+                                    NativeAlertCandidate(
+                                        id = id,
+                                        title = title,
+                                        description = description,
+                                        customMessage = customMessage,
+                                        eventType = "visual_banner",
+                                        sonarMode = "enter",
+                                        distance = distance,
+                                        radius = radius,
+                                        targetDistance = distance,
+                                        targetLat = targetLat,
+                                        targetLon = targetLon,
+                                        visualOnlyBanner = true,
+                                        visualBannerText = msg,
+                                        is5Hz = false
+                                    )
+                                )
+                            }
+                        } else if (now - lastPhaseTrans >= 10_000L && distance > centerZoneMeters && isMovingOutward) {
+                            // 2. Moving outward toward boundary (after 10s phase cooldown)
+                            val isNearBorder = distance >= borderZoneStartMeters
+                            if (isNearBorder) {
                                 if (fiveHzStart == 0L) {
                                     fiveHzStart = now
                                     editor.putLong(fiveHzKey, now)
@@ -5891,7 +5956,7 @@ class YaadGeofenceService : Service(), LocationListener {
                                     description = description,
                                     customMessage = customMessage,
                                     eventType = "exit",
-                                    sonarMode = "both_exit",
+                                    sonarMode = "exit",
                                     distance = distance,
                                     radius = radius,
                                     targetDistance = distToBoundary,
@@ -5899,12 +5964,33 @@ class YaadGeofenceService : Service(), LocationListener {
                                     targetLon = targetLon,
                                     visualOnlyBanner = false,
                                     visualBannerText = "",
-                                    is5Hz = in2PctBorder
+                                    is5Hz = isNearBorder
                                 )
                             )
-                        } else if (fiveHzStart > 0L && (pct < 78.0 || pct > 122.0)) {
-                            editor.remove(fiveHzKey)
-                            prefsModified = true
+                        } else if (!completedCycle && isMovingInward) {
+                            // 3. Moving inward toward center
+                            if (fiveHzStart > 0L) {
+                                editor.remove(fiveHzKey)
+                                prefsModified = true
+                            }
+                            activeCandidates.add(
+                                NativeAlertCandidate(
+                                    id = id,
+                                    title = title,
+                                    description = description,
+                                    customMessage = customMessage,
+                                    eventType = "enter",
+                                    sonarMode = "enter",
+                                    distance = distance,
+                                    radius = radius,
+                                    targetDistance = distance,
+                                    targetLat = targetLat,
+                                    targetLon = targetLon,
+                                    visualOnlyBanner = false,
+                                    visualBannerText = "",
+                                    is5Hz = false
+                                )
+                            )
                         }
                     }
                 }
@@ -6436,8 +6522,27 @@ class YaadGeofenceService : Service(), LocationListener {
         const val EXTRA_GEOFENCE_ITEM_ID = "extra_geofence_item_id"
 
         private val distanceHistoryMap = HashMap<String, ArrayList<Double>>()
+        private val lastMoveRefDistMap = HashMap<String, Double>()
+        private val lastInwardMoveTimeMap = HashMap<String, Long>()
+        private val lastOutwardMoveTimeMap = HashMap<String, Long>()
 
-        private fun recordAndAnalyzeNativeTrend(itemId: String, rawDistance: Double): Pair<Double, Double> {
+        private fun recordAndAnalyzeNativeTrend(itemId: String, rawDistance: Double, nowMs: Long = System.currentTimeMillis()): Pair<Double, Double> {
+            val prevRef = lastMoveRefDistMap[itemId]
+            if (prevRef == null) {
+                lastMoveRefDistMap[itemId] = rawDistance
+                lastInwardMoveTimeMap[itemId] = nowMs
+            } else {
+                val diff = rawDistance - prevRef
+                if (kotlin.math.abs(diff) >= 2.0) {
+                    if (diff <= -2.0) {
+                        lastInwardMoveTimeMap[itemId] = nowMs
+                    } else if (diff >= 2.0) {
+                        lastOutwardMoveTimeMap[itemId] = nowMs
+                    }
+                    lastMoveRefDistMap[itemId] = rawDistance
+                }
+            }
+
             val list = distanceHistoryMap.getOrPut(itemId) { ArrayList() }
             list.add(rawDistance)
             while (list.size > 5) {
@@ -6450,7 +6555,13 @@ class YaadGeofenceService : Service(), LocationListener {
             val splitIdx = (list.size / 2).coerceAtLeast(1)
             val olderAvg = list.subList(0, splitIdx).average()
             val newerAvg = list.subList(splitIdx, list.size).average()
-            return Pair(smoothed, newerAvg - olderAvg)
+            val delta = newerAvg - olderAvg
+            if (delta <= -1.0) {
+                lastInwardMoveTimeMap[itemId] = nowMs
+            } else if (delta >= 1.0) {
+                lastOutwardMoveTimeMap[itemId] = nowMs
+            }
+            return Pair(smoothed, delta)
         }
 
         @Volatile

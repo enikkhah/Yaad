@@ -2450,7 +2450,29 @@ export default function App() {
         setReminders((prev) => [reminderPayload, ...prev]);
       }
     }
+    scrollToLocationsTop();
   };
+
+  const scrollToLocationsTop = () => {
+    if (typeof window === 'undefined') return;
+    const doScroll = () => {
+      try {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        document.documentElement.scrollTop = 0;
+        document.body.scrollTop = 0;
+      } catch {
+        window.scrollTo(0, 0);
+      }
+    };
+    doScroll();
+    setTimeout(doScroll, 60);
+  };
+
+  useEffect(() => {
+    if (activeMainTab === 'locations') {
+      scrollToLocationsTop();
+    }
+  }, [activeMainTab, isLocationModalOpen, locationFilter]);
 
   const handleDeleteLocation = (id: string) => {
     setSavedLocations((prev) =>
@@ -3882,36 +3904,40 @@ export default function App() {
                     </h3>
                   </div>
 
-                  {/* Sliding Geofence Toggle Switch in Header next to Title (دکمه کشویی فعال‌سازی حصار مکانی کنار عنوان) */}
+                  {/* Sliding Geofence Toggle Switch in Header next to Title (دکمه کشویی بزرگ‌تر فعال‌سازی حصار مکانی کنار عنوان) */}
                   <button
                     type="button"
                     role="switch"
                     aria-checked={isGeofenceActive}
                     onClick={() => handleToggleGeofenceService()}
-                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-2xl bg-stone-900/90 border border-stone-800 hover:border-emerald-500/40 cursor-pointer group focus:outline-none transition-all"
+                    className={`min-h-[44px] flex items-center gap-2.5 px-3.5 py-2 rounded-2xl border-2 cursor-pointer group focus:outline-none transition-all shadow-sm ${
+                      isGeofenceActive
+                        ? 'bg-emerald-950/60 border-emerald-500/60 hover:border-emerald-400 shadow-emerald-500/15'
+                        : 'bg-stone-900/95 border-stone-700 hover:border-emerald-500/50'
+                    }`}
                     title={
                       isGeofenceActive
                         ? (isEn ? 'Disable Geofence Radar' : 'غیرفعال کردن رادار حصار مکانی')
-                        : (isEn ? 'Enable Geofence Radar' : 'فعال کردن رادار حصار مکانی')
+                        : (isEn ? 'Activate Geofence Radar' : 'فعال‌سازی رادار حصار مکانی')
                     }
                   >
-                    <Radio className={`w-3.5 h-3.5 ${isGeofenceActive ? 'text-emerald-400 animate-pulse' : 'text-stone-400'}`} />
-                    <span className={`text-xs font-black transition-colors ${
-                      isGeofenceActive ? 'text-emerald-300' : 'text-stone-300 group-hover:text-white'
+                    <Radio className={`w-4.5 h-4.5 shrink-0 ${isGeofenceActive ? 'text-emerald-400 animate-pulse' : 'text-stone-400 group-hover:text-emerald-300'}`} />
+                    <span className={`text-xs sm:text-sm font-black transition-colors whitespace-nowrap ${
+                      isGeofenceActive ? 'text-emerald-300' : 'text-stone-200 group-hover:text-white'
                     }`}>
-                      {isEn ? 'Geofence' : 'حصار مکانی'}
+                      {isEn ? 'Activate Geofence' : 'فعال‌سازی حصار مکانی'}
                     </span>
                     <div
                       dir="ltr"
-                      className={`w-12 h-6.5 rounded-full border-2 p-0.5 flex items-center transition-all duration-200 shadow-inner ${
+                      className={`w-14 h-8 rounded-full border-2 p-1 flex items-center transition-all duration-200 shadow-inner shrink-0 ${
                         isGeofenceActive
                           ? 'bg-emerald-500 border-emerald-200 justify-end shadow-[0_0_12px_rgba(16,185,129,0.5)]'
-                          : 'bg-stone-700 border-stone-400 justify-start hover:border-white'
+                          : 'bg-stone-700 border-stone-400 justify-start group-hover:border-white'
                       }`}
                     >
                       <span
                         style={{ backgroundColor: '#FFFFFF' }}
-                        className="w-4.5 h-4.5 rounded-full !bg-white shadow-md transition-all duration-200"
+                        className="w-5.5 h-5.5 rounded-full !bg-white shadow-md transition-all duration-200"
                       />
                     </div>
                   </button>

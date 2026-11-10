@@ -82,6 +82,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [geofencePlayAudio, setGeofencePlayAudio] = useState<boolean>(true);
   const [showCollapsibleMediaAndGeofence, setShowCollapsibleMediaAndGeofence] = useState(false);
   const geofenceRadiusSectionRef = useRef<HTMLDivElement>(null);
+  const formScrollContainerRef = useRef<HTMLDivElement>(null);
 
   // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
@@ -276,6 +277,13 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
       setLocationError(null);
       setValidationError(null);
       setAlsoCreateReminder(false);
+      if (!focusGeofenceRadius) {
+        setTimeout(() => {
+          if (formScrollContainerRef.current) {
+            formScrollContainerRef.current.scrollTo({ top: 0, behavior: 'auto' });
+          }
+        }, 20);
+      }
     }
   }, [isOpen, editingLocation, focusGeofenceRadius]);
 
@@ -415,7 +423,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
           </div>
 
           {/* Form Content - Strictly bounded scroll container */}
-          <div className="flex-1 min-h-0 p-4 sm:p-5 space-y-4 overflow-y-auto overscroll-contain">
+          <div ref={formScrollContainerRef} className="flex-1 min-h-0 p-4 sm:p-5 space-y-4 overflow-y-auto overscroll-contain">
             {/* Required Field Validation Alert Banner */}
             {validationError && (
               <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-2">
@@ -615,11 +623,11 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 }`}
               >
                 <span className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/25 border border-emerald-300/45 text-white flex items-center justify-center shrink-0 shadow-sm">
-                    <Radio className={`w-5 h-5 ${enableGeofence ? 'animate-pulse text-white' : 'text-emerald-200'}`} />
+                  <div className="w-11 h-11 rounded-xl bg-emerald-500/25 border border-emerald-300/45 text-white flex items-center justify-center shrink-0 shadow-sm">
+                    <Radio className={`w-5.5 h-5.5 ${enableGeofence ? 'animate-pulse text-white' : 'text-emerald-200'}`} />
                   </div>
-                  <span style={{ color: '#FFFFFF' }} className="tracking-wide text-sm sm:text-base font-black !text-white drop-shadow-xs">
-                    {isEn ? 'Geofence' : 'حصار مکانی'}
+                  <span style={{ color: '#FFFFFF' }} className="tracking-wide text-base sm:text-lg font-black !text-white drop-shadow-xs">
+                    {isEn ? 'Activate Geofence' : 'فعال‌سازی حصار مکانی'}
                   </span>
                   {enableGeofence && (
                     <span style={{ color: '#FFFFFF' }} className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/35 !text-white border border-emerald-300/50 font-bold">
@@ -627,12 +635,12 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                     </span>
                   )}
                 </span>
-                <div className={`w-8 h-8 rounded-xl flex items-center justify-center border transition-all ${
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center border transition-all ${
                   showCollapsibleMediaAndGeofence
                     ? 'bg-emerald-500/30 border-emerald-300/50 text-white rotate-180'
                     : 'bg-white/10 border-white/25 text-white'
                 }`}>
-                  <ChevronDown className="w-4.5 h-4.5 transition-transform duration-200" />
+                  <ChevronDown className="w-5 h-5 transition-transform duration-200" />
                 </div>
               </button>
 
@@ -646,16 +654,16 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             }`}>
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2.5 min-w-0">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border transition-colors ${
+                  <div className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 border transition-colors ${
                     enableGeofence
                       ? 'bg-emerald-500/25 border-emerald-400/60 text-emerald-300'
                       : 'bg-stone-700/70 border-stone-500/60 text-stone-200'
                   }`}>
-                    <Radio className={`w-5 h-5 ${enableGeofence ? 'animate-pulse' : ''}`} />
+                    <Radio className={`w-5.5 h-5.5 ${enableGeofence ? 'animate-pulse' : ''}`} />
                   </div>
                   <div className="min-w-0">
                     <h4 style={{ color: '#FFFFFF' }} className="text-sm sm:text-base font-black !text-white flex items-center gap-1.5">
-                      <span>{isEn ? 'Geofence' : 'حصار مکانی'}</span>
+                      <span>{isEn ? 'Activate Geofence' : 'فعال‌سازی حصار مکانی'}</span>
                       {enableGeofence && (
                         <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/25 text-emerald-200 font-bold border border-emerald-400/50">
                           {isEn ? 'Active' : 'فعال'}
@@ -689,17 +697,17 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                       setIsGpsOffWarning(false);
                     }
                   }}
-                  className="flex items-center gap-2 shrink-0 cursor-pointer group focus:outline-none"
-                  title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار مکانی') : (isEn ? 'Enable Geofence' : 'فعال کردن حصار مکانی')}
+                  className="flex items-center gap-2.5 px-3 py-2 rounded-2xl bg-stone-900/80 border border-stone-700/80 hover:border-emerald-400/60 shrink-0 cursor-pointer group focus:outline-none transition-all"
+                  title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار مکانی') : (isEn ? 'Enable Geofence' : 'فعال‌سازی حصار مکانی')}
                 >
-                  <span className={`text-xs font-black transition-colors ${
-                    enableGeofence ? 'text-emerald-300' : 'text-stone-300 group-hover:text-white'
+                  <span className={`text-xs sm:text-sm font-black transition-colors ${
+                    enableGeofence ? 'text-emerald-300' : 'text-stone-200 group-hover:text-white'
                   }`}>
-                    {enableGeofence ? (isEn ? 'ON' : 'فعال') : (isEn ? 'OFF' : 'غیرفعال')}
+                    {enableGeofence ? (isEn ? 'Active' : 'فعال') : (isEn ? 'Activate' : 'فعال‌سازی')}
                   </span>
                   <div
                     dir="ltr"
-                    className={`w-14 h-8 rounded-full border-2 p-1 flex items-center transition-all duration-200 shadow-inner ${
+                    className={`w-16 h-9 rounded-full border-2 p-1 flex items-center transition-all duration-200 shadow-inner ${
                       enableGeofence
                         ? 'bg-emerald-500 border-emerald-200 justify-end shadow-[0_0_14px_rgba(16,185,129,0.55)]'
                         : 'bg-stone-700 border-stone-400 justify-start hover:border-white'
@@ -707,7 +715,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   >
                     <span
                       style={{ backgroundColor: '#FFFFFF' }}
-                      className="w-5.5 h-5.5 rounded-full !bg-white shadow-md transition-all duration-200"
+                      className="w-6 h-6 rounded-full !bg-white shadow-md transition-all duration-200"
                     />
                   </div>
                 </button>
