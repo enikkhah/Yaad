@@ -8,8 +8,10 @@ import {
   EvaluatedGeofenceAlertItem,
   GeofenceScenarioPhase,
   openGoogleMapsDirections,
+  pauseGeofenceAlertTemporarily,
   saveLastKnownPosition,
   shouldAcceptLocationUpdate,
+  toggleGeofenceAlertMute,
 } from '../utils/geofenceManager';
 import {
   computeSubmarineSonarIntervalMs,
@@ -40,6 +42,7 @@ interface GeofenceAlertModalProps {
   language?: 'fa' | 'en';
   onGotIt: (targetId?: string, locationTitle?: string) => void;
   onEditRadius: (alert: GeofenceAlertData) => void;
+  onStartDirections?: (alert: GeofenceAlertData) => void;
 }
 
 export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
@@ -49,12 +52,14 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   language = 'fa',
   onGotIt,
   onEditRadius,
+  onStartDirections,
 }) => {
   const isEn = language === 'en';
   const [liveUserPos, setLiveUserPos] = useState<{ latitude: number; longitude: number } | null>(
     userPosition || null
   );
   const [pingBeat, setPingBeat] = useState<number>(0);
+  const [mutedMap, setMutedMap] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (userPosition) {
@@ -91,12 +96,20 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
       const sonarIntervalMs =
         item.sonarIntervalMs || computeSubmarineSonarIntervalMs(liveDist, safeRad, sonarMode);
 
+      const cleanTargetId = item.targetId.replace(/^(loc_|rem_)/, '');
+      const isMuted =
+        mutedMap[cleanTargetId] !== undefined
+          ? mutedMap[cleanTargetId]
+          : Boolean(item.isAudioMuted);
+
       return {
         ...item,
         initialDistance: liveDist,
         targetDistance: computedTargetDist,
         sonarMode,
         sonarIntervalMs,
+        isAudioMuted: isMuted,
+        playAudio: item.playAudio !== false && !isMuted && !item.isVisualOnly,
       };
     });
 
@@ -108,19 +121,23 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     });
 
     return enriched;
-  }, [alerts, alert, liveUserPos]);
+  }, [alerts, alert, liveUserPos, mutedMap]);
 
   const topPriorityAlert = sortedAlerts[0] || null;
   const isMultiMode = sortedAlerts.length > 1;
 
-  // Drive submarine sonar audio strictly from the #1 priority alert (when not in 10s visual-only phase)
+  // Drive submarine sonar audio strictly from the #1 priority alert (when not muted and not in visual-only phase)
   useEffect(() => {
     if (!topPriorityAlert) {
       stopSubmarineSonarLoop();
       return;
     }
 
-    if (topPriorityAlert.isVisualOnly || topPriorityAlert.playAudio === false) {
+    if (
+      topPriorityAlert.isVisualOnly ||
+      topPriorityAlert.playAudio === false ||
+      topPriorityAlert.isAudioMuted
+    ) {
       stopSubmarineSonarLoop();
       return;
     }
@@ -138,6 +155,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     topPriorityAlert?.radius,
     topPriorityAlert?.isVisualOnly,
     topPriorityAlert?.playAudio,
+    topPriorityAlert?.isAudioMuted,
     topPriorityAlert?.sonarMode,
   ]);
 
@@ -207,7 +225,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   const handleEditItem = (item: GeofenceAlertData) => {
     stopSubmarineSonarLoop();
     stopAlarmRinging();
-    acknowledgeGeofenceAlert(item.targetId);
+    pauseGeofenceAlertTemporarily(item.targetId, 'edit');
     onEditRadius(item);
   };
 
@@ -216,9 +234,33 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
       stopSubmarineSonarLoop();
       stopAlarmRinging();
     }
-    acknowledgeGeofenceAlert(item.targetId);
+    pauseGeofenceAlertTemporarily(item.targetId, 'directions');
+    if (onStartDirections) {
+      onStartDirections(item);
+    }
     openGoogleMapsDirections(item.latitude, item.longitude, item.locationTitle);
-    onGotIt(item.targetId, item.locationTitle);
+  };
+
+  const handleToggleMuteItem = (item: GeofenceAlertData) => {
+    const cleanId = item.targetId.replace(/^(loc_|rem_)/, '');
+    const currentMuted =
+      mutedMap[cleanId] !== undefined ? mutedMap[cleanId] : Boolean(item.isAudioMuted);
+    const nextMuted = !currentMuted;
+    toggleGeofenceAlertMute(item.targetId, nextMuted);
+    setMutedMap((prev) => ({ ...prev, [cleanId]: nextMuted }));
+    if (nextMuted) {
+      stopSubmarineSonarLoop();
+    } else if (
+      topPriorityAlert &&
+      topPriorityAlert.targetId === item.targetId &&
+      !item.isVisualOnly
+    ) {
+      updateSubmarineSonarDistance(
+        item.initialDistance,
+        item.radius || 200,
+        item.sonarMode || 'enter'
+      );
+    }
   };
 
   const formatDistanceText = (meters: number): { value: string; unit: string } => {
@@ -248,54 +290,45 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     const phase: GeofenceScenarioPhase | undefined = item.scenarioPhase;
     if (item.isVisualOnly) {
       if (phase === 'enter_center_visual_10s') {
-        return isEn ? '🎯 Center of Geofence Reached' : '🎯 حضور در مرکز حصار مکانی';
+        return isEn
+          ? '🎯 Center of Geofence Reached (30s Visual)'
+          : '🎯 حضور در مرکز حصار مکانی (نمایش ۳۰ ثانیه‌ای)';
       }
       if (phase === 'both_entered_visual_10s') {
         return isEn ? '✅ Entered Geofence Boundary' : '✅ ورود به حصار مکانی';
       }
-      return isEn ? '🚪 Exited Geofence Boundary' : '🚪 خروج از حصار مکانی';
+      return isEn
+        ? '🚪 Exited Geofence Boundary (30s Visual)'
+        : '🚪 خروج از حصار مکانی (نمایش ۳۰ ثانیه‌ای)';
     }
 
     const is5Hz = (item.sonarIntervalMs || 1000) <= 200;
     if (phase === 'enter_center_5hz') {
       return isEn
-        ? '🎯 Central 10% Zone (5 Hz Sonar - 10s)'
-        : '🎯 محدوده ۱۰٪ مرکزی مقصد (آلارم ۵ هرتزی)';
+        ? '🎯 Central 5% Zone (Rapid Sonar 10s)'
+        : '🎯 محدوده ۵٪ مرکزی مقصد (سونار سریع ۱۰ ثانیه‌ای)';
     }
-    if (phase === 'exit_border_5hz') {
+    if (phase === 'exit_border_5hz' || phase === 'both_exit_border_5hz') {
       return isEn
-        ? '📡 10% Adjacent to Exit Border (5 Hz Sonar)'
-        : '📡 محدوده ۱۰٪ مجاور مرز خروج (آلارم ۵ هرتزی)';
-    }
-    if (phase === 'both_enter_border_5hz') {
-      return isEn
-        ? '📡 2% Outer Border Band (5 Hz Entry Sonar)'
-        : '📡 باند ۲٪ چسبیده به مرز ورود (آلارم ۵ هرتزی)';
-    }
-    if (phase === 'both_exit_border_5hz') {
-      return isEn
-        ? '📡 2% Inner Border Band (5 Hz Exit Sonar)'
-        : '📡 باند ۲٪ مانده به مرز خروج (آلارم ۵ هرتزی)';
+        ? '🚪 Exited Boundary (Rapid Exit Sonar 10s)'
+        : '🚪 خروج از مرز حصار (سونار خروجی سریع ۱۰ ثانیه‌ای)';
     }
     if (phase === 'both_approaching_enter') {
       return isEn
-        ? '📡 Approaching Border to Enter (20% Outer Band)'
-        : '📡 نزدیک شدن به مرز برای ورود (باند ۲۰٪ بیرونی)';
+        ? '📡 5% Pre-Entry Band (10 Pings/Min)'
+        : '📡 ۵٪ قبل از ورود به محدوده (سونار ۱۰ بار در دقیقه)';
     }
-    if (phase === 'both_approaching_exit') {
+    if (phase === 'both_approaching_exit' || phase === 'exit_moving_out' || item.triggerType === 'exit') {
       return isEn
-        ? '📡 Approaching Border to Exit (20% Inner Band)'
-        : '📡 حرکت به سمت خروج از مرز (باند ۲۰٪ داخلی)';
-    }
-    if (phase === 'exit_moving_out' || item.triggerType === 'exit') {
-      return isEn
-        ? '📡 Moving Toward Geofence Exit'
-        : '📡 رادار حرکت به سمت خروج از محدوده';
+        ? '📡 Exiting Geofence (Deep Sonar 10/Min)'
+        : '📡 در حال خروج از حصار مکانی (سونار بم ۱۰ بار در دقیقه)';
     }
     if (is5Hz) {
-      return isEn ? '🎯 Final Proximity Stage (5 Hz)' : '🎯 مرحله نهایی مجاورت (سونار ۵ هرتز)';
+      return isEn ? '🎯 Target Stage (Rapid Sonar 10s)' : '🎯 مرحله هدف (سونار سریع ۱۰ ثانیه‌ای)';
     }
-    return isEn ? '📡 Geofence Arrival Radar' : '📡 رادار ورود به محدوده حصار مکانی';
+    return isEn
+      ? '📡 Geofence Arrival Radar (10 Pings/Min)'
+      : '📡 رادار ورود به حصار مکانی (سونار ۱۰ بار در دقیقه)';
   };
 
   if (sortedAlerts.length === 0) return null;
@@ -334,6 +367,22 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
             onClick={(e) => e.stopPropagation()}
             className="w-full max-w-md rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden p-5 sm:p-6 flex flex-col items-center text-center space-y-4"
           >
+            {/* SEPARATE 10-SECOND BOUNDARY ENTRY MESSAGE BANNER (WHILE DEDICATED ALERT & SONAR CONTINUE) */}
+            {primaryItem.entryToastMessage && (
+              <div className="w-full rounded-2xl border-2 border-emerald-300 bg-emerald-500/20 px-4 py-2.5 shadow-md flex items-center justify-between gap-2">
+                <span className="text-xs sm:text-sm font-black text-emerald-200 text-start leading-snug">
+                  ✅ {primaryItem.entryToastMessage}
+                </span>
+                {primaryItem.entryToastRemainingSeconds !== undefined && (
+                  <span className="shrink-0 text-xs font-black font-mono tabular-nums px-2 py-0.5 rounded-lg bg-emerald-400/25 text-emerald-100">
+                    {isEn
+                      ? `${primaryItem.entryToastRemainingSeconds}s`
+                      : `${toPersianDigits(primaryItem.entryToastRemainingSeconds)} ثانیه`}
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* 1. TOP: Scenario Status & Prominent Location Title */}
             <div className="w-full space-y-2">
               <div className="flex items-center justify-center gap-2 flex-wrap">
@@ -360,17 +409,23 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                   </p>
                 )}
               </div>
+
+              {!primaryItem.isVisualOnly && primaryItem.visualBannerMessage && (
+                <div className="w-full rounded-xl border border-amber-400/70 bg-amber-500/15 px-3.5 py-2 text-xs sm:text-sm font-black text-amber-200 leading-relaxed">
+                  {primaryItem.visualBannerMessage}
+                </div>
+              )}
             </div>
 
-            {/* 2. VISUAL-ONLY 10-SECOND COMPLETION BANNER OR PULSING SONAR RADAR */}
+            {/* 2. VISUAL-ONLY 30-SECOND COMPLETION BANNER OR PULSING SONAR RADAR */}
             {primaryItem.isVisualOnly && primaryItem.visualBannerMessage ? (
               <div className="w-full rounded-2xl border-2 border-amber-400/80 bg-[#07382F] p-5 space-y-3 shadow-lg">
                 <div className="flex items-center justify-center gap-2 text-amber-300 text-xs font-extrabold">
                   <VolumeX className="w-4 h-4 shrink-0" />
                   <span>
                     {isEn
-                      ? 'Visual Notification (10 Seconds - Audio Stopped)'
-                      : 'اعلان دیداری ۱۰ ثانیه‌ای (توقف صدای سونار)'}
+                      ? 'Visual Notification (Up to 30s - Sonar Completed)'
+                      : 'اعلان دیداری تا ۳۰ ثانیه (اتمام پخش ۱۰ ثانیه‌ای سونار)'}
                   </span>
                 </div>
                 <p className="text-lg sm:text-xl font-black text-white leading-relaxed">
@@ -491,34 +546,64 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               );
             })()}
 
-            {/* 4. INDEPENDENT ACTION BUTTONS */}
-            <div className="w-full grid grid-cols-3 gap-2.5 pt-1">
-              <button
-                type="button"
-                onClick={() => handleStopItemOperation(primaryItem)}
-                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/30 whitespace-nowrap"
-              >
-                <CheckCircle2 className="w-4 h-4 stroke-[2.5] shrink-0" />
-                <span className="truncate">{isEn ? 'Stop Operation' : 'توقف عملیات'}</span>
-              </button>
+            {/* 4. MUTE AUDIO BUTTON + 3 INDEPENDENT ACTION BUTTONS */}
+            <div className="w-full space-y-2 pt-1">
+              {!primaryItem.isVisualOnly && (
+                <button
+                  type="button"
+                  onClick={() => handleToggleMuteItem(primaryItem)}
+                  className={`w-full min-h-[42px] py-2 px-3 rounded-2xl font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 border-2 shadow-md ${
+                    primaryItem.isAudioMuted
+                      ? 'bg-amber-500/20 border-amber-400 text-amber-200 hover:bg-amber-500/30'
+                      : 'bg-[#063830] border-emerald-400/70 text-emerald-200 hover:bg-[#09483E]'
+                  }`}
+                >
+                  {primaryItem.isAudioMuted ? (
+                    <>
+                      <Volume2 className="w-4 h-4 shrink-0 text-amber-300" />
+                      <span>
+                        {isEn
+                          ? 'Sonar Muted — Tap to Unmute Audio'
+                          : 'صدای اعلان قطع شد — وصل مجدد صدای سونار'}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <VolumeX className="w-4 h-4 shrink-0 text-rose-300" />
+                      <span>{isEn ? 'Mute Alert Sound' : 'قطع صدای اعلان'}</span>
+                    </>
+                  )}
+                </button>
+              )}
 
-              <button
-                type="button"
-                onClick={() => handleDirectionsItem(primaryItem)}
-                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border-2 border-sky-400/80 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md whitespace-nowrap"
-              >
-                <Navigation className="w-4 h-4 shrink-0 text-sky-300" />
-                <span className="truncate">{isEn ? 'Directions' : 'مسیریابی'}</span>
-              </button>
+              <div className="w-full grid grid-cols-3 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => handleStopItemOperation(primaryItem)}
+                  className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/30 whitespace-nowrap"
+                >
+                  <CheckCircle2 className="w-4 h-4 stroke-[2.5] shrink-0" />
+                  <span className="truncate">{isEn ? 'Stop Operation' : 'توقف عملیات'}</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleEditItem(primaryItem)}
-                className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border-2 border-cyan-400/70 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md whitespace-nowrap"
-              >
-                <Edit2 className="w-4 h-4 shrink-0 text-cyan-300" />
-                <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
-              </button>
+                <button
+                  type="button"
+                  onClick={() => handleDirectionsItem(primaryItem)}
+                  className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border-2 border-sky-400/80 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md whitespace-nowrap"
+                >
+                  <Navigation className="w-4 h-4 shrink-0 text-sky-300" />
+                  <span className="truncate">{isEn ? 'Directions' : 'مسیریابی'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleEditItem(primaryItem)}
+                  className="min-h-[48px] py-2.5 px-2.5 rounded-2xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border-2 border-cyan-400/70 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md whitespace-nowrap"
+                >
+                  <Edit2 className="w-4 h-4 shrink-0 text-cyan-300" />
+                  <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
+                </button>
+              </div>
             </div>
           </motion.div>
         ) : (
@@ -634,21 +719,43 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                       </div>
                     </div>
 
-                    {/* Independent 3 Action Buttons for this Card */}
-                    <div className="grid grid-cols-3 gap-2">
+                    {/* Independent Action Buttons for this Card (Mute + Stop + Directions + Edit) */}
+                    <div className="grid grid-cols-4 gap-1.5">
                       <button
                         type="button"
                         onClick={() => handleStopItemOperation(item)}
-                        className="min-h-[42px] py-2 px-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 shadow-md whitespace-nowrap"
+                        className="min-h-[42px] py-2 px-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-[11px] transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 shadow-md whitespace-nowrap"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5] shrink-0" />
-                        <span className="truncate">{isEn ? 'Stop Operation' : 'توقف عملیات'}</span>
+                        <span className="truncate">{isEn ? 'Stop' : 'توقف عملیات'}</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleMuteItem(item)}
+                        className={`min-h-[42px] py-2 px-1.5 rounded-xl font-black text-[11px] transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 border whitespace-nowrap ${
+                          item.isAudioMuted
+                            ? 'bg-amber-500/20 border-amber-400 text-amber-200'
+                            : 'bg-rose-500/20 border-rose-400/70 text-rose-200'
+                        }`}
+                      >
+                        {item.isAudioMuted ? (
+                          <>
+                            <Volume2 className="w-3.5 h-3.5 shrink-0 text-amber-300" />
+                            <span className="truncate">{isEn ? 'Unmute' : 'وصل صدا'}</span>
+                          </>
+                        ) : (
+                          <>
+                            <VolumeX className="w-3.5 h-3.5 shrink-0 text-rose-300" />
+                            <span className="truncate">{isEn ? 'Mute' : 'قطع صدا'}</span>
+                          </>
+                        )}
                       </button>
 
                       <button
                         type="button"
                         onClick={() => handleDirectionsItem(item)}
-                        className="min-h-[42px] py-2 px-2 rounded-xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border border-sky-400/80 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 whitespace-nowrap"
+                        className="min-h-[42px] py-2 px-1.5 rounded-xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border border-sky-400/80 font-black text-[11px] transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 whitespace-nowrap"
                       >
                         <Navigation className="w-3.5 h-3.5 shrink-0 text-sky-300" />
                         <span className="truncate">{isEn ? 'Directions' : 'مسیریابی'}</span>
@@ -657,7 +764,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                       <button
                         type="button"
                         onClick={() => handleEditItem(item)}
-                        className="min-h-[42px] py-2 px-2 rounded-xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border border-cyan-400/70 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 whitespace-nowrap"
+                        className="min-h-[42px] py-2 px-1.5 rounded-xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border border-cyan-400/70 font-black text-[11px] transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1 whitespace-nowrap"
                       >
                         <Edit2 className="w-3.5 h-3.5 shrink-0 text-cyan-300" />
                         <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>

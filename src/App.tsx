@@ -64,6 +64,8 @@ import {
   syncGeofencesWithNativeAndroid,
   resetGeofenceProximityState,
   acknowledgeGeofenceAlert,
+  pauseGeofenceAlertTemporarily,
+  resumeGeofenceAlertFromPause,
   calculateHaversineDistance,
   shouldAcceptLocationUpdate,
   UserPosition,
@@ -1177,6 +1179,7 @@ export default function App() {
       }
       stopSubmarineSonarLoop();
       stopAlarmRinging();
+      pauseGeofenceAlertTemporarily(rawId, 'edit');
       setShowSplash(false);
       setAppVisible(true);
       setIsCreateChoiceOpen(false);
@@ -1769,6 +1772,38 @@ export default function App() {
     []
   );
 
+  // Resume temporarily paused geofence alerts when Edit modals close or when user returns from / cancels Google Maps navigation
+  useEffect(() => {
+    if (!isFormOpen && !isLocationModalOpen) {
+      const resumed = resumeGeofenceAlertFromPause(undefined, 'edit');
+      if (resumed && isGeofenceActive) {
+        const pos = currentUserPosition || getLastKnownPosition();
+        if (pos) {
+          evaluateUserPositionAgainstAllGeofences(pos, true);
+        }
+      }
+    }
+  }, [isFormOpen, isLocationModalOpen, isGeofenceActive, currentUserPosition, evaluateUserPositionAgainstAllGeofences]);
+
+  useEffect(() => {
+    const handleReturnFromDirections = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      const resumed = resumeGeofenceAlertFromPause(undefined, 'directions');
+      if (resumed && isGeofenceActive) {
+        const pos = currentUserPosition || getLastKnownPosition();
+        if (pos) {
+          evaluateUserPositionAgainstAllGeofences(pos, true);
+        }
+      }
+    };
+    window.addEventListener('focus', handleReturnFromDirections);
+    document.addEventListener('visibilitychange', handleReturnFromDirections);
+    return () => {
+      window.removeEventListener('focus', handleReturnFromDirections);
+      document.removeEventListener('visibilitychange', handleReturnFromDirections);
+    };
+  }, [isGeofenceActive, currentUserPosition, evaluateUserPositionAgainstAllGeofences]);
+
   // 1-second live scenario ticker while geofence radar or any 10-second timer (5Hz or visual-only banner) is active
   useEffect(() => {
     if (!isGeofenceActive && activeGeofenceAlerts.length === 0) return;
@@ -1785,6 +1820,17 @@ export default function App() {
       setActiveGeofenceAlerts(evaluated);
       if (evaluated.length === 0) {
         stopSubmarineSonarLoop();
+      } else {
+        const topPriority = evaluated[0];
+        if (!topPriority.isVisualOnly && topPriority.playAudio !== false) {
+          updateSubmarineSonarDistance(
+            topPriority.initialDistance,
+            topPriority.radius || 200,
+            topPriority.sonarMode || 'enter'
+          );
+        } else {
+          stopSubmarineSonarLoop();
+        }
       }
     }, 1000);
     return () => clearInterval(tickInterval);
@@ -4493,6 +4539,7 @@ export default function App() {
           }
         }}
         onEditRadius={(alertData) => {
+          pauseGeofenceAlertTemporarily(alertData.targetId, 'edit');
           setActiveGeofenceAlerts((prev) =>
             prev.filter((item) => item.targetId !== alertData.targetId)
           );
@@ -4513,6 +4560,17 @@ export default function App() {
               setIsFormOpen(true);
             }
           }
+        }}
+        onStartDirections={(alertData) => {
+          pauseGeofenceAlertTemporarily(alertData.targetId, 'directions');
+          setActiveGeofenceAlerts((prev) => {
+            const remaining = prev.filter((item) => item.targetId !== alertData.targetId);
+            if (remaining.length === 0) {
+              stopSubmarineSonarLoop();
+              stopAlarmRinging();
+            }
+            return remaining;
+          });
         }}
       />
 

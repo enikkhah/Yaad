@@ -602,100 +602,49 @@ let currentSonarVolumeOverride: number | undefined = undefined;
 let lastSonarPingTime = 0;
 
 /**
- * Helper: Computes interval (ms) for an effective Enter percentage (100% at start -> 0% at target):
- * - 100% down to 50%: 5/min at 100%, 10/min at 90%, 15/min at 80%, 20/min at 70%, 25/min at 60%, 30/min at 50%
- * - Below 50% down to >10%: +5/min for each 5% reduction (45%->35/min, ..., 15%->65/min)
- * - <= 10%: 5 Hz (200 ms)
+ * Computes the physical 5% zone threshold with a 15m minimum (capped at 35% of radius for very small geofences)
+ * so normal 5-12m GPS jitter never skips the central 5% target zone or the 5% pre-entry band.
  */
-const computeEnterCurveIntervalMs = (pct: number): number => {
-  const clampedPct = Math.max(0, Math.min(100, pct));
-  if (clampedPct <= 10) {
-    return 200; // 5 Hz (5 times per second = 200 ms)
-  }
-  let basePingsPerMinute: number;
-  if (clampedPct < 50) {
-    const stepsBelow50 = Math.max(1, Math.floor((50 - clampedPct) / 5));
-    basePingsPerMinute = 6 + stepsBelow50;
-  } else {
-    const stepsFrom100 = Math.max(0, Math.floor((100 - clampedPct) / 10));
-    basePingsPerMinute = 1 + stepsFrom100;
-  }
-  const pingsPerMinute = basePingsPerMinute * 5;
-  return Math.round(60000 / pingsPerMinute);
-};
-
-/**
- * Helper: Computes interval (ms) for an effective Exit percentage (0% at center -> 100% at border):
- * - 0% to 10%: Central quiet zone (12,000 ms fallback if queried, muted by scenario evaluator)
- * - 10% to 50%: Starts at 5/min (10..20%), +5/min per 10% further out (20..30%->10/min, 30..40%->15/min, 40..50%->20/min, 50%->25/min)
- * - 50% to <90%: +5/min for each 5% further out (55%->30/min, 60%->35/min, ..., 85%->60/min, <90%->65/min)
- * - 90% to 100% (10% adjacent to border): 5 Hz (200 ms)
- */
-const computeExitCurveIntervalMs = (pct: number): number => {
-  const clampedPct = Math.max(0, Math.min(100, pct));
-  if (clampedPct >= 90) {
-    return 200; // 5 Hz (5 times per second = 200 ms) in the 10% adjacent to border
-  }
-  if (clampedPct <= 10) {
-    return 12000;
-  }
-  let pingsPerMinute: number;
-  if (clampedPct <= 50) {
-    const stepsFrom10 = Math.max(0, Math.floor((clampedPct - 10) / 10));
-    pingsPerMinute = (1 + stepsFrom10) * 5; // 5, 10, 15, 20, 25
-  } else {
-    const stepsAbove50 = Math.max(1, Math.floor((clampedPct - 50) / 5));
-    pingsPerMinute = 25 + stepsAbove50 * 5; // 30, 35, 40, ..., 65
-  }
-  return Math.round(60000 / pingsPerMinute);
+export const computeFivePercentZoneMeters = (radiusMeters: number = 200): number => {
+  const safeRadius = Math.max(20, radiusMeters || 200);
+  return Math.min(Math.floor(safeRadius * 0.35), Math.max(15, Math.round(safeRadius * 0.05)));
 };
 
 /**
  * Calculates the delay (ms) between submarine sonar pings and pulse beats across all 3 scenarios:
- * - 'enter': 100% R -> 0% R (<=10% R is 5 Hz = 200ms)
- * - 'exit': 10% R -> 100% R (90%..100% R is 5 Hz = 200ms)
- * - 'both_enter': 120% R -> 100% R outer 20% border band (102%..100% R is 5 Hz = 200ms)
- * - 'both_exit': 80% R -> 100% R inner 20% border band (98%..100% R is 5 Hz = 200ms)
+ * - No gradual step-up/step-down:
+ *   - Standard sonar rhythm: 10 times per minute = 6000 ms (every 6 seconds).
+ *   - Distinct rapid target rhythm: 5 Hz = 200 ms (5 times per second for 10 seconds):
+ *     * For 'enter' / 'both_enter': when inside the central 5% zone (d <= max(5% R, 15m)).
+ *     * For 'exit' / 'both_exit': when crossing outside the boundary (d > 100% R).
  */
 export const computeSubmarineSonarIntervalMs = (
   distanceMeters: number,
   radiusMeters: number = 200,
   mode: SonarScenarioMode = 'enter'
 ): number => {
-  const safeRadius = Math.max(1, radiusMeters || 200);
+  const safeRadius = Math.max(20, radiusMeters || 200);
   const clampedDist = Math.max(0, distanceMeters);
+  const fivePctMeters = computeFivePercentZoneMeters(safeRadius);
 
-  if (mode === 'enter') {
-    const pct = (clampedDist / safeRadius) * 100;
-    return computeEnterCurveIntervalMs(pct);
+  if (mode === 'exit' || mode === 'both_exit') {
+    if (clampedDist > safeRadius) {
+      return 200; // 5 Hz rapid exit sonar for 10s after crossing outside boundary
+    }
+    return 6000; // 10 times per minute (every 6 seconds) while moving toward exit
   }
 
-  if (mode === 'exit') {
-    const pct = (clampedDist / safeRadius) * 100;
-    return computeExitCurveIntervalMs(pct);
+  // 'enter' or 'both_enter'
+  if (clampedDist <= fivePctMeters) {
+    return 200; // 5 Hz rapid enter sonar for 10s in the central 5% zone
   }
-
-  if (mode === 'both_enter') {
-    // 20% band outside boundary: 1.20*R (100% of band) down to 1.00*R (0% of band)
-    // 2% adjacent to border (1.02*R down to 1.00*R) is <= 10% of the 20% band -> 5 Hz (200 ms)
-    const bandWidth = Math.max(1, safeRadius * 0.2);
-    const distFromBorder = Math.max(0, clampedDist - safeRadius);
-    const bandPct = Math.max(0, Math.min(100, (distFromBorder / bandWidth) * 100));
-    return computeEnterCurveIntervalMs(bandPct);
-  }
-
-  // mode === 'both_exit'
-  // 20% band inside boundary: 0.80*R (0% of band) up to 1.00*R (100% of band)
-  // 2% adjacent to border (0.98*R up to 1.00*R) is >= 90% of the 20% band -> 5 Hz (200 ms)
-  const bandWidth = Math.max(1, safeRadius * 0.2);
-  const innerStart = safeRadius * 0.8;
-  const distFromInnerStart = Math.max(0, clampedDist - innerStart);
-  const bandPct = Math.max(0, Math.min(100, (distFromInnerStart / bandWidth) * 100));
-  return computeExitCurveIntervalMs(bandPct);
+  return 6000; // 10 times per minute (every 6 seconds) from 105% R down to 5% R
 };
 
 /**
- * Plays a single Submarine Sonar Ping (resonant underwater metallic ping + harmonic echo tail).
+ * Plays a single Submarine Sonar Ping:
+ * - Enter mode ('enter' / 'both_enter'): Classic high-clarity metallic submarine sonar (1380 Hz / 1540 Hz at 5 Hz).
+ * - Exit mode ('exit' / 'both_exit'): Distinct deeper, lower-pitched bass submarine sonar (680 Hz + 340 Hz sub-harmonic / 780 Hz at 5 Hz).
  * On Android native platform, delegates to YaadGeofenceBridge.playSonarPing so the sound
  * plays on Android's Notification stream (STREAM_NOTIFICATION) and is controlled by phone notification volume.
  */
@@ -708,6 +657,7 @@ export const playSubmarineSonarPing = (
   try {
     const intervalMs = computeSubmarineSonarIntervalMs(distanceMeters, radiusMeters, mode);
     const is5Hz = intervalMs <= 200;
+    const isExitTone = mode === 'exit' || mode === 'both_exit';
 
     if (typeof window !== 'undefined') {
       window.dispatchEvent(
@@ -726,11 +676,18 @@ export const playSubmarineSonarPing = (
       // when running inside the Android app so the phone's Notification volume slider controls sonar volume.
       const bridge = (window as any).YaadGeofenceBridge;
       if (bridge && typeof bridge.playSonarPing === 'function') {
-        // Pass effective virtual distance/radius so native synthesizer matches 5Hz vs standard ping
-        const effectiveDistForNative = is5Hz
+        const effectiveDistForNative = isExitTone
+          ? is5Hz
+            ? Math.round(radiusMeters + 50)
+            : Math.round(radiusMeters * 0.5)
+          : is5Hz
           ? 0
-          : Math.max(Math.round(radiusMeters * 0.25), Math.round(distanceMeters));
-        bridge.playSonarPing(effectiveDistForNative, Math.round(radiusMeters));
+          : Math.max(Math.round(radiusMeters * 0.5), Math.round(distanceMeters));
+        try {
+          bridge.playSonarPing(effectiveDistForNative, Math.round(radiusMeters), mode);
+        } catch {
+          bridge.playSonarPing(effectiveDistForNative, Math.round(radiusMeters));
+        }
         return;
       }
     }
@@ -743,20 +700,34 @@ export const playSubmarineSonarPing = (
     const ctx = getAudioContext();
     const now = ctx.currentTime + 0.008;
 
-    // Slight pitch rise as interval gets faster (1280 Hz at slow ping -> 1580 Hz at 5 Hz)
-    const urgency = is5Hz ? 1 : Math.max(0, Math.min(1, 1 - intervalMs / 12000));
-    const pingFreq = 1280 + urgency * 300;
-
-    if (is5Hz) {
-      // 5 Hz rapid submarine sonar ping (200ms cycle): crisp attack & tight underwater decay
-      playSoftTone(ctx, pingFreq, now, 0.004, 0.11, 'sine', 0.36, vol);
-      playSoftTone(ctx, pingFreq * 1.5, now, 0.004, 0.06, 'sine', 0.12, vol);
-      playSoftTone(ctx, pingFreq * 0.995, now + 0.055, 0.005, 0.08, 'sine', 0.15, vol);
+    if (isExitTone) {
+      // Deeper, lower-pitched bass Submarine Sonar for Exit scenario ("تن متفاوت و بم‌تر")
+      const baseExitFreq = is5Hz ? 780 : 680;
+      if (is5Hz) {
+        // 5 Hz rapid deep exit sonar (after crossing outside the boundary)
+        playSoftTone(ctx, baseExitFreq, now, 0.005, 0.12, 'sine', 0.4, vol);
+        playSoftTone(ctx, baseExitFreq * 0.5, now, 0.005, 0.1, 'triangle', 0.24, vol);
+        playSoftTone(ctx, baseExitFreq * 1.498, now + 0.055, 0.005, 0.08, 'sine', 0.16, vol);
+      } else {
+        // 10/min (every 6s) deep resonant exit sonar while moving outward from 5% center to border
+        playSoftTone(ctx, baseExitFreq, now, 0.008, 0.48, 'sine', 0.4, vol);
+        playSoftTone(ctx, baseExitFreq * 0.5, now, 0.01, 0.36, 'triangle', 0.25, vol);
+        playSoftTone(ctx, baseExitFreq * 0.992, now + 0.15, 0.014, 0.52, 'sine', 0.18, vol);
+      }
     } else {
-      // Standard Submarine Ping (sharp attack, resonant underwater decay + reverberant echo)
-      playSoftTone(ctx, pingFreq, now, 0.006, 0.42, 'sine', 0.36, vol);
-      playSoftTone(ctx, pingFreq * 1.5, now, 0.008, 0.18, 'sine', 0.12, vol);
-      playSoftTone(ctx, pingFreq * 0.995, now + 0.13, 0.012, 0.48, 'sine', 0.15, vol);
+      // Classic Submarine Sonar for Enter scenario
+      const pingFreq = is5Hz ? 1540 : 1380;
+      if (is5Hz) {
+        // 5 Hz rapid submarine sonar ping in central 5% zone (200ms cycle)
+        playSoftTone(ctx, pingFreq, now, 0.004, 0.11, 'sine', 0.36, vol);
+        playSoftTone(ctx, pingFreq * 1.5, now, 0.004, 0.06, 'sine', 0.12, vol);
+        playSoftTone(ctx, pingFreq * 0.995, now + 0.055, 0.005, 0.08, 'sine', 0.15, vol);
+      } else {
+        // Standard 10/min (every 6s) Submarine Ping from 105% R to 5% R
+        playSoftTone(ctx, pingFreq, now, 0.006, 0.42, 'sine', 0.36, vol);
+        playSoftTone(ctx, pingFreq * 1.5, now, 0.008, 0.18, 'sine', 0.12, vol);
+        playSoftTone(ctx, pingFreq * 0.995, now + 0.13, 0.012, 0.48, 'sine', 0.15, vol);
+      }
     }
   } catch {
     // Ignore audio context errors

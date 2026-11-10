@@ -3948,19 +3948,31 @@ class YaadAlarmPopupActivity : Activity() {
         if (isGeofencePopup) {
             // In Screen-Off / Lock-Screen mode:
             // 1. Keep screen continuously awake with no timeout until the user reacts (or 10s visual banner finishes).
-            // 2. Do NOT leave any visual or audio notification in the Status Bar (نوار اعلان).
+            // 2. Cancel the status-bar notification once the full-screen Activity is on screen so no status-bar notification remains.
             countDownTimer?.cancel()
             acquireContinuousScreenWakeLock()
             try {
                 if (notificationId != Int.MIN_VALUE) {
                     NotificationManagerCompat.from(this).cancel(notificationId)
                 }
+                NotificationManagerCompat.from(this).cancel(889915)
             } catch (e: Exception) {
             }
-            val isVisualOnlyBanner = extraObj?.optBoolean("visualOnly", false) == true
-            val visualBannerText = extraObj?.optString("visualBannerMessage", "") ?: ""
-            val multiItemsJsonStr = extraObj?.optString("multiItemsJson", "[]") ?: "[]"
-            val multiItemsArr = try {
+            window.decorView.postDelayed({
+                try {
+                    if (notificationId != Int.MIN_VALUE) {
+                        NotificationManagerCompat.from(this).cancel(notificationId)
+                    }
+                    NotificationManagerCompat.from(this).cancel(889915)
+                } catch (e: Exception) {
+                }
+            }, 180L)
+            val isVisualOnlyBanner = (extraObj?.optBoolean("visualOnlyBanner", false) == true) ||
+                (extraObj?.optBoolean("visualOnly", false) == true)
+            val visualBannerText = extraObj?.optString("visualBannerText", "")?.takeIf { it.isNotEmpty() }
+                ?: (extraObj?.optString("visualBannerMessage", "") ?: "")
+            val multiItemsArr = extraObj?.optJSONArray("multiCards") ?: try {
+                val multiItemsJsonStr = extraObj?.optString("multiItemsJson", "[]") ?: "[]"
                 org.json.JSONArray(multiItemsJsonStr)
             } catch (e: Exception) {
                 org.json.JSONArray()
@@ -3977,7 +3989,7 @@ class YaadAlarmPopupActivity : Activity() {
                 )
             }
             if (isVisualOnlyBanner && multiItemsArr.length() <= 1) {
-                countDownTimer = object : CountDownTimer(10_000L, 1_000L) {
+                countDownTimer = object : CountDownTimer(20_000L, 1_000L) {
                     override fun onTick(millisUntilFinished: Long) {}
                     override fun onFinish() {
                         releaseScreenWakeLock()
@@ -4045,7 +4057,7 @@ class YaadAlarmPopupActivity : Activity() {
     /**
      * Multi-Card Compact Stack UI for 2+ Simultaneous Geofence Alerts on Lockscreen:
      * Sorted by shortest distance to scenario target; Card #1 is at top and drives sonar audio.
-     * Each card has its own independent "⏹ توقف عملیات", "🧭 مسیریابی", and "✎ ویرایش" buttons.
+     * Each card has its own independent "⏹ توقف عملیات", "🧭 مسیریابی", and "✎ ویرایش" buttons, plus Mute Audio control.
      */
     private fun buildMultiCardGeofenceUI(palette: ThemePalette, itemsArr: org.json.JSONArray) {
         stopPulseAnimators()
@@ -4101,7 +4113,7 @@ class YaadAlarmPopupActivity : Activity() {
             val itemId = itemObj.optString("id", "")
             val itemNotifId = itemObj.optInt("notificationId", notificationId)
             val itemTitle = itemObj.optString("title", cleanLocationTitle)
-            val itemBody = itemObj.optString("body", "")
+            val itemBody = itemObj.optString("subtitle", itemObj.optString("body", ""))
             val itemDist = itemObj.optInt("distance", 0)
             val itemLat = itemObj.optDouble("latitude", targetLatitude)
             val itemLon = itemObj.optDouble("longitude", targetLongitude)
@@ -4196,7 +4208,7 @@ class YaadAlarmPopupActivity : Activity() {
                 textColor = Color.parseColor("#E0F2FE"),
                 strokeDp = 1.3f
             ) {
-                YaadGeofenceService.stopGeofenceOperationForItem(this, itemId, itemNotifId)
+                YaadGeofenceService.pauseGeofenceItemTemporarily(this, itemId, 20_000L, itemNotifId)
                 YaadGeofenceService.launchGoogleMapsDirections(this, itemLat, itemLon, itemTitle)
                 releaseScreenWakeLock()
                 finish()
@@ -4230,6 +4242,40 @@ class YaadAlarmPopupActivity : Activity() {
 
         scrollView.addView(listLinear)
         outerContainer.addView(scrollView)
+
+        val muteBarBtn = TextView(this)
+        fun updateMultiMuteLabel() {
+            val isMuted = YaadGeofenceService.isGeofenceAudioMuted()
+            muteBarBtn.text = if (isMuted) {
+                if (isPersian) "🔊 وصل مجدد صدای سونار (صدا قطع است)" else "🔊 Unmute Sonar Audio (Muted)"
+            } else {
+                if (isPersian) "🔇 قطع صدای اعلان (ادامه نمایش دیداری)" else "🔇 Mute Alert Audio (Keep Visual)"
+            }
+        }
+        updateMultiMuteLabel()
+        muteBarBtn.gravity = Gravity.CENTER
+        muteBarBtn.setTextColor(Color.parseColor("#FDE68A"))
+        muteBarBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        muteBarBtn.setTypeface(Typeface.DEFAULT_BOLD)
+        muteBarBtn.setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
+        muteBarBtn.background = makeRoundedDrawable(
+            Color.parseColor("#451A03"),
+            Color.parseColor("#F59E0B"),
+            1.4f,
+            16f
+        )
+        val muteLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        muteLp.topMargin = dp(8f)
+        muteBarBtn.layoutParams = muteLp
+        muteBarBtn.setOnClickListener {
+            YaadGeofenceService.toggleGeofenceAudioMute(this)
+            updateMultiMuteLabel()
+        }
+        outerContainer.addView(muteBarBtn)
+
         root.addView(outerContainer)
         setContentView(root)
     }
@@ -4239,7 +4285,7 @@ class YaadAlarmPopupActivity : Activity() {
      * 1. Top: Clear & prominent Location Title
      * 2. Center: Large pulsing YAAD App Logo with expanding submarine sonar rings & pulsing GPS pin
      * 3. Below Logo: Distinct, readable Live Distance box
-     * 4. Bottom: Action buttons ("⏹ توقف عملیات", "🧭 مسیریابی", and "✎ ویرایش")
+     * 4. Bottom: Mute Audio button + Action buttons ("⏹ توقف عملیات", "🧭 مسیریابی", and "✎ ویرایش")
      */
     private fun buildFullScreenGeofenceUI(
         palette: ThemePalette,
@@ -4301,9 +4347,9 @@ class YaadAlarmPopupActivity : Activity() {
         // 2. TOP SECTION: Radar status pill + Prominent Location Title at the top of the alert
         val statusBadge = TextView(this)
         statusBadge.text = if (isSub10mArrival) {
-            if (isPersian) "🎯 حضور در محدوده مرکزی مکان (سونار ۵ هرتز)" else "🎯 Central Target Zone Reached (5 Hz)"
+            if (isPersian) "🎯 مرحله نهایی هدف (سونار ۵ هرتز ۱۰ ثانیه • نمایش ۳۰ ثانیه)" else "🎯 Final Target Stage (5 Hz 10s • 30s Display)"
         } else {
-            if (isPersian) "📡 رادار حصار مکانی هوشمند یاد" else "📡 YAAD Submarine Geofence Radar"
+            if (isPersian) "📡 رادار حصار مکانی هوشمند یاد (۱۰ بار در دقیقه)" else "📡 YAAD Geofence Radar (10 pings/min)"
         }
         statusBadge.gravity = Gravity.CENTER
         statusBadge.setTextColor(palette.accentColor)
@@ -4391,7 +4437,7 @@ class YaadAlarmPopupActivity : Activity() {
         )
         centerArea.layoutParams = centerParams
 
-        val emblemSize = dp(144f)
+        val emblemSize = dp(136f)
         val emblemFrame = FrameLayout(this)
         emblemFrame.layoutParams = LinearLayout.LayoutParams(emblemSize, emblemSize)
         emblemFrame.clipChildren = false
@@ -4399,7 +4445,7 @@ class YaadAlarmPopupActivity : Activity() {
 
         // Outer Expanding Submarine Sonar Ring
         val outerSonarRing = View(this)
-        val outerRingSize = dp(122f)
+        val outerRingSize = dp(116f)
         outerSonarRing.layoutParams = FrameLayout.LayoutParams(outerRingSize, outerRingSize, Gravity.CENTER)
         outerSonarRing.background = makeOvalDrawable(
             Color.argb(24, 16, 185, 129),
@@ -4410,7 +4456,7 @@ class YaadAlarmPopupActivity : Activity() {
 
         // Inner Expanding Submarine Sonar Ring
         val sonarRing = View(this)
-        val ringSize = dp(102f)
+        val ringSize = dp(98f)
         sonarRing.layoutParams = FrameLayout.LayoutParams(ringSize, ringSize, Gravity.CENTER)
         sonarRing.background = makeOvalDrawable(
             Color.argb(48, 16, 185, 129),
@@ -4420,7 +4466,7 @@ class YaadAlarmPopupActivity : Activity() {
         emblemFrame.addView(sonarRing)
 
         // Large App Logo Box in the center
-        val logoBoxSize = dp(88f)
+        val logoBoxSize = dp(84f)
         val logoBox = FrameLayout(this)
         logoBox.layoutParams = FrameLayout.LayoutParams(logoBoxSize, logoBoxSize, Gravity.CENTER)
         logoBox.background = makeRoundedDrawable(
@@ -4435,7 +4481,7 @@ class YaadAlarmPopupActivity : Activity() {
             val appDrawable = packageManager.getApplicationIcon(applicationInfo)
             appIconView.setImageDrawable(appDrawable)
             appIconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            val innerIconSize = dp(64f)
+            val innerIconSize = dp(60f)
             appIconView.layoutParams = FrameLayout.LayoutParams(innerIconSize, innerIconSize, Gravity.CENTER)
             logoBox.addView(appIconView)
         } catch (e: Exception) {
@@ -4443,7 +4489,7 @@ class YaadAlarmPopupActivity : Activity() {
         emblemFrame.addView(logoBox)
 
         // Pulsing GPS Pin Badge on top-right corner of the large App Logo
-        val pinBadgeSize = dp(34f)
+        val pinBadgeSize = dp(32f)
         val pinBadge = GpsPinBadgeView(
             this,
             if (isSub10mArrival) Color.parseColor("#059669") else Color.parseColor("#10B981")
@@ -4453,8 +4499,8 @@ class YaadAlarmPopupActivity : Activity() {
             pinBadgeSize,
             Gravity.TOP or Gravity.RIGHT
         )
-        pinParams.topMargin = dp(14f)
-        pinParams.rightMargin = dp(14f)
+        pinParams.topMargin = dp(12f)
+        pinParams.rightMargin = dp(12f)
         pinBadge.layoutParams = pinParams
         pinBadge.elevation = dp(10f).toFloat()
         emblemFrame.addView(pinBadge)
@@ -4505,7 +4551,7 @@ class YaadAlarmPopupActivity : Activity() {
         val distanceCard = LinearLayout(this)
         distanceCard.orientation = LinearLayout.VERTICAL
         distanceCard.gravity = Gravity.CENTER
-        distanceCard.setPadding(dp(18f), dp(14f), dp(18f), dp(14f))
+        distanceCard.setPadding(dp(18f), dp(12f), dp(18f), dp(12f))
         distanceCard.background = makeRoundedDrawable(
             Color.parseColor("#021815"),
             palette.accentColor,
@@ -4516,7 +4562,7 @@ class YaadAlarmPopupActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        distanceCardParams.topMargin = dp(18f)
+        distanceCardParams.topMargin = dp(14f)
         distanceCard.layoutParams = distanceCardParams
 
         val distHeaderTv = TextView(this)
@@ -4531,7 +4577,7 @@ class YaadAlarmPopupActivity : Activity() {
         liveDistTv.text = formatDistanceLabel(initialDistance.coerceAtLeast(0), isSub10mArrival)
         liveDistTv.gravity = Gravity.CENTER
         liveDistTv.setTextColor(Color.parseColor("#ECFDF5"))
-        liveDistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 30f)
+        liveDistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
         liveDistTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
         val liveDistParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -4545,9 +4591,9 @@ class YaadAlarmPopupActivity : Activity() {
         val radiusFormatted = if (isPersian) toPersianDigits(radiusMeters.toString()) else radiusMeters.toString()
         val radiusSubTv = TextView(this)
         radiusSubTv.text = if (isPersian) {
-            "شعاع حصار مکانی: \$radiusFormatted متر  •  ریتم سونار تطبیقی"
+            "شعاع حصار مکانی: \$radiusFormatted متر  •  سونار ۱۰ بار در دقیقه"
         } else {
-            "Geofence Radius: \$radiusFormatted m  •  Adaptive Sonar"
+            "Geofence Radius: \$radiusFormatted m  •  10 pings/min Sonar"
         }
         radiusSubTv.gravity = Gravity.CENTER
         radiusSubTv.setTextColor(palette.bodyColor)
@@ -4563,6 +4609,40 @@ class YaadAlarmPopupActivity : Activity() {
         centerArea.addView(distanceCard)
         content.addView(centerArea)
 
+        // Mute / Unmute Audio Button inside the alert
+        val muteAudioBtn = TextView(this)
+        fun refreshMuteBtnState() {
+            val isMuted = YaadGeofenceService.isGeofenceAudioMuted()
+            muteAudioBtn.text = if (isMuted) {
+                if (isPersian) "🔊 وصل مجدد صدای سونار (صدا قطع است)" else "🔊 Unmute Sonar Audio (Muted)"
+            } else {
+                if (isPersian) "🔇 قطع صدای اعلان (ادامه نمایش دیداری)" else "🔇 Mute Alert Audio (Keep Visual)"
+            }
+        }
+        refreshMuteBtnState()
+        muteAudioBtn.gravity = Gravity.CENTER
+        muteAudioBtn.setTextColor(Color.parseColor("#FDE68A"))
+        muteAudioBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        muteAudioBtn.setTypeface(Typeface.DEFAULT_BOLD)
+        muteAudioBtn.setPadding(dp(12f), dp(11f), dp(12f), dp(11f))
+        muteAudioBtn.background = makeRoundedDrawable(
+            Color.parseColor("#451A03"),
+            Color.parseColor("#F59E0B"),
+            1.4f,
+            16f
+        )
+        val muteBtnParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        muteBtnParams.topMargin = dp(8f)
+        muteAudioBtn.layoutParams = muteBtnParams
+        muteAudioBtn.setOnClickListener {
+            YaadGeofenceService.toggleGeofenceAudioMute(this)
+            refreshMuteBtnState()
+        }
+        content.addView(muteAudioBtn)
+
         // 4. BOTTOM SECTION: Action Buttons ("⏹ توقف عملیات", "🧭 مسیریابی", and "✎ ویرایش")
         val actionsRow = LinearLayout(this)
         actionsRow.orientation = LinearLayout.HORIZONTAL
@@ -4571,7 +4651,7 @@ class YaadAlarmPopupActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        actionsParams.topMargin = dp(12f)
+        actionsParams.topMargin = dp(10f)
         actionsRow.layoutParams = actionsParams
 
         val gotItBtn = buildActionButton(
@@ -4935,7 +5015,12 @@ class YaadAlarmPopupActivity : Activity() {
         countDownTimer?.cancel()
         stopPulseAnimators()
         releaseScreenWakeLock()
-        stopGeofenceAlertIfNeeded(cancelStatusBarNotif = true, stopOperationCompletely = true)
+        YaadGeofenceService.pauseGeofenceItemTemporarily(
+            this,
+            geofenceItemId,
+            20_000L,
+            notificationId
+        )
         try {
             if (notificationId != Int.MIN_VALUE) {
                 NotificationManagerCompat.from(this).cancel(notificationId)
@@ -5005,7 +5090,12 @@ class YaadAlarmPopupActivity : Activity() {
         countDownTimer?.cancel()
         stopPulseAnimators()
         if (isGeofencePopup) {
-            stopGeofenceAlertIfNeeded(cancelStatusBarNotif = true)
+            YaadGeofenceService.pauseGeofenceItemTemporarily(
+                this,
+                geofenceItemId,
+                60_000L,
+                notificationId
+            )
         }
         try {
             if (notificationId != Int.MIN_VALUE) {
@@ -5543,6 +5633,16 @@ class YaadGeofenceService : Service(), LocationListener {
                 val id = item.optString("id", "")
                 if (id.isEmpty()) continue
 
+                val pausedUntilKey = "paused_until_\$id"
+                val pausedUntil = prefs.getLong(pausedUntilKey, 0L)
+                if (pausedUntil > now) {
+                    continue
+                } else if (pausedUntil in 1..now) {
+                    editor.remove(pausedUntilKey)
+                    lastInwardMoveTimeMap[id] = now
+                    prefsModified = true
+                }
+
                 val title = item.optString("title", "")
                 val description = item.optString("description", "")
                 val targetLat = item.optDouble("latitude", Double.NaN)
@@ -5564,10 +5664,10 @@ class YaadGeofenceService : Service(), LocationListener {
                 val (smoothedDistDouble, deltaMeters) = recordAndAnalyzeNativeTrend(id, rawDistance.toDouble(), now)
                 val distance = smoothedDistDouble.roundToInt()
 
-                // Golden Rule 3: Minimum physical zone width max(10% R, 15m) so 5 Hz stage is never skipped
-                val zoneWidthMeters = kotlin.math.min((radius * 0.45).toInt(), kotlin.math.max(15, (radius * 0.1).roundToInt()))
-                val centerZoneMeters = zoneWidthMeters
-                val borderZoneStartMeters = kotlin.math.max(centerZoneMeters + 2, radius - zoneWidthMeters)
+                // 5% zone width: max(5% R, 15m) capped at 35% R so 5 Hz / pre-entry stage is never skipped by GPS stride
+                val fivePctMeters = kotlin.math.min((radius * 0.35).toInt(), kotlin.math.max(15, (radius * 0.05).roundToInt()))
+                val centerZoneMeters = fivePctMeters
+                val preEntryStartMeters = radius + fivePctMeters
 
                 val insideKey = "inside_\$id"
                 val hasPreviousState = prefs.contains(insideKey)
@@ -5581,12 +5681,14 @@ class YaadGeofenceService : Service(), LocationListener {
                 val fiveHzKey = "five_hz_start_\$id"
                 val bannerStartKey = "banner_start_\$id"
                 val bannerTextKey = "banner_text_\$id"
+                val entryToastStartKey = "entry_toast_start_\$id"
                 val completedCycleKey = "completed_cycle_\$id"
                 val phaseTransitionKey = "phase_trans_\$id"
 
                 var fiveHzStart = prefs.getLong(fiveHzKey, 0L)
                 var bannerStart = prefs.getLong(bannerStartKey, 0L)
                 var bannerText = prefs.getString(bannerTextKey, "") ?: ""
+                var entryToastStart = prefs.getLong(entryToastStartKey, 0L)
                 var completedCycle = prefs.getBoolean(completedCycleKey, false)
                 val lastPhaseTrans = prefs.getLong(phaseTransitionKey, 0L)
 
@@ -5595,9 +5697,9 @@ class YaadGeofenceService : Service(), LocationListener {
                 val isMovingInward = deltaMeters <= -1.0 || (deltaMeters < 1.0 && now - lastInwardMs < 15_000L)
                 val isMovingOutward = deltaMeters >= 1.0 || (deltaMeters > -1.0 && lastOutwardMs > 0L && now - lastOutwardMs < 10_000L)
 
-                // Check if an active 10-second visual-only banner is currently running
+                // Check if an active 20-second remaining visual-only banner (after 10s of 5Hz = 30s total) is running
                 if (bannerStart > 0L) {
-                    if (now - bannerStart < 10_000L) {
+                    if (now - bannerStart < 20_000L) {
                         val targetDist = if (triggerOn == "enter") distance else kotlin.math.abs(distance - radius)
                         activeCandidates.add(
                             NativeAlertCandidate(
@@ -5606,7 +5708,7 @@ class YaadGeofenceService : Service(), LocationListener {
                                 description = description,
                                 customMessage = customMessage,
                                 eventType = "visual_banner",
-                                sonarMode = "enter",
+                                sonarMode = if (triggerOn == "exit") "exit" else "enter",
                                 distance = distance,
                                 radius = radius,
                                 targetDistance = targetDist,
@@ -5619,7 +5721,7 @@ class YaadGeofenceService : Service(), LocationListener {
                         )
                         continue
                     } else {
-                        // 10s visual banner finished -> mark cycle completed, keep geofence switch ON for next time!
+                        // 30s total visual alert finished -> mark cycle completed, keep geofence switch ON for next time!
                         editor.remove(bannerStartKey)
                         editor.remove(bannerTextKey)
                         editor.putBoolean(completedCycleKey, true)
@@ -5638,17 +5740,20 @@ class YaadGeofenceService : Service(), LocationListener {
 
                 when (triggerOn) {
                     "enter" -> {
-                        if (!isInsideNow) {
-                            if (wasInsideBefore || completedCycle || fiveHzStart > 0L) {
+                        if (distance > preEntryStartMeters) {
+                            if (wasInsideBefore || completedCycle || fiveHzStart > 0L || entryToastStart > 0L) {
                                 editor.putBoolean(insideKey, false)
                                 editor.putBoolean(completedCycleKey, false)
                                 editor.remove(fiveHzKey)
+                                editor.remove(entryToastStartKey)
                                 prefsModified = true
                             }
                             continue
                         }
-                        if (!wasInsideBefore) {
+                        if (!wasInsideBefore && isInsideNow) {
                             editor.putBoolean(insideKey, true)
+                            editor.putLong(entryToastStartKey, now)
+                            entryToastStart = now
                             lastInwardMoveTimeMap[id] = now
                             prefsModified = true
                         }
@@ -5661,6 +5766,10 @@ class YaadGeofenceService : Service(), LocationListener {
                             }
                         }
 
+                        val activeEntryToastMsg = if (entryToastStart > 0L && now - entryToastStart < 10_000L) {
+                            if (isEn) "You entered geofence «\$title»." else "شما وارد حصار مکانی «\$title» شدید."
+                        } else ""
+
                         if (distance <= centerZoneMeters || fiveHzStart > 0L) {
                             if (fiveHzStart == 0L) {
                                 fiveHzStart = now
@@ -5668,13 +5777,18 @@ class YaadGeofenceService : Service(), LocationListener {
                                 prefsModified = true
                             }
                             val elapsed5Hz = now - fiveHzStart
+                            val centerMsg = if (isEn) {
+                                "You are at the center of geofence «\$title»."
+                            } else {
+                                "شما در مرکز حصار مکانی «\$title» هستید."
+                            }
                             if (elapsed5Hz < 10_000L) {
                                 activeCandidates.add(
                                     NativeAlertCandidate(
                                         id = id,
                                         title = title,
                                         description = description,
-                                        customMessage = customMessage,
+                                        customMessage = if (customMessage.isNotEmpty()) "\$centerMsg — \$customMessage" else centerMsg,
                                         eventType = "arrived_under_10m",
                                         sonarMode = "enter",
                                         distance = distance,
@@ -5683,19 +5797,14 @@ class YaadGeofenceService : Service(), LocationListener {
                                         targetLat = targetLat,
                                         targetLon = targetLon,
                                         visualOnlyBanner = false,
-                                        visualBannerText = "",
+                                        visualBannerText = centerMsg,
                                         is5Hz = true
                                     )
                                 )
                             } else {
-                                val msg = if (isEn) {
-                                    "You are at the center of geofence «\$title»."
-                                } else {
-                                    "شما در مرکز حصار مکانی «\$title» هستید."
-                                }
                                 editor.remove(fiveHzKey)
                                 editor.putLong(bannerStartKey, now)
-                                editor.putString(bannerTextKey, msg)
+                                editor.putString(bannerTextKey, centerMsg)
                                 prefsModified = true
                                 activeCandidates.add(
                                     NativeAlertCandidate(
@@ -5711,18 +5820,21 @@ class YaadGeofenceService : Service(), LocationListener {
                                         targetLat = targetLat,
                                         targetLon = targetLon,
                                         visualOnlyBanner = true,
-                                        visualBannerText = msg,
+                                        visualBannerText = centerMsg,
                                         is5Hz = false
                                     )
                                 )
                             }
-                        } else if (isMovingInward) {
+                        } else if (isMovingInward || isInsideNow) {
+                            val combinedCustom = if (activeEntryToastMsg.isNotEmpty()) {
+                                if (customMessage.isNotEmpty()) "\$activeEntryToastMsg — \$customMessage" else activeEntryToastMsg
+                            } else customMessage
                             activeCandidates.add(
                                 NativeAlertCandidate(
                                     id = id,
                                     title = title,
                                     description = description,
-                                    customMessage = customMessage,
+                                    customMessage = combinedCustom,
                                     eventType = "enter",
                                     sonarMode = "enter",
                                     distance = distance,
@@ -5731,7 +5843,7 @@ class YaadGeofenceService : Service(), LocationListener {
                                     targetLat = targetLat,
                                     targetLon = targetLon,
                                     visualOnlyBanner = false,
-                                    visualBannerText = "",
+                                    visualBannerText = activeEntryToastMsg,
                                     is5Hz = false
                                 )
                             )
@@ -5740,40 +5852,27 @@ class YaadGeofenceService : Service(), LocationListener {
 
                     "exit" -> {
                         val distToBoundary = kotlin.math.max(0, radius - distance)
-                        if (isInsideNow) {
+                        if (isInsideNow && fiveHzStart == 0L) {
                             if (!wasInsideBefore || completedCycle) {
                                 editor.putBoolean(insideKey, true)
                                 editor.putBoolean(completedCycleKey, false)
                                 prefsModified = true
                             }
-                            // Silent inside central zone or when NOT moving outward
+                            // Silent inside 5% central zone or when NOT moving outward
                             if (distance <= centerZoneMeters || !isMovingOutward) {
-                                if (!isMovingOutward && fiveHzStart > 0L) {
-                                    editor.remove(fiveHzKey)
-                                    prefsModified = true
-                                }
                                 continue
                             }
-                            val isNearBorder = distance >= borderZoneStartMeters
-                            if (isNearBorder) {
-                                if (fiveHzStart == 0L) {
-                                    fiveHzStart = now
-                                    editor.putLong(fiveHzKey, now)
-                                    prefsModified = true
-                                }
-                                if (now - fiveHzStart >= 10_000L) {
-                                    continue
-                                }
-                            } else if (fiveHzStart > 0L) {
-                                editor.remove(fiveHzKey)
-                                prefsModified = true
+                            val exitingMsg = if (isEn) {
+                                "You are exiting geofence «\$title»."
+                            } else {
+                                "شما در حال خروج از حصار مکانی «\$title» هستید."
                             }
                             activeCandidates.add(
                                 NativeAlertCandidate(
                                     id = id,
                                     title = title,
                                     description = description,
-                                    customMessage = customMessage,
+                                    customMessage = if (customMessage.isNotEmpty()) "\$exitingMsg — \$customMessage" else exitingMsg,
                                     eventType = "exit",
                                     sonarMode = "exit",
                                     distance = distance,
@@ -5782,40 +5881,68 @@ class YaadGeofenceService : Service(), LocationListener {
                                     targetLat = targetLat,
                                     targetLon = targetLon,
                                     visualOnlyBanner = false,
-                                    visualBannerText = "",
-                                    is5Hz = isNearBorder
+                                    visualBannerText = exitingMsg,
+                                    is5Hz = false
                                 )
                             )
                         } else {
-                            if (wasInsideBefore && !completedCycle) {
-                                val msg = if (isEn) {
+                            // Crossed outside boundary (d > R) or already in 5Hz exit stage
+                            if ((wasInsideBefore || fiveHzStart > 0L) && !completedCycle) {
+                                val exitedMsg = if (isEn) {
                                     "You have exited geofence «\$title»."
                                 } else {
                                     "شما از حصار مکانی «\$title» خارج شدید."
                                 }
-                                editor.putBoolean(insideKey, false)
-                                editor.remove(fiveHzKey)
-                                editor.putLong(bannerStartKey, now)
-                                editor.putString(bannerTextKey, msg)
-                                prefsModified = true
-                                activeCandidates.add(
-                                    NativeAlertCandidate(
-                                        id = id,
-                                        title = title,
-                                        description = description,
-                                        customMessage = customMessage,
-                                        eventType = "visual_banner",
-                                        sonarMode = "exit",
-                                        distance = distance,
-                                        radius = radius,
-                                        targetDistance = 0,
-                                        targetLat = targetLat,
-                                        targetLon = targetLon,
-                                        visualOnlyBanner = true,
-                                        visualBannerText = msg,
-                                        is5Hz = false
+                                if (fiveHzStart == 0L) {
+                                    fiveHzStart = now
+                                    editor.putBoolean(insideKey, false)
+                                    editor.putLong(fiveHzKey, now)
+                                    prefsModified = true
+                                }
+                                val elapsed5Hz = now - fiveHzStart
+                                if (elapsed5Hz < 10_000L) {
+                                    activeCandidates.add(
+                                        NativeAlertCandidate(
+                                            id = id,
+                                            title = title,
+                                            description = description,
+                                            customMessage = if (customMessage.isNotEmpty()) "\$exitedMsg — \$customMessage" else exitedMsg,
+                                            eventType = "exit",
+                                            sonarMode = "exit",
+                                            distance = distance,
+                                            radius = radius,
+                                            targetDistance = 0,
+                                            targetLat = targetLat,
+                                            targetLon = targetLon,
+                                            visualOnlyBanner = false,
+                                            visualBannerText = exitedMsg,
+                                            is5Hz = true
+                                        )
                                     )
-                                )
+                                } else {
+                                    editor.remove(fiveHzKey)
+                                    editor.putLong(bannerStartKey, now)
+                                    editor.putString(bannerTextKey, exitedMsg)
+                                    prefsModified = true
+                                    activeCandidates.add(
+                                        NativeAlertCandidate(
+                                            id = id,
+                                            title = title,
+                                            description = description,
+                                            customMessage = customMessage,
+                                            eventType = "visual_banner",
+                                            sonarMode = "exit",
+                                            distance = distance,
+                                            radius = radius,
+                                            targetDistance = 0,
+                                            targetLat = targetLat,
+                                            targetLon = targetLon,
+                                            visualOnlyBanner = true,
+                                            visualBannerText = exitedMsg,
+                                            is5Hz = false
+                                        )
+                                    )
+                                }
                             } else if (!hasPreviousState) {
                                 editor.putBoolean(insideKey, false)
                                 prefsModified = true
@@ -5833,65 +5960,83 @@ class YaadGeofenceService : Service(), LocationListener {
                             editor.putBoolean(insideKey, true)
                             editor.putBoolean(completedCycleKey, false)
                             editor.putLong(phaseTransitionKey, now)
+                            editor.putLong(entryToastStartKey, now)
+                            entryToastStart = now
                             editor.remove(fiveHzKey)
                             lastInwardMoveTimeMap[id] = now
                             prefsModified = true
                         } else if (wasInsideBefore && !isInsideNow) {
-                            // Exited boundary from inside! Stop sonar and fire 10s visual exit banner
-                            val msg = if (isEn) {
-                                "You have exited geofence «\$title»."
-                            } else {
-                                "شما از حصار مکانی «\$title» خارج شدید."
-                            }
+                            // Exited boundary from inside -> start 10s 5Hz deeper exit sonar + 20s visual banner (30s total)
                             editor.putBoolean(insideKey, false)
                             editor.putLong(phaseTransitionKey, now)
-                            editor.remove(fiveHzKey)
-                            editor.putLong(bannerStartKey, now)
-                            editor.putString(bannerTextKey, msg)
+                            editor.putLong(fiveHzKey, now)
+                            fiveHzStart = now
                             prefsModified = true
-                            activeCandidates.add(
-                                NativeAlertCandidate(
-                                    id = id,
-                                    title = title,
-                                    description = description,
-                                    customMessage = customMessage,
-                                    eventType = "visual_banner",
-                                    sonarMode = "exit",
-                                    distance = distance,
-                                    radius = radius,
-                                    targetDistance = 0,
-                                    targetLat = targetLat,
-                                    targetLon = targetLon,
-                                    visualOnlyBanner = true,
-                                    visualBannerText = msg,
-                                    is5Hz = false
-                                )
-                            )
-                            continue
                         }
 
                         if (!isInsideNow) {
-                            continue
-                        }
-
-                        // Inside boundary (d <= R):
-                        // 1. Center arrival (d <= max(10% R, 15m))
-                        if (!completedCycle && (distance <= centerZoneMeters || (fiveHzStart > 0L && distance <= centerZoneMeters + 6))) {
-                            if (fiveHzStart == 0L) {
-                                fiveHzStart = now
-                                editor.putLong(fiveHzKey, now)
-                                editor.putLong(phaseTransitionKey, now)
-                                prefsModified = true
+                            // Outside boundary (d > R):
+                            if (fiveHzStart > 0L) {
+                                val exitedMsg = if (isEn) {
+                                    "You have exited geofence «\$title»."
+                                } else {
+                                    "شما از حصار مکانی «\$title» خارج شدید."
+                                }
+                                val elapsed5Hz = now - fiveHzStart
+                                if (elapsed5Hz < 10_000L) {
+                                    activeCandidates.add(
+                                        NativeAlertCandidate(
+                                            id = id,
+                                            title = title,
+                                            description = description,
+                                            customMessage = if (customMessage.isNotEmpty()) "\$exitedMsg — \$customMessage" else exitedMsg,
+                                            eventType = "exit",
+                                            sonarMode = "exit",
+                                            distance = distance,
+                                            radius = radius,
+                                            targetDistance = 0,
+                                            targetLat = targetLat,
+                                            targetLon = targetLon,
+                                            visualOnlyBanner = false,
+                                            visualBannerText = exitedMsg,
+                                            is5Hz = true
+                                        )
+                                    )
+                                } else {
+                                    editor.remove(fiveHzKey)
+                                    editor.putLong(bannerStartKey, now)
+                                    editor.putString(bannerTextKey, exitedMsg)
+                                    prefsModified = true
+                                    activeCandidates.add(
+                                        NativeAlertCandidate(
+                                            id = id,
+                                            title = title,
+                                            description = description,
+                                            customMessage = customMessage,
+                                            eventType = "visual_banner",
+                                            sonarMode = "exit",
+                                            distance = distance,
+                                            radius = radius,
+                                            targetDistance = 0,
+                                            targetLat = targetLat,
+                                            targetLon = targetLon,
+                                            visualOnlyBanner = true,
+                                            visualBannerText = exitedMsg,
+                                            is5Hz = false
+                                        )
+                                    )
+                                }
+                                continue
                             }
-                            val elapsed5Hz = now - fiveHzStart
-                            if (elapsed5Hz < 10_000L) {
+                            // 5% pre-entry band outside boundary moving inward
+                            if (distance <= preEntryStartMeters && isMovingInward) {
                                 activeCandidates.add(
                                     NativeAlertCandidate(
                                         id = id,
                                         title = title,
                                         description = description,
                                         customMessage = customMessage,
-                                        eventType = "arrived_under_10m",
+                                        eventType = "enter",
                                         sonarMode = "enter",
                                         distance = distance,
                                         radius = radius,
@@ -5900,18 +6045,55 @@ class YaadGeofenceService : Service(), LocationListener {
                                         targetLon = targetLon,
                                         visualOnlyBanner = false,
                                         visualBannerText = "",
+                                        is5Hz = false
+                                    )
+                                )
+                            }
+                            continue
+                        }
+
+                        // Inside boundary (d <= R):
+                        val activeEntryToastMsg = if (entryToastStart > 0L && now - entryToastStart < 10_000L) {
+                            if (isEn) "You entered geofence «\$title»." else "شما وارد حصار مکانی «\$title» شدید."
+                        } else ""
+
+                        // 1. Center arrival (d <= max(5% R, 15m))
+                        if (!completedCycle && (distance <= centerZoneMeters || (fiveHzStart > 0L && distance <= centerZoneMeters + 6))) {
+                            if (fiveHzStart == 0L) {
+                                fiveHzStart = now
+                                editor.putLong(fiveHzKey, now)
+                                editor.putLong(phaseTransitionKey, now)
+                                prefsModified = true
+                            }
+                            val centerMsg = if (isEn) {
+                                "You are at the center of geofence «\$title»."
+                            } else {
+                                "شما در مرکز حصار مکانی «\$title» هستید."
+                            }
+                            val elapsed5Hz = now - fiveHzStart
+                            if (elapsed5Hz < 10_000L) {
+                                activeCandidates.add(
+                                    NativeAlertCandidate(
+                                        id = id,
+                                        title = title,
+                                        description = description,
+                                        customMessage = if (customMessage.isNotEmpty()) "\$centerMsg — \$customMessage" else centerMsg,
+                                        eventType = "arrived_under_10m",
+                                        sonarMode = "enter",
+                                        distance = distance,
+                                        radius = radius,
+                                        targetDistance = distance,
+                                        targetLat = targetLat,
+                                        targetLon = targetLon,
+                                        visualOnlyBanner = false,
+                                        visualBannerText = centerMsg,
                                         is5Hz = true
                                     )
                                 )
                             } else {
-                                val msg = if (isEn) {
-                                    "You are at the center of geofence «\$title»."
-                                } else {
-                                    "شما در مرکز حصار مکانی «\$title» هستید."
-                                }
                                 editor.remove(fiveHzKey)
                                 editor.putLong(bannerStartKey, now)
-                                editor.putString(bannerTextKey, msg)
+                                editor.putString(bannerTextKey, centerMsg)
                                 editor.putLong(phaseTransitionKey, now)
                                 prefsModified = true
                                 activeCandidates.add(
@@ -5928,33 +6110,28 @@ class YaadGeofenceService : Service(), LocationListener {
                                         targetLat = targetLat,
                                         targetLon = targetLon,
                                         visualOnlyBanner = true,
-                                        visualBannerText = msg,
+                                        visualBannerText = centerMsg,
                                         is5Hz = false
                                     )
                                 )
                             }
                         } else if (now - lastPhaseTrans >= 10_000L && distance > centerZoneMeters && isMovingOutward) {
-                            // 2. Moving outward toward boundary (after 10s phase cooldown)
-                            val isNearBorder = distance >= borderZoneStartMeters
-                            if (isNearBorder) {
-                                if (fiveHzStart == 0L) {
-                                    fiveHzStart = now
-                                    editor.putLong(fiveHzKey, now)
-                                    prefsModified = true
-                                }
-                                if (now - fiveHzStart >= 10_000L) {
-                                    continue
-                                }
-                            } else if (fiveHzStart > 0L) {
+                            // 2. Moving outward from 5% central zone toward boundary -> deeper exit sonar at 10/min
+                            if (fiveHzStart > 0L) {
                                 editor.remove(fiveHzKey)
                                 prefsModified = true
+                            }
+                            val exitingMsg = if (isEn) {
+                                "You are exiting geofence «\$title»."
+                            } else {
+                                "شما در حال خروج از حصار مکانی «\$title» هستید."
                             }
                             activeCandidates.add(
                                 NativeAlertCandidate(
                                     id = id,
                                     title = title,
                                     description = description,
-                                    customMessage = customMessage,
+                                    customMessage = if (customMessage.isNotEmpty()) "\$exitingMsg — \$customMessage" else exitingMsg,
                                     eventType = "exit",
                                     sonarMode = "exit",
                                     distance = distance,
@@ -5963,22 +6140,25 @@ class YaadGeofenceService : Service(), LocationListener {
                                     targetLat = targetLat,
                                     targetLon = targetLon,
                                     visualOnlyBanner = false,
-                                    visualBannerText = "",
-                                    is5Hz = isNearBorder
+                                    visualBannerText = exitingMsg,
+                                    is5Hz = false
                                 )
                             )
-                        } else if (!completedCycle && isMovingInward) {
-                            // 3. Moving inward toward center
+                        } else if (!completedCycle && (isMovingInward || activeEntryToastMsg.isNotEmpty())) {
+                            // 3. Moving inward toward 5% central zone
                             if (fiveHzStart > 0L) {
                                 editor.remove(fiveHzKey)
                                 prefsModified = true
                             }
+                            val combinedCustom = if (activeEntryToastMsg.isNotEmpty()) {
+                                if (customMessage.isNotEmpty()) "\$activeEntryToastMsg — \$customMessage" else activeEntryToastMsg
+                            } else customMessage
                             activeCandidates.add(
                                 NativeAlertCandidate(
                                     id = id,
                                     title = title,
                                     description = description,
-                                    customMessage = customMessage,
+                                    customMessage = combinedCustom,
                                     eventType = "enter",
                                     sonarMode = "enter",
                                     distance = distance,
@@ -5987,7 +6167,7 @@ class YaadGeofenceService : Service(), LocationListener {
                                     targetLat = targetLat,
                                     targetLon = targetLon,
                                     visualOnlyBanner = false,
-                                    visualBannerText = "",
+                                    visualBannerText = activeEntryToastMsg,
                                     is5Hz = false
                                 )
                             )
@@ -6050,7 +6230,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 )
             }
 
-            if (topSonarCandidate != null) {
+            if (topSonarCandidate != null && !geofenceAudioMuted) {
                 updateLiveSonarDistance(topSonarCandidate.distance, topSonarCandidate.radius, topSonarCandidate.sonarMode)
                 YaadAlarmPopupActivity.updateLiveGeofenceDistance(
                     topSonarCandidate.distance,
@@ -6068,7 +6248,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     )
                 }
             } else {
-                // Only visual-only 10s banner(s) are active -> ensure sonar audio is stopped!
+                // Only visual-only banner(s) are active or user muted audio -> ensure sonar audio is stopped!
                 if (sonarLoopActive) {
                     sonarLoopActive = false
                     try {
@@ -6080,7 +6260,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 YaadAlarmPopupActivity.updateLiveGeofenceDistance(
                     topOverall.distance,
                     topOverall.radius,
-                    false
+                    topOverall.is5Hz
                 )
             }
         } catch (e: Exception) {
@@ -6135,15 +6315,15 @@ class YaadGeofenceService : Service(), LocationListener {
 
         val statusLine = if (isSub10m) {
             if (savedContentDetails.isNotEmpty()) {
-                if (isEn) "🎯 \$savedContentDetails (Center target zone)" else "🎯 \$savedContentDetails (حضور در ۱۰٪ مرکزی حصار)"
+                if (isEn) "🎯 \$savedContentDetails (5% Center Zone)" else "🎯 \$savedContentDetails (حضور در ۵٪ مرکزی حصار)"
             } else {
-                if (isEn) "🎯 You are in the central 10% zone of «\$title»" else "🎯 شما در محدوده ۱۰٪ مرکزی «\$title» قرار دارید"
+                if (isEn) "🎯 You are in the central 5% zone of «\$title»" else "🎯 شما در مرکز حصار مکانی «\$title» هستید."
             }
         } else {
             val actionLabel = if (eventType == "enter") {
                 if (isEn) "Approaching geofence target" else "پایش ورود به حصار مکانی"
             } else {
-                if (isEn) "Monitoring geofence exit" else "پایش خروج از حصار مکانی"
+                if (isEn) "You are exiting geofence «\$title»." else "شما در حال خروج از حصار مکانی «\$title» هستید."
             }
             if (savedContentDetails.isNotEmpty()) {
                 "\$actionLabel • \$savedContentDetails"
@@ -6269,6 +6449,26 @@ class YaadGeofenceService : Service(), LocationListener {
             }
 
             val screenOffOrLocked = isScreenOffOrLocked()
+            val popupAlreadyShowing = YaadAlarmPopupActivity.isShowingGeofencePopup()
+
+            if (screenOffOrLocked && isTopPriority) {
+                wakeScreenForLockscreenAlert()
+            }
+
+            // When screen is off or locked and the full-screen popup is NOT yet showing:
+            // We MUST post the high-priority Notification with showFullScreen = true and isLiveUpdate = false (.setOnlyAlertOnce(false))
+            // so Android 10-14's fullScreenIntent mechanism launches YaadAlarmPopupActivity over the lockscreen!
+            // Once YaadAlarmPopupActivity opens, it immediately cancels the status-bar notification.
+            val shouldPostNotif = if (screenOffOrLocked) {
+                isTopPriority && !popupAlreadyShowing
+            } else {
+                true
+            }
+            val shouldUseLiveUpdate = if (screenOffOrLocked && !popupAlreadyShowing) {
+                false
+            } else {
+                true
+            }
 
             val sourceJsonStr = buildAndPostStatusBarNotification(
                 notificationId = notificationId,
@@ -6281,17 +6481,33 @@ class YaadGeofenceService : Service(), LocationListener {
                 targetLat = targetLat,
                 targetLon = targetLon,
                 isEn = isEn,
-                isLiveUpdate = true,
+                isLiveUpdate = shouldUseLiveUpdate,
                 showFullScreen = screenOffOrLocked && isTopPriority,
-                postToStatusBar = !screenOffOrLocked,
+                postToStatusBar = shouldPostNotif,
                 visualOnlyBanner = visualOnlyBanner,
                 visualBannerText = visualBannerText,
                 multiCardsJson = multiCardsJson
             )
 
-            if (screenOffOrLocked && isTopPriority) {
+            if (screenOffOrLocked && isTopPriority && !popupAlreadyShowing) {
                 YaadAlarmPopupActivity.launch(this, notificationId, sourceJsonStr)
             }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun wakeScreenForLockscreenAlert() {
+        try {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return
+            @Suppress("DEPRECATION")
+            val wl = pm.newWakeLock(
+                PowerManager.SCREEN_BRIGHT_WAKE_LOCK or
+                    PowerManager.ACQUIRE_CAUSES_WAKEUP or
+                    PowerManager.ON_AFTER_RELEASE,
+                "yaad:geofenceScreenWakeUp"
+            )
+            wl.setReferenceCounted(false)
+            wl.acquire(12_000L)
         } catch (e: Exception) {
         }
     }
@@ -6327,10 +6543,13 @@ class YaadGeofenceService : Service(), LocationListener {
             put("language", if (isEn) "en" else "fa")
             put("theme", if (isSub10m) "geofence-sub10m" else "geofence-radar")
             put("visualOnlyBanner", visualOnlyBanner)
+            put("visualOnly", visualOnlyBanner)
             put("visualBannerText", visualBannerText)
+            put("visualBannerMessage", visualBannerText)
             if (multiCardsJson.isNotEmpty()) {
                 try {
                     put("multiCards", JSONArray(multiCardsJson))
+                    put("multiItemsJson", multiCardsJson)
                 } catch (e: Exception) {
                 }
             }
@@ -6567,6 +6786,8 @@ class YaadGeofenceService : Service(), LocationListener {
         @Volatile
         private var sonarLoopActive: Boolean = false
         @Volatile
+        private var geofenceAudioMuted: Boolean = false
+        @Volatile
         private var liveSonarDistanceMeters: Int = 100
         @Volatile
         private var liveSonarRadiusMeters: Int = 200
@@ -6599,6 +6820,29 @@ class YaadGeofenceService : Service(), LocationListener {
 
         private var sonarThread: Thread? = null
         private var sonarWakeLock: PowerManager.WakeLock? = null
+
+        fun isGeofenceAudioMuted(): Boolean = geofenceAudioMuted
+
+        fun toggleGeofenceAudioMute(context: Context): Boolean {
+            geofenceAudioMuted = !geofenceAudioMuted
+            if (geofenceAudioMuted) {
+                sonarLoopActive = false
+                try {
+                    sonarThread?.interrupt()
+                } catch (e: Exception) {
+                }
+                sonarThread = null
+            } else if (activeGeofenceNotificationId != Int.MIN_VALUE) {
+                startNativeSubmarineSonarLoop(
+                    context.applicationContext,
+                    liveSonarDistanceMeters,
+                    liveSonarRadiusMeters,
+                    activeGeofenceNotificationId,
+                    liveSonarMode
+                )
+            }
+            return geofenceAudioMuted
+        }
 
         fun isDeviceLocationEnabled(context: Context): Boolean {
             return try {
@@ -6665,6 +6909,7 @@ class YaadGeofenceService : Service(), LocationListener {
                         editor.remove("five_hz_start_\$sfx")
                         editor.remove("banner_start_\$sfx")
                         editor.remove("banner_text_\$sfx")
+                        editor.remove("entry_toast_start_\$sfx")
                         editor.remove("completed_cycle_\$sfx")
                     }
                 } else {
@@ -6678,6 +6923,7 @@ class YaadGeofenceService : Service(), LocationListener {
                             key.startsWith("five_hz_start_") ||
                             key.startsWith("banner_start_") ||
                             key.startsWith("banner_text_") ||
+                            key.startsWith("entry_toast_start_") ||
                             key.startsWith("completed_cycle_")
                         ) {
                             editor.remove(key)
@@ -6701,6 +6947,7 @@ class YaadGeofenceService : Service(), LocationListener {
             notificationIdToCancel: Int = Int.MIN_VALUE
         ) {
             val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
+            geofenceAudioMuted = false
             stopGeofenceAudio(context, notificationIdToCancel)
             YaadAlarmPopupActivity.dismissIfMatching(notificationIdToCancel)
 
@@ -6742,6 +6989,64 @@ class YaadGeofenceService : Service(), LocationListener {
             }
         }
 
+        /**
+         * Temporarily pauses geofence alert & sonar for an item (e.g. when user clicks "ویرایش" or "مسیریابی")
+         * without disabling the geofence switch. If navigation is canceled or edit is closed without disabling,
+         * the alert automatically resumes.
+         */
+        fun pauseGeofenceItemTemporarily(
+            context: Context,
+            rawItemId: String,
+            durationMs: Long = 20_000L,
+            notificationIdToCancel: Int = Int.MIN_VALUE
+        ) {
+            val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
+            stopGeofenceAudio(context, notificationIdToCancel)
+            YaadAlarmPopupActivity.dismissIfMatching(notificationIdToCancel)
+            if (targetId.isEmpty()) return
+
+            try {
+                val now = System.currentTimeMillis()
+                val resumeAt = now + durationMs.coerceAtLeast(3_000L)
+                val cleanId = targetId.removePrefix("loc_").removePrefix("rem_")
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val editor = prefs.edit()
+                for (sfx in listOf(targetId, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
+                    editor.putLong("paused_until_\$sfx", resumeAt)
+                }
+                editor.apply()
+            } catch (e: Exception) {
+            }
+        }
+
+        fun resumeGeofenceItemFromPause(
+            context: Context,
+            rawItemId: String = ""
+        ) {
+            try {
+                val now = System.currentTimeMillis()
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val editor = prefs.edit()
+                if (rawItemId.isNotEmpty()) {
+                    val cleanId = rawItemId.removePrefix("loc_").removePrefix("rem_")
+                    for (sfx in listOf(rawItemId, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
+                        editor.remove("paused_until_\$sfx")
+                        lastInwardMoveTimeMap[sfx] = now
+                    }
+                } else {
+                    for (key in prefs.all.keys.toList()) {
+                        if (key.startsWith("paused_until_")) {
+                            val itemKey = key.removePrefix("paused_until_")
+                            editor.remove(key)
+                            lastInwardMoveTimeMap[itemKey] = now
+                        }
+                    }
+                }
+                editor.apply()
+            } catch (e: Exception) {
+            }
+        }
+
         fun consumeQueuedStoppedItems(context: Context): String {
             return try {
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -6755,56 +7060,20 @@ class YaadGeofenceService : Service(), LocationListener {
             }
         }
 
-        private fun computeEnterPctIntervalMs(pct: Double): Long {
-            val clamped = pct.coerceIn(0.0, 100.0)
-            if (clamped <= 10.0) {
-                return 200L // 5 Hz (every 200ms) in remaining 10%
-            }
-            val basePingsPerMinute = if (clamped < 50.0) {
-                val stepsBelow50 = ((50.0 - clamped) / 5.0).toInt().coerceAtLeast(1)
-                6 + stepsBelow50
-            } else {
-                val stepsFrom100 = ((100.0 - clamped) / 10.0).toInt().coerceAtLeast(0)
-                1 + stepsFrom100
-            }
-            val pingsPerMinute = basePingsPerMinute * 5
-            return (60_000.0 / pingsPerMinute.toDouble()).roundToInt().toLong()
-        }
-
-        private fun computeExitPctIntervalMs(pct: Double): Long {
-            val clamped = pct.coerceIn(0.0, 100.0)
-            if (clamped >= 90.0) {
-                return 200L // 5 Hz (every 200ms) in 90%..100% border zone
-            }
-            val basePingsPerMinute = if (clamped >= 50.0) {
-                val stepsAbove50 = ((clamped - 50.0) / 5.0).toInt().coerceAtLeast(0)
-                5 + stepsAbove50
-            } else {
-                val stepsAbove10 = ((clamped - 10.0).coerceAtLeast(0.0) / 10.0).toInt().coerceAtLeast(0)
-                1 + stepsAbove10
-            }
-            val pingsPerMinute = basePingsPerMinute * 5
-            return (60_000.0 / pingsPerMinute.toDouble()).roundToInt().toLong()
-        }
-
+        /**
+         * Simplified Two-Stage Sonar Rhythm (no gradual ramp-up/down):
+         * - Normal stage: 10 pings per minute (every 6000ms)
+         * - Target stage (inside 5% central zone for enter, or outside boundary d > R for exit): 5 Hz (every 200ms)
+         */
         fun computeSonarIntervalMs(distanceMeters: Int, radiusMeters: Int, mode: String = "enter"): Long {
-            val safeRadius = radiusMeters.coerceAtLeast(1).toDouble()
-            val clampedDist = distanceMeters.coerceAtLeast(0).toDouble()
-            val rawPct = (clampedDist / safeRadius) * 100.0
+            val safeRadius = radiusMeters.coerceAtLeast(20)
+            val clampedDist = distanceMeters.coerceAtLeast(0)
+            val fivePctMeters = kotlin.math.min((safeRadius * 0.35).toInt(), kotlin.math.max(15, (safeRadius * 0.05).roundToInt()))
 
-            return when (mode) {
-                "exit" -> computeExitPctIntervalMs(rawPct)
-                "both_enter" -> {
-                    if (rawPct <= 102.0) return 200L // 5 Hz in 2% outside border
-                    val bandRatio = ((rawPct - 100.0) / 20.0).coerceIn(0.0, 1.0)
-                    computeEnterPctIntervalMs(bandRatio * 100.0)
-                }
-                "both_exit" -> {
-                    if (rawPct >= 98.0) return 200L // 5 Hz in 2% inside border
-                    val bandRatio = ((rawPct - 80.0) / 20.0).coerceIn(0.0, 1.0)
-                    computeExitPctIntervalMs(bandRatio * 100.0)
-                }
-                else -> computeEnterPctIntervalMs(rawPct)
+            return if (mode == "exit" || mode == "both_exit") {
+                if (clampedDist > safeRadius) 200L else 6000L
+            } else {
+                if (clampedDist <= fivePctMeters) 200L else 6000L
             }
         }
 
@@ -6864,29 +7133,34 @@ class YaadGeofenceService : Service(), LocationListener {
             val safeRad = rad.coerceAtLeast(1)
             val currentIntervalMs = computeSonarIntervalMs(dist, safeRad, mode)
             val is5Hz = currentIntervalMs <= 200L
-            val pingDurationSec = if (is5Hz) 0.14 else 0.42
+            val isExitMode = mode == "exit" || mode == "both_exit"
+            val pingDurationSec = if (is5Hz) 0.14 else 0.44
             val numSamples = (sampleRate * pingDurationSec).toInt()
             val pcmBuffer = ShortArray(numSamples)
 
-            val closeness = (1.0 - (dist.toDouble() / safeRad.toDouble()).coerceIn(0.0, 1.0))
-            // Pitch rises slightly as user gets closer to target (1280 Hz -> 1560 Hz)
-            val baseFreq = 1280.0 + closeness * 280.0
+            // Distinct tone for Exit (deeper, lower-pitched bass sonar: 680 Hz / 780 Hz) vs Enter (classic 1380 Hz / 1540 Hz)
+            val baseFreq = if (isExitMode) {
+                if (is5Hz) 780.0 else 680.0
+            } else {
+                if (is5Hz) 1540.0 else 1380.0
+            }
+            val harmonicRatio = if (isExitMode) 0.5 else 1.5
             val echoDelaySamples = ((if (is5Hz) 0.055 else 0.13) * sampleRate).toInt()
-            val decayRate = if (is5Hz) 24.0 else 10.5
+            val decayRate = if (is5Hz) 24.0 else 10.0
 
             for (i in 0 until numSamples) {
                 val timeSec = i.toDouble() / sampleRate.toDouble()
                 val attack1 = (timeSec / (if (is5Hz) 0.004 else 0.008)).coerceIn(0.0, 1.0)
                 val env1 = attack1 * exp(-timeSec * decayRate)
                 val sig1 = sin(2.0 * PI * baseFreq * timeSec) * 0.72 +
-                    sin(2.0 * PI * (baseFreq * 1.5) * timeSec) * 0.16
+                    sin(2.0 * PI * (baseFreq * harmonicRatio) * timeSec) * (if (isExitMode) 0.24 else 0.16)
 
                 var sig2 = 0.0
                 if (i >= echoDelaySamples) {
                     val echoTime = (i - echoDelaySamples).toDouble() / sampleRate.toDouble()
                     val attack2 = (echoTime / 0.006).coerceIn(0.0, 1.0)
                     val env2 = attack2 * exp(-echoTime * (decayRate * 1.1)) * 0.36
-                    sig2 = sin(2.0 * PI * (baseFreq * 0.995) * echoTime) * env2
+                    sig2 = sin(2.0 * PI * (baseFreq * 0.992) * echoTime) * env2
                 }
 
                 val combined = ((sig1 * env1) + sig2).coerceIn(-0.98, 0.98)
@@ -7173,6 +7447,16 @@ class YaadGeofenceService : Service(), LocationListener {
         @android.webkit.JavascriptInterface
         fun openGoogleMapsNavigation(lat: Double, lon: Double, label: String) {
             launchGoogleMapsDirections(appContext, lat, lon, label)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun pauseGeofenceItemTemporarily(itemId: String, durationMs: Long) {
+            pauseGeofenceItemTemporarily(appContext, itemId, durationMs)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun resumeGeofenceItemFromPause(itemId: String) {
+            resumeGeofenceItemFromPause(appContext, itemId)
         }
     }
 }
