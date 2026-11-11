@@ -3546,7 +3546,7 @@ class YaadAlarmPopupActivity : Activity() {
     private var isSub10mArrival: Boolean = false
     private var geofenceItemId: String = ""
     private var targetLatitude: Double = Double.NaN
-    private var targetLongitude: Double.NaN
+    private var targetLongitude: Double = Double.NaN
     private var cleanLocationTitle: String = ""
     private var sonarRingAnimator: ObjectAnimator? = null
     private var sonarOuterRingAnimator: ObjectAnimator? = null
@@ -3760,7 +3760,7 @@ class YaadAlarmPopupActivity : Activity() {
                 }
                 else -> {
                     val extra = (ratio - 1.0f).coerceAtMost(0.10f)
-                    outerR + (extra / 0.10f) * dp(10f)
+                    outerR + (extra / 0.10f) * dp(10f).toFloat()
                 }
             }
             val rad = Math.toRadians((bearingDeg - 90f).toDouble())
@@ -3775,7 +3775,7 @@ class YaadAlarmPopupActivity : Activity() {
             val h = height.toFloat()
             val cx = w / 2f
             val cy = h * 0.525f
-            val frameR = (w.coerceAtMost(h) / 2f) - dp(2f)
+            val frameR = (w.coerceAtMost(h) / 2f) - dp(2f).toFloat()
             val outerR = frameR * 0.76f
             val centerR = outerR * 0.175f
 
@@ -3787,11 +3787,11 @@ class YaadAlarmPopupActivity : Activity() {
             canvas.drawLine(cx - outerR, cy, cx + outerR, cy, guidePaint)
 
             // 1. North Indicator ('N' + Red Triangle ▲ at top center)
-            val northTopY = cy - outerR - dp(24f)
+            val northTopY = cy - outerR - dp(24f).toFloat()
             canvas.drawText("N", cx, northTopY, northTextPaint)
             workPath.reset()
-            val triTopY = northTopY + dp(3f)
-            val triBotY = triTopY + dp(13f)
+            val triTopY = northTopY + dp(3f).toFloat()
+            val triBotY = triTopY + dp(13f).toFloat()
             val triHalfW = dp(7.5f).toFloat()
             workPath.moveTo(cx, triTopY)
             workPath.lineTo(cx - triHalfW, triBotY)
@@ -3819,7 +3819,7 @@ class YaadAlarmPopupActivity : Activity() {
             canvas.drawCircle(cx, cy, centerR, centerFillPaint)
             canvas.drawCircle(cx, cy, centerR, centerStrokePaint)
             val shortTitle = if (targetName.length > 18) targetName.take(18) + "…" else targetName
-            canvas.drawText(shortTitle, cx, cy - centerR - dp(6f), targetNamePaint)
+            canvas.drawText(shortTitle, cx, cy - centerR - dp(6f).toFloat(), targetNamePaint)
 
             // 4. Live Dotted Trajectory Trail + Directional Chevrons
             val isExit = radarMode == "exit" || radarMode == "both_exit"
@@ -3843,7 +3843,7 @@ class YaadAlarmPopupActivity : Activity() {
                         val t = s.toFloat() / steps.toFloat()
                         canvas.drawCircle(p0.first + dx * t, p0.second + dy * t, dotR, dotPaint)
                     }
-                    if (segLen >= dp(14f) || i == xyList.size / 2) {
+                    if (segLen >= dp(14f).toFloat() || i == xyList.size / 2) {
                         val mx = (p0.first + p1.first) * 0.5f
                         val my = (p0.second + p1.second) * 0.5f
                         val angDeg = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
@@ -3860,8 +3860,8 @@ class YaadAlarmPopupActivity : Activity() {
                 val lblOffsetX = if (isExit) dp(18f).toFloat() else -dp(20f).toFloat()
                 canvas.drawText(
                     if (isExit) "exit" else "enter",
-                    (midPt.first + lblOffsetX).coerceIn(cx - outerR + dp(20f), cx + outerR - dp(20f)),
-                    (midPt.second - dp(10f)).coerceIn(cy - outerR + dp(20f), cy + outerR - dp(14f)),
+                    (midPt.first + lblOffsetX).coerceIn(cx - outerR + dp(20f).toFloat(), cx + outerR - dp(20f).toFloat()),
+                    (midPt.second - dp(10f).toFloat()).coerceIn(cy - outerR + dp(20f).toFloat(), cy + outerR - dp(14f).toFloat()),
                     modeTextPaint
                 )
             }
@@ -3877,12 +3877,12 @@ class YaadAlarmPopupActivity : Activity() {
 
             if (!isVisualOnlyMode) {
                 val p = pulseProgress.coerceIn(0f, 1f)
-                val waveR1 = dp(10f) + p * dp(15f)
+                val waveR1 = dp(10f).toFloat() + p * dp(15f).toFloat()
                 wavePaint.alpha = ((1f - p) * 210f).toInt().coerceIn(0, 255)
                 canvas.drawCircle(0f, headOffsetY, waveR1, wavePaint)
 
                 val p2 = (p + 0.5f) % 1f
-                val waveR2 = dp(10f) + p2 * dp(15f)
+                val waveR2 = dp(10f).toFloat() + p2 * dp(15f).toFloat()
                 wavePaint.alpha = ((1f - p2) * 180f).toInt().coerceIn(0, 255)
                 canvas.drawCircle(0f, headOffsetY, waveR2, wavePaint)
 
@@ -8083,6 +8083,35 @@ function validateKotlinFiles(dir) {
     }
     if (parenDepth !== 0) {
       throw new Error(`[KotlinValidator] Unbalanced parentheses (depth=${parenDepth}) in ${file}`);
+    }
+
+    // Check property declarations for missing '=' (e.g. `private var foo: Double.NaN` instead of `= Double.NaN`)
+    const lines = src.split('\n');
+    const isYaadCustomClass = file === 'YaadAlarmPopupActivity.kt' || file === 'YaadGeofenceService.kt';
+    for (let idx = 0; idx < lines.length; idx++) {
+      const trimmed = lines[idx].trim();
+      if (trimmed.startsWith('//') || trimmed.startsWith('*') || trimmed.startsWith('/*')) continue;
+      if (isYaadCustomClass && /^(?:private|protected|internal)\s+(?:var|val)\s+\w+\s*:\s*[^=]+$/.test(trimmed)) {
+        const prevLine = (lines[idx - 1] || '').trim();
+        const nextLine = (lines[idx + 1] || '').trim();
+        if (
+          !trimmed.endsWith(',') &&
+          !trimmed.endsWith(')') &&
+          !prevLine.endsWith('(') &&
+          !prevLine.endsWith(',') &&
+          !nextLine.startsWith('=') &&
+          !nextLine.startsWith('get(')
+        ) {
+          throw new Error(
+            `[KotlinValidator] Uninitialized class property or missing '=' in ${file} at line ${idx + 1}: "${trimmed}"`
+          );
+        }
+      }
+      if (/^(?:(?:private|public|protected|internal)\s+)?(?:var|val)\s+\w+\s*:\s*(?:Double|Float|Int|Long|Boolean)\.[A-Za-z0-9_]+$/.test(trimmed)) {
+        throw new Error(
+          `[KotlinValidator] Missing '= Type' in property declaration in ${file} at line ${idx + 1}: "${trimmed}"`
+        );
+      }
     }
   }
 }
