@@ -326,16 +326,16 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
         animate={{ opacity: 1 }}
         exit={{ opacity: 0 }}
         transition={{ duration: 0.15 }}
-        className="fixed inset-0 z-[110] bg-black/85 backdrop-blur-md flex items-center justify-center p-3 sm:p-5 select-none overflow-y-auto"
+        className="fixed inset-0 z-[110] bg-black/85 backdrop-blur-md flex items-center justify-center px-1.5 py-2 sm:p-4 select-none overflow-y-auto"
         dir={isEn ? 'ltr' : 'rtl'}
       >
         {!isMultiMode ? (
           /* =====================================================================
              SINGLE CONCISE GEOFENCE ALERT CARD WITH LIVE POLAR TRAJECTORY RADAR:
-             1. Location Name + Short Status Phrase
-             2. Live Polar Trajectory Radar (Moving Pulsing Character on Graph)
-             3. Live Distance + Geofence Radius
-             4. 4 Concise Buttons
+             1. Location Name + Short Status Phrase (Compact)
+             2. Expanded Live Polar Trajectory Radar (20px from screen edges, YAAD App Logo marker)
+             3. Live Distance + Geofence Radius (Compact)
+             4. 4 Concise Buttons (Compact)
              ===================================================================== */
           <motion.div
             key={primaryItem.id}
@@ -344,27 +344,27 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
             exit={{ scale: 0.94, y: 14, opacity: 0 }}
             transition={{ type: 'spring', damping: 26, stiffness: 340 }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden p-4 sm:p-5 flex flex-col items-center text-center space-y-3"
+            className="w-full max-w-md rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden px-1.5 py-2.5 sm:p-4 flex flex-col items-center text-center space-y-2"
           >
             {/* Separate 10-second entry toast if distinct from current status */}
             {primaryItem.entryToastMessage &&
               primaryItem.entryToastMessage !== getConciseStatusText(primaryItem) && (
-                <div className="w-full rounded-2xl border border-emerald-300/80 bg-emerald-500/20 px-3.5 py-2 text-xs sm:text-sm font-black text-emerald-100">
+                <div className="w-[calc(100%-8px)] rounded-xl border border-emerald-300/80 bg-emerald-500/20 px-3 py-1.5 text-xs font-black text-emerald-100">
                   {primaryItem.entryToastMessage}
                 </div>
               )}
 
-            {/* 1. Location Name + 2. Short Status Phrase */}
-            <div className="w-full px-4 py-2.5 rounded-2xl bg-[#073B33]/90 border-2 border-emerald-400/60 space-y-1">
-              <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight leading-snug break-words">
+            {/* 1. Location Name + Short Status Phrase (Compact) */}
+            <div className="w-[calc(100%-8px)] px-3 py-1.5 rounded-2xl bg-[#073B33]/90 border border-emerald-400/60 space-y-0.5">
+              <h2 className="text-base sm:text-lg font-black text-white tracking-tight leading-tight break-words">
                 {primaryItem.locationTitle}
               </h2>
-              <p className="text-sm sm:text-base font-extrabold text-amber-300 leading-snug">
+              <p className="text-xs sm:text-sm font-extrabold text-amber-300 leading-tight">
                 {getConciseStatusText(primaryItem)}
               </p>
             </div>
 
-            {/* 2. Live Polar Trajectory Radar Graph with Moving Pulsing Character */}
+            {/* 2. Expanded Live Polar Trajectory Radar Graph with YAAD App Logo Marker */}
             <LivePolarRadar
               locationTitle={primaryItem.locationTitle}
               distanceMeters={primaryItem.initialDistance}
@@ -380,21 +380,21 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               language={language}
             />
 
-            {/* 3. Live Distance + Geofence Radius */}
+            {/* 3. Live Distance + Geofence Radius (Compact) */}
             {(() => {
               const distFormatted = formatDistanceText(primaryItem.initialDistance);
               const radiusFormatted = formatDistanceText(primaryItem.radius || 200);
               return (
-                <div className="w-full rounded-2xl border-2 border-cyan-400/75 bg-[#052E28]/95 px-4 py-3 flex flex-col items-center justify-center gap-1 tabular-nums">
-                  <div className="flex items-baseline justify-center gap-2">
-                    <span className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-emerald-300">
+                <div className="w-[calc(100%-8px)] rounded-2xl border border-cyan-400/75 bg-[#052E28]/95 px-3 py-1.5 flex flex-col items-center justify-center gap-0.5 tabular-nums">
+                  <div className="flex items-baseline justify-center gap-1.5">
+                    <span className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-emerald-300 leading-none">
                       {distFormatted.value}
                     </span>
-                    <span className="text-base sm:text-lg font-black text-emerald-100">
+                    <span className="text-xs sm:text-sm font-black text-emerald-100">
                       {distFormatted.unit}
                     </span>
                   </div>
-                  <div className="text-xs sm:text-sm font-extrabold text-cyan-200/90">
+                  <div className="text-[11px] sm:text-xs font-extrabold text-cyan-200/90 leading-tight">
                     {isEn
                       ? `Geofence Radius: ${radiusFormatted.value} ${radiusFormatted.unit}`
                       : `شعاع حصار: ${radiusFormatted.value} ${radiusFormatted.unit}`}
@@ -403,12 +403,12 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               );
             })()}
 
-            {/* 4. 4 Concise Action Buttons: قطع صدا، توقف، مسیریابی، ویرایش */}
-            <div className="w-full grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+            {/* 4. 4 Concise Action Buttons (Compact): قطع صدا، توقف، مسیریابی، ویرایش */}
+            <div className="w-[calc(100%-8px)] grid grid-cols-2 sm:grid-cols-4 gap-1.5 pt-0.5">
               <button
                 type="button"
                 onClick={() => handleToggleMuteItem(primaryItem)}
-                className={`min-h-[46px] py-2.5 px-2.5 rounded-2xl font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 border-2 shadow-md whitespace-nowrap ${
+                className={`min-h-[38px] py-1.5 px-2 rounded-xl font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 border shadow-sm whitespace-nowrap ${
                   primaryItem.isAudioMuted
                     ? 'bg-amber-500/20 border-amber-400 text-amber-200'
                     : 'bg-rose-500/20 border-rose-400/80 text-rose-200'
@@ -416,12 +416,12 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               >
                 {primaryItem.isAudioMuted ? (
                   <>
-                    <Volume2 className="w-4 h-4 shrink-0 text-amber-300" />
+                    <Volume2 className="w-3.5 h-3.5 shrink-0 text-amber-300" />
                     <span>{isEn ? 'Unmute' : 'وصل صدا'}</span>
                   </>
                 ) : (
                   <>
-                    <VolumeX className="w-4 h-4 shrink-0 text-rose-300" />
+                    <VolumeX className="w-3.5 h-3.5 shrink-0 text-rose-300" />
                     <span>{isEn ? 'Mute' : 'قطع صدا'}</span>
                   </>
                 )}
@@ -430,27 +430,27 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               <button
                 type="button"
                 onClick={() => handleStopItemOperation(primaryItem)}
-                className="min-h-[46px] py-2.5 px-2.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/30 whitespace-nowrap"
+                className="min-h-[38px] py-1.5 px-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md shadow-emerald-500/25 whitespace-nowrap"
               >
-                <CheckCircle2 className="w-4 h-4 stroke-[2.5] shrink-0" />
+                <CheckCircle2 className="w-3.5 h-3.5 stroke-[2.5] shrink-0" />
                 <span>{isEn ? 'Stop' : 'توقف'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleDirectionsItem(primaryItem)}
-                className="min-h-[46px] py-2.5 px-2.5 rounded-2xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border-2 border-sky-400/80 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md whitespace-nowrap"
+                className="min-h-[38px] py-1.5 px-2 rounded-xl bg-sky-500/25 hover:bg-sky-500/35 text-sky-200 border border-sky-400/80 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap"
               >
-                <Navigation className="w-4 h-4 shrink-0 text-sky-300" />
+                <Navigation className="w-3.5 h-3.5 shrink-0 text-sky-300" />
                 <span>{isEn ? 'Directions' : 'مسیریابی'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleEditItem(primaryItem)}
-                className="min-h-[46px] py-2.5 px-2.5 rounded-2xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border-2 border-cyan-400/70 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md whitespace-nowrap"
+                className="min-h-[38px] py-1.5 px-2 rounded-xl bg-[#073B33] hover:bg-[#0B4F45] text-cyan-200 border border-cyan-400/70 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-sm whitespace-nowrap"
               >
-                <Edit2 className="w-4 h-4 shrink-0 text-cyan-300" />
+                <Edit2 className="w-3.5 h-3.5 shrink-0 text-cyan-300" />
                 <span>{isEn ? 'Edit' : 'ویرایش'}</span>
               </button>
             </div>

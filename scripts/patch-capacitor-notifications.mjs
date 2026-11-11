@@ -3666,21 +3666,24 @@ class YaadAlarmPopupActivity : Activity() {
             textSize = dp(11.5f).toFloat()
             typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
         }
+        private val pinBackdropPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#041512")
+        }
         private val pinFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = Color.parseColor("#090D0B")
+            color = Color.parseColor("#FF8C00")
         }
         private val pinStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = dp(2.2f).toFloat()
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
-            color = Color.parseColor("#FACC15")
+            color = Color.parseColor("#FF8C00")
         }
         private val wavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = dp(1.5f).toFloat()
-            color = Color.parseColor("#FACC15")
+            strokeWidth = dp(1.6f).toFloat()
+            color = Color.parseColor("#FF8C00")
         }
         private val workPath = Path()
         private val arcRect = android.graphics.RectF()
@@ -3694,13 +3697,16 @@ class YaadAlarmPopupActivity : Activity() {
             val safeR = radiusMeters.coerceAtLeast(20)
             val safeD = dist.coerceAtLeast(0)
             val isExit = radarMode == "exit" || radarMode == "both_exit"
-            val anchorDist = if (isExit) (safeR * 0.04f).toInt().coerceAtLeast(4) else safeR
-            val anchorBearing = if (isExit) (bearing + 200f) % 360f else (bearing + 342f) % 360f
+            val anchorDist = if (isExit) (safeR * 0.03f).toInt().coerceAtLeast(2) else safeR
+            val anchorBearing = if (isExit) (bearing + 195f) % 360f else (bearing + 332f) % 360f
             if (kotlin.math.abs(safeD - anchorDist) > (safeR * 0.06f).toInt().coerceAtLeast(5)) {
-                val midDist = (anchorDist + safeD) / 2
-                val midBearing = if (isExit) (bearing + 350f) % 360f else (bearing + 352f) % 360f
+                val q1Dist = anchorDist + ((safeD - anchorDist) * 0.33f).toInt()
+                val q2Dist = anchorDist + ((safeD - anchorDist) * 0.67f).toInt()
+                val q1Bearing = if (isExit) (bearing + 340f) % 360f else (bearing + 342f) % 360f
+                val q2Bearing = (bearing + 352f) % 360f
                 trailPoints.add(NativePolarPoint(anchorDist, anchorBearing))
-                trailPoints.add(NativePolarPoint(midDist, midBearing))
+                trailPoints.add(NativePolarPoint(q1Dist, q1Bearing))
+                trailPoints.add(NativePolarPoint(q2Dist, q2Bearing))
             }
             trailPoints.add(NativePolarPoint(safeD, bearing))
         }
@@ -3725,13 +3731,14 @@ class YaadAlarmPopupActivity : Activity() {
                 return
             }
 
+            val refOuterR = dp(150f).toFloat()
+            val refCenterR = refOuterR * 0.145f
             val last = trailPoints.last()
-            val distDelta = kotlin.math.abs(last.distance - safeD)
-            val rawAng = kotlin.math.abs(last.bearingDeg - newBearing) % 360f
-            val angDelta = if (rawAng > 180f) 360f - rawAng else rawAng
-            val minStep = (safeR * 0.018f).toInt().coerceAtLeast(2)
+            val lastPt = polarToPixel(last.distance, last.bearingDeg, 0f, 0f, refCenterR, refOuterR)
+            val nextPt = polarToPixel(safeD, newBearing, 0f, 0f, refCenterR, refOuterR)
+            val pixelStep = kotlin.math.hypot((nextPt.first - lastPt.first).toDouble(), (nextPt.second - lastPt.second).toDouble()).toFloat()
 
-            if (distDelta < minStep && angDelta < 4f) {
+            if (pixelStep < dp(10f).toFloat()) {
                 trailPoints[trailPoints.size - 1] = NativePolarPoint(safeD, newBearing)
             } else {
                 trailPoints.add(NativePolarPoint(safeD, newBearing))
@@ -3753,14 +3760,14 @@ class YaadAlarmPopupActivity : Activity() {
             val safeR = radiusMeters.coerceAtLeast(20).toFloat()
             val ratio = distMeters.coerceAtLeast(0).toFloat() / safeR
             val pixelR = when {
-                ratio <= 0.05f -> (ratio / 0.05f) * (centerR * 0.75f)
+                ratio <= 0.05f -> (ratio / 0.05f) * (centerR * 0.45f)
                 ratio <= 1.0f -> {
                     val t = (ratio - 0.05f) / 0.95f
                     centerR + t * (outerR - centerR)
                 }
                 else -> {
-                    val extra = (ratio - 1.0f).coerceAtMost(0.10f)
-                    outerR + (extra / 0.10f) * dp(10f).toFloat()
+                    val extra = (ratio - 1.0f).coerceAtMost(0.08f)
+                    outerR + (extra / 0.08f) * dp(5f).toFloat()
                 }
             }
             val rad = Math.toRadians((bearingDeg - 90f).toDouble())
@@ -3773,26 +3780,25 @@ class YaadAlarmPopupActivity : Activity() {
             super.onDraw(canvas)
             val w = width.toFloat()
             val h = height.toFloat()
+            val outerR = (w / 2f) - dp(6f).toFloat()
             val cx = w / 2f
-            val cy = h * 0.525f
-            val frameR = (w.coerceAtMost(h) / 2f) - dp(2f).toFloat()
-            val outerR = frameR * 0.76f
-            val centerR = outerR * 0.175f
+            val cy = h - outerR - dp(6f).toFloat()
+            val centerR = outerR * 0.145f
 
-            // 0. Dark Radar Circle Background & Subtle Crosshairs
-            canvas.drawCircle(cx, cy, frameR, bgPaint)
-            canvas.drawCircle(cx, cy, frameR, frameBorderPaint)
-            canvas.drawCircle(cx, cy, (outerR + centerR) * 0.5f, guidePaint)
+            // 0. Dark Radar Circle Background directly inside the Green Boundary Circle & Subtle Crosshairs
+            canvas.drawCircle(cx, cy, outerR, bgPaint)
+            canvas.drawCircle(cx, cy, (outerR + centerR) * 0.52f, guidePaint)
             canvas.drawLine(cx, cy - outerR, cx, cy + outerR, guidePaint)
             canvas.drawLine(cx - outerR, cy, cx + outerR, cy, guidePaint)
 
-            // 1. North Indicator ('N' + Red Triangle ▲ at top center)
-            val northTopY = cy - outerR - dp(24f).toFloat()
+            // 1. North Indicator ('N' + Red Triangle ▲ directly above the green boundary circle)
+            val northTopY = cy - outerR - dp(19f).toFloat()
             canvas.drawText("N", cx, northTopY, northTextPaint)
             workPath.reset()
-            val triTopY = northTopY + dp(3f).toFloat()
-            val triBotY = triTopY + dp(13f).toFloat()
-            val triHalfW = dp(7.5f).toFloat()
+            workPath.fillType = Path.FillType.WINDING
+            val triTopY = northTopY + dp(2.5f).toFloat()
+            val triBotY = triTopY + dp(12f).toFloat()
+            val triHalfW = dp(7f).toFloat()
             workPath.moveTo(cx, triTopY)
             workPath.lineTo(cx - triHalfW, triBotY)
             workPath.lineTo(cx + triHalfW, triBotY)
@@ -3801,27 +3807,26 @@ class YaadAlarmPopupActivity : Activity() {
 
             // 2. Outer Green Geofence Boundary Circle with Top-Left Arc Gap for Radius Label
             arcRect.set(cx - outerR, cy - outerR, cx + outerR, cy + outerR)
-            // Gap at 208°..246° (top-left arc)
-            canvas.drawArc(arcRect, 246f, 322f, false, boundaryPaint)
+            canvas.drawArc(arcRect, 244f, 324f, false, boundaryPaint)
 
             val safeRadVal = radiusMeters.coerceAtLeast(20)
-            val radLabel = if (isPersian) "\${toPersianDigits(safeRadVal.toString())}m" else "\${safeRadVal}m"
-            val midAngleRad = Math.toRadians(227.0)
+            val radLabel = if (isPersian) "\${toPersianDigits(safeRadVal.toString())} متر" else "\${safeRadVal} m"
+            val midAngleRad = Math.toRadians(226.0)
             val lblX = cx + (outerR * kotlin.math.cos(midAngleRad)).toFloat()
             val lblY = cy + (outerR * kotlin.math.sin(midAngleRad)).toFloat()
             canvas.save()
             canvas.translate(lblX, lblY)
-            canvas.rotate(-43f)
+            canvas.rotate(-44f)
             canvas.drawText(radLabel, 0f, dp(4f).toFloat(), radiusArcTextPaint)
             canvas.restore()
 
             // 3. Central 5% Target Zone Circle + Target Name above it
             canvas.drawCircle(cx, cy, centerR, centerFillPaint)
             canvas.drawCircle(cx, cy, centerR, centerStrokePaint)
-            val shortTitle = if (targetName.length > 18) targetName.take(18) + "…" else targetName
+            val shortTitle = if (targetName.length > 20) targetName.take(20) + "…" else targetName
             canvas.drawText(shortTitle, cx, cy - centerR - dp(6f).toFloat(), targetNamePaint)
 
-            // 4. Live Dotted Trajectory Trail + Directional Chevrons
+            // 4. Live Dotted Trajectory Trail + Directional Chevrons + Arc-Length Midpoint Label
             val isExit = radarMode == "exit" || radarMode == "both_exit"
             val trailColor = if (isExit) Color.parseColor("#38BDF8") else Color.parseColor("#FBBF24")
             dotPaint.color = trailColor
@@ -3832,18 +3837,22 @@ class YaadAlarmPopupActivity : Activity() {
             if (xyList.size >= 2) {
                 val dotSpacing = dp(7f).toFloat()
                 val dotR = dp(1.7f).toFloat()
+                var totalPathLen = 0f
+                val segLengths = FloatArray(xyList.size - 1)
                 for (i in 1 until xyList.size) {
                     val p0 = xyList[i - 1]
                     val p1 = xyList[i]
                     val dx = p1.first - p0.first
                     val dy = p1.second - p0.second
                     val segLen = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                    segLengths[i - 1] = segLen
+                    totalPathLen += segLen
                     val steps = (segLen / dotSpacing).toInt().coerceAtLeast(1)
                     for (s in 0..steps) {
                         val t = s.toFloat() / steps.toFloat()
                         canvas.drawCircle(p0.first + dx * t, p0.second + dy * t, dotR, dotPaint)
                     }
-                    if (segLen >= dp(14f).toFloat() || i == xyList.size / 2) {
+                    if (segLen >= dp(18f).toFloat()) {
                         val mx = (p0.first + p1.first) * 0.5f
                         val my = (p0.second + p1.second) * 0.5f
                         val angDeg = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
@@ -3856,60 +3865,101 @@ class YaadAlarmPopupActivity : Activity() {
                         canvas.restore()
                     }
                 }
-                val midPt = xyList[xyList.size / 2]
-                val lblOffsetX = if (isExit) dp(18f).toFloat() else -dp(20f).toFloat()
+
+                var halfRem = totalPathLen * 0.5f
+                var midPt = xyList[xyList.size / 2]
+                for (idx in segLengths.indices) {
+                    val sl = segLengths[idx]
+                    if (halfRem <= sl && sl > 0f) {
+                        val r = halfRem / sl
+                        val a = xyList[idx]
+                        val b = xyList[idx + 1]
+                        midPt = Pair(a.first + (b.first - a.first) * r, a.second + (b.second - a.second) * r)
+                        break
+                    }
+                    halfRem -= sl
+                }
+
+                var lx = midPt.first + (if (isExit) dp(20f).toFloat() else -dp(24f).toFloat())
+                var ly = midPt.second - dp(10f).toFloat()
+                val distFromCenter = kotlin.math.hypot((lx - cx).toDouble(), (ly - cy).toDouble()).toFloat()
+                if (distFromCenter < centerR + dp(24f).toFloat()) {
+                    lx = cx + (if (isExit) dp(48f).toFloat() else -dp(48f).toFloat())
+                    ly = cy - dp(26f).toFloat()
+                }
                 canvas.drawText(
                     if (isExit) "exit" else "enter",
-                    (midPt.first + lblOffsetX).coerceIn(cx - outerR + dp(20f).toFloat(), cx + outerR - dp(20f).toFloat()),
-                    (midPt.second - dp(10f).toFloat()).coerceIn(cy - outerR + dp(20f).toFloat(), cy + outerR - dp(14f).toFloat()),
+                    lx.coerceIn(cx - outerR + dp(20f).toFloat(), cx + outerR - dp(20f).toFloat()),
+                    ly.coerceIn(cy - outerR + dp(20f).toFloat(), cy + outerR - dp(14f).toFloat()),
                     modeTextPaint
                 )
             }
 
-            // 5. Moving Pulsing Golden Clock-Pin Character at User's Live Position
+            // 5. Official YAAD App Logo (Brand Orange #FF8C00 Location-Clock Pin) at User's Live Position
             val userPt = if (xyList.isNotEmpty()) xyList.last() else Pair(cx, cy - outerR)
             val ux = userPt.first
             val uy = userPt.second
 
             canvas.save()
             canvas.translate(ux, uy)
-            val headOffsetY = -dp(9f).toFloat()
 
             if (!isVisualOnlyMode) {
                 val p = pulseProgress.coerceIn(0f, 1f)
-                val waveR1 = dp(10f).toFloat() + p * dp(15f).toFloat()
-                wavePaint.alpha = ((1f - p) * 210f).toInt().coerceIn(0, 255)
-                canvas.drawCircle(0f, headOffsetY, waveR1, wavePaint)
+                val waveR1 = dp(12f).toFloat() + p * dp(16f).toFloat()
+                wavePaint.alpha = ((1f - p) * 215f).toInt().coerceIn(0, 255)
+                canvas.drawCircle(0f, 0f, waveR1, wavePaint)
 
                 val p2 = (p + 0.5f) % 1f
-                val waveR2 = dp(10f).toFloat() + p2 * dp(15f).toFloat()
-                wavePaint.alpha = ((1f - p2) * 180f).toInt().coerceIn(0, 255)
-                canvas.drawCircle(0f, headOffsetY, waveR2, wavePaint)
+                val waveR2 = dp(12f).toFloat() + p2 * dp(16f).toFloat()
+                wavePaint.alpha = ((1f - p2) * 185f).toInt().coerceIn(0, 255)
+                canvas.drawCircle(0f, 0f, waveR2, wavePaint)
 
-                val scale = 1f + 0.12f * kotlin.math.sin(p * Math.PI).toFloat()
-                canvas.scale(scale, scale, 0f, headOffsetY)
+                val scale = 1f + 0.13f * kotlin.math.sin(p * Math.PI).toFloat()
+                canvas.scale(scale, scale, 0f, 0f)
             }
 
-            val headR = dp(8.5f).toFloat()
-            val tipY = dp(4.5f).toFloat()
+            // Map official 1024x1024 YAAD logo geometry centered at (0, 0) with size 30dp
+            val logoSize = dp(30f).toFloat()
+            val s = logoSize / 1024f
+            canvas.save()
+            canvas.translate(-logoSize * 0.5f, -logoSize * 0.5f)
+
+            // Dark interior backdrop so clock hands remain ultra-crisp
             workPath.reset()
-            workPath.addCircle(0f, headOffsetY, headR, Path.Direction.CW)
-            workPath.moveTo(-headR * 0.85f, headOffsetY + headR * 0.45f)
-            workPath.lineTo(0f, tipY)
-            workPath.lineTo(headR * 0.85f, headOffsetY + headR * 0.45f)
+            workPath.fillType = Path.FillType.WINDING
+            workPath.moveTo(512f * s, 95f * s)
+            workPath.cubicTo(675f * s, 95f * s, 812f * s, 225f * s, 812f * s, 393.2f * s)
+            workPath.cubicTo(812f * s, 555f * s, 662f * s, 752f * s, 512f * s, 910f * s)
+            workPath.cubicTo(362f * s, 752f * s, 212f * s, 555f * s, 212f * s, 393.2f * s)
+            workPath.cubicTo(212f * s, 225f * s, 349f * s, 95f * s, 512f * s, 95f * s)
+            workPath.close()
+            canvas.drawPath(workPath, pinBackdropPaint)
+
+            // Outer Teardrop Location Pin (Official YAAD #FF8C00 Even-Odd Path)
+            workPath.reset()
+            workPath.fillType = Path.FillType.EVEN_ODD
+            workPath.moveTo(512f * s, 51.2f * s)
+            workPath.cubicTo(700.9f * s, 51.2f * s, 854f * s, 204.3f * s, 854f * s, 393.2f * s)
+            workPath.cubicTo(854f * s, 576.0f * s, 692.0f * s, 788.0f * s, 545.5f * s, 956.5f * s)
+            workPath.cubicTo(527.8f * s, 976.8f * s, 496.2f * s, 976.8f * s, 478.5f * s, 956.5f * s)
+            workPath.cubicTo(332.0f * s, 788.0f * s, 170f * s, 576.0f * s, 170f * s, 393.2f * s)
+            workPath.cubicTo(170f * s, 204.3f * s, 323.1f * s, 51.2f * s, 512f * s, 51.2f * s)
+            workPath.close()
+
+            workPath.moveTo(512f * s, 135.2f * s)
+            workPath.cubicTo(369.5f * s, 135.2f * s, 254f * s, 250.7f * s, 254f * s, 393.2f * s)
+            workPath.cubicTo(254f * s, 538.0f * s, 388.0f * s, 722.0f * s, 512f * s, 863.0f * s)
+            workPath.cubicTo(636.0f * s, 722.0f * s, 770f * s, 538.0f * s, 770f * s, 393.2f * s)
+            workPath.cubicTo(770f * s, 250.7f * s, 654.5f * s, 135.2f * s, 512f * s, 135.2f * s)
             workPath.close()
             canvas.drawPath(workPath, pinFillPaint)
-            canvas.drawPath(workPath, pinStrokePaint)
 
-            // Inner Clock Face + Hands inside Pin Head
-            val clockR = headR * 0.58f
-            canvas.drawCircle(0f, headOffsetY, clockR, pinFillPaint)
-            pinStrokePaint.strokeWidth = dp(1.5f).toFloat()
-            canvas.drawCircle(0f, headOffsetY, clockR, pinStrokePaint)
-            canvas.drawLine(0f, headOffsetY, 0f, headOffsetY - clockR * 0.65f, pinStrokePaint)
-            canvas.drawLine(0f, headOffsetY, clockR * 0.55f, headOffsetY + clockR * 0.3f, pinStrokePaint)
-            pinStrokePaint.strokeWidth = dp(2.2f).toFloat()
+            // Integrated Clock Hands (Official YAAD #FF8C00)
+            pinStrokePaint.strokeWidth = 72f * s
+            canvas.drawLine(512f * s, 237f * s, 512f * s, 393.2f * s, pinStrokePaint)
+            canvas.drawLine(512f * s, 393.2f * s, 625f * s, 458.5f * s, pinStrokePaint)
 
+            canvas.restore()
             canvas.restore()
         }
     }
@@ -4613,13 +4663,13 @@ class YaadAlarmPopupActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT
         )
         root.setBackgroundColor(Color.parseColor("#E6021411"))
-        root.setPadding(dp(16f), dp(28f), dp(16f), dp(20f))
+        root.setPadding(dp(6f), dp(14f), dp(6f), dp(10f))
 
         val cardContainer = LinearLayout(this)
         cardContainer.orientation = LinearLayout.VERTICAL
         cardContainer.layoutDirection = if (isPersian) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
-        cardContainer.background = makeRoundedDrawable(palette.cardBg, palette.cardBorder, 2.4f, 28f)
-        cardContainer.elevation = dp(22f).toFloat()
+        cardContainer.background = makeRoundedDrawable(palette.cardBg, palette.cardBorder, 2.2f, 24f)
+        cardContainer.elevation = dp(20f).toFloat()
         cardContainer.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
@@ -4628,22 +4678,22 @@ class YaadAlarmPopupActivity : Activity() {
         val content = LinearLayout(this)
         content.orientation = LinearLayout.VERTICAL
         content.gravity = Gravity.CENTER_HORIZONTAL
-        content.setPadding(dp(20f), dp(22f), dp(20f), dp(20f))
+        content.setPadding(dp(8f), dp(10f), dp(8f), dp(10f))
         content.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
 
-        // 1. TOP SECTION: Location Name + Short Status Phrase ONLY
+        // 1. TOP SECTION: Location Name + Short Status Phrase (Compact)
         val topTitleBox = LinearLayout(this)
         topTitleBox.orientation = LinearLayout.VERTICAL
         topTitleBox.gravity = Gravity.CENTER
-        topTitleBox.setPadding(dp(16f), dp(14f), dp(16f), dp(14f))
+        topTitleBox.setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
         topTitleBox.background = makeRoundedDrawable(
             Color.parseColor("#063830"),
             palette.accentColor,
-            1.6f,
-            20f
+            1.4f,
+            16f
         )
         topTitleBox.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -4654,9 +4704,9 @@ class YaadAlarmPopupActivity : Activity() {
         titleTv.text = titleStr
         titleTv.gravity = Gravity.CENTER
         titleTv.setTextColor(palette.titleColor)
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 23f)
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17.5f)
         titleTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
-        titleTv.maxLines = 2
+        titleTv.maxLines = 1
         titleTv.ellipsize = TextUtils.TruncateAt.END
         topTitleBox.addView(titleTv)
 
@@ -4665,22 +4715,22 @@ class YaadAlarmPopupActivity : Activity() {
             val bodyTv = TextView(this)
             bodyTv.text = cleanBody
             bodyTv.gravity = Gravity.CENTER
-            bodyTv.setTextColor(Color.parseColor("#A7F3D0"))
-            bodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            bodyTv.setTextColor(Color.parseColor("#FDE047"))
+            bodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
             bodyTv.setTypeface(Typeface.DEFAULT_BOLD)
-            bodyTv.maxLines = 2
+            bodyTv.maxLines = 1
             bodyTv.ellipsize = TextUtils.TruncateAt.END
             val bodyParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            bodyParams.topMargin = dp(6f)
+            bodyParams.topMargin = dp(2f)
             bodyTv.layoutParams = bodyParams
             topTitleBox.addView(bodyTv)
         }
         content.addView(topTitleBox)
 
-        // 2. CENTER SECTION: Live Polar Trajectory Radar Graph + Concise Live Distance Box
+        // 2. CENTER SECTION: Expanded Live Polar Trajectory Radar Graph (20px/dp from screen edges) + Compact Distance Box
         val centerArea = LinearLayout(this)
         centerArea.orientation = LinearLayout.VERTICAL
         centerArea.gravity = Gravity.CENTER
@@ -4698,7 +4748,9 @@ class YaadAlarmPopupActivity : Activity() {
         val isVisualOnlyBanner = (extraObj?.optBoolean("visualOnlyBanner", false) == true) ||
             (extraObj?.optBoolean("visualOnly", false) == true)
 
-        val radarSize = dp(224f)
+        val screenW = resources.displayMetrics.widthPixels
+        val radarW = (screenW - dp(28f)).coerceAtLeast(dp(240f))
+        val radarH = radarW + dp(20f)
         val radarView = LivePolarRadarView(
             this,
             titleStr,
@@ -4708,7 +4760,7 @@ class YaadAlarmPopupActivity : Activity() {
             initialMode,
             isVisualOnlyBanner
         )
-        radarView.layoutParams = LinearLayout.LayoutParams(radarSize, radarSize)
+        radarView.layoutParams = LinearLayout.LayoutParams(radarW, radarH)
         livePolarRadarView = radarView
 
         val initialIntervalMs = YaadGeofenceService.computeSonarIntervalMs(initialDistance, radiusMeters, initialMode)
@@ -4725,29 +4777,29 @@ class YaadAlarmPopupActivity : Activity() {
 
         centerArea.addView(radarView)
 
-        // Concise Distance Box (ONLY Distance Value)
+        // Compact Distance + Geofence Radius Box
         val distanceCard = LinearLayout(this)
         distanceCard.orientation = LinearLayout.VERTICAL
         distanceCard.gravity = Gravity.CENTER
-        distanceCard.setPadding(dp(22f), dp(10f), dp(22f), dp(10f))
+        distanceCard.setPadding(dp(16f), dp(6f), dp(16f), dp(6f))
         distanceCard.background = makeRoundedDrawable(
             Color.parseColor("#021815"),
             palette.accentColor,
-            2.0f,
-            20f
+            1.5f,
+            16f
         )
         val distanceCardParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        distanceCardParams.topMargin = dp(14f)
+        distanceCardParams.topMargin = dp(6f)
         distanceCard.layoutParams = distanceCardParams
 
         val liveDistTv = TextView(this)
         liveDistTv.text = formatDistanceLabel(initialDistance.coerceAtLeast(0), isSub10mArrival)
         liveDistTv.gravity = Gravity.CENTER
-        liveDistTv.setTextColor(Color.parseColor("#ECFDF5"))
-        liveDistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
+        liveDistTv.setTextColor(Color.parseColor("#6EE7B7"))
+        liveDistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
         liveDistTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
         distanceBadgeTextView = liveDistTv
         distanceCard.addView(liveDistTv)
@@ -4755,21 +4807,21 @@ class YaadAlarmPopupActivity : Activity() {
         val radiusTv = TextView(this)
         radiusTv.text = formatRadiusLabel(radiusMeters)
         radiusTv.gravity = Gravity.CENTER
-        radiusTv.setTextColor(Color.parseColor("#6EE7B7"))
-        radiusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+        radiusTv.setTextColor(Color.parseColor("#A7F3D0"))
+        radiusTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
         radiusTv.setTypeface(Typeface.DEFAULT_BOLD)
         val radiusTvParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        radiusTvParams.topMargin = dp(4f)
+        radiusTvParams.topMargin = dp(2f)
         radiusTv.layoutParams = radiusTvParams
         distanceCard.addView(radiusTv)
 
         centerArea.addView(distanceCard)
         content.addView(centerArea)
 
-        // 3. BOTTOM SECTION: 4 Concise Buttons ("قطع صدا", "توقف", "مسیریابی", "ویرایش") in 2x2 grid
+        // 3. BOTTOM SECTION: 4 Compact Buttons ("قطع صدا", "توقف", "مسیریابی", "ویرایش") in 2x2 grid
         val row1 = LinearLayout(this)
         row1.orientation = LinearLayout.HORIZONTAL
         row1.gravity = Gravity.CENTER
@@ -4777,7 +4829,7 @@ class YaadAlarmPopupActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        row1Params.topMargin = dp(10f)
+        row1Params.topMargin = dp(6f)
         row1.layoutParams = row1Params
 
         val muteAudioBtn = buildActionButton(
@@ -4785,7 +4837,7 @@ class YaadAlarmPopupActivity : Activity() {
             bgColor = Color.parseColor("#451A03"),
             borderColor = Color.parseColor("#F59E0B"),
             textColor = Color.parseColor("#FDE68A"),
-            strokeDp = 1.4f
+            strokeDp = 1.2f
         ) {}
         fun refreshMuteBtnState() {
             val isMuted = YaadGeofenceService.isGeofenceAudioMuted()
@@ -4800,8 +4852,8 @@ class YaadAlarmPopupActivity : Activity() {
             YaadGeofenceService.toggleGeofenceAudioMute(this)
             refreshMuteBtnState()
         }
-        muteAudioBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-        muteAudioBtn.setPadding(dp(8f), dp(13f), dp(8f), dp(13f))
+        muteAudioBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        muteAudioBtn.setPadding(dp(6f), dp(9f), dp(6f), dp(9f))
 
         val gotItBtn = buildActionButton(
             text = if (isPersian) "⏹ توقف" else "⏹ Stop",
@@ -4812,10 +4864,10 @@ class YaadAlarmPopupActivity : Activity() {
         ) {
             performBackgroundAction("done")
         }
-        gotItBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-        gotItBtn.setPadding(dp(8f), dp(13f), dp(8f), dp(13f))
+        gotItBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        gotItBtn.setPadding(dp(6f), dp(9f), dp(6f), dp(9f))
 
-        val btnMargin = dp(4f)
+        val btnMargin = dp(3f)
         (muteAudioBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
         (gotItBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
         row1.addView(muteAudioBtn)
@@ -4829,7 +4881,7 @@ class YaadAlarmPopupActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        row2Params.topMargin = dp(8f)
+        row2Params.topMargin = dp(5f)
         row2.layoutParams = row2Params
 
         val directionsBtn = buildActionButton(
@@ -4837,24 +4889,24 @@ class YaadAlarmPopupActivity : Activity() {
             bgColor = Color.parseColor("#0C4A6E"),
             borderColor = Color.parseColor("#38BDF8"),
             textColor = Color.parseColor("#E0F2FE"),
-            strokeDp = 1.5f
+            strokeDp = 1.2f
         ) {
             performDirectionsAction()
         }
-        directionsBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-        directionsBtn.setPadding(dp(8f), dp(13f), dp(8f), dp(13f))
+        directionsBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        directionsBtn.setPadding(dp(6f), dp(9f), dp(6f), dp(9f))
 
         val editBtn = buildActionButton(
             text = if (isPersian) "✎ ویرایش" else "✎ Edit",
             bgColor = palette.editBtnBg,
             borderColor = palette.editBtnBorder,
             textColor = palette.editBtnText,
-            strokeDp = 1.5f
+            strokeDp = 1.2f
         ) {
             performEditAction()
         }
-        editBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-        editBtn.setPadding(dp(8f), dp(13f), dp(8f), dp(13f))
+        editBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        editBtn.setPadding(dp(6f), dp(9f), dp(6f), dp(9f))
 
         (directionsBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
         (editBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
