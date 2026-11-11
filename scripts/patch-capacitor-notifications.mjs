@@ -3540,16 +3540,18 @@ class YaadAlarmPopupActivity : Activity() {
     private var progressTrackView: FrameLayout? = null
     private var timerTextView: TextView? = null
     private var distanceBadgeTextView: TextView? = null
+    private var livePolarRadarView: LivePolarRadarView? = null
     private var isPersian: Boolean = true
     private var isGeofencePopup: Boolean = false
     private var isSub10mArrival: Boolean = false
     private var geofenceItemId: String = ""
     private var targetLatitude: Double = Double.NaN
-    private var targetLongitude: Double = Double.NaN
+    private var targetLongitude: Double.NaN
     private var cleanLocationTitle: String = ""
     private var sonarRingAnimator: ObjectAnimator? = null
     private var sonarOuterRingAnimator: ObjectAnimator? = null
     private var gpsPinPulseAnimator: ObjectAnimator? = null
+    private var radarPulseAnimator: ValueAnimator? = null
     private var screenWakeLock: android.os.PowerManager.WakeLock? = null
 
     data class ThemePalette(
@@ -3569,52 +3571,346 @@ class YaadAlarmPopupActivity : Activity() {
         val editBtnText: Int
     )
 
-    private inner class GpsPinBadgeView(context: Context, private val badgeBgColor: Int) : View(context) {
+    private data class NativePolarPoint(
+        val distance: Int,
+        val bearingDeg: Float
+    )
+
+    /**
+     * Live Polar Trajectory Radar View matching the user's sketch:
+     * - Top 'N' + Red Triangle ▲ North indicator
+     * - Outer bright green geofence boundary circle with a top-left arc gap showing the radius ("5000 m")
+     * - Central 5% target zone filled teal/cyan circle with bright green border + target name above it
+     * - Live dotted trajectory trail with directional chevrons ('enter' in amber/gold, 'exit' in sky-blue)
+     * - Moving pulsing golden Clock-Pin character icon at the user's live polar coordinate (d, θ)
+     */
+    private inner class LivePolarRadarView(
+        context: Context,
+        private var targetName: String,
+        private var radiusMeters: Int,
+        initialDist: Int,
+        initialBearing: Float,
+        private var radarMode: String,
+        private var isVisualOnlyMode: Boolean
+    ) : View(context) {
+
+        private val trailPoints = ArrayList<NativePolarPoint>()
+        var pulseProgress: Float = 0f
+            set(value) {
+                field = value
+                invalidate()
+            }
+
         private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = badgeBgColor
+            color = Color.parseColor("#020806")
         }
-        private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val frameBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            strokeWidth = dp(1.8f).toFloat()
-            color = Color.parseColor("#04231F")
+            strokeWidth = dp(1.4f).toFloat()
+            color = Color.argb(95, 16, 185, 129)
         }
-        private val pinPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1f).toFloat()
+            color = Color.argb(34, 16, 185, 129)
+        }
+        private val boundaryPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2.6f).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            color = Color.parseColor("#22C55E")
+        }
+        private val centerFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = Color.WHITE
+            color = Color.argb(210, 20, 184, 166)
         }
-        private val holePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        private val centerStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2.6f).toFloat()
+            color = Color.parseColor("#22C55E")
+        }
+        private val northFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = badgeBgColor
+            color = Color.parseColor("#EF4444")
         }
-        private val pinPath = Path()
+        private val northTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#EF4444")
+            textAlign = Paint.Align.CENTER
+            textSize = dp(13f).toFloat()
+            typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
+        }
+        private val radiusArcTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#4ADE80")
+            textAlign = Paint.Align.CENTER
+            textSize = dp(11.5f).toFloat()
+            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+        }
+        private val targetNamePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.parseColor("#C084FC")
+            textAlign = Paint.Align.CENTER
+            textSize = dp(11f).toFloat()
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        private val chevronPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2.1f).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+        private val modeTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textAlign = Paint.Align.CENTER
+            textSize = dp(11.5f).toFloat()
+            typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
+        }
+        private val pinFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = Color.parseColor("#090D0B")
+        }
+        private val pinStrokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(2.2f).toFloat()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            color = Color.parseColor("#FACC15")
+        }
+        private val wavePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            strokeWidth = dp(1.5f).toFloat()
+            color = Color.parseColor("#FACC15")
+        }
+        private val workPath = Path()
+        private val arcRect = android.graphics.RectF()
+
+        init {
+            seedInitialTrail(initialDist, initialBearing)
+        }
+
+        private fun seedInitialTrail(dist: Int, bearing: Float) {
+            trailPoints.clear()
+            val safeR = radiusMeters.coerceAtLeast(20)
+            val safeD = dist.coerceAtLeast(0)
+            val isExit = radarMode == "exit" || radarMode == "both_exit"
+            val anchorDist = if (isExit) (safeR * 0.04f).toInt().coerceAtLeast(4) else safeR
+            val anchorBearing = if (isExit) (bearing + 200f) % 360f else (bearing + 342f) % 360f
+            if (kotlin.math.abs(safeD - anchorDist) > (safeR * 0.06f).toInt().coerceAtLeast(5)) {
+                val midDist = (anchorDist + safeD) / 2
+                val midBearing = if (isExit) (bearing + 350f) % 360f else (bearing + 352f) % 360f
+                trailPoints.add(NativePolarPoint(anchorDist, anchorBearing))
+                trailPoints.add(NativePolarPoint(midDist, midBearing))
+            }
+            trailPoints.add(NativePolarPoint(safeD, bearing))
+        }
+
+        fun updateLiveState(
+            newDist: Int,
+            newRadius: Int,
+            newBearing: Float,
+            newMode: String,
+            visualOnly: Boolean
+        ) {
+            val safeR = newRadius.coerceAtLeast(20)
+            val safeD = newDist.coerceAtLeast(0)
+            val modeChanged = (newMode == "exit" || newMode == "both_exit") != (radarMode == "exit" || radarMode == "both_exit")
+            radiusMeters = safeR
+            radarMode = newMode
+            isVisualOnlyMode = visualOnly
+
+            if (modeChanged || trailPoints.isEmpty()) {
+                seedInitialTrail(safeD, newBearing)
+                invalidate()
+                return
+            }
+
+            val last = trailPoints.last()
+            val distDelta = kotlin.math.abs(last.distance - safeD)
+            val rawAng = kotlin.math.abs(last.bearingDeg - newBearing) % 360f
+            val angDelta = if (rawAng > 180f) 360f - rawAng else rawAng
+            val minStep = (safeR * 0.018f).toInt().coerceAtLeast(2)
+
+            if (distDelta < minStep && angDelta < 4f) {
+                trailPoints[trailPoints.size - 1] = NativePolarPoint(safeD, newBearing)
+            } else {
+                trailPoints.add(NativePolarPoint(safeD, newBearing))
+                while (trailPoints.size > 24) {
+                    trailPoints.removeAt(0)
+                }
+            }
+            invalidate()
+        }
+
+        private fun polarToPixel(
+            distMeters: Int,
+            bearingDeg: Float,
+            cx: Float,
+            cy: Float,
+            centerR: Float,
+            outerR: Float
+        ): Pair<Float, Float> {
+            val safeR = radiusMeters.coerceAtLeast(20).toFloat()
+            val ratio = distMeters.coerceAtLeast(0).toFloat() / safeR
+            val pixelR = when {
+                ratio <= 0.05f -> (ratio / 0.05f) * (centerR * 0.75f)
+                ratio <= 1.0f -> {
+                    val t = (ratio - 0.05f) / 0.95f
+                    centerR + t * (outerR - centerR)
+                }
+                else -> {
+                    val extra = (ratio - 1.0f).coerceAtMost(0.10f)
+                    outerR + (extra / 0.10f) * dp(10f)
+                }
+            }
+            val rad = Math.toRadians((bearingDeg - 90f).toDouble())
+            val x = cx + (pixelR * kotlin.math.cos(rad)).toFloat()
+            val y = cy + (pixelR * kotlin.math.sin(rad)).toFloat()
+            return Pair(x, y)
+        }
 
         override fun onDraw(canvas: Canvas) {
             super.onDraw(canvas)
             val w = width.toFloat()
             val h = height.toFloat()
             val cx = w / 2f
-            val cy = h / 2f
-            val r = (w.coerceAtMost(h) / 2f) - dp(1f)
+            val cy = h * 0.525f
+            val frameR = (w.coerceAtMost(h) / 2f) - dp(2f)
+            val outerR = frameR * 0.76f
+            val centerR = outerR * 0.175f
 
-            canvas.drawCircle(cx, cy, r, bgPaint)
-            canvas.drawCircle(cx, cy, r, strokePaint)
+            // 0. Dark Radar Circle Background & Subtle Crosshairs
+            canvas.drawCircle(cx, cy, frameR, bgPaint)
+            canvas.drawCircle(cx, cy, frameR, frameBorderPaint)
+            canvas.drawCircle(cx, cy, (outerR + centerR) * 0.5f, guidePaint)
+            canvas.drawLine(cx, cy - outerR, cx, cy + outerR, guidePaint)
+            canvas.drawLine(cx - outerR, cy, cx + outerR, cy, guidePaint)
 
-            // Draw crisp vector GPS Pin inside the circular badge
-            val headR = r * 0.42f
-            val headCy = cy - r * 0.14f
-            val tipY = cy + r * 0.56f
+            // 1. North Indicator ('N' + Red Triangle ▲ at top center)
+            val northTopY = cy - outerR - dp(24f)
+            canvas.drawText("N", cx, northTopY, northTextPaint)
+            workPath.reset()
+            val triTopY = northTopY + dp(3f)
+            val triBotY = triTopY + dp(13f)
+            val triHalfW = dp(7.5f).toFloat()
+            workPath.moveTo(cx, triTopY)
+            workPath.lineTo(cx - triHalfW, triBotY)
+            workPath.lineTo(cx + triHalfW, triBotY)
+            workPath.close()
+            canvas.drawPath(workPath, northFillPaint)
 
-            pinPath.reset()
-            pinPath.addCircle(cx, headCy, headR, Path.Direction.CW)
-            pinPath.moveTo(cx - headR * 0.86f, headCy + headR * 0.45f)
-            pinPath.lineTo(cx, tipY)
-            pinPath.lineTo(cx + headR * 0.86f, headCy + headR * 0.45f)
-            pinPath.close()
-            canvas.drawPath(pinPath, pinPaint)
+            // 2. Outer Green Geofence Boundary Circle with Top-Left Arc Gap for Radius Label
+            arcRect.set(cx - outerR, cy - outerR, cx + outerR, cy + outerR)
+            // Gap at 208°..246° (top-left arc)
+            canvas.drawArc(arcRect, 246f, 322f, false, boundaryPaint)
 
-            // Inner GPS pin dot
-            canvas.drawCircle(cx, headCy, headR * 0.42f, holePaint)
+            val safeRadVal = radiusMeters.coerceAtLeast(20)
+            val radLabel = if (isPersian) "\${toPersianDigits(safeRadVal.toString())}m" else "\${safeRadVal}m"
+            val midAngleRad = Math.toRadians(227.0)
+            val lblX = cx + (outerR * kotlin.math.cos(midAngleRad)).toFloat()
+            val lblY = cy + (outerR * kotlin.math.sin(midAngleRad)).toFloat()
+            canvas.save()
+            canvas.translate(lblX, lblY)
+            canvas.rotate(-43f)
+            canvas.drawText(radLabel, 0f, dp(4f).toFloat(), radiusArcTextPaint)
+            canvas.restore()
+
+            // 3. Central 5% Target Zone Circle + Target Name above it
+            canvas.drawCircle(cx, cy, centerR, centerFillPaint)
+            canvas.drawCircle(cx, cy, centerR, centerStrokePaint)
+            val shortTitle = if (targetName.length > 18) targetName.take(18) + "…" else targetName
+            canvas.drawText(shortTitle, cx, cy - centerR - dp(6f), targetNamePaint)
+
+            // 4. Live Dotted Trajectory Trail + Directional Chevrons
+            val isExit = radarMode == "exit" || radarMode == "both_exit"
+            val trailColor = if (isExit) Color.parseColor("#38BDF8") else Color.parseColor("#FBBF24")
+            dotPaint.color = trailColor
+            chevronPaint.color = trailColor
+            modeTextPaint.color = trailColor
+
+            val xyList = trailPoints.map { polarToPixel(it.distance, it.bearingDeg, cx, cy, centerR, outerR) }
+            if (xyList.size >= 2) {
+                val dotSpacing = dp(7f).toFloat()
+                val dotR = dp(1.7f).toFloat()
+                for (i in 1 until xyList.size) {
+                    val p0 = xyList[i - 1]
+                    val p1 = xyList[i]
+                    val dx = p1.first - p0.first
+                    val dy = p1.second - p0.second
+                    val segLen = kotlin.math.hypot(dx.toDouble(), dy.toDouble()).toFloat()
+                    val steps = (segLen / dotSpacing).toInt().coerceAtLeast(1)
+                    for (s in 0..steps) {
+                        val t = s.toFloat() / steps.toFloat()
+                        canvas.drawCircle(p0.first + dx * t, p0.second + dy * t, dotR, dotPaint)
+                    }
+                    if (segLen >= dp(14f) || i == xyList.size / 2) {
+                        val mx = (p0.first + p1.first) * 0.5f
+                        val my = (p0.second + p1.second) * 0.5f
+                        val angDeg = Math.toDegrees(kotlin.math.atan2(dy.toDouble(), dx.toDouble())).toFloat()
+                        canvas.save()
+                        canvas.translate(mx, my)
+                        canvas.rotate(angDeg)
+                        val chSize = dp(4.2f).toFloat()
+                        canvas.drawLine(-chSize, -chSize * 0.85f, chSize * 0.8f, 0f, chevronPaint)
+                        canvas.drawLine(chSize * 0.8f, 0f, -chSize, chSize * 0.85f, chevronPaint)
+                        canvas.restore()
+                    }
+                }
+                val midPt = xyList[xyList.size / 2]
+                val lblOffsetX = if (isExit) dp(18f).toFloat() else -dp(20f).toFloat()
+                canvas.drawText(
+                    if (isExit) "exit" else "enter",
+                    (midPt.first + lblOffsetX).coerceIn(cx - outerR + dp(20f), cx + outerR - dp(20f)),
+                    (midPt.second - dp(10f)).coerceIn(cy - outerR + dp(20f), cy + outerR - dp(14f)),
+                    modeTextPaint
+                )
+            }
+
+            // 5. Moving Pulsing Golden Clock-Pin Character at User's Live Position
+            val userPt = if (xyList.isNotEmpty()) xyList.last() else Pair(cx, cy - outerR)
+            val ux = userPt.first
+            val uy = userPt.second
+
+            canvas.save()
+            canvas.translate(ux, uy)
+            val headOffsetY = -dp(9f).toFloat()
+
+            if (!isVisualOnlyMode) {
+                val p = pulseProgress.coerceIn(0f, 1f)
+                val waveR1 = dp(10f) + p * dp(15f)
+                wavePaint.alpha = ((1f - p) * 210f).toInt().coerceIn(0, 255)
+                canvas.drawCircle(0f, headOffsetY, waveR1, wavePaint)
+
+                val p2 = (p + 0.5f) % 1f
+                val waveR2 = dp(10f) + p2 * dp(15f)
+                wavePaint.alpha = ((1f - p2) * 180f).toInt().coerceIn(0, 255)
+                canvas.drawCircle(0f, headOffsetY, waveR2, wavePaint)
+
+                val scale = 1f + 0.12f * kotlin.math.sin(p * Math.PI).toFloat()
+                canvas.scale(scale, scale, 0f, headOffsetY)
+            }
+
+            val headR = dp(8.5f).toFloat()
+            val tipY = dp(4.5f).toFloat()
+            workPath.reset()
+            workPath.addCircle(0f, headOffsetY, headR, Path.Direction.CW)
+            workPath.moveTo(-headR * 0.85f, headOffsetY + headR * 0.45f)
+            workPath.lineTo(0f, tipY)
+            workPath.lineTo(headR * 0.85f, headOffsetY + headR * 0.45f)
+            workPath.close()
+            canvas.drawPath(workPath, pinFillPaint)
+            canvas.drawPath(workPath, pinStrokePaint)
+
+            // Inner Clock Face + Hands inside Pin Head
+            val clockR = headR * 0.58f
+            canvas.drawCircle(0f, headOffsetY, clockR, pinFillPaint)
+            pinStrokePaint.strokeWidth = dp(1.5f).toFloat()
+            canvas.drawCircle(0f, headOffsetY, clockR, pinStrokePaint)
+            canvas.drawLine(0f, headOffsetY, 0f, headOffsetY - clockR * 0.65f, pinStrokePaint)
+            canvas.drawLine(0f, headOffsetY, clockR * 0.55f, headOffsetY + clockR * 0.3f, pinStrokePaint)
+            pinStrokePaint.strokeWidth = dp(2.2f).toFloat()
+
+            canvas.restore()
         }
     }
 
@@ -4042,16 +4338,22 @@ class YaadAlarmPopupActivity : Activity() {
             sonarOuterRingAnimator = null
             gpsPinPulseAnimator?.cancel()
             gpsPinPulseAnimator = null
+            radarPulseAnimator?.cancel()
+            radarPulseAnimator = null
         } catch (e: Exception) {
         }
     }
 
-    private fun applyAdaptivePulseDuration(distanceMeters: Int, radiusMeters: Int) {
+    private fun applyAdaptivePulseDuration(distanceMeters: Int, radiusMeters: Int, mode: String = "enter") {
         try {
-            val intervalMs = YaadGeofenceService.computeSonarIntervalMs(distanceMeters, radiusMeters).coerceAtLeast(200L)
+            val intervalMs = YaadGeofenceService.computeSonarIntervalMs(distanceMeters, radiusMeters, mode).coerceAtLeast(200L)
+            val animDur = if (intervalMs <= 200L) 220L else 1350L
             sonarOuterRingAnimator?.duration = intervalMs
             sonarRingAnimator?.duration = intervalMs
             gpsPinPulseAnimator?.duration = intervalMs
+            if (radarPulseAnimator?.duration != animDur) {
+                radarPulseAnimator?.duration = animDur
+            }
         } catch (e: Exception) {
         }
     }
@@ -4378,7 +4680,7 @@ class YaadAlarmPopupActivity : Activity() {
         }
         content.addView(topTitleBox)
 
-        // 2. CENTER SECTION: Pulsing App Logo + Concise Live Distance Box
+        // 2. CENTER SECTION: Live Polar Trajectory Radar Graph + Concise Live Distance Box
         val centerArea = LinearLayout(this)
         centerArea.orientation = LinearLayout.VERTICAL
         centerArea.gravity = Gravity.CENTER
@@ -4390,111 +4692,38 @@ class YaadAlarmPopupActivity : Activity() {
             1f
         )
 
-        val emblemSize = dp(132f)
-        val emblemFrame = FrameLayout(this)
-        emblemFrame.layoutParams = LinearLayout.LayoutParams(emblemSize, emblemSize)
-        emblemFrame.clipChildren = false
-        emblemFrame.clipToPadding = false
+        val extraObj = requestJson?.optJSONObject("extra")
+        val initialBearing = extraObj?.optDouble("bearingDeg", 300.0)?.toFloat() ?: 300f
+        val initialMode = extraObj?.optString("sonarMode", "enter") ?: "enter"
+        val isVisualOnlyBanner = (extraObj?.optBoolean("visualOnlyBanner", false) == true) ||
+            (extraObj?.optBoolean("visualOnly", false) == true)
 
-        val outerSonarRing = View(this)
-        val outerRingSize = dp(114f)
-        outerSonarRing.layoutParams = FrameLayout.LayoutParams(outerRingSize, outerRingSize, Gravity.CENTER)
-        outerSonarRing.background = makeOvalDrawable(
-            Color.argb(24, 16, 185, 129),
-            palette.accentColor,
-            1.5f
-        )
-        emblemFrame.addView(outerSonarRing)
-
-        val sonarRing = View(this)
-        val ringSize = dp(96f)
-        sonarRing.layoutParams = FrameLayout.LayoutParams(ringSize, ringSize, Gravity.CENTER)
-        sonarRing.background = makeOvalDrawable(
-            Color.argb(48, 16, 185, 129),
-            palette.accentColor,
-            2.0f
-        )
-        emblemFrame.addView(sonarRing)
-
-        val logoBoxSize = dp(82f)
-        val logoBox = FrameLayout(this)
-        logoBox.layoutParams = FrameLayout.LayoutParams(logoBoxSize, logoBoxSize, Gravity.CENTER)
-        logoBox.background = makeRoundedDrawable(
-            Color.parseColor("#063B32"),
-            palette.accentColor,
-            2.2f,
-            24f
-        )
-        logoBox.elevation = dp(8f).toFloat()
-        try {
-            val appIconView = android.widget.ImageView(this)
-            val appDrawable = packageManager.getApplicationIcon(applicationInfo)
-            appIconView.setImageDrawable(appDrawable)
-            appIconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
-            val innerIconSize = dp(58f)
-            appIconView.layoutParams = FrameLayout.LayoutParams(innerIconSize, innerIconSize, Gravity.CENTER)
-            logoBox.addView(appIconView)
-        } catch (e: Exception) {
-        }
-        emblemFrame.addView(logoBox)
-
-        val pinBadgeSize = dp(30f)
-        val pinBadge = GpsPinBadgeView(
+        val radarSize = dp(224f)
+        val radarView = LivePolarRadarView(
             this,
-            if (isSub10mArrival) Color.parseColor("#059669") else Color.parseColor("#10B981")
+            titleStr,
+            radiusMeters,
+            initialDistance,
+            initialBearing,
+            initialMode,
+            isVisualOnlyBanner
         )
-        val pinParams = FrameLayout.LayoutParams(
-            pinBadgeSize,
-            pinBadgeSize,
-            Gravity.TOP or Gravity.RIGHT
-        )
-        pinParams.topMargin = dp(12f)
-        pinParams.rightMargin = dp(12f)
-        pinBadge.layoutParams = pinParams
-        pinBadge.elevation = dp(10f).toFloat()
-        emblemFrame.addView(pinBadge)
+        radarView.layoutParams = LinearLayout.LayoutParams(radarSize, radarSize)
+        livePolarRadarView = radarView
 
-        val initialPulseMs = YaadGeofenceService.computeSonarIntervalMs(initialDistance, radiusMeters).coerceAtLeast(200L)
-
-        sonarOuterRingAnimator = ObjectAnimator.ofPropertyValuesHolder(
-            outerSonarRing,
-            PropertyValuesHolder.ofFloat(View.SCALE_X, 0.80f, 1.48f),
-            PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.80f, 1.48f),
-            PropertyValuesHolder.ofFloat(View.ALPHA, 0.70f, 0.0f)
-        ).apply {
-            duration = initialPulseMs
+        val initialIntervalMs = YaadGeofenceService.computeSonarIntervalMs(initialDistance, radiusMeters, initialMode)
+        val initialAnimDur = if (initialIntervalMs <= 200L) 220L else 1350L
+        radarPulseAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = initialAnimDur
             repeatCount = ValueAnimator.INFINITE
             repeatMode = ValueAnimator.RESTART
-            interpolator = AccelerateDecelerateInterpolator()
+            addUpdateListener { anim ->
+                radarView.pulseProgress = anim.animatedValue as Float
+            }
             start()
         }
 
-        sonarRingAnimator = ObjectAnimator.ofPropertyValuesHolder(
-            sonarRing,
-            PropertyValuesHolder.ofFloat(View.SCALE_X, 0.88f, 1.38f),
-            PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.88f, 1.38f),
-            PropertyValuesHolder.ofFloat(View.ALPHA, 0.90f, 0.0f)
-        ).apply {
-            duration = initialPulseMs
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.RESTART
-            interpolator = AccelerateDecelerateInterpolator()
-            start()
-        }
-
-        gpsPinPulseAnimator = ObjectAnimator.ofPropertyValuesHolder(
-            pinBadge,
-            PropertyValuesHolder.ofFloat(View.SCALE_X, 1.0f, 1.32f, 0.94f, 1.22f, 1.0f),
-            PropertyValuesHolder.ofFloat(View.SCALE_Y, 1.0f, 1.32f, 0.94f, 1.22f, 1.0f)
-        ).apply {
-            duration = initialPulseMs
-            repeatCount = ValueAnimator.INFINITE
-            repeatMode = ValueAnimator.RESTART
-            interpolator = AccelerateDecelerateInterpolator()
-            start()
-        }
-
-        centerArea.addView(emblemFrame)
+        centerArea.addView(radarView)
 
         // Concise Distance Box (ONLY Distance Value)
         val distanceCard = LinearLayout(this)
@@ -5099,7 +5328,14 @@ class YaadAlarmPopupActivity : Activity() {
             return !act.isFinishing && !act.isDestroyed && act.isGeofencePopup
         }
 
-        fun updateLiveGeofenceDistance(distanceMeters: Int, radiusMeters: Int, sub10m: Boolean) {
+        fun updateLiveGeofenceDistance(
+            distanceMeters: Int,
+            radiusMeters: Int,
+            sub10m: Boolean,
+            bearingDeg: Float = 300f,
+            sonarMode: String = "enter",
+            visualOnly: Boolean = false
+        ) {
             val act = activeInstance?.get() ?: return
             if (!act.isGeofencePopup) return
             act.runOnUiThread {
@@ -5109,7 +5345,14 @@ class YaadAlarmPopupActivity : Activity() {
                             distanceMeters,
                             sub10m || act.isSub10mArrival
                         )
-                        act.applyAdaptivePulseDuration(distanceMeters, radiusMeters)
+                        act.livePolarRadarView?.updateLiveState(
+                            distanceMeters,
+                            radiusMeters,
+                            bearingDeg,
+                            sonarMode,
+                            visualOnly
+                        )
+                        act.applyAdaptivePulseDuration(distanceMeters, radiusMeters, sonarMode)
                     }
                 } catch (e: Exception) {
                 }
@@ -6384,7 +6627,22 @@ class YaadGeofenceService : Service(), LocationListener {
                 return
             }
 
+            val topBearingDeg = computeBearingDeg(
+                topOverall.targetLat,
+                topOverall.targetLon,
+                location.latitude,
+                location.longitude
+            )
+            activeGeofenceBearingDeg = topBearingDeg
+            activeGeofenceSonarMode = topOverall.sonarMode
+
             for ((idx, cand) in activeCandidates.withIndex()) {
+                val candBearing = computeBearingDeg(
+                    cand.targetLat,
+                    cand.targetLon,
+                    location.latitude,
+                    location.longitude
+                )
                 fireOutOfAppGeofenceAlert(
                     id = cand.id,
                     title = cand.title,
@@ -6395,6 +6653,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     radius = cand.radius,
                     targetLat = cand.targetLat,
                     targetLon = cand.targetLon,
+                    bearingDeg = candBearing,
                     isEn = isEn,
                     visualOnlyBanner = cand.visualOnlyBanner,
                     visualBannerText = cand.visualBannerText,
@@ -6404,11 +6663,20 @@ class YaadGeofenceService : Service(), LocationListener {
             }
 
             if (topSonarCandidate != null && !geofenceAudioMuted) {
+                val sonarBearing = computeBearingDeg(
+                    topSonarCandidate.targetLat,
+                    topSonarCandidate.targetLon,
+                    location.latitude,
+                    location.longitude
+                )
                 updateLiveSonarDistance(topSonarCandidate.distance, topSonarCandidate.radius, topSonarCandidate.sonarMode)
                 YaadAlarmPopupActivity.updateLiveGeofenceDistance(
                     topSonarCandidate.distance,
                     topSonarCandidate.radius,
-                    topSonarCandidate.is5Hz
+                    topSonarCandidate.is5Hz,
+                    sonarBearing,
+                    topSonarCandidate.sonarMode,
+                    topSonarCandidate.visualOnlyBanner
                 )
                 if (!sonarLoopActive) {
                     val notifId = geofenceNotifId(topSonarCandidate.id)
@@ -6432,11 +6700,30 @@ class YaadGeofenceService : Service(), LocationListener {
                 YaadAlarmPopupActivity.updateLiveGeofenceDistance(
                     topOverall.distance,
                     topOverall.radius,
-                    topOverall.is5Hz
+                    topOverall.is5Hz,
+                    topBearingDeg,
+                    topOverall.sonarMode,
+                    topOverall.visualOnlyBanner
                 )
             }
         } catch (e: Exception) {
         }
+    }
+
+    private fun computeBearingDeg(
+        targetLat: Double,
+        targetLon: Double,
+        userLat: Double,
+        userLon: Double
+    ): Float {
+        if (targetLat.isNaN() || targetLon.isNaN() || userLat.isNaN() || userLon.isNaN()) return 300f
+        val phi1 = Math.toRadians(targetLat)
+        val phi2 = Math.toRadians(userLat)
+        val dLon = Math.toRadians(userLon - targetLon)
+        val y = sin(dLon) * cos(phi2)
+        val x = cos(phi1) * sin(phi2) - sin(phi1) * cos(phi2) * cos(dLon)
+        val deg = (Math.toDegrees(atan2(y, x)) + 360.0) % 360.0
+        return deg.toFloat()
     }
 
     private fun buildStatusBarTitleAndBody(
@@ -6503,6 +6790,7 @@ class YaadGeofenceService : Service(), LocationListener {
         radius: Int,
         targetLat: Double,
         targetLon: Double,
+        bearingDeg: Float = 300f,
         isEn: Boolean,
         visualOnlyBanner: Boolean = false,
         visualBannerText: String = "",
@@ -6556,6 +6844,8 @@ class YaadGeofenceService : Service(), LocationListener {
                 activeGeofenceRadius = radius
                 activeGeofenceLat = targetLat
                 activeGeofenceLon = targetLon
+                activeGeofenceBearingDeg = bearingDeg
+                activeGeofenceSonarMode = sonarMode
                 activeGeofenceIsEn = isEn
                 lastNotifiedStatusBarDistance = distance
             }
@@ -6588,6 +6878,8 @@ class YaadGeofenceService : Service(), LocationListener {
                 radius = radius,
                 targetLat = targetLat,
                 targetLon = targetLon,
+                bearingDeg = bearingDeg,
+                sonarMode = sonarMode,
                 isEn = isEn,
                 isLiveUpdate = shouldUseLiveUpdate,
                 showFullScreen = isFirstWakeForPhase,
@@ -6630,6 +6922,8 @@ class YaadGeofenceService : Service(), LocationListener {
         radius: Int,
         targetLat: Double,
         targetLon: Double,
+        bearingDeg: Float = activeGeofenceBearingDeg,
+        sonarMode: String = activeGeofenceSonarMode,
         isEn: Boolean,
         isLiveUpdate: Boolean,
         showFullScreen: Boolean,
@@ -6648,6 +6942,8 @@ class YaadGeofenceService : Service(), LocationListener {
             put("radius", radius)
             put("latitude", targetLat)
             put("longitude", targetLon)
+            put("bearingDeg", bearingDeg.toDouble())
+            put("sonarMode", sonarMode)
             put("language", if (isEn) "en" else "fa")
             put("theme", if (isSub10m) "geofence-sub10m" else "geofence-radar")
             put("visualOnlyBanner", visualOnlyBanner)
@@ -6955,6 +7251,10 @@ class YaadGeofenceService : Service(), LocationListener {
         private var activeGeofenceLat: Double = Double.NaN
         @Volatile
         private var activeGeofenceLon: Double = Double.NaN
+        @Volatile
+        private var activeGeofenceBearingDeg: Float = 300f
+        @Volatile
+        private var activeGeofenceSonarMode: String = "enter"
         @Volatile
         private var activeGeofenceIsEn: Boolean = false
         @Volatile

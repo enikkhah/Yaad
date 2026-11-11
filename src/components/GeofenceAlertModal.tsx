@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, Edit2, MapPin, Navigation, Volume2, VolumeX } from 'lucide-react';
-import appIcon from '../assets/images/icon.png';
+import { CheckCircle2, Edit2, Navigation, Volume2, VolumeX } from 'lucide-react';
+import { LivePolarRadar } from './LivePolarRadar';
 import {
   acknowledgeGeofenceAlert,
   calculateHaversineDistance,
@@ -310,12 +310,14 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   const primaryItem = sortedAlerts[0];
   const primaryIntervalMs = primaryItem.sonarIntervalMs || 6000;
   const isPrimary5Hz = !primaryItem.isVisualOnly && primaryIntervalMs <= 200;
-  const activeBeatDurationSec = isPrimary5Hz
-    ? 0.2
-    : Math.min(0.75, Math.max(0.2, (primaryIntervalMs / 1000) * 0.65));
-  const activeRepeatDelaySec = isPrimary5Hz
-    ? 0
-    : Math.max(0.04, primaryIntervalMs / 1000 - activeBeatDurationSec);
+  const primaryRadarMode: 'enter' | 'exit' =
+    primaryItem.sonarMode === 'exit' ||
+    primaryItem.sonarMode === 'both_exit' ||
+    primaryItem.triggerType === 'exit' ||
+    primaryItem.scenarioPhase?.startsWith('exit') ||
+    primaryItem.scenarioPhase?.includes('exit')
+      ? 'exit'
+      : 'enter';
 
   return (
     <AnimatePresence>
@@ -329,8 +331,11 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
       >
         {!isMultiMode ? (
           /* =====================================================================
-             SINGLE CONCISE GEOFENCE ALERT CARD:
-             Only: 1. Location Name, 2. Short Status Phrase, 3. Live Distance, 4. 4 Concise Buttons
+             SINGLE CONCISE GEOFENCE ALERT CARD WITH LIVE POLAR TRAJECTORY RADAR:
+             1. Location Name + Short Status Phrase
+             2. Live Polar Trajectory Radar (Moving Pulsing Character on Graph)
+             3. Live Distance + Geofence Radius
+             4. 4 Concise Buttons
              ===================================================================== */
           <motion.div
             key={primaryItem.id}
@@ -339,7 +344,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
             exit={{ scale: 0.94, y: 14, opacity: 0 }}
             transition={{ type: 'spring', damping: 26, stiffness: 340 }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden p-5 flex flex-col items-center text-center space-y-4"
+            className="w-full max-w-md rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden p-4 sm:p-5 flex flex-col items-center text-center space-y-3"
           >
             {/* Separate 10-second entry toast if distinct from current status */}
             {primaryItem.entryToastMessage &&
@@ -350,7 +355,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               )}
 
             {/* 1. Location Name + 2. Short Status Phrase */}
-            <div className="w-full px-4 py-3 rounded-2xl bg-[#073B33]/90 border-2 border-emerald-400/60 space-y-1.5">
+            <div className="w-full px-4 py-2.5 rounded-2xl bg-[#073B33]/90 border-2 border-emerald-400/60 space-y-1">
               <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight leading-snug break-words">
                 {primaryItem.locationTitle}
               </h2>
@@ -359,60 +364,21 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               </p>
             </div>
 
-            {/* Pulsing Radar Logo */}
-            <div className="relative my-1 flex items-center justify-center py-2">
-              {!primaryItem.isVisualOnly && (
-                <>
-                  <motion.span
-                    key={`outer-ring-${isPrimary5Hz ? '5hz' : pingBeat}`}
-                    initial={{ scale: 0.85, opacity: 0.8 }}
-                    animate={{ scale: 1.5, opacity: 0 }}
-                    transition={{
-                      duration: activeBeatDurationSec,
-                      repeat: Infinity,
-                      repeatDelay: activeRepeatDelaySec,
-                      ease: 'easeOut',
-                    }}
-                    className="absolute inline-flex w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-emerald-400/25 border border-emerald-300/60"
-                  />
-                  <motion.span
-                    key={`inner-ring-${isPrimary5Hz ? '5hz' : pingBeat}`}
-                    initial={{ scale: 0.9, opacity: 0.85 }}
-                    animate={{ scale: 1.34, opacity: 0 }}
-                    transition={{
-                      duration: activeBeatDurationSec * 0.85,
-                      repeat: Infinity,
-                      repeatDelay: activeRepeatDelaySec,
-                      ease: 'easeOut',
-                    }}
-                    className="absolute inline-flex w-20 h-20 sm:w-24 sm:h-24 rounded-3xl bg-cyan-400/20 border border-cyan-300/50"
-                  />
-                </>
-              )}
-
-              <motion.div
-                key={`logo-pulse-${isPrimary5Hz ? '5hz' : pingBeat}`}
-                animate={primaryItem.isVisualOnly ? { scale: 1 } : { scale: [1, 1.08, 1] }}
-                transition={{
-                  duration: activeBeatDurationSec,
-                  repeat: Infinity,
-                  repeatDelay: activeRepeatDelaySec,
-                  ease: 'easeInOut',
-                }}
-                className="relative z-10 w-20 h-20 sm:w-24 sm:h-24 rounded-3xl border-2 border-emerald-400 bg-[#063830] flex items-center justify-center shadow-[0_0_26px_rgba(16,185,129,0.5)]"
-              >
-                <img
-                  src={appIcon}
-                  alt="YAAD"
-                  referrerPolicy="no-referrer"
-                  className="w-16 h-16 sm:w-20 sm:h-20 object-contain rounded-2xl"
-                  draggable={false}
-                />
-                <div className="absolute -top-2 -right-2 z-20 w-8 h-8 rounded-full bg-emerald-400 border-2 border-[#031D19] flex items-center justify-center shadow-md">
-                  <MapPin className="w-4 h-4 text-stone-950 fill-stone-950" />
-                </div>
-              </motion.div>
-            </div>
+            {/* 2. Live Polar Trajectory Radar Graph with Moving Pulsing Character */}
+            <LivePolarRadar
+              locationTitle={primaryItem.locationTitle}
+              distanceMeters={primaryItem.initialDistance}
+              radiusMeters={primaryItem.radius || 200}
+              targetLat={primaryItem.latitude}
+              targetLon={primaryItem.longitude}
+              userLat={liveUserPos?.latitude}
+              userLon={liveUserPos?.longitude}
+              mode={primaryRadarMode}
+              is5Hz={isPrimary5Hz}
+              isVisualOnly={Boolean(primaryItem.isVisualOnly)}
+              pingBeat={pingBeat}
+              language={language}
+            />
 
             {/* 3. Live Distance + Geofence Radius */}
             {(() => {
