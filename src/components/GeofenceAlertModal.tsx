@@ -414,17 +414,25 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               </motion.div>
             </div>
 
-            {/* 3. Live Distance */}
+            {/* 3. Live Distance + Geofence Radius */}
             {(() => {
               const distFormatted = formatDistanceText(primaryItem.initialDistance);
+              const radiusFormatted = formatDistanceText(primaryItem.radius || 200);
               return (
-                <div className="w-full rounded-2xl border-2 border-cyan-400/75 bg-[#052E28]/95 px-4 py-3 flex items-baseline justify-center gap-2 tabular-nums">
-                  <span className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-emerald-300">
-                    {distFormatted.value}
-                  </span>
-                  <span className="text-base sm:text-lg font-black text-emerald-100">
-                    {distFormatted.unit}
-                  </span>
+                <div className="w-full rounded-2xl border-2 border-cyan-400/75 bg-[#052E28]/95 px-4 py-3 flex flex-col items-center justify-center gap-1 tabular-nums">
+                  <div className="flex items-baseline justify-center gap-2">
+                    <span className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-emerald-300">
+                      {distFormatted.value}
+                    </span>
+                    <span className="text-base sm:text-lg font-black text-emerald-100">
+                      {distFormatted.unit}
+                    </span>
+                  </div>
+                  <div className="text-xs sm:text-sm font-extrabold text-cyan-200/90">
+                    {isEn
+                      ? `Geofence Radius: ${radiusFormatted.value} ${radiusFormatted.unit}`
+                      : `شعاع حصار: ${radiusFormatted.value} ${radiusFormatted.unit}`}
+                  </div>
                 </div>
               );
             })()}
@@ -506,26 +514,36 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                         : 'bg-[#04241F]/90 border border-emerald-500/40'
                     }`}
                   >
-                    {/* Location Name + Short Status + Live Distance */}
-                    <div className="flex items-center justify-between gap-3 bg-[#031D19]/90 rounded-xl px-3.5 py-2.5 border border-emerald-400/35">
-                      <div className="min-w-0 flex-1 text-start">
-                        <h3 className="text-base sm:text-lg font-black text-white truncate">
-                          {item.locationTitle}
-                        </h3>
-                        <p className="text-xs font-extrabold text-amber-300 mt-0.5 truncate">
-                          {getConciseStatusText(item)}
-                        </p>
-                      </div>
+                    {/* Location Name + Short Status + Live Distance + Geofence Radius */}
+                    {(() => {
+                      const radiusFormatted = formatDistanceText(item.radius || 200);
+                      return (
+                        <div className="flex items-center justify-between gap-3 bg-[#031D19]/90 rounded-xl px-3.5 py-2.5 border border-emerald-400/35">
+                          <div className="min-w-0 flex-1 text-start">
+                            <h3 className="text-base sm:text-lg font-black text-white truncate">
+                              {item.locationTitle}
+                            </h3>
+                            <p className="text-xs font-extrabold text-amber-300 mt-0.5 truncate">
+                              {getConciseStatusText(item)}
+                            </p>
+                            <p className="text-[11px] font-bold text-cyan-200/90 mt-0.5 truncate">
+                              {isEn
+                                ? `Radius: ${radiusFormatted.value} ${radiusFormatted.unit}`
+                                : `شعاع حصار: ${radiusFormatted.value} ${radiusFormatted.unit}`}
+                            </p>
+                          </div>
 
-                      <div className="shrink-0 text-end font-mono tabular-nums bg-[#052E28] px-3 py-1.5 rounded-xl border border-cyan-400/50">
-                        <div className="text-xl sm:text-2xl font-black text-emerald-300 leading-none">
-                          {distFormatted.value}
+                          <div className="shrink-0 text-end font-mono tabular-nums bg-[#052E28] px-3 py-1.5 rounded-xl border border-cyan-400/50">
+                            <div className="text-xl sm:text-2xl font-black text-emerald-300 leading-none">
+                              {distFormatted.value}
+                            </div>
+                            <div className="text-[10px] font-bold text-emerald-100 mt-0.5">
+                              {distFormatted.unit}
+                            </div>
+                          </div>
                         </div>
-                        <div className="text-[10px] font-bold text-emerald-100 mt-0.5">
-                          {distFormatted.unit}
-                        </div>
-                      </div>
-                    </div>
+                      );
+                    })()}
 
                     {/* 4 Concise Buttons: قطع صدا، توقف، مسیریابی، ویرایش */}
                     <div className="grid grid-cols-4 gap-1.5">

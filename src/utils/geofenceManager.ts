@@ -84,6 +84,10 @@ interface ItemScenarioRuntimeState {
   lastInwardMoveMs: number;
   lastOutwardMoveMs: number;
   lastPhaseTransitionMs: number;
+  // Directional extrema for strict Enter vs Exit discrimination
+  minDistanceReachedInside: number;
+  maxDistanceInApproach: number;
+  startedOutsideBoundary?: boolean;
   // Scenario 'enter'
   enterAlertActive: boolean;
   enterCycleCompleted: boolean;
@@ -118,9 +122,12 @@ function getOrCreateRuntimeState(key: string, nowMs: number = Date.now()): ItemS
       trend: 'stationary',
       lastMoveRefDistance: Number.NaN,
       lastSignificantMoveMs: nowMs,
-      lastInwardMoveMs: nowMs,
+      lastInwardMoveMs: 0,
       lastOutwardMoveMs: 0,
       lastPhaseTransitionMs: 0,
+      minDistanceReachedInside: Number.POSITIVE_INFINITY,
+      maxDistanceInApproach: 0,
+      startedOutsideBoundary: undefined,
       enterAlertActive: false,
       enterCycleCompleted: false,
       center5HzStartMs: 0,
@@ -160,15 +167,16 @@ export function recordAndAnalyzeDistanceTrend(
   if (Number.isNaN(st.lastMoveRefDistance)) {
     st.lastMoveRefDistance = distanceMeters;
     st.lastSignificantMoveMs = nowMs;
-    st.lastInwardMoveMs = nowMs;
   } else {
     const moveThreshold = Math.max(2.0, Math.min(6.0, safeAcc * 0.2));
     const diffFromRef = distanceMeters - st.lastMoveRefDistance;
     if (Math.abs(diffFromRef) >= moveThreshold) {
       if (diffFromRef <= -moveThreshold) {
         st.lastInwardMoveMs = nowMs;
+        st.trend = 'inward';
       } else if (diffFromRef >= moveThreshold) {
         st.lastOutwardMoveMs = nowMs;
+        st.trend = 'outward';
       }
       st.lastMoveRefDistance = distanceMeters;
       st.lastSignificantMoveMs = nowMs;
@@ -607,6 +615,38 @@ function evaluateSingleItemScenario(params: {
   const msgExiting = isEn ? `Exiting «${title}»` : `در حال خروج از حصار مکانی «${title}»`;
   const msgExited = isEn ? `Exited «${title}»` : `خروج از حصار مکانی «${title}»`;
 
+  const directionConfirmMeters = Math.max(4, Math.min(12, Math.round((accuracy || 12) * 0.35)));
+
+  if (st.startedOutsideBoundary === undefined) {
+    st.startedOutsideBoundary = distance > safeRadius;
+  }
+  if (distance <= preEntryStartMeters) {
+    if (distance < st.minDistanceReachedInside) {
+      st.minDistanceReachedInside = distance;
+    }
+    if (distance > st.maxDistanceInApproach) {
+      st.maxDistanceInApproach = distance;
+    }
+  } else {
+    st.startedOutsideBoundary = true;
+    st.maxDistanceInApproach = distance;
+  }
+
+  // True when user is moving away from their closest point to the center (exiting)
+  const isConfirmedExitingDirection =
+    trend === 'outward' ||
+    (Number.isFinite(st.minDistanceReachedInside) &&
+      distance >= st.minDistanceReachedInside + directionConfirmMeters &&
+      st.lastOutwardMoveMs > st.lastInwardMoveMs);
+
+  // True when user is moving toward the center (entering)
+  const isConfirmedEnteringDirection =
+    trend === 'inward' ||
+    (st.maxDistanceInApproach > 0 &&
+      distance <= st.maxDistanceInApproach - directionConfirmMeters &&
+      st.lastInwardMoveMs >= st.lastOutwardMoveMs) ||
+    (st.startedOutsideBoundary && distance <= preEntryStartMeters && !isConfirmedExitingDirection);
+
   // =========================================================================
   // SCENARIO 1: ENTER ONLY ('enter')
   // =========================================================================
@@ -622,6 +662,9 @@ function evaluateSingleItemScenario(params: {
       st.audioMutedForCycle = false;
       st.sonarFinishedForCycle = false;
       st.acknowledgedUntilExit = false;
+      st.minDistanceReachedInside = Number.POSITIVE_INFINITY;
+      st.maxDistanceInApproach = distance;
+      st.startedOutsideBoundary = true;
       return null;
     }
 
@@ -629,8 +672,8 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    // Separate 10-second entry message upon crossing into <= R
-    if (!st.wasInsideBorder && distance <= safeRadius) {
+    // Separate 10-second entry message upon crossing into <= R ONLY when entering (not when exiting!)
+    if (!st.wasInsideBorder && distance <= safeRadius && !isConfirmedExitingDirection && isConfirmedEnteringDirection) {
       st.wasInsideBorder = true;
       st.enterAlertActive = true;
       st.entryBannerStartMs = now;
@@ -723,15 +766,13 @@ function evaluateSingleItemScenario(params: {
     }
 
     // 1B. From ~5% before boundary (105% R) down to central 5% zone:
-    // Fires immediately (< 2s) when inside pre-entry band unless moving distinctly outward outside the boundary
-    if (distance <= preEntryStartMeters && !st.sonarFinishedForCycle) {
-      const shouldActivate =
-        distance <= safeRadius ||
-        st.enterAlertActive ||
-        trend !== 'outward';
-      if (!shouldActivate) {
-        return null;
-      }
+    // CRITICAL: If the user is moving outward (exiting the geofence), detect exit and DO NOT emit an enter alert!
+    if (isConfirmedExitingDirection) {
+      st.enterAlertActive = false;
+      return null;
+    }
+
+    if (distance <= preEntryStartMeters && !st.sonarFinishedForCycle && isConfirmedEnteringDirection) {
       st.enterAlertActive = true;
 
       return {
@@ -776,27 +817,27 @@ function evaluateSingleItemScenario(params: {
       st.audioMutedForCycle = false;
       st.sonarFinishedForCycle = false;
       st.acknowledgedUntilExit = false;
+      st.minDistanceReachedInside = distance;
       return null;
     }
 
     // 2B. Inside boundary after leaving central 5% zone (5% R < d <= 100% R):
+    // CRITICAL: If the user is entering the fence (moving inward / approaching center), do NOT emit an exit alert!
     if (distance <= safeRadius && st.border5HzStartMs === 0) {
-      if (distance <= innerSafeExitArmRadius) {
-        st.armedForExit = true;
-      }
-      const hadInside = st.wasInsideForExit;
       st.wasInsideForExit = true;
       st.exitCycleCompleted = false;
+
+      // Only arm exit if user either visited the center OR started inside and moved distinctly outward
+      if (!st.startedOutsideBoundary && isConfirmedExitingDirection && distance <= innerSafeExitArmRadius) {
+        st.armedForExit = true;
+      }
+
       if (st.acknowledgedUntilExit || st.sonarFinishedForCycle) {
         return null;
       }
 
-      const isMovingOutward =
-        st.armedForExit &&
-        (hadInside ||
-          trend === 'outward' ||
-          (trend !== 'inward' && st.lastOutwardMoveMs > 0 && now - st.lastOutwardMoveMs < 15_000));
-      if (!isMovingOutward) {
+      // Must be armed AND actively moving outward (NOT entering/inward)
+      if (!st.armedForExit || !isConfirmedExitingDirection || trend === 'inward') {
         return null;
       }
 
@@ -830,6 +871,7 @@ function evaluateSingleItemScenario(params: {
       distance > safeRadius + Math.min(8, Math.round(fuzzyHysteresisMeters * 0.4));
     if (
       st.wasInsideForExit &&
+      st.armedForExit &&
       !st.exitCycleCompleted &&
       !st.acknowledgedUntilExit &&
       (crossedOutsideWithHysteresis || st.border5HzStartMs > 0)
@@ -898,6 +940,8 @@ function evaluateSingleItemScenario(params: {
       st.wasInsideForExit = false;
       st.armedForExit = false;
       st.border5HzStartMs = 0;
+      st.minDistanceReachedInside = Number.POSITIVE_INFINITY;
+      st.startedOutsideBoundary = true;
     }
 
     return null;
