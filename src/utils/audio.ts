@@ -595,11 +595,31 @@ export const stopAlarmRinging = () => {
 // ============================================================================
 let sonarLoopTimeoutId: number | null = null;
 let isSonarActive = false;
+let isSonarMuted = false;
 let currentSonarDistance = 150;
 let currentSonarRadius = 200;
 let currentSonarMode: SonarScenarioMode = 'enter';
 let currentSonarVolumeOverride: number | undefined = undefined;
 let lastSonarPingTime = 0;
+
+export const setSubmarineSonarMuted = (muted: boolean): void => {
+  isSonarMuted = muted;
+  if (muted) {
+    stopSubmarineSonarLoop();
+    if (typeof window !== 'undefined') {
+      try {
+        const bridge = (window as any).YaadGeofenceBridge;
+        if (bridge && typeof bridge.stopGeofenceAlertAudio === 'function') {
+          bridge.stopGeofenceAlertAudio();
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+};
+
+export const isSubmarineSonarMuted = (): boolean => isSonarMuted;
 
 /**
  * Computes the physical 5% zone threshold with a 15m minimum (capped at 35% of radius for very small geofences)
@@ -654,6 +674,7 @@ export const playSubmarineSonarPing = (
   volumeOverride?: number,
   mode: SonarScenarioMode = 'enter'
 ) => {
+  if (isSonarMuted) return;
   try {
     const intervalMs = computeSubmarineSonarIntervalMs(distanceMeters, radiusMeters, mode);
     const is5Hz = intervalMs <= 200;
@@ -735,7 +756,7 @@ export const playSubmarineSonarPing = (
 };
 
 const runSonarTick = () => {
-  if (!isSonarActive) return;
+  if (!isSonarActive || isSonarMuted) return;
   lastSonarPingTime = Date.now();
   playSubmarineSonarPing(
     currentSonarDistance,
@@ -768,6 +789,10 @@ export const startSubmarineSonarLoop = (
   volumeOverride?: number,
   mode: SonarScenarioMode = 'enter'
 ) => {
+  if (isSonarMuted) {
+    stopSubmarineSonarLoop();
+    return;
+  }
   stopSubmarineSonarLoop();
   isSonarActive = true;
   currentSonarDistance = initialDistanceMeters;
@@ -786,6 +811,10 @@ export const updateSubmarineSonarDistance = (
   radiusMeters?: number,
   mode?: SonarScenarioMode
 ) => {
+  if (isSonarMuted) {
+    stopSubmarineSonarLoop();
+    return;
+  }
   currentSonarDistance = distanceMeters;
   if (radiusMeters && radiusMeters > 0) {
     currentSonarRadius = radiusMeters;
@@ -830,6 +859,13 @@ export const stopSubmarineSonarLoop = () => {
   if (sonarLoopTimeoutId !== null) {
     clearTimeout(sonarLoopTimeoutId);
     sonarLoopTimeoutId = null;
+  }
+  if ('vibrate' in navigator) {
+    try {
+      navigator.vibrate(0);
+    } catch {
+      // ignore
+    }
   }
 };
 

@@ -239,13 +239,13 @@ export function isAppCurrentlyInForeground(): boolean {
  */
 export function getNotificationId(reminderId: string | number): number {
   if (typeof reminderId === 'number') {
-    return Math.abs(reminderId) % 2147483647 || 1;
+    return (Math.abs(reminderId) % 600000000) + 1;
   }
   let hash = 0;
   for (let i = 0; i < reminderId.length; i++) {
     hash = (hash * 31 + reminderId.charCodeAt(i)) & 0x7fffffff;
   }
-  return hash === 0 ? 1 : hash;
+  return (Math.abs(hash) % 600000000) + 1;
 }
 
 /**
@@ -264,7 +264,7 @@ export function getAllNotificationIdsForReminder(reminderId: string | number): n
   const baseId = getNotificationId(reminderId);
   return [
     baseId,
-    ...Array.from({ length: 25 }, (_, index) => (baseId + 1000 + index + 1) % 2147483647),
+    ...Array.from({ length: 25 }, (_, index) => ((baseId + 1000 + index + 1) % 600000000) + 1),
   ];
 }
 
@@ -429,7 +429,7 @@ export async function scheduleReminderNotification(
         },
       },
       ...NOTIFICATION_REPEAT_OFFSETS_MINUTES.map((offsetMins, index) => ({
-        id: (notifId + 1000 + index + 1) % 2147483647,
+        id: ((notifId + 1000 + index + 1) % 600000000) + 1,
         title: reminder.title,
         body: reminder.description
           ? `${reminder.description} • ساعت ${timeFormatted}`
@@ -530,7 +530,15 @@ export async function syncAllRemindersWithLocalNotifications(
       }
       const pending = await LocalNotifications.getPending();
       const staleToCancel = (pending.notifications || [])
-        .filter((n: any) => typeof n.id === 'number' && !validIds.has(n.id))
+        .filter(
+          (n: any) =>
+            typeof n.id === 'number' &&
+            !validIds.has(n.id) &&
+            n.id < 700000000 &&
+            n.id !== 889911 &&
+            n.id !== 889912 &&
+            n.id !== 889915
+        )
         .map((n: any) => ({ id: n.id }));
       if (staleToCancel.length > 0) {
         await LocalNotifications.cancel({ notifications: staleToCancel }).catch(() => {});

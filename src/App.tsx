@@ -10,6 +10,7 @@ import {
   startSubmarineSonarLoop,
   updateSubmarineSonarDistance,
   stopSubmarineSonarLoop,
+  setSubmarineSonarMuted,
 } from './utils/audio';
 import { VerticalTimelineView } from './components/VerticalTimelineView';
 import { ReminderForm } from './components/ReminderForm';
@@ -209,11 +210,12 @@ export default function App() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
           const bootNow = Date.now();
-          // Filter out any default seed reminders and only auto-acknowledge reminders older than the 15-min repeat window (25 * 15 mins)
+          // Filter out any default seed reminders and auto-acknowledge past reminders (> 60s before app boot)
+          // so old reminders from earlier sessions never fire an unrelated alarm when opening the app
           return parsed
             .filter((r: any) => r && !r.id?.startsWith('seed-'))
             .map((r: Reminder) =>
-              r.dueTimestamp <= bootNow - 25 * 15 * 60000 ? { ...r, acknowledged: true } : r
+              r.dueTimestamp <= bootNow - 60000 ? { ...r, acknowledged: true } : r
             );
         }
       }
@@ -1720,14 +1722,10 @@ export default function App() {
   }, [isGeofenceActive, reminders, savedLocations, settings.language]);
 
   const hasActiveGeofences = useMemo(() => {
-    const hasRemGeo = reminders.some(
-      (r) => !r.deletedAt && (r.status === 'pending' || r.status === 'postponed') && r.geofence && r.geofence.enabled
-    );
-    const hasLocGeo = savedLocations.some(
+    return savedLocations.some(
       (l) => !l.deletedAt && l.geofence && l.geofence.enabled
     );
-    return hasRemGeo || hasLocGeo;
-  }, [reminders, savedLocations]);
+  }, [savedLocations]);
 
   const evaluateUserPositionAgainstAllGeofences = useCallback(
     (userPos: UserPosition, bypassStabilizer: boolean = false) => {
@@ -1757,9 +1755,10 @@ export default function App() {
         return;
       }
 
-      // Priority #1 alert (index 0) drives the submarine sonar audio if not in a 10s visual-only phase
+      // Priority #1 alert (index 0) drives the submarine sonar audio if not muted and not in visual-only phase
       const topPriority = evaluatedAlerts[0];
-      if (!topPriority.isVisualOnly && topPriority.playAudio !== false) {
+      setSubmarineSonarMuted(Boolean(topPriority.isAudioMuted));
+      if (!topPriority.isVisualOnly && topPriority.playAudio !== false && !topPriority.isAudioMuted) {
         updateSubmarineSonarDistance(
           topPriority.initialDistance,
           topPriority.radius || 200,
@@ -1822,7 +1821,8 @@ export default function App() {
         stopSubmarineSonarLoop();
       } else {
         const topPriority = evaluated[0];
-        if (!topPriority.isVisualOnly && topPriority.playAudio !== false) {
+        setSubmarineSonarMuted(Boolean(topPriority.isAudioMuted));
+        if (!topPriority.isVisualOnly && topPriority.playAudio !== false && !topPriority.isAudioMuted) {
           updateSubmarineSonarDistance(
             topPriority.initialDistance,
             topPriority.radius || 200,
@@ -1922,18 +1922,18 @@ export default function App() {
           if (timerId) clearTimeout(timerId);
           timerId = setTimeout(runGeofenceCheck, 15000);
         },
-        { enableHighAccuracy: true, timeout: 15000, maximumAge: 2000 }
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
       );
     };
 
-    // Start continuous watchPosition alongside adaptive polling for immediate boundary detection
+    // Start continuous watchPosition alongside 1s polling for <2s boundary detection
     try {
       watchId = navigator.geolocation.watchPosition(
         (pos) => {
           handlePositionUpdate(pos);
         },
         () => {},
-        { enableHighAccuracy: true, maximumAge: 1000, timeout: 20000 }
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
       );
     } catch {
       // ignore if watchPosition fails
