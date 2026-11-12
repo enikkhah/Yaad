@@ -1068,6 +1068,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.PowerManager
+import com.getcapacitor.JSObject
 import com.getcapacitor.Logger
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -1844,9 +1845,10 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
                 var at = schedule.at
                 if (at != null) {
                     // Reconcile local wall-clock hour when user travels across timezones or DST changes
-                    val extra = notification.extra
-                    if (extra != null && extra.has("scheduledTzOffsetMinutes")) {
-                        val savedOffsetMins = extra.optInt("scheduledTzOffsetMinutes", Int.MIN_VALUE)
+                    val savedJsObj = storage.getSavedNotificationAsJSObject(id)
+                    val extraObj = savedJsObj?.optJSONObject("extra")
+                    if (savedJsObj != null && extraObj != null && extraObj.has("scheduledTzOffsetMinutes")) {
+                        val savedOffsetMins = extraObj.optInt("scheduledTzOffsetMinutes", Int.MIN_VALUE)
                         if (savedOffsetMins != Int.MIN_VALUE) {
                             val currentOffsetMins = currentTz.getOffset(at.time) / 60000
                             val deltaMins = savedOffsetMins - currentOffsetMins
@@ -1855,8 +1857,17 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
                                 at = Date(shiftedMs)
                                 schedule.at = at
                                 notification.schedule = schedule
-                                extra.put("scheduledTzOffsetMinutes", currentOffsetMins)
-                                extra.put("scheduledTimeZone", currentTz.id)
+                                extraObj.put("scheduledTzOffsetMinutes", currentOffsetMins)
+                                extraObj.put("scheduledTimeZone", currentTz.id)
+                                savedJsObj.put("extra", extraObj)
+                                val schedJsObj = savedJsObj.optJSONObject("schedule")
+                                if (schedJsObj != null) {
+                                    val sdfUtc = java.text.SimpleDateFormat(LocalNotificationSchedule.JS_DATE_FORMAT, java.util.Locale.US)
+                                    sdfUtc.timeZone = TimeZone.getTimeZone("UTC")
+                                    schedJsObj.put("at", sdfUtc.format(at))
+                                    savedJsObj.put("schedule", schedJsObj)
+                                }
+                                notification.source = savedJsObj.toString()
                                 updatedNotifications.add(notification)
                             }
                         }
@@ -9676,6 +9687,35 @@ function validateKotlinFiles(dir) {
         throw new Error(
           `[KotlinValidator] Missing '= Type' in property declaration in ${file} at line ${idx + 1}: "${trimmed}"`
         );
+      }
+    }
+
+    // Verify all commonly used Capacitor / JSON / Android classes are imported when referenced unqualified
+    const importLines = lines.filter((l) => l.trim().startsWith('import ')).join('\n');
+    const codeLines = lines
+      .filter((l) => {
+        const t = l.trim();
+        return !t.startsWith('import ') && !t.startsWith('//') && !t.startsWith('*');
+      })
+      .join('\n');
+    for (const sym of [
+      'JSObject',
+      'JSArray',
+      'JSONObject',
+      'JSONArray',
+      'JSONException',
+      'CapConfig',
+      'Logger',
+      'TimeZone',
+      'SimpleDateFormat',
+      'PowerManager',
+      'AlarmManager',
+      'PendingIntent',
+      'NotificationManagerCompat',
+    ]) {
+      const unqualifiedRegex = new RegExp(`(?<!\\.)\\b${sym}\\b`);
+      if (unqualifiedRegex.test(codeLines) && !importLines.includes(sym)) {
+        throw new Error(`[KotlinValidator] Missing import for '${sym}' in ${file}`);
       }
     }
   }
