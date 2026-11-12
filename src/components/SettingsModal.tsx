@@ -1526,9 +1526,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </button>
 
                 <a
-                  href="mailto:narvanapplications@gmail.com?subject=YAAD%20App%20Support"
+                  href="mailto:info@narvanteam.ir?subject=YAAD%20App%20Support"
                   className="py-2 px-2.5 rounded-xl bg-stone-900/80 hover:bg-stone-800 border border-stone-800 text-stone-300 hover:text-indigo-300 font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                  title="narvanapplications@gmail.com"
+                  title="info@narvanteam.ir"
                 >
                   <Mail className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
                   <span className="truncate">{isFa ? 'پشتیبانی' : 'Support'}</span>
@@ -1575,8 +1575,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </p>
                   <p className="text-[10.5px] text-stone-400">
                     {isFa
-                      ? 'توسعه‌دهنده: تیم نرم‌افزاری ناروَن • narvanteam.ir'
-                      : 'Developer: Narvan Software Team • narvanteam.ir'}
+                      ? 'توسعه‌دهنده: تیم فناوری نارون • narvanteam.ir'
+                      : 'Developer: Narvan Technology Team • narvanteam.ir'}
                   </p>
                   <a
                     href="/privacy.html"
@@ -1604,7 +1604,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       : `Smart time management assistant for spoken reminders, occasions, ideas, and location-based Geofence alerts • Version ${APP_VERSION}`}
                   </p>
                   <p className="text-stone-400 font-bold">
-                    {isFa ? 'توسعه‌دهنده: تیم نرم‌افزاری ناروَن' : 'Developer: Narvan Software Team'}
+                    {isFa ? 'توسعه‌دهنده: تیم فناوری نارون' : 'Developer: Narvan Technology Team'}
                   </p>
                 </div>
               )}
@@ -1619,18 +1619,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     rel="noopener noreferrer"
                     className="font-bold text-emerald-400 hover:text-emerald-300 flex items-center gap-1"
                   >
-                    <span>{isFa ? 'تیم نرم‌افزاری ناروَن (narvanteam.ir)' : 'Narvan Software Team (narvanteam.ir)'}</span>
+                    <span>{isFa ? 'تیم فناوری نارون (narvanteam.ir)' : 'Narvan Technology Team (narvanteam.ir)'}</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>
                 <div className="flex items-center justify-between">
                   <span>{isFa ? 'ایمیل پشتیبانی:' : 'Support Email:'}</span>
                   <a
-                    href="mailto:narvanapplications@gmail.com?subject=YAAD%20App%20Support"
+                    href="mailto:info@narvanteam.ir?subject=YAAD%20App%20Support"
                     className="font-mono text-indigo-400 hover:text-indigo-300 underline flex items-center gap-1"
                     dir="ltr"
                   >
-                    <span>narvanapplications@gmail.com</span>
+                    <span>info@narvanteam.ir</span>
                     <ExternalLink className="w-3 h-3" />
                   </a>
                 </div>

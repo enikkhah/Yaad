@@ -570,10 +570,6 @@ export const stopAlarmRinging = () => {
   }
   stopSubmarineSonarLoop();
 
-  if (!wasLooping) {
-    return;
-  }
-
   if (Capacitor.isNativePlatform()) {
     try {
       (LocalNotifications as any).stopNotificationSound().catch(() => {});
@@ -581,6 +577,11 @@ export const stopAlarmRinging = () => {
       // Ignore
     }
   }
+
+  if (!wasLooping) {
+    return;
+  }
+
   if ('vibrate' in navigator) {
     try {
       navigator.vibrate(0);

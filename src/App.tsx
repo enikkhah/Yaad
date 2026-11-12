@@ -74,6 +74,7 @@ import {
 import { getT, formatSavedLocationTitle } from './utils/i18n';
 import { APP_VERSION } from './utils/version';
 import { triggerReviewFlow } from './utils/reviewFlow';
+import { TwoStageFeedbackModal } from './components/TwoStageFeedbackModal';
 import { 
   Plus, 
   Search, 
@@ -1486,9 +1487,9 @@ export default function App() {
                 triggerOutOfAppPersistentNotification(updatedForCycle, settings).catch(() => {});
               }
             } else {
-              // Outside the 1-minute window: move dueTimestamp to the next 15-minute mark after NOW in the timeline
+              // Outside the 1-minute ringing window: move dueTimestamp to the next 15-minute mark after NOW in the timeline,
+              // but DO NOT close activeAlarmReminder if it is already open on screen waiting for user reaction!
               const nextFutureDue = r.dueTimestamp + (completedCycles + 1) * REPEAT_INTERVAL_MS;
-              setActiveAlarmReminder((curr) => (curr?.id === r.id ? null : curr));
               setReminders((prev) => {
                 const nextList = prev.map((item) =>
                   item.id === r.id
@@ -1529,6 +1530,20 @@ export default function App() {
       });
     };
 
+    // Listen to immediate native broadcast when a scheduled alarm fires while the app is open (<50ms latency)
+    const handleNativeReminderDue = (e: Event) => {
+      const customEv = e as CustomEvent<{ reminderId?: string; notificationId?: number }>;
+      const remId = customEv.detail?.reminderId;
+      if (remId) {
+        const target = remindersRef.current.find((item) => item.id === remId);
+        if (target && !target.deletedAt && target.status !== 'completed' && !target.acknowledged) {
+          setActiveAlarmReminder({ ...target });
+          return;
+        }
+      }
+      checkAlarms();
+    };
+
     // Run immediately
     checkAlarms();
 
@@ -1540,6 +1555,7 @@ export default function App() {
     };
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     window.addEventListener('focus', handleVisibilityOrFocus);
+    window.addEventListener('yaad:native-reminder-due', handleNativeReminderDue);
 
     // Unthrottled Web Worker timer so background tabs / minimized windows trigger notifications immediately
     let worker: Worker | null = null;
@@ -1560,6 +1576,7 @@ export default function App() {
       clearInterval(timer);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
       window.removeEventListener('focus', handleVisibilityOrFocus);
+      window.removeEventListener('yaad:native-reminder-due', handleNativeReminderDue);
       if (worker) {
         worker.terminate();
       }
@@ -1722,10 +1739,14 @@ export default function App() {
   }, [isGeofenceActive, reminders, savedLocations, settings.language]);
 
   const hasActiveGeofences = useMemo(() => {
-    return savedLocations.some(
+    const hasLocFence = savedLocations.some(
       (l) => !l.deletedAt && l.geofence && l.geofence.enabled
     );
-  }, [savedLocations]);
+    const hasRemFence = reminders.some(
+      (r) => !r.deletedAt && r.status !== 'completed' && r.geofence && r.geofence.enabled
+    );
+    return hasLocFence || hasRemFence;
+  }, [savedLocations, reminders]);
 
   const evaluateUserPositionAgainstAllGeofences = useCallback(
     (userPos: UserPosition, bypassStabilizer: boolean = false) => {
@@ -2262,6 +2283,7 @@ export default function App() {
       const nextReminders = [newReminder, ...remindersRef.current];
       remindersRef.current = nextReminders;
       setReminders(nextReminders);
+      triggerReviewFlow({ delayMs: 800 }).catch(() => {});
 
       if (newReminder.geofence?.enabled) {
         syncGeofencesWithNativeAndroid(
@@ -2318,6 +2340,7 @@ export default function App() {
         };
         scheduleReminderNotification(newRem, settings).catch(() => {});
         setReminders((prev) => [newRem, ...prev]);
+        triggerReviewFlow({ delayMs: 800 }).catch(() => {});
       }
     } else if (editingIdea?.linkedReminderId) {
       // User turned off the reminder for this idea
@@ -2963,14 +2986,12 @@ export default function App() {
 
   handleStopOrDismissReminderRef.current = handleStopOrDismissReminder;
 
-  // Handler: When 1-minute alarm finishes without user reaction:
-  // 1. Silence current 1-minute ring & close in-app alarm modal
+  // Handler: When 1-minute alarm finishes ringing without user reaction:
+  // 1. Silence current 1-minute ring (do NOT close in-app full-screen alarm modal so it stays open until user reaction!)
   // 2. Keep the dropdown shade notification pinned at the top (do NOT dismiss delivered notification)
-  // 3. Move the reminder's dueTimestamp to +15 minutes in the future so it is positioned after NOW in the timeline
-  //    and opening the app never triggers the in-app alarm modal until the next 15-minute due time arrives.
+  // 3. Move the reminder's dueTimestamp to +15 minutes in the future so it repeats in 15m if still unacknowledged.
   const handleNoReactionTimeout = (id: string, explicitNextDueTimestamp?: number) => {
     stopAlarmRinging();
-    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
 
     setReminders((prev) => {
       const now = Date.now();
@@ -3437,7 +3458,7 @@ export default function App() {
                         : `دستیار هوشمند یادآورهای گفتاری، مناسبت‌ها، ایده‌ها و حصار مکانی مکان‌محور (Geofence) • نسخه ${toPersianDigits(APP_VERSION)}`}
                     </p>
                     <p className="text-stone-400 font-bold">
-                      {isEn ? 'Developer: Narvan Software Team' : 'توسعه‌دهنده: تیم نرم‌افزاری ناروَن'}
+                      {isEn ? 'Developer: Narvan Technology Team' : 'توسعه‌دهنده: تیم فناوری نارون'}
                     </p>
                     <a
                       href="https://narvanteam.ir"
@@ -3452,17 +3473,17 @@ export default function App() {
                   </div>
                 )}
 
-                {/* 4. Support Email Link (mailto:narvanapplications@gmail.com) */}
+                {/* 4. Support Email Link (mailto:info@narvanteam.ir) */}
                 <a
-                  href="mailto:narvanapplications@gmail.com?subject=YAAD%20App%20Support"
+                  href="mailto:info@narvanteam.ir?subject=YAAD%20App%20Support"
                   className="w-full px-3 py-2.5 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/35 text-indigo-300 hover:text-white text-xs font-bold flex items-center justify-between gap-2 transition-all cursor-pointer"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Mail className="w-4 h-4 text-indigo-400 shrink-0" />
                     <div className="flex flex-col min-w-0">
-                      <span>{isEn ? 'Support (Narvan Team)' : 'پشتیبانی (تیم ناروَن)'}</span>
+                      <span>{isEn ? 'Support (Narvan Technology Team)' : 'پشتیبانی (تیم فناوری نارون)'}</span>
                       <span className="text-[10px] font-mono text-stone-400 truncate" dir="ltr">
-                        narvanapplications@gmail.com
+                        info@narvanteam.ir
                       </span>
                     </div>
                   </div>
@@ -4617,6 +4638,9 @@ export default function App() {
         onRetry={androidPermissionModal.onRetry}
         language={settings.language}
       />
+
+      {/* TWO-STAGE FEEDBACK MODAL */}
+      <TwoStageFeedbackModal />
 
       </div>
       

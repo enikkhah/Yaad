@@ -20,6 +20,8 @@ import {
   X,
   MapPin,
   Navigation,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { openGoogleMapsDirections } from '../utils/geofenceManager';
 import appIcon from '../assets/images/icon.png';
@@ -182,6 +184,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
 }) => {
   const isEn = settings?.language === 'en';
   const [secondsLeft, setSecondsLeft] = useState<number>(60);
+  const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
 
   useEffect(() => {
     if (!reminder?.id) {
@@ -189,6 +192,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     }
 
     setSecondsLeft(60);
+    setIsAudioMuted(false);
 
     try {
       window.dispatchEvent(new CustomEvent('yaad:stop-all-microphones'));
@@ -213,16 +217,16 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       }, 600);
     }
 
-    // 60-second countdown timer: stops 1-minute alarm and closes the popup card; repeats in 15 minutes if no user reaction
+    // 60-second audio countdown timer: mutes the 1-minute alarm sound and schedules the +15m repeat,
+    // while keeping this Full-Screen Alert Modal open on screen until the user explicitly reacts!
     const intervalId = window.setInterval(() => {
       setSecondsLeft((prev) => {
         if (prev <= 1) {
           window.clearInterval(intervalId);
           stopAlarmRinging();
+          setIsAudioMuted(true);
           if (onNoReactionTimeout && reminder?.id) {
             onNoReactionTimeout(reminder.id);
-          } else {
-            onDismiss();
           }
           return 0;
         }
@@ -236,6 +240,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     };
   }, [
     reminder?.id,
+    reminder?.dueTimestamp,
     reminder?.ringTune,
     settings?.alarmSound,
     settings?.alarmVolume,
@@ -271,6 +276,11 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       default:
         return <Tag className="w-3.5 h-3.5" />;
     }
+  };
+
+  const handleMuteAudio = () => {
+    stopAlarmRinging();
+    setIsAudioMuted(true);
   };
 
   const handleComplete = () => {
@@ -311,85 +321,40 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
           transition={{ duration: 0.22 }}
-          className="fixed inset-0 z-[100] bg-black/65 backdrop-blur-xs flex items-start sm:items-center justify-center p-3.5 sm:p-6 pt-6 select-none"
+          className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 select-none"
           dir={isEn ? 'ltr' : 'rtl'}
         >
           <motion.div
-            initial={{ y: '100%', opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: '100%', opacity: 0 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
-            onClick={handleDismiss}
-            className={`w-full max-w-md rounded-3xl border-2 ${palette.cardBg} ${palette.cardBorder} shadow-2xl overflow-hidden transition-colors cursor-pointer`}
+            initial={{ scale: 0.92, y: 24, opacity: 0 }}
+            animate={{ scale: 1, y: 0, opacity: 1 }}
+            exit={{ scale: 0.92, y: 24, opacity: 0 }}
+            transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+            onClick={(e) => e.stopPropagation()}
+            className={`w-full max-w-md rounded-3xl border-2 ${palette.cardBg} ${palette.cardBorder} shadow-2xl overflow-hidden transition-colors`}
           >
-        {/* Minimal 1-Minute Progress Bar */}
-        <div className="w-full h-1 bg-black/20 overflow-hidden">
-          <div
-            className={`h-full transition-all duration-1000 ease-linear ${palette.progressFill}`}
-            style={{ width: `${Math.max(0, (secondsLeft / 60) * 100)}%` }}
-          />
-        </div>
+            {/* 1-Minute Audio Ringing Progress Bar */}
+            <div className="w-full h-1.5 bg-black/30 overflow-hidden">
+              <div
+                className={`h-full transition-all duration-1000 ease-linear ${palette.progressFill}`}
+                style={{ width: `${Math.max(0, (secondsLeft / 60) * 100)}%` }}
+              />
+            </div>
 
-        <div className="p-4 sm:p-5 space-y-4">
-          {/* Header Row */}
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5 min-w-0">
-              {isGeofenceAlarm ? (
-                <div className="relative w-12 h-12 rounded-2xl border border-emerald-400/70 bg-[#073831] flex items-center justify-center shrink-0 overflow-visible shadow-lg shadow-emerald-950/80">
-                  {/* Submarine Sonar Concentric Pulsing Rings */}
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-2xl opacity-35 bg-emerald-400" />
-                  <span
-                    className="animate-ping absolute inline-flex h-10 w-10 rounded-full opacity-40 border border-cyan-300"
-                    style={{ animationDuration: '1.6s' }}
-                  />
-                  <img
-                    src={appIcon}
-                    alt="YAAD"
-                    className="relative z-10 w-10 h-10 object-contain rounded-xl"
-                    draggable={false}
-                  />
-                  {/* Pulsing GPS Pin Symbol Overlay on App Logo */}
-                  <motion.div
-                    animate={{
-                      scale: [1, 1.32, 0.95, 1.25, 1],
-                      y: [0, -2, 0, -1.5, 0],
-                    }}
-                    transition={{
-                      duration: 1.25,
-                      repeat: Infinity,
-                      ease: 'easeInOut',
-                    }}
-                    className="absolute -top-1.5 -right-1.5 z-20 w-6 h-6 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-[0_0_12px_rgba(16,185,129,0.95)]"
-                  >
-                    <MapPin className="w-3.5 h-3.5 text-stone-950 fill-stone-950" />
-                  </motion.div>
-                </div>
-              ) : (
-                <div
-                  className={`relative w-8 h-8 rounded-xl border flex items-center justify-center shrink-0 overflow-hidden ${palette.accentBg} ${palette.accentText}`}
-                >
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-xl opacity-20 bg-current" />
-                  <img
-                    src={appIcon}
-                    alt="YAAD"
-                    className="relative z-10 w-full h-full object-contain rounded-[9px]"
-                    draggable={false}
-                  />
-                </div>
-              )}
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5 text-xs font-bold">
-                  <span className={palette.accentText}>
+            <div className="p-5 sm:p-6 space-y-5">
+              {/* Top Row: Close Button & Mute Audio Pill */}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`inline-flex items-center gap-1.5 text-xs font-extrabold ${palette.accentText}`}>
                     {isGeofenceAlarm
                       ? isEn
                         ? '📡 YAAD Geofence Radar'
                         : '📡 رادار حصار مکانی یاد'
                       : isEn
-                      ? 'YAAD Reminder'
-                      : 'یادآور هوشمند یاد'}
+                      ? '🔔 YAAD Full-Screen Reminder'
+                      : '🔔 یادآور هوشمند یاد'}
                   </span>
                   <span className={palette.mutedText}>·</span>
-                  <span className={`inline-flex items-center gap-1 ${palette.mutedText}`}>
+                  <span className={`inline-flex items-center gap-1 text-xs font-bold ${palette.mutedText}`}>
                     {getCategoryIcon()}
                     <span>
                       {reminder.category === 'work'
@@ -406,126 +371,196 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
                     </span>
                   </span>
                 </div>
+
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleMuteAudio();
+                    }}
+                    disabled={isAudioMuted}
+                    className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      isAudioMuted
+                        ? 'border-stone-600/40 bg-stone-800/40 text-stone-400 cursor-default'
+                        : 'border-rose-500/50 bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 active:scale-95'
+                    }`}
+                  >
+                    {isAudioMuted ? (
+                      <>
+                        <VolumeX className="w-3.5 h-3.5" />
+                        <span>{isEn ? 'Muted' : 'بی‌صدا شد'}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Volume2 className="w-3.5 h-3.5 animate-pulse" />
+                        <span>{isEn ? 'Mute' : 'قطع صدا'}</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDismiss();
+                    }}
+                    className={`p-1.5 rounded-xl transition-colors cursor-pointer ${palette.mutedText} hover:opacity-100`}
+                    title={isEn ? 'Dismiss' : 'بستن'}
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
-            </div>
 
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDismiss();
-                }}
-                className={`p-1.5 rounded-xl transition-colors cursor-pointer ${palette.mutedText} hover:opacity-100`}
-                title={isEn ? 'Close Card' : 'بستن کارت'}
+              {/* Centered Pulsing App Emblem */}
+              <div className="flex flex-col items-center justify-center pt-1 pb-1">
+                {isGeofenceAlarm ? (
+                  <div className="relative w-20 h-20 rounded-3xl border-2 border-emerald-400/80 bg-[#073831] flex items-center justify-center shrink-0 overflow-visible shadow-xl shadow-emerald-950/90">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-3xl opacity-30 bg-emerald-400" />
+                    <img
+                      src={appIcon}
+                      alt="YAAD"
+                      className="relative z-10 w-16 h-16 object-contain rounded-2xl"
+                      draggable={false}
+                    />
+                    <motion.div
+                      animate={{
+                        scale: [1, 1.28, 0.95, 1.22, 1],
+                        y: [0, -2, 0, -1.5, 0],
+                      }}
+                      transition={{
+                        duration: 1.25,
+                        repeat: Infinity,
+                        ease: 'easeInOut',
+                      }}
+                      className="absolute -top-2 -right-2 z-20 w-7 h-7 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-[0_0_12px_rgba(16,185,129,0.95)]"
+                    >
+                      <MapPin className="w-4 h-4 text-stone-950 fill-stone-950" />
+                    </motion.div>
+                  </div>
+                ) : (
+                  <div
+                    className={`relative w-20 h-20 rounded-3xl border-2 flex items-center justify-center shrink-0 overflow-visible shadow-xl ${palette.accentBg} ${palette.accentText}`}
+                  >
+                    {!isAudioMuted && (
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-3xl opacity-25 bg-current" />
+                    )}
+                    <img
+                      src={appIcon}
+                      alt="YAAD"
+                      className="relative z-10 w-16 h-16 object-contain rounded-2xl"
+                      draggable={false}
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Main Reminder Content */}
+              <div className="space-y-2.5 text-center">
+                <div
+                  className={`px-4 py-3.5 rounded-2xl border ${
+                    isGeofenceAlarm
+                      ? 'border-emerald-400/50 bg-emerald-500/15'
+                      : 'border-[#FF8C00]/45 bg-[#FF8C00]/12'
+                  }`}
+                >
+                  <h2 className={`text-xl sm:text-2xl font-black tracking-tight leading-snug ${palette.titleText}`}>
+                    {reminder.title}
+                  </h2>
+                </div>
+
+                <div className={`text-xs sm:text-sm font-bold ${palette.mutedText} flex items-center justify-center gap-2 flex-wrap`}>
+                  <span>{dateFormatted}</span>
+                  {reminder.recurrence && reminder.recurrence !== 'none' && (
+                    <>
+                      <span>·</span>
+                      <span className="inline-flex items-center gap-1">
+                        <Repeat className="w-3.5 h-3.5" />
+                        <span>{getRecurrenceLabel(reminder, isEn ? 'en' : 'fa')}</span>
+                      </span>
+                    </>
+                  )}
+                </div>
+
+                {reminder.description && (
+                  <p className={`text-xs sm:text-sm font-medium leading-relaxed pt-1 ${palette.bodyText}`}>
+                    {reminder.description}
+                  </p>
+                )}
+
+                {typeof reminder.geofence?.latitude === 'number' &&
+                  typeof reminder.geofence?.longitude === 'number' && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openGoogleMapsDirections(
+                          reminder.geofence!.latitude,
+                          reminder.geofence!.longitude,
+                          reminder.geofence?.locationName || reminder.title
+                        );
+                      }}
+                      className="w-full mt-2 min-h-[42px] py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm border border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
+                    >
+                      <Navigation className="w-4 h-4 shrink-0" />
+                      <span>{isEn ? 'Directions in Google Maps' : 'مسیریابی در گوگل‌مپ'}</span>
+                    </button>
+                  )}
+              </div>
+
+              {/* Primary + Secondary Action Buttons */}
+              <div
+                onClick={(e) => e.stopPropagation()}
+                className="space-y-2.5 pt-1"
               >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Main Reminder Content: Distinct Subject Font + Single Time in Date Line */}
-          <div className="space-y-2 py-1">
-            <div
-              className={`px-3.5 py-2.5 rounded-2xl border ${
-                isGeofenceAlarm
-                  ? 'border-emerald-400/50 bg-emerald-500/15'
-                  : 'border-[#FF8C00]/35 bg-[#FF8C00]/10'
-              }`}
-            >
-              <h2 className={`text-xl sm:text-2xl font-black tracking-tight leading-snug ${palette.titleText}`}>
-                {reminder.title}
-              </h2>
-            </div>
-
-            <div className={`text-xs font-normal ${palette.mutedText} flex items-center gap-2 flex-wrap`}>
-              <span>{dateFormatted}</span>
-              {reminder.recurrence && reminder.recurrence !== 'none' && (
-                <>
-                  <span>·</span>
-                  <span className="inline-flex items-center gap-1">
-                    <Repeat className="w-3 h-3" />
-                    <span>{getRecurrenceLabel(reminder, isEn ? 'en' : 'fa')}</span>
-                  </span>
-                </>
-              )}
-            </div>
-
-            {reminder.description && (
-              <p className={`text-xs sm:text-sm font-normal leading-relaxed pt-1 ${palette.bodyText}`}>
-                {reminder.description}
-              </p>
-            )}
-
-            {typeof reminder.geofence?.latitude === 'number' &&
-              typeof reminder.geofence?.longitude === 'number' && (
+                {/* 1. Primary Full-Width Done Button */}
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    openGoogleMapsDirections(
-                      reminder.geofence!.latitude,
-                      reminder.geofence!.longitude,
-                      reminder.geofence?.locationName || reminder.title
-                    );
+                    handleComplete();
                   }}
-                  className="w-full mt-2 min-h-[40px] py-2 px-3 rounded-xl font-bold text-xs sm:text-sm border border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
+                  className={`w-full min-h-[50px] py-3 px-4 rounded-2xl font-black text-sm sm:text-base transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-lg ${palette.doneBtn}`}
                 >
-                  <Navigation className="w-3.5 h-3.5 shrink-0" />
-                  <span>{isEn ? 'Directions in Google Maps' : 'مسیریابی در گوگل‌مپ'}</span>
+                  <CheckCircle2 className="w-5 h-5 shrink-0" />
+                  <span className="truncate">{isEn ? 'Done' : 'انجام شد'}</span>
                 </button>
-              )}
-          </div>
 
-          {/* 3 Minimal Theme-Matched Action Buttons */}
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="grid grid-cols-3 gap-2 pt-1"
-          >
-            {/* 1. Done */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleComplete();
-              }}
-              className={`min-h-[44px] py-2.5 px-3 rounded-xl font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-sm ${palette.doneBtn}`}
-            >
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              <span className="truncate">{isEn ? 'Done' : 'انجام شد'}</span>
-            </button>
+                <div className="grid grid-cols-2 gap-2.5">
+                  {/* 2. Snooze (+15m) */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handlePostpone(15);
+                    }}
+                    className={`min-h-[46px] py-2.5 px-3 rounded-2xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.secondaryBtn}`}
+                  >
+                    <Clock className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{isEn ? 'Snooze 15m' : 'تعویق ۱۵ دقیقه'}</span>
+                  </button>
 
-            {/* 2. Snooze (+15m) */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handlePostpone(15);
-              }}
-              className={`min-h-[44px] py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.secondaryBtn}`}
-            >
-              <Clock className="w-4 h-4 shrink-0" />
-              <span className="truncate">{isEn ? 'Snooze 15m' : 'تعویق ۱۵ دقیقه'}</span>
-            </button>
-
-            {/* 3. Edit Reminder (Opens Edit Form) */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleEdit();
-              }}
-              className={`min-h-[44px] py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.editBtn}`}
-            >
-              <Edit2 className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
-            </button>
-          </div>
-        </div>
+                  {/* 3. Edit Reminder (Opens Edit Form) */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEdit();
+                    }}
+                    className={`min-h-[46px] py-2.5 px-3 rounded-2xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.editBtn}`}
+                  >
+                    <Edit2 className="w-4 h-4 shrink-0" />
+                    <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
           </motion.div>
         </motion.div>
       )}
     </AnimatePresence>
   );
 };
+
 
