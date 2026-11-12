@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Reminder, AppSettings, AppTheme } from '../types';
-import { formatJalaliFull } from '../utils/jalali';
+import { formatJalaliFull, formatJalaliTime, toPersianDigits } from '../utils/jalali';
 import { getRecurrenceLabel } from '../utils/recurrence';
 import { stopAlarmRinging, speakReminderText } from '../utils/audio';
 import {
@@ -18,22 +18,28 @@ import {
   Repeat,
   Edit2,
   X,
+  Minus,
+  Maximize2,
   MapPin,
   Navigation,
   Volume2,
   VolumeX,
+  Layers,
 } from 'lucide-react';
 import { openGoogleMapsDirections } from '../utils/geofenceManager';
 import appIcon from '../assets/images/icon.png';
 
 interface AlarmModalProps {
   reminder: Reminder | null;
+  reminders?: Reminder[];
   settings?: AppSettings;
   onUpdateSettings?: (newSettings: Partial<AppSettings>) => void;
   onDismiss: () => void;
   onNoReactionTimeout?: (id: string) => void;
   onComplete: (id: string) => void;
+  onCompleteAll?: (ids: string[]) => void;
   onPostpone: (id: string, minutes: number) => void;
+  onPostponeAll?: (ids: string[], minutes: number) => void;
   onEdit?: (reminder: Reminder) => void;
 }
 
@@ -175,24 +181,41 @@ function getAlarmCardPalette(theme: AppTheme = 'dark-gold'): CardThemePalette {
 
 export const AlarmModal: React.FC<AlarmModalProps> = ({
   reminder,
+  reminders,
   settings,
   onDismiss,
   onNoReactionTimeout,
   onComplete,
+  onCompleteAll,
   onPostpone,
+  onPostponeAll,
   onEdit,
 }) => {
   const isEn = settings?.language === 'en';
   const [secondsLeft, setSecondsLeft] = useState<number>(60);
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
+  const [isMinimized, setIsMinimized] = useState<boolean>(false);
+
+  const bundledReminders = React.useMemo(() => {
+    if (reminders && reminders.length > 0) {
+      return reminders;
+    }
+    return reminder ? [reminder] : [];
+  }, [reminders, reminder]);
+
+  const activePrimary = bundledReminders[0] || reminder || null;
+  const isBundledMode = bundledReminders.length >= 2;
+  const bundleSignature = bundledReminders.map((r) => r.id).join('|');
 
   useEffect(() => {
-    if (!reminder?.id) {
+    if (!activePrimary?.id) {
+      setIsMinimized(false);
       return;
     }
 
     setSecondsLeft(60);
     setIsAudioMuted(false);
+    setIsMinimized(false);
 
     try {
       window.dispatchEvent(new CustomEvent('yaad:stop-all-microphones'));
@@ -202,15 +225,24 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
 
     // Visual in-app alarm modal only: out-of-app notification handles the alarm audio so two sounds never play with a lag
     if (!isAppCurrentlyInForeground()) {
-      triggerOutOfAppPersistentNotification(reminder, settings).catch(() => {});
+      triggerOutOfAppPersistentNotification(activePrimary, settings).catch(() => {});
     }
 
     let ttsTimer: any = null;
-    if (reminder.voiceReadAloud) {
+    const readableTitles = bundledReminders
+      .filter((r) => r.voiceReadAloud)
+      .map((r) => r.title);
+    if (readableTitles.length > 0) {
+      const combinedSpeechText =
+        readableTitles.length > 1
+          ? isEn
+            ? `You have ${readableTitles.length} simultaneous reminders: ${readableTitles.join(', and ')}`
+            : `${toPersianDigits(readableTitles.length)} یادآور همزمان: ${readableTitles.join(' ، و ')}`
+          : readableTitles[0];
       ttsTimer = setTimeout(() => {
         speakReminderText(
-          reminder.title,
-          reminder.category,
+          combinedSpeechText,
+          activePrimary.category,
           settings?.ttsVoiceRate ?? 0.95,
           settings?.language || 'fa'
         );
@@ -225,8 +257,10 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           window.clearInterval(intervalId);
           stopAlarmRinging();
           setIsAudioMuted(true);
-          if (onNoReactionTimeout && reminder?.id) {
-            onNoReactionTimeout(reminder.id);
+          if (onNoReactionTimeout) {
+            bundledReminders.forEach((item) => {
+              onNoReactionTimeout(item.id);
+            });
           }
           return 0;
         }
@@ -239,9 +273,10 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       if (ttsTimer) clearTimeout(ttsTimer);
     };
   }, [
-    reminder?.id,
-    reminder?.dueTimestamp,
-    reminder?.ringTune,
+    bundleSignature,
+    activePrimary?.id,
+    activePrimary?.dueTimestamp,
+    activePrimary?.ringTune,
     settings?.alarmSound,
     settings?.alarmVolume,
     settings?.vibrationEnabled,
@@ -249,7 +284,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     settings?.ttsVoiceRate,
   ]);
 
-  const isGeofenceAlarm = Boolean(reminder?.geofence?.enabled);
+  const isGeofenceAlarm = Boolean(activePrimary?.geofence?.enabled) && !isBundledMode;
   const basePalette = getAlarmCardPalette(settings?.theme);
   const palette: CardThemePalette = isGeofenceAlarm
     ? {
@@ -267,8 +302,8 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
       }
     : basePalette;
 
-  const getCategoryIcon = () => {
-    switch (reminder?.category) {
+  const getCategoryIcon = (cat?: string) => {
+    switch (cat || activePrimary?.category) {
       case 'work':
         return <Briefcase className="w-3.5 h-3.5" />;
       case 'family':
@@ -283,40 +318,150 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     setIsAudioMuted(true);
   };
 
-  const handleComplete = () => {
-    if (!reminder) return;
+  const handleMinimize = () => {
     stopAlarmRinging();
-    clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
-    onComplete(reminder.id);
+    setIsAudioMuted(true);
+    setIsMinimized(true);
   };
 
-  const handlePostpone = (minutes: number) => {
-    if (!reminder) return;
-    stopAlarmRinging();
-    clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
-    onPostpone(reminder.id, minutes);
+  const handleRestoreMinimized = () => {
+    setIsMinimized(false);
   };
 
-  const handleEdit = () => {
-    if (!reminder) return;
+  const handleCompleteSingle = (targetId: string) => {
+    if (bundledReminders.length <= 1) {
+      stopAlarmRinging();
+    }
+    clearOutOfAppPersistentNotification(targetId).catch(() => {});
+    onComplete(targetId);
+  };
+
+  const handlePostponeSingle = (targetId: string, minutes: number) => {
+    if (bundledReminders.length <= 1) {
+      stopAlarmRinging();
+    }
+    clearOutOfAppPersistentNotification(targetId).catch(() => {});
+    onPostpone(targetId, minutes);
+  };
+
+  const handleCompleteAllBundled = () => {
     stopAlarmRinging();
-    clearOutOfAppPersistentNotification(reminder.id).catch(() => {});
+    const ids = bundledReminders.map((r) => r.id);
+    ids.forEach((id) => {
+      clearOutOfAppPersistentNotification(id).catch(() => {});
+    });
+    if (onCompleteAll) {
+      onCompleteAll(ids);
+    } else {
+      ids.forEach((id) => onComplete(id));
+    }
+  };
+
+  const handlePostponeAllBundled = (minutes: number) => {
+    stopAlarmRinging();
+    const ids = bundledReminders.map((r) => r.id);
+    ids.forEach((id) => {
+      clearOutOfAppPersistentNotification(id).catch(() => {});
+    });
+    if (onPostponeAll) {
+      onPostponeAll(ids, minutes);
+    } else {
+      ids.forEach((id) => onPostpone(id, minutes));
+    }
+  };
+
+  const handleEditItem = (targetReminder: Reminder) => {
+    stopAlarmRinging();
+    clearOutOfAppPersistentNotification(targetReminder.id).catch(() => {});
     if (onEdit) {
-      onEdit(reminder);
+      onEdit(targetReminder);
     }
   };
 
   const handleDismiss = () => {
     stopAlarmRinging();
+    setIsMinimized(false);
     onDismiss();
   };
 
-  const dateFormatted = reminder ? formatJalaliFull(reminder.dueTimestamp, isEn ? 'en' : 'fa') : '';
+  const dateFormatted = activePrimary
+    ? formatJalaliFull(activePrimary.dueTimestamp, isEn ? 'en' : 'fa')
+    : '';
 
   return (
     <AnimatePresence>
-      {reminder && (
+      {activePrimary && isMinimized && (
         <motion.div
+          key="alarm-minimized-pill"
+          initial={{ y: 40, opacity: 0, scale: 0.94 }}
+          animate={{ y: 0, opacity: 1, scale: 1 }}
+          exit={{ y: 40, opacity: 0, scale: 0.94 }}
+          transition={{ type: 'spring', damping: 24, stiffness: 320 }}
+          className="fixed bottom-20 left-3 right-3 z-[105] max-w-md mx-auto select-none"
+          dir="ltr"
+        >
+          <div
+            onClick={handleRestoreMinimized}
+            className="flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-2xl border-2 border-[#FF8C00] bg-[#101222]/95 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.65)] cursor-pointer hover:bg-[#16192E] transition-all"
+          >
+            {/* Left: Complete Close (X) */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleDismiss();
+              }}
+              className="w-8 h-8 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 border border-rose-500/50 text-rose-200 flex items-center justify-center shrink-0 transition-all cursor-pointer active:scale-90"
+              title={isEn ? 'Close completely' : 'بستن کامل'}
+            >
+              <X className="w-4 h-4 stroke-[2.5]" />
+            </button>
+
+            {/* Center: Reminder Title / Bundle Summary */}
+            <div
+              className="flex items-center gap-2.5 min-w-0 flex-1"
+              dir={isEn ? 'ltr' : 'rtl'}
+            >
+              <img
+                src={appIcon}
+                alt="YAAD"
+                className="w-8 h-8 rounded-xl object-contain shrink-0"
+                draggable={false}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs sm:text-sm font-black text-white truncate">
+                  {isBundledMode
+                    ? isEn
+                      ? `${bundledReminders.length} Simultaneous Reminders`
+                      : `${toPersianDigits(bundledReminders.length)} یادآور همزمان در انتظار`
+                    : activePrimary.title}
+                </p>
+                <p className="text-[11px] font-bold text-[#FF8C00] truncate">
+                  {isEn ? 'Tap to reopen full-screen alert' : 'برای باز کردن مجدد اعلان ضربه بزنید'}
+                </p>
+              </div>
+            </div>
+
+            {/* Right: Reopen / Maximize Button */}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                handleRestoreMinimized();
+              }}
+              className="px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/60 text-emerald-200 text-xs font-black flex items-center gap-1 shrink-0 transition-all cursor-pointer active:scale-95"
+              title={isEn ? 'Reopen' : 'باز کردن مجدد'}
+            >
+              <Maximize2 className="w-3.5 h-3.5 stroke-[2.5]" />
+              <span>{isEn ? 'Open' : 'باز کردن'}</span>
+            </button>
+          </div>
+        </motion.div>
+      )}
+
+      {activePrimary && !isMinimized && (
+        <motion.div
+          key="alarm-fullscreen-modal"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -340,39 +485,49 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
               />
             </div>
 
-            <div className="p-5 sm:p-6 space-y-5">
-              {/* Top Row: Close Button & Mute Audio Pill */}
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className={`inline-flex items-center gap-1.5 text-xs font-extrabold ${palette.accentText}`}>
-                    {isGeofenceAlarm
-                      ? isEn
-                        ? '📡 YAAD Geofence Radar'
-                        : '📡 رادار حصار مکانی یاد'
-                      : isEn
-                      ? '🔔 YAAD Full-Screen Reminder'
-                      : '🔔 یادآور هوشمند یاد'}
-                  </span>
-                  <span className={palette.mutedText}>·</span>
-                  <span className={`inline-flex items-center gap-1 text-xs font-bold ${palette.mutedText}`}>
-                    {getCategoryIcon()}
-                    <span>
-                      {reminder.category === 'work'
-                        ? isEn
-                          ? 'Work'
-                          : 'کاری'
-                        : reminder.category === 'family'
-                        ? isEn
-                          ? 'Family'
-                          : 'خانوادگی'
-                        : isEn
-                        ? 'Other'
-                        : 'سایر'}
-                    </span>
-                  </span>
-                </div>
+            <div className="p-5 sm:p-6 space-y-4">
+              {/* Top Window Control Row (Physical LTR: Top-Left = Close (X), Center = Brand & Mute, Top-Right = Minimize (—)) */}
+              <div className="flex items-center justify-between gap-2" dir="ltr">
+                {/* Top-Left: Close Completely (X) */}
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDismiss();
+                  }}
+                  className="w-8 h-8 rounded-xl bg-rose-500/15 hover:bg-rose-500/30 border border-rose-500/45 text-rose-200 flex items-center justify-center shrink-0 transition-all cursor-pointer active:scale-90"
+                  title={isEn ? 'Close completely' : 'بستن کامل'}
+                  aria-label={isEn ? 'Close completely' : 'بستن کامل'}
+                >
+                  <X className="w-4 h-4 stroke-[2.5]" />
+                </button>
 
-                <div className="flex items-center gap-1.5 shrink-0">
+                {/* Center: Brand Label + Mute Audio Pill */}
+                <div
+                  className="flex items-center justify-center gap-1.5 min-w-0 flex-1 flex-wrap"
+                  dir={isEn ? 'ltr' : 'rtl'}
+                >
+                  {isBundledMode ? (
+                    <span className="inline-flex items-center gap-1 px-2 py-1 rounded-xl bg-emerald-500/20 border border-emerald-400/50 text-emerald-300 text-[11px] font-black">
+                      <Layers className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span>
+                        {isEn
+                          ? `${bundledReminders.length} Simultaneous`
+                          : `${toPersianDigits(bundledReminders.length)} یادآور همزمان`}
+                      </span>
+                    </span>
+                  ) : (
+                    <span className={`inline-flex items-center gap-1 text-xs font-extrabold truncate ${palette.accentText}`}>
+                      {isGeofenceAlarm
+                        ? isEn
+                          ? '📡 Geofence Radar'
+                          : '📡 رادار حصار مکانی'
+                        : isEn
+                        ? '🔔 YAAD Reminder'
+                        : '🔔 یادآور هوشمند یاد'}
+                    </span>
+                  )}
+
                   <button
                     type="button"
                     onClick={(e) => {
@@ -380,181 +535,330 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
                       handleMuteAudio();
                     }}
                     disabled={isAudioMuted}
-                    className={`px-2.5 py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-2 py-1 rounded-xl border text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1 shrink-0 ${
                       isAudioMuted
                         ? 'border-stone-600/40 bg-stone-800/40 text-stone-400 cursor-default'
-                        : 'border-rose-500/50 bg-rose-500/15 hover:bg-rose-500/25 text-rose-200 active:scale-95'
+                        : 'border-amber-500/50 bg-amber-500/15 hover:bg-amber-500/25 text-amber-200 active:scale-95'
                     }`}
                   >
                     {isAudioMuted ? (
                       <>
-                        <VolumeX className="w-3.5 h-3.5" />
-                        <span>{isEn ? 'Muted' : 'بی‌صدا شد'}</span>
+                        <VolumeX className="w-3 h-3" />
+                        <span>{isEn ? 'Muted' : 'بی‌صدا'}</span>
                       </>
                     ) : (
                       <>
-                        <Volume2 className="w-3.5 h-3.5 animate-pulse" />
+                        <Volume2 className="w-3 h-3 animate-pulse" />
                         <span>{isEn ? 'Mute' : 'قطع صدا'}</span>
                       </>
                     )}
                   </button>
-
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDismiss();
-                    }}
-                    className={`p-1.5 rounded-xl transition-colors cursor-pointer ${palette.mutedText} hover:opacity-100`}
-                    title={isEn ? 'Dismiss' : 'بستن'}
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Centered Pulsing App Emblem */}
-              <div className="flex flex-col items-center justify-center pt-1 pb-1">
-                {isGeofenceAlarm ? (
-                  <div className="relative w-20 h-20 rounded-3xl border-2 border-emerald-400/80 bg-[#073831] flex items-center justify-center shrink-0 overflow-visible shadow-xl shadow-emerald-950/90">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-3xl opacity-30 bg-emerald-400" />
-                    <img
-                      src={appIcon}
-                      alt="YAAD"
-                      className="relative z-10 w-16 h-16 object-contain rounded-2xl"
-                      draggable={false}
-                    />
-                    <motion.div
-                      animate={{
-                        scale: [1, 1.28, 0.95, 1.22, 1],
-                        y: [0, -2, 0, -1.5, 0],
-                      }}
-                      transition={{
-                        duration: 1.25,
-                        repeat: Infinity,
-                        ease: 'easeInOut',
-                      }}
-                      className="absolute -top-2 -right-2 z-20 w-7 h-7 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-[0_0_12px_rgba(16,185,129,0.95)]"
-                    >
-                      <MapPin className="w-4 h-4 text-stone-950 fill-stone-950" />
-                    </motion.div>
-                  </div>
-                ) : (
-                  <div
-                    className={`relative w-20 h-20 rounded-3xl border-2 flex items-center justify-center shrink-0 overflow-visible shadow-xl ${palette.accentBg} ${palette.accentText}`}
-                  >
-                    {!isAudioMuted && (
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-3xl opacity-25 bg-current" />
-                    )}
-                    <img
-                      src={appIcon}
-                      alt="YAAD"
-                      className="relative z-10 w-16 h-16 object-contain rounded-2xl"
-                      draggable={false}
-                    />
-                  </div>
-                )}
-              </div>
-
-              {/* Main Reminder Content */}
-              <div className="space-y-2.5 text-center">
-                <div
-                  className={`px-4 py-3.5 rounded-2xl border ${
-                    isGeofenceAlarm
-                      ? 'border-emerald-400/50 bg-emerald-500/15'
-                      : 'border-[#FF8C00]/45 bg-[#FF8C00]/12'
-                  }`}
-                >
-                  <h2 className={`text-xl sm:text-2xl font-black tracking-tight leading-snug ${palette.titleText}`}>
-                    {reminder.title}
-                  </h2>
                 </div>
 
-                <div className={`text-xs sm:text-sm font-bold ${palette.mutedText} flex items-center justify-center gap-2 flex-wrap`}>
-                  <span>{dateFormatted}</span>
-                  {reminder.recurrence && reminder.recurrence !== 'none' && (
-                    <>
-                      <span>·</span>
-                      <span className="inline-flex items-center gap-1">
-                        <Repeat className="w-3.5 h-3.5" />
-                        <span>{getRecurrenceLabel(reminder, isEn ? 'en' : 'fa')}</span>
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                {reminder.description && (
-                  <p className={`text-xs sm:text-sm font-medium leading-relaxed pt-1 ${palette.bodyText}`}>
-                    {reminder.description}
-                  </p>
-                )}
-
-                {typeof reminder.geofence?.latitude === 'number' &&
-                  typeof reminder.geofence?.longitude === 'number' && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openGoogleMapsDirections(
-                          reminder.geofence!.latitude,
-                          reminder.geofence!.longitude,
-                          reminder.geofence?.locationName || reminder.title
-                        );
-                      }}
-                      className="w-full mt-2 min-h-[42px] py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm border border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
-                    >
-                      <Navigation className="w-4 h-4 shrink-0" />
-                      <span>{isEn ? 'Directions in Google Maps' : 'مسیریابی در گوگل‌مپ'}</span>
-                    </button>
-                  )}
-              </div>
-
-              {/* Primary + Secondary Action Buttons */}
-              <div
-                onClick={(e) => e.stopPropagation()}
-                className="space-y-2.5 pt-1"
-              >
-                {/* 1. Primary Full-Width Done Button */}
+                {/* Top-Right: Minimize Temporarily (—) */}
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    handleComplete();
+                    handleMinimize();
                   }}
-                  className={`w-full min-h-[50px] py-3 px-4 rounded-2xl font-black text-sm sm:text-base transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-lg ${palette.doneBtn}`}
+                  className="w-8 h-8 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/30 border border-emerald-400/50 text-emerald-200 flex items-center justify-center shrink-0 transition-all cursor-pointer active:scale-90"
+                  title={isEn ? 'Minimize temporarily' : 'مینیمایز (بستن موقت)'}
+                  aria-label={isEn ? 'Minimize temporarily' : 'مینیمایز (بستن موقت)'}
                 >
-                  <CheckCircle2 className="w-5 h-5 shrink-0" />
-                  <span className="truncate">{isEn ? 'Done' : 'انجام شد'}</span>
+                  <Minus className="w-4 h-4 stroke-[2.5]" />
                 </button>
-
-                <div className="grid grid-cols-2 gap-2.5">
-                  {/* 2. Snooze (+15m) */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handlePostpone(15);
-                    }}
-                    className={`min-h-[46px] py-2.5 px-3 rounded-2xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.secondaryBtn}`}
-                  >
-                    <Clock className="w-4 h-4 shrink-0" />
-                    <span className="truncate">{isEn ? 'Snooze 15m' : 'تعویق ۱۵ دقیقه'}</span>
-                  </button>
-
-                  {/* 3. Edit Reminder (Opens Edit Form) */}
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleEdit();
-                    }}
-                    className={`min-h-[46px] py-2.5 px-3 rounded-2xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.editBtn}`}
-                  >
-                    <Edit2 className="w-4 h-4 shrink-0" />
-                    <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
-                  </button>
-                </div>
               </div>
+
+              {isBundledMode ? (
+                /* BUNDLED / GROUPED SIMULTANEOUS REMINDERS VIEW */
+                <>
+                  <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-2xl bg-stone-950/60 border border-stone-800">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={appIcon}
+                        alt="YAAD"
+                        className="w-10 h-10 object-contain rounded-xl shrink-0"
+                        draggable={false}
+                      />
+                      <div className="min-w-0">
+                        <p className={`text-xs sm:text-sm font-black truncate ${palette.titleText}`}>
+                          {isEn
+                            ? 'Bundled Reminders Alert'
+                            : 'ادغام هوشمند یادآورهای همزمان'}
+                        </p>
+                        <p className={`text-[11px] font-bold truncate ${palette.mutedText}`}>
+                          {dateFormatted}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Scrollable Bundled Reminder Cards */}
+                  <div className="max-h-[42vh] overflow-y-auto space-y-2.5 pr-0.5">
+                    {bundledReminders.map((item, idx) => {
+                      const itemTime = formatJalaliTime(item.dueTimestamp, isEn ? 'en' : 'fa');
+                      return (
+                        <div
+                          key={item.id}
+                          className="p-3.5 rounded-2xl bg-stone-950/80 border border-stone-800 hover:border-emerald-500/40 transition-all space-y-2.5"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 mb-1">
+                                <span className="px-1.5 py-0.5 rounded-md bg-emerald-500/15 border border-emerald-500/30 font-mono">
+                                  #{isEn ? idx + 1 : toPersianDigits(idx + 1)}
+                                </span>
+                                <span className="inline-flex items-center gap-1 text-stone-300">
+                                  {getCategoryIcon(item.category)}
+                                  <span>{itemTime}</span>
+                                </span>
+                                {item.recurrence && item.recurrence !== 'none' && (
+                                  <span className="inline-flex items-center gap-0.5 text-indigo-300">
+                                    <Repeat className="w-3 h-3" />
+                                    <span>{getRecurrenceLabel(item, isEn ? 'en' : 'fa')}</span>
+                                  </span>
+                                )}
+                              </div>
+                              <h3 className="text-sm sm:text-base font-black text-white leading-snug break-words">
+                                {item.title}
+                              </h3>
+                              {item.description && (
+                                <p className="text-xs text-stone-300 mt-1 line-clamp-2 leading-relaxed">
+                                  {item.description}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Individual Item Actions */}
+                          <div className="grid grid-cols-3 gap-1.5 pt-1">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleCompleteSingle(item.id);
+                              }}
+                              className="py-1.5 px-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs flex items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">{isEn ? 'Done' : 'انجام شد'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handlePostponeSingle(item.id, 15);
+                              }}
+                              className="py-1.5 px-2 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <Clock className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                              <span className="truncate">{isEn ? '+15m' : '+۱۵ دقیقه'}</span>
+                            </button>
+
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleEditItem(item);
+                              }}
+                              className="py-1.5 px-2 rounded-xl bg-stone-900 hover:bg-stone-800 text-indigo-300 border border-indigo-500/40 font-bold text-xs flex items-center justify-center gap-1 cursor-pointer active:scale-95 transition-all"
+                            >
+                              <Edit2 className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Master Batch Actions for All Bundled Reminders */}
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="space-y-2 pt-1 border-t border-stone-800/80"
+                  >
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCompleteAllBundled();
+                      }}
+                      className={`w-full min-h-[48px] py-2.5 px-4 rounded-2xl font-black text-sm sm:text-base transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-lg ${palette.doneBtn}`}
+                    >
+                      <CheckCircle2 className="w-5 h-5 shrink-0" />
+                      <span className="truncate">
+                        {isEn
+                          ? `Done All (${bundledReminders.length})`
+                          : `انجام همه (${toPersianDigits(bundledReminders.length)} مورد)`}
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handlePostponeAllBundled(15);
+                      }}
+                      className={`w-full min-h-[44px] py-2 px-3 rounded-2xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.secondaryBtn}`}
+                    >
+                      <Clock className="w-4 h-4 shrink-0" />
+                      <span className="truncate">
+                        {isEn
+                          ? `Snooze All 15m (${bundledReminders.length})`
+                          : `تعویق همه به مدت ۱۵ دقیقه`}
+                      </span>
+                    </button>
+                  </div>
+                </>
+              ) : (
+                /* SINGLE REMINDER VIEW */
+                <>
+                  {/* Centered Pulsing App Emblem */}
+                  <div className="flex flex-col items-center justify-center pt-1 pb-1">
+                    {isGeofenceAlarm ? (
+                      <div className="relative w-20 h-20 rounded-3xl border-2 border-emerald-400/80 bg-[#073831] flex items-center justify-center shrink-0 overflow-visible shadow-xl shadow-emerald-950/90">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-3xl opacity-30 bg-emerald-400" />
+                        <img
+                          src={appIcon}
+                          alt="YAAD"
+                          className="relative z-10 w-16 h-16 object-contain rounded-2xl"
+                          draggable={false}
+                        />
+                        <motion.div
+                          animate={{
+                            scale: [1, 1.28, 0.95, 1.22, 1],
+                            y: [0, -2, 0, -1.5, 0],
+                          }}
+                          transition={{
+                            duration: 1.25,
+                            repeat: Infinity,
+                            ease: 'easeInOut',
+                          }}
+                          className="absolute -top-2 -right-2 z-20 w-7 h-7 rounded-full bg-emerald-500 border-2 border-white flex items-center justify-center shadow-[0_0_12px_rgba(16,185,129,0.95)]"
+                        >
+                          <MapPin className="w-4 h-4 text-stone-950 fill-stone-950" />
+                        </motion.div>
+                      </div>
+                    ) : (
+                      <div
+                        className={`relative w-20 h-20 rounded-3xl border-2 flex items-center justify-center shrink-0 overflow-visible shadow-xl ${palette.accentBg} ${palette.accentText}`}
+                      >
+                        {!isAudioMuted && (
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-3xl opacity-25 bg-current" />
+                        )}
+                        <img
+                          src={appIcon}
+                          alt="YAAD"
+                          className="relative z-10 w-16 h-16 object-contain rounded-2xl"
+                          draggable={false}
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Main Reminder Content */}
+                  <div className="space-y-2.5 text-center">
+                    <div
+                      className={`px-4 py-3.5 rounded-2xl border ${
+                        isGeofenceAlarm
+                          ? 'border-emerald-400/50 bg-emerald-500/15'
+                          : 'border-[#FF8C00]/45 bg-[#FF8C00]/12'
+                      }`}
+                    >
+                      <h2 className={`text-xl sm:text-2xl font-black tracking-tight leading-snug ${palette.titleText}`}>
+                        {activePrimary.title}
+                      </h2>
+                    </div>
+
+                    <div className={`text-xs sm:text-sm font-bold ${palette.mutedText} flex items-center justify-center gap-2 flex-wrap`}>
+                      <span>{dateFormatted}</span>
+                      {activePrimary.recurrence && activePrimary.recurrence !== 'none' && (
+                        <>
+                          <span>·</span>
+                          <span className="inline-flex items-center gap-1">
+                            <Repeat className="w-3.5 h-3.5" />
+                            <span>{getRecurrenceLabel(activePrimary, isEn ? 'en' : 'fa')}</span>
+                          </span>
+                        </>
+                      )}
+                    </div>
+
+                    {activePrimary.description && (
+                      <p className={`text-xs sm:text-sm font-medium leading-relaxed pt-1 ${palette.bodyText}`}>
+                        {activePrimary.description}
+                      </p>
+                    )}
+
+                    {typeof activePrimary.geofence?.latitude === 'number' &&
+                      typeof activePrimary.geofence?.longitude === 'number' && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openGoogleMapsDirections(
+                              activePrimary.geofence!.latitude,
+                              activePrimary.geofence!.longitude,
+                              activePrimary.geofence?.locationName || activePrimary.title
+                            );
+                          }}
+                          className="w-full mt-2 min-h-[42px] py-2.5 px-3 rounded-xl font-bold text-xs sm:text-sm border border-sky-400/50 bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5"
+                        >
+                          <Navigation className="w-4 h-4 shrink-0" />
+                          <span>{isEn ? 'Directions in Google Maps' : 'مسیریابی در گوگل‌مپ'}</span>
+                        </button>
+                      )}
+                  </div>
+
+                  {/* Primary + Secondary Action Buttons */}
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="space-y-2.5 pt-1"
+                  >
+                    {/* 1. Primary Full-Width Done Button */}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleCompleteSingle(activePrimary.id);
+                      }}
+                      className={`w-full min-h-[50px] py-3 px-4 rounded-2xl font-black text-sm sm:text-base transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-lg ${palette.doneBtn}`}
+                    >
+                      <CheckCircle2 className="w-5 h-5 shrink-0" />
+                      <span className="truncate">{isEn ? 'Done' : 'انجام شد'}</span>
+                    </button>
+
+                    <div className="grid grid-cols-2 gap-2.5">
+                      {/* 2. Snooze (+15m) */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handlePostponeSingle(activePrimary.id, 15);
+                        }}
+                        className={`min-h-[46px] py-2.5 px-3 rounded-2xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.secondaryBtn}`}
+                      >
+                        <Clock className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{isEn ? 'Snooze 15m' : 'تعویق ۱۵ دقیقه'}</span>
+                      </button>
+
+                      {/* 3. Edit Reminder (Opens Edit Form) */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleEditItem(activePrimary);
+                        }}
+                        className={`min-h-[46px] py-2.5 px-3 rounded-2xl font-bold text-xs sm:text-sm border transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 ${palette.editBtn}`}
+                      >
+                        <Edit2 className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{isEn ? 'Edit' : 'ویرایش'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           </motion.div>
         </motion.div>

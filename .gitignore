@@ -23,4 +23,5 @@ dev-dist/
 .aistudio/
 /.aistudio/
 .aistudio/**
+public/assets/aistudio/
 **/.tempmediaStorage/

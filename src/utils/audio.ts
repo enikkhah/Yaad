@@ -620,8 +620,6 @@ export const setSubmarineSonarMuted = (muted: boolean): void => {
   }
 };
 
-export const isSubmarineSonarMuted = (): boolean => isSonarMuted;
-
 /**
  * Computes the physical 5% zone threshold with a 15m minimum (capped at 35% of radius for very small geofences)
  * so normal 5-12m GPS jitter never skips the central 5% target zone or the 5% pre-entry band.

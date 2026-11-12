@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Reminder, Category, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
-import { getJalaliComponents, getGregorianComponents, formatJalaliFull, toPersianDigits, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch } from './utils/jalali';
+import { getJalaliComponents, getGregorianComponents, formatJalaliFull, toPersianDigits, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch, reconcileReminderWithCurrentTimezone } from './utils/jalali';
 import {
   setGlobalVolume,
   setGlobalVibration,
@@ -645,7 +645,82 @@ export default function App() {
   const [isGeofenceActive, setIsGeofenceActive] = useState<boolean>(() => isGeofenceTrackingEnabled());
   const [isCreateChoiceOpen, setIsCreateChoiceOpen] = useState(false);
   const [locationFilter, setLocationFilter] = useState<'all' | 'checkpoints'>('all');
-  const [activeAlarmReminder, setActiveAlarmReminder] = useState<Reminder | null>(null);
+  const [activeAlarmReminders, setActiveAlarmReminders] = useState<Reminder[]>([]);
+  const activeAlarmRemindersRef = useRef<Reminder[]>([]);
+  useEffect(() => {
+    activeAlarmRemindersRef.current = activeAlarmReminders;
+  }, [activeAlarmReminders]);
+  const activeAlarmReminder = activeAlarmReminders[0] || null;
+  const sortAlarmBundle = useCallback((list: Reminder[]): Reminder[] => {
+    const prioWeight = (r: Reminder) => {
+      if (typeof r.priorityLevel === 'number') return r.priorityLevel;
+      if (r.priority === 'high') return 5;
+      if (r.priority === 'medium') return 3;
+      return 1;
+    };
+    return [...list].sort((a, b) => {
+      const pDiff = prioWeight(b) - prioWeight(a);
+      if (pDiff !== 0) return pDiff;
+      return a.dueTimestamp - b.dueTimestamp;
+    });
+  }, []);
+  const upsertBundledAlarmReminders = useCallback(
+    (incoming: Reminder | Reminder[]) => {
+      const items = Array.isArray(incoming) ? incoming : [incoming];
+      if (items.length === 0) return;
+      setActiveAlarmReminders((prevList) => {
+        const map = new Map<string, Reminder>();
+        for (const existing of prevList) {
+          map.set(existing.id, existing);
+        }
+        for (const item of items) {
+          if (item && item.id) {
+            map.set(item.id, item);
+          }
+        }
+        const merged = sortAlarmBundle(Array.from(map.values()));
+        activeAlarmRemindersRef.current = merged;
+        return merged;
+      });
+    },
+    [sortAlarmBundle]
+  );
+  const removeAlarmReminderFromBundle = useCallback((reminderId: string) => {
+    setActiveAlarmReminders((prevList) => {
+      const remaining = prevList.filter((item) => item.id !== reminderId);
+      activeAlarmRemindersRef.current = remaining;
+      if (remaining.length === 0) {
+        stopAlarmRinging();
+      }
+      return remaining;
+    });
+  }, []);
+  const setActiveAlarmReminder = useCallback(
+    (
+      updater:
+        | Reminder
+        | null
+        | ((prev: Reminder | null) => Reminder | null)
+    ) => {
+      setActiveAlarmReminders((prevList) => {
+        const prevFirst = prevList[0] || null;
+        const nextVal = typeof updater === 'function' ? updater(prevFirst) : updater;
+        if (!nextVal) {
+          activeAlarmRemindersRef.current = [];
+          return [];
+        }
+        const map = new Map<string, Reminder>();
+        for (const existing of prevList) {
+          map.set(existing.id, existing);
+        }
+        map.set(nextVal.id, nextVal);
+        const merged = sortAlarmBundle(Array.from(map.values()));
+        activeAlarmRemindersRef.current = merged;
+        return merged;
+      });
+    },
+    [sortAlarmBundle]
+  );
   const [activeGeofenceAlerts, setActiveGeofenceAlerts] = useState<GeofenceAlertData[]>([]);
   const activeGeofenceAlert = activeGeofenceAlerts[0] || null;
   const setActiveGeofenceAlert = useCallback(
@@ -1436,11 +1511,63 @@ export default function App() {
     }
   }, [reminders]);
 
+  // Reconcile pending reminders with the phone's local timezone / DST so travel or clock offset shifts keep local wall-clock time stable
+  const lastObservedTzSignatureRef = useRef<string>('');
+  useEffect(() => {
+    const checkTimezoneStability = () => {
+      let currentTzName = '';
+      try {
+        currentTzName = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      } catch {}
+      const currentOffset = -new Date().getTimezoneOffset();
+      const tzSignature = `${currentTzName}|${currentOffset}`;
+
+      let anyChanged = false;
+      const currentList = remindersRef.current;
+      const reconciledList = currentList.map((rem) => {
+        const { reminder: reconciled, changed } = reconcileReminderWithCurrentTimezone(rem);
+        if (changed) {
+          anyChanged = true;
+        }
+        return reconciled;
+      });
+
+      if (anyChanged) {
+        remindersRef.current = reconciledList;
+        setReminders(reconciledList);
+        try {
+          localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(reconciledList));
+        } catch {}
+        syncAllRemindersWithLocalNotifications(reconciledList, settingsRef.current).catch(() => {});
+      } else if (
+        lastObservedTzSignatureRef.current &&
+        lastObservedTzSignatureRef.current !== tzSignature
+      ) {
+        syncAllRemindersWithLocalNotifications(currentList, settingsRef.current).catch(() => {});
+      }
+      lastObservedTzSignatureRef.current = tzSignature;
+    };
+
+    checkTimezoneStability();
+    const tzInterval = setInterval(checkTimezoneStability, 30000);
+    window.addEventListener('focus', checkTimezoneStability);
+    document.addEventListener('visibilitychange', checkTimezoneStability);
+    return () => {
+      clearInterval(tzInterval);
+      window.removeEventListener('focus', checkTimezoneStability);
+      document.removeEventListener('visibilitychange', checkTimezoneStability);
+    };
+  }, []);
+
   // Robust live time & alarm triggers (with unthrottled Web Worker for background tabs)
+  // Includes Simultaneous Notification Bundling / Queuing so reminders due at the same time (or within ~30s) merge into a single grouped Full-Screen Modal
   useEffect(() => {
     const checkAlarms = () => {
       const now = Date.now();
       setCurrentTime(now);
+
+      const newlyDueBundle: Reminder[] = [];
+      const SIMULTANEOUS_WINDOW_MS = 30 * 1000; // 30s lookahead window to bundle near-simultaneous reminders together
 
       reminders.forEach((r) => {
         // Check if this reminder was actioned recently (e.g. Done, Snooze, or Stop via notification)
@@ -1483,8 +1610,7 @@ export default function App() {
               ) {
                 triggeredAlarmsRef.current.add(cycleKey);
                 const updatedForCycle: Reminder = { ...r, dueTimestamp: currentCycleStart, status: 'postponed' };
-                setActiveAlarmReminder(updatedForCycle);
-                triggerOutOfAppPersistentNotification(updatedForCycle, settings).catch(() => {});
+                newlyDueBundle.push(updatedForCycle);
               }
             } else {
               // Outside the 1-minute ringing window: move dueTimestamp to the next 15-minute mark after NOW in the timeline,
@@ -1517,27 +1643,87 @@ export default function App() {
             !triggeredAlarmsRef.current.has(r.id)
           ) {
             triggeredAlarmsRef.current.add(cycleKey);
-            setActiveAlarmReminder({ ...r });
-
-            // Trigger out-of-app notification sound (on Android already fired by TimedNotificationPublisher; on Web fired if permitted)
-            // Do NOT cancel or dismiss the delivered notification when the app is open, so the out-of-app sound plays cleanly
-            triggerOutOfAppPersistentNotification(
-              r,
-              settings
-            ).catch(() => {});
+            newlyDueBundle.push({ ...r });
           }
         }
       });
+
+      // If at least one reminder triggered right now, also check if any other pending reminder is scheduled within SIMULTANEOUS_WINDOW_MS (same minute/cluster)
+      if (newlyDueBundle.length > 0) {
+        reminders.forEach((candidate) => {
+          if (
+            candidate.deletedAt ||
+            candidate.status === 'completed' ||
+            candidate.status === 'cancelled' ||
+            candidate.acknowledged === true
+          ) {
+            return;
+          }
+          if (newlyDueBundle.some((b) => b.id === candidate.id)) return;
+          const lastActionTime = recentNotificationActionsRef.current.get(candidate.id) || candidate.lastActionAt || 0;
+          if (now - lastActionTime < 300000) return;
+
+          const diffMs = Math.abs(candidate.dueTimestamp - now);
+          if (diffMs <= SIMULTANEOUS_WINDOW_MS) {
+            const cycleKey = `${candidate.id}_${candidate.dueTimestamp}_0`;
+            triggeredAlarmsRef.current.add(cycleKey);
+            newlyDueBundle.push({ ...candidate });
+          }
+        });
+
+        upsertBundledAlarmReminders(newlyDueBundle);
+        const combinedBundle = sortAlarmBundle([
+          ...activeAlarmRemindersRef.current.filter(
+            (existing) => !newlyDueBundle.some((n) => n.id === existing.id)
+          ),
+          ...newlyDueBundle,
+        ]);
+        triggerOutOfAppPersistentNotification(
+          combinedBundle[0],
+          settings,
+          undefined,
+          combinedBundle
+        ).catch(() => {});
+      }
     };
 
     // Listen to immediate native broadcast when a scheduled alarm fires while the app is open (<50ms latency)
     const handleNativeReminderDue = (e: Event) => {
-      const customEv = e as CustomEvent<{ reminderId?: string; notificationId?: number }>;
+      const customEv = e as CustomEvent<{
+        reminderId?: string;
+        notificationId?: number;
+        bundledReminderIds?: string[];
+      }>;
       const remId = customEv.detail?.reminderId;
-      if (remId) {
-        const target = remindersRef.current.find((item) => item.id === remId);
-        if (target && !target.deletedAt && target.status !== 'completed' && !target.acknowledged) {
-          setActiveAlarmReminder({ ...target });
+      const bundledIds = Array.isArray(customEv.detail?.bundledReminderIds)
+        ? customEv.detail.bundledReminderIds
+        : remId
+        ? [remId]
+        : [];
+      if (bundledIds.length > 0) {
+        const now = Date.now();
+        const dueItems: Reminder[] = [];
+        for (const id of bundledIds) {
+          const target = remindersRef.current.find((item) => item.id === id);
+          if (target && !target.deletedAt && target.status !== 'completed' && !target.acknowledged) {
+            dueItems.push({ ...target });
+          }
+        }
+        // Also collect any other reminders scheduled within 30s of now
+        for (const candidate of remindersRef.current) {
+          if (
+            !candidate.deletedAt &&
+            candidate.status !== 'completed' &&
+            candidate.status !== 'cancelled' &&
+            !candidate.acknowledged &&
+            !dueItems.some((d) => d.id === candidate.id) &&
+            Math.abs(candidate.dueTimestamp - now) <= 30000
+          ) {
+            dueItems.push({ ...candidate });
+          }
+        }
+        if (dueItems.length > 0) {
+          upsertBundledAlarmReminders(dueItems);
           return;
         }
       }
@@ -1581,7 +1767,7 @@ export default function App() {
         worker.terminate();
       }
     };
-  }, [reminders]);
+  }, [reminders, sortAlarmBundle, upsertBundledAlarmReminders]);
 
   const verifyGpsTurnedOnForGeofence = useCallback(async () => {
     try {
@@ -1698,6 +1884,23 @@ export default function App() {
         handleStopGeofenceOperation(customEv.detail.itemId);
       }
     };
+    const handleNativeSnoozeGeofenceItem = (e: Event) => {
+      const customEv = e as CustomEvent<{ itemId?: string }>;
+      const rawId = customEv.detail?.itemId;
+      if (!rawId) return;
+      const cleanId = rawId.replace(/^(loc_|rem_)/, '');
+      setActiveGeofenceAlerts((prevList) => {
+        const remaining = prevList.filter((item) => {
+          const itemClean = item.targetId.replace(/^(loc_|rem_)/, '');
+          return itemClean !== cleanId && item.targetId !== rawId;
+        });
+        if (remaining.length === 0) {
+          stopSubmarineSonarLoop();
+          stopAlarmRinging();
+        }
+        return remaining;
+      });
+    };
     const flushNativeStoppedGeofenceItems = () => {
       try {
         const bridge = (window as any).YaadGeofenceBridge;
@@ -1720,10 +1923,12 @@ export default function App() {
     flushNativeStoppedGeofenceItems();
     window.addEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
     window.addEventListener('yaad:stop-geofence-item', handleNativeStopGeofenceItem);
+    window.addEventListener('yaad:snooze-geofence-item', handleNativeSnoozeGeofenceItem);
     document.addEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
     return () => {
       window.removeEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
       window.removeEventListener('yaad:stop-geofence-item', handleNativeStopGeofenceItem);
+      window.removeEventListener('yaad:snooze-geofence-item', handleNativeSnoozeGeofenceItem);
       document.removeEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
     };
   }, [verifyGpsTurnedOnForGeofence, handleStopGeofenceOperation]);
@@ -2759,10 +2964,9 @@ export default function App() {
   };
 
   // Handler: Complete reminder explicitly (called by Alarm Modal, notifications, and complete actions)
-  // Guarantees stopping sound, closing modal, and prevents re-triggering
+  // Guarantees stopping sound when bundle empties, closing modal item, and prevents re-triggering
   const handleCompleteReminder = (id: string) => {
-    stopAlarmRinging();
-    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+    removeAlarmReminderFromBundle(id);
     triggeredAlarmsRef.current.add(id);
     recordNotificationAction(id);
 
@@ -2821,12 +3025,20 @@ export default function App() {
     triggerReviewFlow({ delayMs: 700 }).catch(() => {});
   };
 
+  const handleCompleteAllReminders = (ids: string[]) => {
+    stopAlarmRinging();
+    setActiveAlarmReminders([]);
+    activeAlarmRemindersRef.current = [];
+    ids.forEach((id) => {
+      handleCompleteReminder(id);
+    });
+  };
+
   handleCompleteReminderRef.current = handleCompleteReminder;
 
   // Handler: Toggle complete from reminder card list checkbox
   const handleToggleComplete = (id: string) => {
-    stopAlarmRinging();
-    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+    removeAlarmReminderFromBundle(id);
 
     setReminders((prev) => {
       const target = prev.find((r) => r.id === id);
@@ -2906,8 +3118,7 @@ export default function App() {
 
   // Handler: Postpone reminder
   const handlePostpone = (id: string, minutes: number, explicitDueTimestamp?: number) => {
-    stopAlarmRinging();
-    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+    removeAlarmReminderFromBundle(id);
     recordNotificationAction(id);
     clearOutOfAppPersistentNotification(id);
     cancelReminderNotification(id).catch(() => {});
@@ -2948,12 +3159,20 @@ export default function App() {
     });
   };
 
+  const handlePostponeAllReminders = (ids: string[], minutes: number) => {
+    stopAlarmRinging();
+    setActiveAlarmReminders([]);
+    activeAlarmRemindersRef.current = [];
+    ids.forEach((id) => {
+      handlePostpone(id, minutes);
+    });
+  };
+
   handlePostponeRef.current = handlePostpone;
 
   // Handler: Stop / Dismiss alarm explicitly (called by Alarm Modal onDismiss, notification Stop action)
   const handleStopOrDismissReminder = (id: string) => {
-    stopAlarmRinging();
-    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+    removeAlarmReminderFromBundle(id);
     triggeredAlarmsRef.current.add(id);
     recordNotificationAction(id);
 
@@ -4508,32 +4727,37 @@ export default function App() {
         language={settings.language}
       />
 
-      {/* FULL-SCREEN MINIMAL IN-APP NOTIFICATION POPUP */}
+      {/* FULL-SCREEN MINIMAL IN-APP NOTIFICATION POPUP (SINGLE & BUNDLED SIMULTANEOUS VIEW) */}
       <AlarmModal
         reminder={activeAlarmReminder}
+        reminders={activeAlarmReminders}
         settings={settings}
         onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
         onNoReactionTimeout={(id) => {
           handleNoReactionTimeout(id);
         }}
         onDismiss={() => {
-          if (activeAlarmReminder) {
-            handleNoReactionTimeout(activeAlarmReminder.id);
-          }
+          activeAlarmReminders.forEach((rem) => {
+            handleNoReactionTimeout(rem.id);
+          });
           setIsCreateChoiceOpen(false);
-          setActiveAlarmReminder(null);
+          setActiveAlarmReminders([]);
+          activeAlarmRemindersRef.current = [];
         }}
         onComplete={(id) => {
           handleCompleteReminder(id);
-          setActiveAlarmReminder(null);
+        }}
+        onCompleteAll={(ids) => {
+          handleCompleteAllReminders(ids);
         }}
         onPostpone={(id, mins) => {
           handlePostpone(id, mins);
-          setActiveAlarmReminder(null);
+        }}
+        onPostponeAll={(ids, mins) => {
+          handlePostponeAllReminders(ids, mins);
         }}
         onEdit={(rem) => {
           handleStopOrDismissReminder(rem.id);
-          setActiveAlarmReminder(null);
           setEditingReminder(rem);
           setIsFormOpen(true);
         }}
@@ -4558,6 +4782,21 @@ export default function App() {
           } else {
             setActiveGeofenceAlerts([]);
           }
+        }}
+        onSnoozePassThrough={(alertData) => {
+          setActiveGeofenceAlerts((prevList) => {
+            const remaining = prevList.filter((item) => item.targetId !== alertData.targetId);
+            if (remaining.length === 0) {
+              stopSubmarineSonarLoop();
+              stopAlarmRinging();
+            }
+            return remaining;
+          });
+          showSyncNotification(
+            isEn
+              ? `Location reminder «${alertData.locationTitle}» snoozed (passing through)`
+              : `یادآور مکانی «${alertData.locationTitle}» موقتاً متوقف شد (الان نه)`
+          );
         }}
         onEditRadius={(alertData) => {
           pauseGeofenceAlertTemporarily(alertData.targetId, 'edit');

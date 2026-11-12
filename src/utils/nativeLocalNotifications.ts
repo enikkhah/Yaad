@@ -420,6 +420,11 @@ export async function scheduleReminderNotification(
         extra: {
           reminderId: reminder.id,
           dueTimestamp: reminder.dueTimestamp,
+          scheduledTzOffsetMinutes:
+            typeof reminder.scheduledTzOffsetMinutes === 'number'
+              ? reminder.scheduledTzOffsetMinutes
+              : -new Date(reminder.dueTimestamp).getTimezoneOffset(),
+          scheduledTimeZone: reminder.scheduledTimeZone || '',
           sound: soundType,
           volume,
           vibrationEnabled,
@@ -448,6 +453,11 @@ export async function scheduleReminderNotification(
         extra: {
           reminderId: reminder.id,
           dueTimestamp: reminder.dueTimestamp,
+          scheduledTzOffsetMinutes:
+            typeof reminder.scheduledTzOffsetMinutes === 'number'
+              ? reminder.scheduledTzOffsetMinutes
+              : -new Date(reminder.dueTimestamp).getTimezoneOffset(),
+          scheduledTimeZone: reminder.scheduledTimeZone || '',
           sound: soundType,
           volume,
           theme: appTheme,
@@ -693,7 +703,8 @@ export function setupNotificationListeners(
 export async function triggerOutOfAppPersistentNotification(
   reminder: Reminder,
   settings?: AppSettings,
-  onClickOpen?: (r: Reminder) => void
+  onClickOpen?: (r: Reminder) => void,
+  bundledReminders?: Reminder[]
 ): Promise<void> {
   // On Native Android Capacitor, TimedNotificationPublisher already fires the scheduled notification & sound at dueTimestamp.
   // Avoid re-scheduling a second duplicate notification from JS which would cause two sounds with a time lag.
@@ -702,13 +713,28 @@ export async function triggerOutOfAppPersistentNotification(
   }
 
   const isEn = settings?.language === 'en';
+  const bundleList =
+    bundledReminders && bundledReminders.length >= 2 ? bundledReminders : [reminder];
+  const isBundled = bundleList.length >= 2;
   const timeFormatted = formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa');
-  const title = reminder.title;
-  const body = reminder.description
+
+  const title = isBundled
+    ? isEn
+      ? `🔔 ${bundleList.length} Simultaneous Reminders`
+      : `🔔 ${bundleList.length} یادآور همزمان`
+    : reminder.title;
+
+  const body = isBundled
+    ? bundleList
+        .map((r, idx) => `${idx + 1}. ${r.title}${r.description ? ` (${r.description})` : ''}`)
+        .join('\n')
+    : reminder.description
     ? `${reminder.description} • ${timeFormatted}`
     : isEn
     ? `Time: ${timeFormatted}`
     : `ساعت ${timeFormatted}`;
+
+  const notifTag = isBundled ? 'yaad-rem-bundle' : `yaad-rem-${reminder.id}`;
   const vibrationEnabled = settings?.vibrationEnabled !== false;
 
   // 2. Web / PWA Service Worker persistent notification with action buttons
@@ -733,12 +759,13 @@ export async function triggerOutOfAppPersistentNotification(
             body,
             icon: '/pwa-192x192.png',
             badge: '/pwa-192x192.png',
-            tag: `yaad-rem-${reminder.id}`,
+            tag: notifTag,
             renotify: true,
             requireInteraction: true,
             vibrate: vibrationEnabled ? [500, 250, 500, 250, 500] : [],
             data: {
               reminderId: reminder.id,
+              bundledIds: bundleList.map((r) => r.id),
               persistentUntilReaction: true,
               actions,
             },
@@ -756,10 +783,14 @@ export async function triggerOutOfAppPersistentNotification(
         body,
         icon: '/pwa-192x192.png',
         badge: '/pwa-192x192.png',
-        tag: `yaad-rem-${reminder.id}`,
+        tag: notifTag,
         renotify: true,
         requireInteraction: true,
-        data: { reminderId: reminder.id, persistentUntilReaction: true },
+        data: {
+          reminderId: reminder.id,
+          bundledIds: bundleList.map((r) => r.id),
+          persistentUntilReaction: true,
+        },
       } as any);
       notif.onclick = () => {
         window.focus();
@@ -790,6 +821,8 @@ export async function clearOutOfAppPersistentNotification(reminderId: string | n
       if (reg && reg.getNotifications) {
         const list = await reg.getNotifications({ tag: `yaad-rem-${reminderId}` });
         list.forEach((n) => n.close());
+        const bundleList = await reg.getNotifications({ tag: 'yaad-rem-bundle' });
+        bundleList.forEach((n) => n.close());
       }
     } catch {
       // ignore

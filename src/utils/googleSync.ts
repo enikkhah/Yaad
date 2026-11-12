@@ -15,7 +15,6 @@ let cachedAuthInstance: Auth | null = null;
 let configPromise: Promise<Auth | null> | null = null;
 
 // Standard Android / Capacitor Package & OAuth Constants
-export const ANDROID_PACKAGE_NAME = 'com.yaad.reminder';
 export const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events';
 export const GOOGLE_TASKS_SCOPE = 'https://www.googleapis.com/auth/tasks';
 

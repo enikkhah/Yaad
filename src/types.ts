@@ -136,6 +136,17 @@ export interface Reminder {
   recurrenceCustomDates?: string[]; // array of Jalali date strings "1404/01/25"
   googleCalendarEventId?: string;
   googleTaskId?: string;
+  // Timezone & Wall-Clock travel stability metadata
+  scheduledTzOffsetMinutes?: number; // Device Date.getTimezoneOffset() at creation/update time
+  scheduledTimeZone?: string; // IANA timezone string e.g. "Asia/Tehran"
+  wallClockTime?: {
+    year: number;
+    month: number;
+    day: number;
+    hour: number;
+    minute: number;
+    calendar: 'jalali' | 'gregorian';
+  };
   // Geofencing and location-based reminder fields
   geofence?: LocationGeofenceConfig;
   deletedAt?: number;          // Recycle Bin deletion timestamp

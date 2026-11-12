@@ -758,3 +758,146 @@ export function matchesOccasionSearch(occ: any, query: string): boolean {
   );
 }
 
+/**
+ * Returns the device's current timezone offset (in minutes, matching Date.getTimezoneOffset())
+ * and IANA timezone identifier (e.g. "Asia/Tehran", "Europe/Istanbul").
+ */
+export function getCurrentTimezoneMeta(referenceTimestamp: number = Date.now()): {
+  tzOffsetMinutes: number;
+  timeZone: string;
+} {
+  const tzOffsetMinutes = new Date(referenceTimestamp).getTimezoneOffset();
+  let timeZone = 'UTC';
+  try {
+    timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    // ignore
+  }
+  return { tzOffsetMinutes, timeZone };
+}
+
+/**
+ * Computes Unix timestamp (ms) in the device's CURRENT local timezone from a saved wall-clock specification.
+ */
+export function computeTimestampForWallClock(wallClock: {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  calendar: 'jalali' | 'gregorian';
+}): number {
+  if (wallClock.calendar === 'gregorian') {
+    return new Date(
+      wallClock.year,
+      wallClock.month - 1,
+      wallClock.day,
+      wallClock.hour,
+      wallClock.minute,
+      0,
+      0
+    ).getTime();
+  }
+  const [gy, gm, gd] = jalaliToGregorian(wallClock.year, wallClock.month, wallClock.day);
+  return new Date(gy, gm - 1, gd, wallClock.hour, wallClock.minute, 0, 0).getTime();
+}
+
+/**
+ * Checks whether a candidate reminder timestamp is in the past relative to now.
+ * Prevents saving a reminder for a past date/time.
+ */
+export function isSelectedDateTimeInPast(dueTimestamp: number, nowMs: number = Date.now()): boolean {
+  return dueTimestamp <= nowMs;
+}
+
+/**
+ * Reconciles a reminder's dueTimestamp when the user travels across timezones or when DST changes,
+ * ensuring wall-clock reminders (e.g. "09:00 AM") always trigger at 09:00 AM in the phone's current local timezone.
+ */
+export function reconcileReminderWithCurrentTimezone<
+  T extends {
+    dueTimestamp: number;
+    status?: string;
+    deletedAt?: number;
+    acknowledged?: boolean;
+    postponeCount?: number;
+    scheduledTzOffsetMinutes?: number;
+    scheduledTimeZone?: string;
+    wallClockTime?: {
+      year: number;
+      month: number;
+      day: number;
+      hour: number;
+      minute: number;
+      calendar: 'jalali' | 'gregorian';
+    };
+  }
+>(reminder: T): { reminder: T; changed: boolean } {
+  if (
+    !reminder ||
+    reminder.deletedAt ||
+    reminder.acknowledged === true ||
+    (reminder.status && reminder.status !== 'pending' && reminder.status !== 'postponed')
+  ) {
+    return { reminder, changed: false };
+  }
+
+  const currentMeta = getCurrentTimezoneMeta(reminder.dueTimestamp);
+
+  // Case 1: Reminder has explicit wallClockTime and has not been snoozed away from its wall-clock slot
+  if (reminder.wallClockTime && (!reminder.postponeCount || reminder.postponeCount === 0)) {
+    const targetWallTimestamp = computeTimestampForWallClock(reminder.wallClockTime);
+    const targetMeta = getCurrentTimezoneMeta(targetWallTimestamp);
+    if (
+      Math.abs(targetWallTimestamp - reminder.dueTimestamp) >= 60_000 ||
+      reminder.scheduledTzOffsetMinutes !== targetMeta.tzOffsetMinutes ||
+      reminder.scheduledTimeZone !== targetMeta.timeZone
+    ) {
+      return {
+        reminder: {
+          ...reminder,
+          dueTimestamp: targetWallTimestamp,
+          scheduledTzOffsetMinutes: targetMeta.tzOffsetMinutes,
+          scheduledTimeZone: targetMeta.timeZone,
+        },
+        changed: Math.abs(targetWallTimestamp - reminder.dueTimestamp) >= 60_000,
+      };
+    }
+    return { reminder, changed: false };
+  }
+
+  // Case 2: Reminder has scheduledTzOffsetMinutes and the device's timezone offset has shifted
+  if (
+    typeof reminder.scheduledTzOffsetMinutes === 'number' &&
+    reminder.scheduledTzOffsetMinutes !== currentMeta.tzOffsetMinutes
+  ) {
+    const offsetDeltaMs =
+      (currentMeta.tzOffsetMinutes - reminder.scheduledTzOffsetMinutes) * 60_000;
+    const adjustedTimestamp = reminder.dueTimestamp + offsetDeltaMs;
+    const adjustedMeta = getCurrentTimezoneMeta(adjustedTimestamp);
+    return {
+      reminder: {
+        ...reminder,
+        dueTimestamp: adjustedTimestamp,
+        scheduledTzOffsetMinutes: adjustedMeta.tzOffsetMinutes,
+        scheduledTimeZone: adjustedMeta.timeZone,
+      },
+      changed: true,
+    };
+  }
+
+  // Case 3: Legacy reminder without timezone metadata — stamp current timezone metadata without shifting time
+  if (reminder.scheduledTzOffsetMinutes === undefined) {
+    return {
+      reminder: {
+        ...reminder,
+        scheduledTzOffsetMinutes: currentMeta.tzOffsetMinutes,
+        scheduledTimeZone: currentMeta.timeZone,
+      },
+      changed: false,
+    };
+  }
+
+  return { reminder, changed: false };
+}
+

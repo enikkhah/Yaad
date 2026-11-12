@@ -128,11 +128,6 @@ export function saveTwoStageFeedbackState(state: TwoStageFeedbackPersistedState)
   }
 }
 
-export async function hasCompletedReviewFlow(): Promise<boolean> {
-  const state = getTwoStageFeedbackState();
-  return state.hasGivenFeedback;
-}
-
 /**
  * ثبت نهایی بازخورد (زمانی که کاربر امتیاز داده یا فرم پیشنهاد را ارسال کرده است)
  */
@@ -365,7 +360,3 @@ export async function triggerReviewFlow(options: TriggerReviewFlowOptions = {}):
   return true;
 }
 
-/**
- * نام مستعار صریح برای فراخوانی در لحظات موفقیت کاربر
- */
-export const recordUserSuccessForFeedback = triggerReviewFlow;

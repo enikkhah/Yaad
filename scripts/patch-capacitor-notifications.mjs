@@ -728,9 +728,29 @@ const legacyNoopOpenIntent = `        // Open intent: use a no-op Broadcast so t
         val pendingIntent = PendingIntent.getBroadcast(context, id, bodyTapIntent, flags)
         mBuilder.setContentIntent(pendingIntent)`;
 
-const patchedOpenIntent = `        // Open intent: tapping the notification body opens the app directly to the Reminders Timeline (DEFAULT_PRESS_ACTION = "tap")
+const legacyOpenIntentV2 = `        // Open intent: tapping the notification body opens the app directly to the Reminders Timeline (DEFAULT_PRESS_ACTION = "tap")
         val intent = buildIntent(localNotification, DEFAULT_PRESS_ACTION)
         var flags = PendingIntent.FLAG_CANCEL_CURRENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            flags = flags or PendingIntent.FLAG_MUTABLE
+        }
+        val pendingIntent = PendingIntent.getActivity(context, id, intent, flags)
+        mBuilder.setContentIntent(pendingIntent)`;
+
+const patchedOpenIntent = `        // Open intent: tapping the notification body reopens YaadAlarmPopupActivity full-screen card (if minimized) or opens Reminders Timeline
+        val intent = if (localNotification.ongoing || !localNotification.autoCancel) {
+            Intent(context, YaadAlarmPopupActivity::class.java).apply {
+                this.flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                putExtra(NOTIFICATION_INTENT_KEY, id)
+                putExtra(NOTIFICATION_OBJ_INTENT_KEY, localNotification.source)
+            }
+        } else {
+            buildIntent(localNotification, DEFAULT_PRESS_ACTION)
+        }
+        var flags = PendingIntent.FLAG_UPDATE_CURRENT
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             flags = flags or PendingIntent.FLAG_MUTABLE
         }
@@ -740,11 +760,11 @@ const patchedOpenIntent = `        // Open intent: tapping the notification body
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'createActionIntents body tap opens Reminders Timeline',
+  'createActionIntents body tap reopens YaadAlarmPopupActivity or Reminders Timeline',
   origOpenIntent,
   patchedOpenIntent,
-  '// Open intent: tapping the notification body opens the app directly to the Reminders Timeline',
-  [legacyNoopOpenIntent]
+  '// Open intent: tapping the notification body reopens YaadAlarmPopupActivity full-screen card',
+  [legacyOpenIntentV2, legacyNoopOpenIntent]
 );
 
 const targetActionLoop = `        // Build action types
@@ -1146,6 +1166,83 @@ class TimedNotificationPublisher : BroadcastReceiver() {
             cancelPreviousActiveNotificationsForReminder(storage, notificationManager, id, reminderId)
         }
 
+        // Bundling / Queuing for Simultaneous or Near-Simultaneous Timed Reminders (within +/- 60s window):
+        // Prevents multiple full-screen intents from colliding and merges them into a single grouped full-screen alert
+        val bundledReminderIdsJs = ArrayList<String>()
+        if (reminderId.isNotEmpty() && id != Int.MIN_VALUE && notificationJson != null) {
+            try {
+                val extraObj = notificationJson.optJSONObject("extra") ?: JSObject()
+                val isGeofence = extraObj.optBoolean("geofence", false)
+                if (!isGeofence) {
+                    val nowMs = System.currentTimeMillis()
+                    val bundleArr = org.json.JSONArray()
+                    val seenReminderIds = HashSet<String>()
+
+                    fun appendCandidateToBundle(candId: Int, candJson: JSObject) {
+                        val cExtra = candJson.optJSONObject("extra")
+                        if (cExtra?.optBoolean("geofence", false) == true) return
+                        val cRemId = cExtra?.optString("reminderId", "") ?: ""
+                        val dedupKey = if (cRemId.isNotEmpty()) cRemId else "notif_\$candId"
+                        if (seenReminderIds.contains(dedupKey)) return
+                        seenReminderIds.add(dedupKey)
+                        if (cRemId.isNotEmpty()) {
+                            bundledReminderIdsJs.add(cRemId)
+                        }
+                        val item = org.json.JSONObject()
+                        item.put("notificationId", candId)
+                        item.put("reminderId", cRemId)
+                        item.put("title", candJson.optString("title", ""))
+                        item.put("body", candJson.optString("body", ""))
+                        item.put("sourceJson", candJson.toString())
+                        bundleArr.put(item)
+                    }
+
+                    appendCandidateToBundle(id, notificationJson)
+
+                    // 1. Include any currently active timed reminders already displayed in status bar / full-screen popup
+                    for (active in notificationManager.activeNotifications) {
+                        if (active.id == id) continue
+                        val activeJson = storage.getSavedNotificationAsJSObject(active.id.toString()) ?: continue
+                        val activeExtra = activeJson.optJSONObject("extra")
+                        if (activeExtra?.optBoolean("geofence", false) == true) continue
+                        val activeRemId = activeExtra?.optString("reminderId", "") ?: ""
+                        if (activeRemId.isNotEmpty() && activeRemId != reminderId) {
+                            appendCandidateToBundle(active.id, activeJson)
+                        }
+                    }
+
+                    // 2. Include any other saved timed reminders scheduled within +/- 45 seconds of now
+                    val sdfIso = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                    sdfIso.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                    for (savedIdStr in storage.getSavedNotificationIds()) {
+                        val sId = savedIdStr.toIntOrNull() ?: continue
+                        if (sId == id) continue
+                        val sJson = storage.getSavedNotificationAsJSObject(savedIdStr) ?: continue
+                        val sExtra = sJson.optJSONObject("extra")
+                        if (sExtra?.optBoolean("geofence", false) == true) continue
+                        if (sExtra?.optBoolean("isRepeat", false) == true) continue
+                        val sRemId = sExtra?.optString("reminderId", "") ?: ""
+                        if (sRemId.isEmpty() || sRemId == reminderId) continue
+                        val atStr = sJson.optJSONObject("schedule")?.optString("at", "") ?: ""
+                        val dueMs = if (atStr.isNotEmpty()) {
+                            try { sdfIso.parse(atStr)?.time ?: 0L } catch (e: Exception) { 0L }
+                        } else {
+                            sExtra?.optLong("dueTimestamp", 0L) ?: 0L
+                        }
+                        if (dueMs > 0L && kotlin.math.abs(dueMs - nowMs) <= 45_000L) {
+                            appendCandidateToBundle(sId, sJson)
+                        }
+                    }
+
+                    if (bundleArr.length() >= 2) {
+                        extraObj.put("bundledReminders", bundleArr)
+                        notificationJson.put("extra", extraObj)
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+
         val isInsistentAlarm = id != Int.MIN_VALUE && (notification.flags and Notification.FLAG_INSISTENT) != 0
         val appInForeground = LocalNotificationsPlugin.isAppInForeground(context)
 
@@ -1159,8 +1256,11 @@ class TimedNotificationPublisher : BroadcastReceiver() {
         LocalNotificationsPlugin.fireReceived(notificationJson)
         if (appInForeground && reminderId.isNotEmpty()) {
             val safeRemId = reminderId.replace("'", "").replace("\\\\", "")
+            val bundledJsArrayLiteral = bundledReminderIdsJs.joinToString(",") {
+                "'" + it.replace("'", "").replace("\\\\", "") + "'"
+            }
             LocalNotificationsPlugin.evaluateJsInWebView(
-                "window.dispatchEvent(new CustomEvent('yaad:native-reminder-due', { detail: { reminderId: '\$safeRemId', notificationId: \$id } }));"
+                "window.dispatchEvent(new CustomEvent('yaad:native-reminder-due', { detail: { reminderId: '\$safeRemId', notificationId: \$id, bundledReminderIds: [\$bundledJsArrayLiteral] } }));"
             )
         }
         notificationManager.notify(id, notification)
@@ -1692,6 +1792,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
 `;
 
 // 6b. Patch LocalNotificationRestoreReceiver.kt to also restore YaadGeofenceService on boot / package update / service restart
+// and reconcile scheduled reminder timestamps when the phone's timezone or clock changes (travel / DST stability)
 const restoreReceiverPath = path.join(pluginDir, 'LocalNotificationRestoreReceiver.kt');
 const restoreReceiverContent = `package com.capacitorjs.plugins.localnotifications
 
@@ -1701,6 +1802,7 @@ import android.content.Intent
 import android.os.UserManager
 import com.getcapacitor.CapConfig
 import java.util.Date
+import java.util.TimeZone
 
 class LocalNotificationRestoreReceiver : BroadcastReceiver() {
 
@@ -1716,8 +1818,13 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
         val um = context.getSystemService(UserManager::class.java)
         if (um == null || !um.isUserUnlocked) return
 
+        val isTimeOrTzChange =
+            intent.action == Intent.ACTION_TIMEZONE_CHANGED ||
+            intent.action == Intent.ACTION_TIME_CHANGED
+
         val storage = NotificationStorage(context)
         val ids = storage.getSavedNotificationIds()
+        val currentTz = TimeZone.getDefault()
 
         val notifications = ArrayList<LocalNotification>(ids.size)
         val updatedNotifications = ArrayList<LocalNotification>()
@@ -1734,12 +1841,37 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
                     if (notification.cancelled) storage.deleteNotification(id)
                     continue
                 }
-                val at = schedule.at
-                if (at != null && at.before(Date())) {
-                    val newDateTime = Date().time + 1500L
-                    schedule.at = Date(newDateTime)
-                    notification.schedule = schedule
-                    updatedNotifications.add(notification)
+                var at = schedule.at
+                if (at != null) {
+                    // Reconcile local wall-clock hour when user travels across timezones or DST changes
+                    val extra = notification.extra
+                    if (extra != null && extra.has("scheduledTzOffsetMinutes")) {
+                        val savedOffsetMins = extra.optInt("scheduledTzOffsetMinutes", Int.MIN_VALUE)
+                        if (savedOffsetMins != Int.MIN_VALUE) {
+                            val currentOffsetMins = currentTz.getOffset(at.time) / 60000
+                            val deltaMins = savedOffsetMins - currentOffsetMins
+                            if (deltaMins != 0) {
+                                val shiftedMs = at.time + (deltaMins.toLong() * 60_000L)
+                                at = Date(shiftedMs)
+                                schedule.at = at
+                                notification.schedule = schedule
+                                extra.put("scheduledTzOffsetMinutes", currentOffsetMins)
+                                extra.put("scheduledTimeZone", currentTz.id)
+                                updatedNotifications.add(notification)
+                            }
+                        }
+                    }
+
+                    if (at.before(Date())) {
+                        if (!isTimeOrTzChange) {
+                            val newDateTime = Date().time + 1500L
+                            schedule.at = Date(newDateTime)
+                            notification.schedule = schedule
+                            updatedNotifications.add(notification)
+                        } else {
+                            continue
+                        }
+                    }
                 }
             }
 
@@ -4679,7 +4811,51 @@ class YaadAlarmPopupActivity : Activity() {
                 acquireBriefScreenWakeLock()
                 data.removeExtra("yaad_wake_screen_once")
             }
-            buildMinimalCardUI(palette, cleanTitle, bodyText, initialDistance)
+            // Merge into activeBundledTimedReminders so simultaneous or near-simultaneous reminders
+            // are grouped into a single Full-Screen UI instead of stacking multiple activities on top of each other
+            try {
+                if (notificationId != Int.MIN_VALUE && requestJson != null) {
+                    val remId = extraObj?.optString("reminderId", "") ?: ""
+                    // Remove any older entry with the same reminderId
+                    if (remId.isNotEmpty()) {
+                        val toRemove = ArrayList<Int>()
+                        for ((kId, kJson) in activeBundledTimedReminders) {
+                            val kRemId = kJson.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (kRemId == remId && kId != notificationId) {
+                                toRemove.add(kId)
+                            }
+                        }
+                        for (rKey in toRemove) {
+                            activeBundledTimedReminders.remove(rKey)
+                        }
+                    }
+                    activeBundledTimedReminders[notificationId] = requestJson!!
+                }
+                val bundledArr = extraObj?.optJSONArray("bundledReminders")
+                if (bundledArr != null) {
+                    for (i in 0 until bundledArr.length()) {
+                        val bObj = bundledArr.optJSONObject(i) ?: continue
+                        val bNotifId = bObj.optInt("notificationId", Int.MIN_VALUE)
+                        if (bNotifId == Int.MIN_VALUE) continue
+                        val bSourceStr = bObj.optString("sourceJson", "")
+                        val bJson = if (bSourceStr.isNotEmpty()) {
+                            try { JSObject(bSourceStr) } catch (e: Exception) { null }
+                        } else {
+                            storage.getSavedNotificationAsJSObject(bNotifId.toString())
+                        }
+                        if (bJson != null) {
+                            activeBundledTimedReminders[bNotifId] = bJson
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+            }
+
+            if (activeBundledTimedReminders.size >= 2) {
+                buildBundledTimedRemindersUI(palette)
+            } else {
+                buildMinimalCardUI(palette, cleanTitle, bodyText, initialDistance)
+            }
             startOneMinuteCountdown()
         }
     }
@@ -4759,11 +4935,33 @@ class YaadAlarmPopupActivity : Activity() {
         outerContainer.orientation = LinearLayout.VERTICAL
         outerContainer.layoutDirection = if (isPersian) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
         outerContainer.background = makeRoundedDrawable(palette.cardBg, palette.cardBorder, 2.2f, 24f)
-        outerContainer.setPadding(dp(14f), dp(14f), dp(14f), dp(14f))
+        outerContainer.setPadding(dp(14f), dp(12f), dp(14f), dp(14f))
         outerContainer.layoutParams = FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
+
+        val multiCountStr = if (isPersian) toPersianDigits(itemsArr.length().toString()) else itemsArr.length().toString()
+        val multiControlBar = buildTopWindowControlBar(
+            centerLabel = if (isPersian) "📍 \$multiCountStr یادآور مکانی فعال" else "📍 \$multiCountStr Active Geofences",
+            accentColor = palette.accentColor,
+            onCloseCompletely = {
+                for (idx in 0 until itemsArr.length()) {
+                    val obj = itemsArr.optJSONObject(idx) ?: continue
+                    val idStr = obj.optString("id", "")
+                    val nId = obj.optInt("notificationId", notificationId)
+                    YaadGeofenceService.stopGeofenceOperationForItem(this, idStr, nId)
+                }
+                stopGeofenceAlertIfNeeded(cancelStatusBarNotif = true, stopOperationCompletely = true)
+                releaseScreenWakeLock()
+                finish()
+                overridePendingTransition(0, 0)
+            },
+            onMinimizeTemporarily = {
+                performMinimizeGeofencePopupAction()
+            }
+        )
+        outerContainer.addView(multiControlBar)
 
         val scrollView = android.widget.ScrollView(this)
         scrollView.layoutParams = LinearLayout.LayoutParams(
@@ -4887,6 +5085,36 @@ class YaadAlarmPopupActivity : Activity() {
                 card.addView(statusTv)
             }
 
+            // Prominent Pass-Through Snooze Button ("الان نه (Snooze)")
+            val snoozeRow = LinearLayout(this)
+            snoozeRow.orientation = LinearLayout.HORIZONTAL
+            snoozeRow.gravity = Gravity.CENTER
+            val snoozeRowLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            snoozeRowLp.topMargin = dp(8f)
+            snoozeRow.layoutParams = snoozeRowLp
+
+            val passThroughSnoozeBtn = buildActionButton(
+                text = if (isPersian) "⏱ الان نه (Snooze)" else "⏱ Not Now (Snooze)",
+                bgColor = Color.parseColor("#78350F"),
+                borderColor = Color.parseColor("#F59E0B"),
+                textColor = Color.parseColor("#FEF3C7"),
+                strokeDp = 1.5f
+            ) {
+                YaadGeofenceService.snoozeGeofenceItemForPassingThrough(this, itemId, 30 * 60_000L, itemNotifId)
+                if (itemsArr.length() <= 1) {
+                    releaseScreenWakeLock()
+                    finish()
+                    overridePendingTransition(0, 0)
+                }
+            }
+            passThroughSnoozeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+            passThroughSnoozeBtn.setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
+            snoozeRow.addView(passThroughSnoozeBtn)
+            card.addView(snoozeRow)
+
             // 3. 4 Concise Buttons (قطع صدا, توقف, مسیریابی, ویرایش)
             val btnRow = LinearLayout(this)
             btnRow.orientation = LinearLayout.HORIZONTAL
@@ -4895,7 +5123,7 @@ class YaadAlarmPopupActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            btnRowLp.topMargin = dp(10f)
+            btnRowLp.topMargin = dp(6f)
             btnRow.layoutParams = btnRowLp
 
             val muteBtn = buildActionButton(
@@ -5010,11 +5238,24 @@ class YaadAlarmPopupActivity : Activity() {
         val content = LinearLayout(this)
         content.orientation = LinearLayout.VERTICAL
         content.gravity = Gravity.CENTER_HORIZONTAL
-        content.setPadding(dp(8f), dp(10f), dp(8f), dp(10f))
+        content.setPadding(dp(8f), dp(8f), dp(8f), dp(10f))
         content.layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.MATCH_PARENT
         )
+
+        // Top Window Control Bar: Left = Close Completely (✕), Right = Minimize Temporarily (—)
+        val geoControlBar = buildTopWindowControlBar(
+            centerLabel = if (isPersian) "📍 رادار هوشمند یاد" else "📍 YAAD Live Radar",
+            accentColor = palette.accentColor,
+            onCloseCompletely = {
+                performBackgroundAction("done")
+            },
+            onMinimizeTemporarily = {
+                performMinimizeGeofencePopupAction()
+            }
+        )
+        content.addView(geoControlBar)
 
         // 1. TOP SECTION: Location Name + Short Status Phrase (Compact)
         val topTitleBox = LinearLayout(this)
@@ -5153,7 +5394,34 @@ class YaadAlarmPopupActivity : Activity() {
         centerArea.addView(distanceCard)
         content.addView(centerArea)
 
-        // 3. BOTTOM SECTION: 4 Compact Buttons ("قطع صدا", "توقف", "مسیریابی", "ویرایش") in 2x2 grid
+        // 3. BOTTOM SECTION: Prominent "الان نه (Snooze)" Button + 4 Compact Buttons ("قطع صدا", "توقف", "مسیریابی", "ویرایش") in 2x2 grid
+        val snoozeRow = LinearLayout(this)
+        snoozeRow.orientation = LinearLayout.HORIZONTAL
+        snoozeRow.gravity = Gravity.CENTER
+        val snoozeRowParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        snoozeRowParams.topMargin = dp(6f)
+        snoozeRow.layoutParams = snoozeRowParams
+
+        val btnMargin = dp(3f)
+
+        val passThroughSnoozeBtn = buildActionButton(
+            text = if (isPersian) "⏱ الان نه (Snooze)" else "⏱ Not Now (Snooze)",
+            bgColor = Color.parseColor("#78350F"),
+            borderColor = Color.parseColor("#F59E0B"),
+            textColor = Color.parseColor("#FEF3C7"),
+            strokeDp = 1.6f
+        ) {
+            performSnoozeGeofenceAction()
+        }
+        passThroughSnoozeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+        passThroughSnoozeBtn.setPadding(dp(10f), dp(10f), dp(10f), dp(10f))
+        (passThroughSnoozeBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
+        snoozeRow.addView(passThroughSnoozeBtn)
+        content.addView(snoozeRow)
+
         val row1 = LinearLayout(this)
         row1.orientation = LinearLayout.HORIZONTAL
         row1.gravity = Gravity.CENTER
@@ -5161,7 +5429,7 @@ class YaadAlarmPopupActivity : Activity() {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         )
-        row1Params.topMargin = dp(6f)
+        row1Params.topMargin = dp(5f)
         row1.layoutParams = row1Params
 
         val muteAudioBtn = buildActionButton(
@@ -5185,7 +5453,7 @@ class YaadAlarmPopupActivity : Activity() {
             refreshMuteBtnState()
         }
         muteAudioBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-        muteAudioBtn.setPadding(dp(6f), dp(9f), dp(6f), dp(9f))
+        muteAudioBtn.setPadding(dp(6f), dp(8f), dp(6f), dp(8f))
 
         val gotItBtn = buildActionButton(
             text = if (isPersian) "⏹ توقف" else "⏹ Stop",
@@ -5197,9 +5465,8 @@ class YaadAlarmPopupActivity : Activity() {
             performBackgroundAction("done")
         }
         gotItBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-        gotItBtn.setPadding(dp(6f), dp(9f), dp(6f), dp(9f))
+        gotItBtn.setPadding(dp(6f), dp(8f), dp(6f), dp(8f))
 
-        val btnMargin = dp(3f)
         (muteAudioBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
         (gotItBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
         row1.addView(muteAudioBtn)
@@ -5226,7 +5493,7 @@ class YaadAlarmPopupActivity : Activity() {
             performDirectionsAction()
         }
         directionsBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-        directionsBtn.setPadding(dp(6f), dp(9f), dp(6f), dp(9f))
+        directionsBtn.setPadding(dp(6f), dp(8f), dp(6f), dp(8f))
 
         val editBtn = buildActionButton(
             text = if (isPersian) "✎ ویرایش" else "✎ Edit",
@@ -5238,7 +5505,7 @@ class YaadAlarmPopupActivity : Activity() {
             performEditAction()
         }
         editBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-        editBtn.setPadding(dp(6f), dp(9f), dp(6f), dp(9f))
+        editBtn.setPadding(dp(6f), dp(8f), dp(6f), dp(8f))
 
         (directionsBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
         (editBtn.layoutParams as LinearLayout.LayoutParams).setMargins(btnMargin, 0, btnMargin, 0)
@@ -5253,6 +5520,394 @@ class YaadAlarmPopupActivity : Activity() {
 
     private var reminderAudioMutedView: TextView? = null
     private var isReminderAudioMuted: Boolean = false
+
+    /**
+     * Bundled Multi-Reminder Full-Screen UI for 2+ Simultaneous Timed Reminders:
+     * Prevents overlapping full-screen intents and merges all simultaneous due reminders into one grouped card
+     * with individual (Done, +15m, Edit) and batch (Done All, Snooze All 15m) controls.
+     */
+    private fun buildBundledTimedRemindersUI(palette: ThemePalette) {
+        stopPulseAnimators()
+        isReminderAudioMuted = false
+
+        val items = ArrayList<Pair<Int, JSObject>>()
+        for ((kId, kJson) in activeBundledTimedReminders) {
+            items.add(Pair(kId, kJson))
+        }
+        if (items.size <= 1) {
+            val singlePair = items.firstOrNull()
+            if (singlePair != null) {
+                notificationId = singlePair.first
+                activeNotificationId = singlePair.first
+                requestJson = singlePair.second
+                sourceJson = singlePair.second.toString()
+            }
+            val rawT = requestJson?.getString("title") ?: (if (isPersian) "یادآور" else "Reminder")
+            val cleanT = rawT
+                .replaceFirst("🔔 یادآور: ", "")
+                .replaceFirst("یادآور: ", "")
+                .replaceFirst("🔔 ", "")
+                .trim()
+            val bodyT = requestJson?.getString("body") ?: ""
+            buildMinimalCardUI(palette, cleanT, bodyT, 0)
+            return
+        }
+
+        val root = FrameLayout(this)
+        root.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        root.setBackgroundColor(Color.parseColor("#EB070B14"))
+        root.setPadding(dp(12f), dp(22f), dp(12f), dp(16f))
+
+        val cardContainer = LinearLayout(this)
+        cardContainer.orientation = LinearLayout.VERTICAL
+        cardContainer.layoutDirection = if (isPersian) View.LAYOUT_DIRECTION_RTL else View.LAYOUT_DIRECTION_LTR
+        cardContainer.background = makeRoundedDrawable(palette.cardBg, palette.cardBorder, 2.2f, 26f)
+        cardContainer.elevation = dp(22f).toFloat()
+        cardContainer.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+
+        // 1. 60s audio countdown top progress bar
+        val track = FrameLayout(this)
+        val trackParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(5f)
+        )
+        trackParams.setMargins(dp(18f), dp(14f), dp(18f), 0)
+        track.layoutParams = trackParams
+        track.background = makeRoundedDrawable(Color.argb(45, 128, 128, 128), Color.TRANSPARENT, 0f, 3f)
+
+        val fill = View(this)
+        fill.layoutParams = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        fill.background = makeRoundedDrawable(palette.accentColor, Color.TRANSPARENT, 0f, 3f)
+        track.addView(fill)
+        progressTrackView = track
+        progressFillView = fill
+        cardContainer.addView(track)
+
+        val content = LinearLayout(this)
+        content.orientation = LinearLayout.VERTICAL
+        content.setPadding(dp(16f), dp(14f), dp(16f), dp(16f))
+        content.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+
+        // Top Window Control Bar: Left = Close Completely (✕), Right = Minimize Temporarily (—)
+        val countText = if (isPersian) toPersianDigits(items.size.toString()) else items.size.toString()
+        val bundledControlBar = buildTopWindowControlBar(
+            centerLabel = if (isPersian) "🔔 \$countText یادآور همزمان" else "🔔 \$countText Simultaneous Reminders",
+            accentColor = palette.accentColor,
+            onCloseCompletely = {
+                countDownTimer?.cancel()
+                releaseScreenWakeLock()
+                for ((itemNotifId, itemJson) in items) {
+                    dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "stop")
+                }
+                activeBundledTimedReminders.clear()
+                finish()
+                overridePendingTransition(0, 0)
+            },
+            onMinimizeTemporarily = {
+                countDownTimer?.cancel()
+                releaseScreenWakeLock()
+                for ((itemNotifId, itemJson) in items) {
+                    dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "dismiss_popup_only")
+                }
+                activeBundledTimedReminders.clear()
+                finish()
+                overridePendingTransition(0, 0)
+            }
+        )
+        content.addView(bundledControlBar)
+
+        // Header Row: Bundled status + Mute Audio button
+        val headerRow = LinearLayout(this)
+        headerRow.orientation = LinearLayout.HORIZONTAL
+        headerRow.gravity = Gravity.CENTER_VERTICAL
+        headerRow.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+
+        val brandTv = TextView(this)
+        brandTv.text = if (isPersian) "مدیریت یکجا یا تکی یادآورها" else "Manage Individually or All at Once"
+        brandTv.setTextColor(palette.titleColor)
+        brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+        brandTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
+        brandTv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        headerRow.addView(brandTv)
+
+        val muteBtn = TextView(this)
+        muteBtn.text = if (isPersian) "🔇 قطع صدا" else "🔇 Mute"
+        muteBtn.setTextColor(Color.parseColor("#FDE68A"))
+        muteBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        muteBtn.setTypeface(Typeface.DEFAULT_BOLD)
+        muteBtn.setPadding(dp(10f), dp(6f), dp(10f), dp(6f))
+        muteBtn.background = makeRoundedDrawable(
+            Color.parseColor("#451A03"),
+            Color.parseColor("#F59E0B"),
+            1.2f,
+            12f
+        )
+        muteBtn.setOnClickListener {
+            muteReminderAudioOnly()
+        }
+        reminderAudioMutedView = muteBtn
+        headerRow.addView(muteBtn)
+        content.addView(headerRow)
+
+        val subHeaderTv = TextView(this)
+        subHeaderTv.text = if (isPersian) {
+            "چند یادآور در این لحظه سررسید شده‌اند؛ می‌توانید هر کدام را جداگانه یا همه را یکجا مدیریت کنید:"
+        } else {
+            "Multiple reminders are due right now; manage them individually or all at once:"
+        }
+        subHeaderTv.setTextColor(palette.mutedColor)
+        subHeaderTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
+        val subLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        subLp.topMargin = dp(6f)
+        subLp.bottomMargin = dp(10f)
+        subHeaderTv.layoutParams = subLp
+        content.addView(subHeaderTv)
+
+        // Scrollable list of bundled reminder cards
+        val scrollView = android.widget.ScrollView(this)
+        scrollView.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        )
+
+        val listLinear = LinearLayout(this)
+        listLinear.orientation = LinearLayout.VERTICAL
+        listLinear.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+
+        for ((index, pair) in items.withIndex()) {
+            val itemNotifId = pair.first
+            val itemJson = pair.second
+            val rawItemTitle = itemJson.optString("title", if (isPersian) "یادآور" else "Reminder")
+            val cleanItemTitle = rawItemTitle
+                .replaceFirst("🔔 یادآور: ", "")
+                .replaceFirst("یادآور: ", "")
+                .replaceFirst("🔔 ", "")
+                .trim()
+            val itemBody = itemJson.optString("body", "")
+
+            val itemCard = LinearLayout(this)
+            itemCard.orientation = LinearLayout.VERTICAL
+            itemCard.setPadding(dp(14f), dp(12f), dp(14f), dp(12f))
+            itemCard.background = makeRoundedDrawable(
+                Color.argb(42, Color.red(palette.accentColor), Color.green(palette.accentColor), Color.blue(palette.accentColor)),
+                Color.argb(115, Color.red(palette.accentColor), Color.green(palette.accentColor), Color.blue(palette.accentColor)),
+                1.3f,
+                18f
+            )
+            val cardLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            cardLp.bottomMargin = dp(10f)
+            itemCard.layoutParams = cardLp
+
+            val idxStr = if (isPersian) toPersianDigits((index + 1).toString()) else (index + 1).toString()
+            val itemTitleTv = TextView(this)
+            itemTitleTv.text = "\$idxStr. \$cleanItemTitle"
+            itemTitleTv.setTextColor(palette.titleColor)
+            itemTitleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16.5f)
+            itemTitleTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
+            itemTitleTv.maxLines = 2
+            itemTitleTv.ellipsize = TextUtils.TruncateAt.END
+            itemCard.addView(itemTitleTv)
+
+            if (itemBody.isNotEmpty()) {
+                val itemBodyTv = TextView(this)
+                itemBodyTv.text = itemBody
+                itemBodyTv.setTextColor(palette.bodyColor)
+                itemBodyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                itemBodyTv.maxLines = 2
+                itemBodyTv.ellipsize = TextUtils.TruncateAt.END
+                val bLp = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+                bLp.topMargin = dp(4f)
+                itemBodyTv.layoutParams = bLp
+                itemCard.addView(itemBodyTv)
+            }
+
+            // Per-item quick buttons: Done, +15m, Edit
+            val itemBtnRow = LinearLayout(this)
+            itemBtnRow.orientation = LinearLayout.HORIZONTAL
+            itemBtnRow.gravity = Gravity.CENTER
+            val itemBtnLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+            itemBtnLp.topMargin = dp(10f)
+            itemBtnRow.layoutParams = itemBtnLp
+
+            val itemDoneBtn = buildActionButton(
+                text = if (isPersian) "✓ انجام شد" else "✓ Done",
+                bgColor = palette.doneBtnBg,
+                borderColor = Color.TRANSPARENT,
+                textColor = palette.doneBtnText,
+                strokeDp = 0f
+            ) {
+                dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "done")
+                activeBundledTimedReminders.remove(itemNotifId)
+                if (activeBundledTimedReminders.isEmpty()) {
+                    countDownTimer?.cancel()
+                    releaseScreenWakeLock()
+                    finish()
+                    overridePendingTransition(0, 0)
+                } else {
+                    buildBundledTimedRemindersUI(palette)
+                }
+            }
+            itemDoneBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            itemDoneBtn.setPadding(dp(8f), dp(9f), dp(8f), dp(9f))
+
+            val itemSnoozeBtn = buildActionButton(
+                text = if (isPersian) "⏱ +۱۵ دقیقه" else "⏱ +15m",
+                bgColor = palette.secondaryBtnBg,
+                borderColor = palette.secondaryBtnBorder,
+                textColor = palette.secondaryBtnText,
+                strokeDp = 1.1f
+            ) {
+                dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "snooze")
+                activeBundledTimedReminders.remove(itemNotifId)
+                if (activeBundledTimedReminders.isEmpty()) {
+                    countDownTimer?.cancel()
+                    releaseScreenWakeLock()
+                    finish()
+                    overridePendingTransition(0, 0)
+                } else {
+                    buildBundledTimedRemindersUI(palette)
+                }
+            }
+            itemSnoozeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            itemSnoozeBtn.setPadding(dp(8f), dp(9f), dp(8f), dp(9f))
+
+            val itemEditBtn = buildActionButton(
+                text = if (isPersian) "✎ ویرایش" else "✎ Edit",
+                bgColor = palette.editBtnBg,
+                borderColor = palette.editBtnBorder,
+                textColor = palette.editBtnText,
+                strokeDp = 1.1f
+            ) {
+                notificationId = itemNotifId
+                requestJson = itemJson
+                sourceJson = itemJson.toString()
+                activeBundledTimedReminders.remove(itemNotifId)
+                performEditAction()
+            }
+            itemEditBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+            itemEditBtn.setPadding(dp(8f), dp(9f), dp(8f), dp(9f))
+
+            val m = dp(3f)
+            (itemDoneBtn.layoutParams as LinearLayout.LayoutParams).setMargins(m, 0, m, 0)
+            (itemSnoozeBtn.layoutParams as LinearLayout.LayoutParams).setMargins(m, 0, m, 0)
+            (itemEditBtn.layoutParams as LinearLayout.LayoutParams).setMargins(m, 0, m, 0)
+
+            itemBtnRow.addView(itemDoneBtn)
+            itemBtnRow.addView(itemSnoozeBtn)
+            itemBtnRow.addView(itemEditBtn)
+            itemCard.addView(itemBtnRow)
+
+            listLinear.addView(itemCard)
+        }
+
+        scrollView.addView(listLinear)
+        content.addView(scrollView)
+
+        // Master Batch Actions at bottom: Done All & Snooze All 15m
+        val doneAllBtn = buildActionButton(
+            text = if (isPersian) "✓ انجام همه (\$countText مورد)" else "✓ Complete All (\$countText)",
+            bgColor = palette.doneBtnBg,
+            borderColor = Color.TRANSPARENT,
+            textColor = palette.doneBtnText,
+            strokeDp = 0f
+        ) {
+            countDownTimer?.cancel()
+            releaseScreenWakeLock()
+            for ((itemNotifId, itemJson) in items) {
+                dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "done")
+            }
+            activeBundledTimedReminders.clear()
+            finish()
+            overridePendingTransition(0, 0)
+        }
+        doneAllBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14.5f)
+        doneAllBtn.setPadding(dp(12f), dp(12f), dp(12f), dp(12f))
+        val doneAllLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        doneAllLp.topMargin = dp(10f)
+        doneAllBtn.layoutParams = doneAllLp
+        content.addView(doneAllBtn)
+
+        val snoozeAllBtn = buildActionButton(
+            text = if (isPersian) "⏱ تعویق همه به مدت ۱۵ دقیقه" else "⏱ Snooze All 15m",
+            bgColor = palette.secondaryBtnBg,
+            borderColor = palette.secondaryBtnBorder,
+            textColor = palette.secondaryBtnText,
+            strokeDp = 1.2f
+        ) {
+            countDownTimer?.cancel()
+            releaseScreenWakeLock()
+            for ((itemNotifId, itemJson) in items) {
+                dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "snooze")
+            }
+            activeBundledTimedReminders.clear()
+            finish()
+            overridePendingTransition(0, 0)
+        }
+        snoozeAllBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
+        snoozeAllBtn.setPadding(dp(12f), dp(11f), dp(12f), dp(11f))
+        val snoozeAllLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        snoozeAllLp.topMargin = dp(8f)
+        snoozeAllBtn.layoutParams = snoozeAllLp
+        content.addView(snoozeAllBtn)
+
+        cardContainer.addView(content)
+        root.addView(cardContainer)
+        setContentView(root)
+    }
+
+    private fun dispatchBackgroundActionForSpecificNotification(
+        targetNotifId: Int,
+        targetSourceJson: String?,
+        actionId: String
+    ) {
+        try {
+            val broadcastIntent = Intent(this, NotificationDismissReceiver::class.java)
+            broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, targetNotifId)
+            broadcastIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, actionId)
+            if (targetSourceJson != null) {
+                broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, targetSourceJson)
+            }
+            sendBroadcast(broadcastIntent)
+        } catch (e: Exception) {
+        }
+    }
 
     private fun buildMinimalCardUI(palette: ThemePalette, titleStr: String, bodyStr: String, initialDistance: Int) {
         stopPulseAnimators()
@@ -5305,42 +5960,21 @@ class YaadAlarmPopupActivity : Activity() {
         val content = LinearLayout(this)
         content.orientation = LinearLayout.VERTICAL
         content.gravity = Gravity.CENTER_HORIZONTAL
-        content.setPadding(dp(20f), dp(18f), dp(20f), dp(22f))
+        content.setPadding(dp(20f), dp(14f), dp(20f), dp(22f))
 
-        // Header row: Brand label + explicit close button (✕)
-        val headerRow = LinearLayout(this)
-        headerRow.orientation = LinearLayout.HORIZONTAL
-        headerRow.gravity = Gravity.CENTER_VERTICAL
-        headerRow.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-
-        val brandColumn = LinearLayout(this)
-        brandColumn.orientation = LinearLayout.VERTICAL
-        val brandColParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        brandColumn.layoutParams = brandColParams
-
-        val brandTv = TextView(this)
-        brandTv.text = if (isPersian) "🔔 یادآور هوشمند یاد" else "🔔 YAAD Smart Reminder"
-        brandTv.setTextColor(palette.accentColor)
-        brandTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
-        brandTv.setTypeface(Typeface.DEFAULT_BOLD)
-        brandColumn.addView(brandTv)
+        // Top Window Control Bar: Left = Close Completely (✕), Right = Minimize Temporarily (—)
         distanceBadgeTextView = null
-
-        headerRow.addView(brandColumn)
-
-        val closeTv = TextView(this)
-        closeTv.text = "✕"
-        closeTv.setTextColor(palette.mutedColor)
-        closeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-        closeTv.setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
-        closeTv.setOnClickListener {
-            performBackgroundAction("dismiss_popup_only")
-        }
-        headerRow.addView(closeTv)
-        content.addView(headerRow)
+        val minimalControlBar = buildTopWindowControlBar(
+            centerLabel = if (isPersian) "🔔 یادآور هوشمند یاد" else "🔔 YAAD Smart Reminder",
+            accentColor = palette.accentColor,
+            onCloseCompletely = {
+                performBackgroundAction("stop")
+            },
+            onMinimizeTemporarily = {
+                performBackgroundAction("dismiss_popup_only")
+            }
+        )
+        content.addView(minimalControlBar)
 
         // Centered Pulsing App Icon Emblem
         try {
@@ -5511,13 +6145,94 @@ class YaadAlarmPopupActivity : Activity() {
         actionsRow.addView(editBtn)
         content.addView(actionsRow)
 
-        brandColumn.setOnClickListener {
-            performTapOpenTimelineAction()
-        }
-
         cardContainer.addView(content)
         root.addView(cardContainer)
         setContentView(root)
+    }
+
+    private fun buildTopWindowControlBar(
+        centerLabel: String,
+        accentColor: Int,
+        onCloseCompletely: () -> Unit,
+        onMinimizeTemporarily: () -> Unit
+    ): LinearLayout {
+        val bar = LinearLayout(this)
+        bar.orientation = LinearLayout.HORIZONTAL
+        bar.layoutDirection = View.LAYOUT_DIRECTION_LTR
+        bar.gravity = Gravity.CENTER_VERTICAL
+        val barLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        barLp.bottomMargin = dp(6f)
+        bar.layoutParams = barLp
+
+        // Top-Left: Close Completely (✕)
+        val closeBtn = TextView(this)
+        closeBtn.text = "✕"
+        closeBtn.gravity = Gravity.CENTER
+        closeBtn.setTextColor(Color.parseColor("#FCA5A5"))
+        closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        closeBtn.setTypeface(Typeface.DEFAULT_BOLD)
+        closeBtn.background = makeRoundedDrawable(
+            Color.parseColor("#3B0A14"),
+            Color.parseColor("#F43F5E"),
+            1.2f,
+            12f
+        )
+        val btnSize = dp(34f)
+        closeBtn.layoutParams = LinearLayout.LayoutParams(btnSize, btnSize)
+        closeBtn.contentDescription = if (isPersian) "بستن کامل" else "Close completely"
+        closeBtn.setOnClickListener { onCloseCompletely() }
+        bar.addView(closeBtn)
+
+        // Center Title / Brand Badge
+        val centerTv = TextView(this)
+        centerTv.text = centerLabel
+        centerTv.gravity = Gravity.CENTER
+        centerTv.setTextColor(accentColor)
+        centerTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        centerTv.setTypeface(Typeface.DEFAULT_BOLD)
+        centerTv.maxLines = 1
+        centerTv.ellipsize = TextUtils.TruncateAt.END
+        centerTv.setPadding(dp(8f), 0, dp(8f), 0)
+        centerTv.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        centerTv.setOnClickListener {
+            performTapOpenTimelineAction()
+        }
+        bar.addView(centerTv)
+
+        // Top-Right: Minimize Temporarily (—)
+        val minBtn = TextView(this)
+        minBtn.text = "—"
+        minBtn.gravity = Gravity.CENTER
+        minBtn.setTextColor(Color.parseColor("#E2E8F0"))
+        minBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        minBtn.setTypeface(Typeface.DEFAULT_BOLD)
+        minBtn.background = makeRoundedDrawable(
+            Color.parseColor("#0F2925"),
+            accentColor,
+            1.2f,
+            12f
+        )
+        minBtn.layoutParams = LinearLayout.LayoutParams(btnSize, btnSize)
+        minBtn.contentDescription = if (isPersian) "مینیمایز (بستن موقت)" else "Minimize temporarily"
+        minBtn.setOnClickListener { onMinimizeTemporarily() }
+        bar.addView(minBtn)
+
+        return bar
+    }
+
+    private fun performMinimizeGeofencePopupAction() {
+        countDownTimer?.cancel()
+        stopPulseAnimators()
+        releaseScreenWakeLock()
+        try {
+            YaadGeofenceService.setGeofenceAudioMuteState(this, true)
+        } catch (e: Exception) {
+        }
+        finish()
+        overridePendingTransition(0, 0)
     }
 
     private fun buildActionButton(
@@ -5613,11 +6328,32 @@ class YaadAlarmPopupActivity : Activity() {
         }
     }
 
+    private fun performSnoozeGeofenceAction() {
+        countDownTimer?.cancel()
+        stopPulseAnimators()
+        releaseScreenWakeLock()
+        try {
+            YaadGeofenceService.snoozeGeofenceItemForPassingThrough(
+                this,
+                geofenceItemId,
+                30 * 60_000L,
+                notificationId
+            )
+        } catch (e: Exception) {
+        }
+        finish()
+        overridePendingTransition(0, 0)
+    }
+
     private fun performBackgroundAction(actionId: String) {
         countDownTimer?.cancel()
         stopPulseAnimators()
         releaseScreenWakeLock()
         if (isGeofencePopup) {
+            if (actionId == "snooze") {
+                performSnoozeGeofenceAction()
+                return
+            }
             stopGeofenceAlertIfNeeded(
                 cancelStatusBarNotif = (actionId == "done"),
                 stopOperationCompletely = (actionId == "done")
@@ -5782,6 +6518,7 @@ class YaadAlarmPopupActivity : Activity() {
         releaseScreenWakeLock()
         if (activeInstance?.get() === this) {
             activeInstance = null
+            activeBundledTimedReminders.clear()
         }
         super.onDestroy()
     }
@@ -5789,6 +6526,7 @@ class YaadAlarmPopupActivity : Activity() {
     companion object {
         private var activeInstance: WeakReference<YaadAlarmPopupActivity>? = null
         private var activeNotificationId: Int = Int.MIN_VALUE
+        private val activeBundledTimedReminders = java.util.LinkedHashMap<Int, JSObject>()
 
         fun isShowingGeofencePopup(): Boolean {
             val act = activeInstance?.get() ?: return false
@@ -5850,8 +6588,21 @@ class YaadAlarmPopupActivity : Activity() {
         }
 
         fun dismissIfMatching(notificationId: Int) {
+            activeBundledTimedReminders.remove(notificationId)
             val act = activeInstance?.get() ?: return
-            if (activeNotificationId == notificationId || notificationId == Int.MIN_VALUE) {
+            if (!act.isGeofencePopup && activeBundledTimedReminders.isNotEmpty()) {
+                act.runOnUiThread {
+                    try {
+                        if (!act.isFinishing && !act.isDestroyed) {
+                            val themeName = act.requestJson?.optJSONObject("extra")?.optString("theme", "dark-gold") ?: "dark-gold"
+                            act.buildBundledTimedRemindersUI(act.resolvePalette(themeName))
+                        }
+                    } catch (e: Exception) {
+                    }
+                }
+                return
+            }
+            if (activeNotificationId == notificationId || notificationId == Int.MIN_VALUE || activeBundledTimedReminders.isEmpty()) {
                 act.runOnUiThread {
                     try {
                         if (!act.isFinishing && !act.isDestroyed) {
@@ -6143,6 +6894,18 @@ class YaadGeofenceService : Service(), LocationListener {
             }
             return START_STICKY
         }
+        if (action == ACTION_SNOOZE_GEOFENCE_ALERT) {
+            val notifId = intent?.getIntExtra(EXTRA_NOTIFICATION_ID, Int.MIN_VALUE) ?: Int.MIN_VALUE
+            val targetItemId = intent?.getStringExtra(EXTRA_GEOFENCE_ITEM_ID) ?: activeGeofenceItemId
+            snoozeGeofenceItemForPassingThrough(applicationContext, targetItemId, 30 * 60_000L, notifId)
+            if (!shouldRun(applicationContext) || !hasLocationPermission(applicationContext)) {
+                stopLocationUpdates()
+                releaseServiceCpuWakeLock()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            return START_STICKY
+        }
 
         if (!shouldRun(applicationContext) || !hasLocationPermission(applicationContext)) {
             stopGeofenceAudio(applicationContext)
@@ -6255,10 +7018,13 @@ class YaadGeofenceService : Service(), LocationListener {
         }
     }
 
-    private fun startLocationUpdates() {
+    private var currentGpsIntervalMs: Long = 1000L
+
+    private fun startLocationUpdates(intervalMs: Long = currentGpsIntervalMs) {
         val lm = locationManager ?: return
         if (!hasLocationPermission(this)) return
         try {
+            currentGpsIntervalMs = intervalMs.coerceIn(1000L, 15_000L)
             if (isTrackingRegistered) {
                 try {
                     lm.removeUpdates(this)
@@ -6267,12 +7033,12 @@ class YaadGeofenceService : Service(), LocationListener {
                 isTrackingRegistered = false
             }
             var anyRegistered = false
-            // 1. High-accuracy satellite GPS_PROVIDER (1000ms, 0m minDistance) for <2s response
+            // 1. Adaptive satellite GPS_PROVIDER (1000ms near boundary for <2s response, scaled up when far to save battery)
             try {
                 if (lm.allProviders.contains(LocationManager.GPS_PROVIDER)) {
                     lm.requestLocationUpdates(
                         LocationManager.GPS_PROVIDER,
-                        1000L,
+                        currentGpsIntervalMs,
                         0.0f,
                         this,
                         Looper.getMainLooper()
@@ -6281,12 +7047,12 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             } catch (e: Exception) {
             }
-            // 2. Fast NETWORK_PROVIDER (1000ms, 0m) for instant indoor/urban response (<2s)
+            // 2. Adaptive NETWORK_PROVIDER for indoor/urban response (<2s when near boundary)
             try {
                 if (lm.allProviders.contains(LocationManager.NETWORK_PROVIDER)) {
                     lm.requestLocationUpdates(
                         LocationManager.NETWORK_PROVIDER,
-                        1000L,
+                        currentGpsIntervalMs,
                         0.0f,
                         this,
                         Looper.getMainLooper()
@@ -6295,7 +7061,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             } catch (e: Exception) {
             }
-            // 3. PASSIVE_PROVIDER (500ms, 0m) to capture location fixes from any system service immediately
+            // 3. PASSIVE_PROVIDER (500ms, 0m) to capture location fixes from any system service immediately with zero extra battery cost
             try {
                 if (lm.allProviders.contains(LocationManager.PASSIVE_PROVIDER)) {
                     lm.requestLocationUpdates(
@@ -6313,6 +7079,17 @@ class YaadGeofenceService : Service(), LocationListener {
             checkLastKnownLocations()
         } catch (e: SecurityException) {
         } catch (e: Exception) {
+        }
+    }
+
+    private fun updateAdaptiveLocationInterval(minDistanceToBoundaryMeters: Int, hasActiveAlert: Boolean) {
+        val desiredIntervalMs = when {
+            hasActiveAlert || minDistanceToBoundaryMeters <= 600 -> 1000L
+            minDistanceToBoundaryMeters <= 2500 -> 4000L
+            else -> 12000L
+        }
+        if (desiredIntervalMs != currentGpsIntervalMs && isTrackingRegistered) {
+            startLocationUpdates(desiredIntervalMs)
         }
     }
 
@@ -6508,6 +7285,7 @@ class YaadGeofenceService : Service(), LocationListener {
             )
 
             val activeCandidates = ArrayList<NativeAlertCandidate>()
+            var minDistanceToBoundaryMeters = Int.MAX_VALUE
 
             for (i in 0 until arr.length()) {
                 val item = arr.optJSONObject(i) ?: continue
@@ -6539,6 +7317,11 @@ class YaadGeofenceService : Service(), LocationListener {
                     targetLon
                 )
 
+                val distFromBoundary = kotlin.math.abs(rawDistance - radius)
+                if (distFromBoundary < minDistanceToBoundaryMeters) {
+                    minDistanceToBoundaryMeters = distFromBoundary
+                }
+
                 // Accuracy-weighted moving average + fuzzy hysteresis
                 val (smoothedDistDouble, deltaMeters) = recordAndAnalyzeNativeTrend(id, rawDistance.toDouble(), accuracyMeters, now)
                 val distance = smoothedDistDouble.roundToInt()
@@ -6547,16 +7330,27 @@ class YaadGeofenceService : Service(), LocationListener {
                 val centerZoneMeters = fivePctMeters
                 val preEntryStartMeters = radius + fivePctMeters
                 val fuzzyHyst = kotlin.math.min(25, kotlin.math.max(10, (accuracyMeters * 0.6).roundToInt()))
+                val antiPingPongDeadband = kotlin.math.max(fuzzyHyst, kotlin.math.min(80, (radius * 0.15).roundToInt()))
 
                 val insideKey = "inside_\$id"
                 val armedExitKey = "armed_exit_\$id"
                 val sonarDoneKey = "sonar_done_\$id"
                 val latchedModeKey = "latched_mode_\$id"
+                val cooldownUntilKey = "cooldown_until_\$id"
                 val hasPreviousState = prefs.contains(insideKey)
                 val wasInsideBefore = prefs.getBoolean(insideKey, false)
                 var armedForExit = prefs.getBoolean(armedExitKey, false)
                 var sonarDone = prefs.getBoolean(sonarDoneKey, false)
                 var latchedMode = prefs.getString(latchedModeKey, "") ?: ""
+                val cooldownUntil = prefs.getLong(cooldownUntilKey, 0L)
+
+                if (distance > preEntryStartMeters + antiPingPongDeadband) {
+                    outsideSampleCountMap[id] = (outsideSampleCountMap[id] ?: 0) + 1
+                    insideSampleCountMap[id] = 0
+                } else if (distance <= radius) {
+                    insideSampleCountMap[id] = (insideSampleCountMap[id] ?: 0) + 1
+                    outsideSampleCountMap[id] = 0
+                }
 
                 if (!startedOutsideMap.containsKey(id)) {
                     startedOutsideMap[id] = rawDistance > radius
@@ -6564,7 +7358,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 val startedOutside = startedOutsideMap[id] == true
 
                 val isInsideNow = if (wasInsideBefore) {
-                    distance <= radius + fuzzyHyst
+                    distance <= radius + antiPingPongDeadband
                 } else {
                     distance <= radius
                 }
@@ -6574,7 +7368,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     if (smoothedDistDouble < prevMin) {
                         minDistInsideMap[id] = smoothedDistDouble
                     }
-                } else if (distance > preEntryStartMeters + fuzzyHyst) {
+                } else if (distance > preEntryStartMeters + antiPingPongDeadband && (outsideSampleCountMap[id] ?: 0) >= 2) {
                     minDistInsideMap.remove(id)
                     startedOutsideMap[id] = true
                 }
@@ -6630,7 +7424,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 if (bannerStart > 0L) {
                     val shouldUnlatchForBothExit = triggerOn == "both" && latchedMode == "enter" && armedForExit && isConfirmedExiting && distance > centerZoneMeters
                     val shouldUnlatchForBothReEnter = triggerOn == "both" && latchedMode == "exit" && isInsideNow && !isConfirmedExiting
-                    val shouldUnlatchOutsideEnter = triggerOn == "enter" && distance > preEntryStartMeters + fuzzyHyst
+                    val shouldUnlatchOutsideEnter = triggerOn == "enter" && distance > preEntryStartMeters + antiPingPongDeadband && (outsideSampleCountMap[id] ?: 0) >= 2 && now >= cooldownUntil
                     val shouldUnlatchCenterExit = triggerOn == "exit" && distance <= centerZoneMeters && !isConfirmedExiting
 
                     if (shouldUnlatchForBothExit || shouldUnlatchForBothReEnter || shouldUnlatchOutsideEnter || shouldUnlatchCenterExit) {
@@ -6665,23 +7459,25 @@ class YaadGeofenceService : Service(), LocationListener {
 
                 when (triggerOn) {
                     "enter" -> {
-                        if (distance > preEntryStartMeters + fuzzyHyst) {
-                            if (wasInsideBefore || completedCycle || fiveHzStart > 0L || entryToastStart > 0L || sonarDone || latchedMode.isNotEmpty()) {
-                                editor.putBoolean(insideKey, false)
-                                editor.putBoolean(completedCycleKey, false)
-                                editor.putBoolean(sonarDoneKey, false)
-                                editor.putBoolean(armedExitKey, false)
-                                editor.remove(fiveHzKey)
-                                editor.remove(entryToastStartKey)
-                                editor.remove(latchedModeKey)
-                                prefsModified = true
+                        if (distance > preEntryStartMeters + antiPingPongDeadband) {
+                            if ((outsideSampleCountMap[id] ?: 0) >= 2 && now >= cooldownUntil) {
+                                if (wasInsideBefore || completedCycle || fiveHzStart > 0L || entryToastStart > 0L || sonarDone || latchedMode.isNotEmpty()) {
+                                    editor.putBoolean(insideKey, false)
+                                    editor.putBoolean(completedCycleKey, false)
+                                    editor.putBoolean(sonarDoneKey, false)
+                                    editor.putBoolean(armedExitKey, false)
+                                    editor.remove(fiveHzKey)
+                                    editor.remove(entryToastStartKey)
+                                    editor.remove(latchedModeKey)
+                                    prefsModified = true
+                                }
                             }
                             continue
                         }
                         if (distance > preEntryStartMeters && !wasInsideBefore && latchedMode != "enter") {
                             continue
                         }
-                        if (completedCycle) {
+                        if (completedCycle || (now < cooldownUntil && latchedMode != "enter")) {
                             continue
                         }
                         // If user is moving outward / exiting away from center and was not already latched in enter alert, NEVER fire Enter alert!
@@ -6695,6 +7491,7 @@ class YaadGeofenceService : Service(), LocationListener {
                         if (!wasInsideBefore && isInsideNow && !isConfirmedExiting) {
                             editor.putBoolean(insideKey, true)
                             editor.putLong(entryToastStartKey, now)
+                            editor.putLong(cooldownUntilKey, now + 3 * 60_000L)
                             entryToastStart = now
                             lastInwardMoveTimeMap[id] = now
                             prefsModified = true
@@ -7196,6 +7993,8 @@ class YaadGeofenceService : Service(), LocationListener {
                 editor.apply()
             }
 
+            updateAdaptiveLocationInterval(minDistanceToBoundaryMeters, activeCandidates.isNotEmpty())
+
             if (activeCandidates.isEmpty()) {
                 wokenAlertPhaseSet.clear()
                 if (sonarLoopActive) {
@@ -7640,6 +8439,18 @@ class YaadGeofenceService : Service(), LocationListener {
             piFlags
         )
 
+        val snoozeIntent = Intent(this, YaadGeofenceService::class.java).apply {
+            action = ACTION_SNOOZE_GEOFENCE_ALERT
+            putExtra(EXTRA_NOTIFICATION_ID, notificationId)
+            putExtra(EXTRA_GEOFENCE_ITEM_ID, id)
+        }
+        val snoozePi = PendingIntent.getService(
+            this,
+            notificationId + 250000,
+            snoozeIntent,
+            piFlags
+        )
+
         val directionsIntent = Intent(this, YaadAlarmPopupActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_SINGLE_TOP or
@@ -7690,10 +8501,15 @@ class YaadGeofenceService : Service(), LocationListener {
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(!visualOnlyBanner)
             .setOnlyAlertOnce(isLiveUpdate)
-            .setAutoCancel(true)
+            .setAutoCancel(false)
             .setGroup(GEOFENCE_MULTI_GROUP_KEY)
-            .setDeleteIntent(stopPi)
-            .setContentIntent(editPi)
+            .setDeleteIntent(snoozePi)
+            .setContentIntent(fullScreenPi)
+            .addAction(
+                0,
+                if (isEn) "⏱ Not Now (Snooze)" else "⏱ الان نه (Snooze)",
+                snoozePi
+            )
             .addAction(
                 0,
                 if (isEn) "⏹ Stop" else "⏹ توقف",
@@ -7703,11 +8519,6 @@ class YaadGeofenceService : Service(), LocationListener {
                 0,
                 if (isEn) "🧭 Directions" else "🧭 مسیریابی",
                 directionsPi
-            )
-            .addAction(
-                0,
-                if (isEn) "✎ Edit" else "✎ ویرایش",
-                editPi
             )
 
         // Do NOT call builder.setTimeoutAfter(20_000L) so the notification and full-screen alert stay active until user reaction!
@@ -7779,6 +8590,7 @@ class YaadGeofenceService : Service(), LocationListener {
         private const val GEOFENCE_MULTI_GROUP_KEY = "YAAD_GEOFENCE_MULTI_GROUP"
         private const val GEOFENCE_GROUP_SUMMARY_ID = 889915
         const val ACTION_STOP_GEOFENCE_ALERT = "com.capacitorjs.plugins.localnotifications.STOP_GEOFENCE_ALERT"
+        const val ACTION_SNOOZE_GEOFENCE_ALERT = "com.capacitorjs.plugins.localnotifications.SNOOZE_GEOFENCE_ALERT"
         const val ACTION_RESTART_GEOFENCE_SERVICE = "com.capacitorjs.plugins.localnotifications.RESTART_GEOFENCE_SERVICE"
         const val EXTRA_NOTIFICATION_ID = "extra_geofence_notif_id"
         const val EXTRA_GEOFENCE_ITEM_ID = "extra_geofence_item_id"
@@ -7800,6 +8612,8 @@ class YaadGeofenceService : Service(), LocationListener {
         private val minDistInsideMap = HashMap<String, Double>()
         private val maxDistApproachMap = HashMap<String, Double>()
         private val startedOutsideMap = HashMap<String, Boolean>()
+        private val outsideSampleCountMap = HashMap<String, Int>()
+        private val insideSampleCountMap = HashMap<String, Int>()
         private val wokenAlertPhaseSet = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
         private fun computeWeightedAvg(samples: List<WeightedSample>): Double {
@@ -8087,6 +8901,44 @@ class YaadGeofenceService : Service(), LocationListener {
 
                 LocalNotificationsPlugin.evaluateJsInWebView(
                     "window.dispatchEvent(new CustomEvent('yaad:stop-geofence-item', { detail: { itemId: '\$targetId' } }));"
+                )
+            } catch (e: Exception) {
+            }
+        }
+
+        fun snoozeGeofenceItemForPassingThrough(
+            context: Context,
+            rawItemId: String,
+            durationMs: Long = 30 * 60_000L,
+            notificationIdToCancel: Int = Int.MIN_VALUE
+        ) {
+            val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
+            geofenceAudioMuted = false
+            stopGeofenceAudio(context, notificationIdToCancel)
+            YaadAlarmPopupActivity.dismissIfMatching(notificationIdToCancel)
+            if (targetId.isEmpty()) return
+
+            try {
+                val now = System.currentTimeMillis()
+                val resumeAt = now + durationMs.coerceAtLeast(60_000L)
+                val cleanId = targetId.removePrefix("loc_").removePrefix("rem_")
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val editor = prefs.edit()
+                for (sfx in listOf(targetId, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
+                    editor.putLong("paused_until_\$sfx", resumeAt)
+                    editor.putLong("cooldown_until_\$sfx", resumeAt)
+                    editor.putBoolean("completed_cycle_\$sfx", true)
+                    editor.putBoolean("sonar_done_\$sfx", true)
+                    editor.putBoolean("inside_\$sfx", true)
+                    editor.remove("five_hz_start_\$sfx")
+                    editor.remove("banner_start_\$sfx")
+                    editor.remove("banner_text_\$sfx")
+                    outsideSampleCountMap[sfx] = 0
+                }
+                editor.apply()
+
+                LocalNotificationsPlugin.evaluateJsInWebView(
+                    "window.dispatchEvent(new CustomEvent('yaad:snooze-geofence-item', { detail: { itemId: '\$targetId' } }));"
                 )
             } catch (e: Exception) {
             }
@@ -8558,8 +9410,41 @@ class YaadGeofenceService : Service(), LocationListener {
         }
 
         @android.webkit.JavascriptInterface
+        fun snoozeGeofenceItem(itemId: String, durationMs: Long) {
+            snoozeGeofenceItemForPassingThrough(appContext, itemId, durationMs)
+        }
+
+        @android.webkit.JavascriptInterface
         fun resumeGeofenceItemFromPause(itemId: String) {
             resumeGeofenceItemFromPause(appContext, itemId)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun hasBackgroundLocationPermission(): Boolean {
+            if (!hasLocationPermission(appContext)) return false
+            return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                ContextCompat.checkSelfPermission(
+                    appContext,
+                    Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openBackgroundLocationSettings() {
+            try {
+                val intent = Intent(
+                    Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                    Uri.fromParts("package", appContext.packageName, null)
+                ).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                appContext.startActivity(intent)
+            } catch (e: Exception) {
+                openDeviceLocationSettings(appContext)
+            }
         }
     }
 }
@@ -8613,6 +9498,15 @@ if (fs.existsSync(manifestPath)) {
       '<action android:name="android.intent.action.BOOT_COMPLETED" />',
       `<action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="com.capacitorjs.plugins.localnotifications.RESTART_GEOFENCE_SERVICE" />`
+    );
+  } else if (!manifestContent.includes('android.intent.action.TIMEZONE_CHANGED')) {
+    manifestContent = manifestContent.replace(
+      '<action android:name="com.capacitorjs.plugins.localnotifications.RESTART_GEOFENCE_SERVICE" />',
+      `<action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="com.capacitorjs.plugins.localnotifications.RESTART_GEOFENCE_SERVICE" />`
     );
   }

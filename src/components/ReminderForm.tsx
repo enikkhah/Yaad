@@ -14,7 +14,9 @@ import {
   JALALI_WEEKDAYS_HEADER,
   GREGORIAN_WEEKDAYS_MONDAY_FIRST,
   getCalendarDayHolidayInfo,
-  getMonthOfficialHolidays
+  getMonthOfficialHolidays,
+  getCurrentTimezoneMeta,
+  isSelectedDateTimeInPast
 } from '../utils/jalali';
 import { 
   RECURRENCE_OPTIONS, 
@@ -221,8 +223,12 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     setPickerSessionKey((prev) => prev + 1);
 
     if (initialData) {
-      // Editing existing reminder: set date to today (now) and default roller clock time to 2 minutes from now
-      const reminderTime = Date.now() + 2 * 60 * 1000;
+      // Editing existing reminder: preserve its scheduled date & time if it is in the future;
+      // if it was already in the past, default to 2 minutes from now so user can easily reschedule
+      const reminderTime =
+        initialData.dueTimestamp && initialData.dueTimestamp > Date.now()
+          ? initialData.dueTimestamp
+          : Date.now() + 2 * 60 * 1000;
       if (isEn) {
         const d = new Date(reminderTime);
         setSelectedYear(d.getFullYear());
@@ -568,6 +574,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setSelectedHour(j.hour);
       setSelectedMinute(j.minute);
     }
+    setPickerSessionKey((prev) => prev + 1);
+    if (validationError) setValidationError(null);
   };
 
   const setTomorrowMorning = () => {
@@ -586,6 +594,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     }
     setSelectedHour(9);
     setSelectedMinute(0);
+    setPickerSessionKey((prev) => prev + 1);
+    if (validationError) setValidationError(null);
   };
 
   // Convert selected date and time to Unix Timestamp (Gregorian for EN, Jalali for FA)
@@ -598,6 +608,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     const date = new Date(gy, gm - 1, gd, selectedHour, selectedMinute, 0, 0);
     return date.getTime();
   };
+
+  const candidateDueTimestamp = calculateDueTimestamp();
+  const isCandidateInPast = isSelectedDateTimeInPast(candidateDueTimestamp);
 
   // Handle file upload
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -668,6 +681,17 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setTimeout(() => titleInputRef.current?.focus(), 30);
       return;
     }
+
+    const dueTimestamp = calculateDueTimestamp();
+    if (isSelectedDateTimeInPast(dueTimestamp)) {
+      setValidationError(
+        isEn
+          ? 'Cannot save a reminder for a past date or time. Please select a future time.'
+          : 'امکان ثبت یادآور برای تاریخ و ساعت گذشته وجود ندارد. لطفاً زمانی در آینده انتخاب کنید.'
+      );
+      return;
+    }
+
     setValidationError(null);
 
     stopVoiceListening();
@@ -675,7 +699,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     // Request Android notification permission on first reminder need
     requestNotificationPermission().catch(() => {});
 
-    const dueTimestamp = calculateDueTimestamp();
+    const tzMeta = getCurrentTimezoneMeta(dueTimestamp);
     onSave(
       {
         title: title.trim(),
@@ -684,6 +708,16 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         priority,
         priorityLevel,
         dueTimestamp,
+        scheduledTzOffsetMinutes: tzMeta.tzOffsetMinutes,
+        scheduledTimeZone: tzMeta.timeZone,
+        wallClockTime: {
+          year: selectedYear,
+          month: selectedMonth,
+          day: selectedDay,
+          hour: selectedHour,
+          minute: selectedMinute,
+          calendar: isEn ? 'gregorian' : 'jalali',
+        },
         imageUrl,
         ringTune,
         voiceReadAloud,
@@ -846,7 +880,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
             {/* Persian Jalali Date & Time Picker */}
             <div className="p-4 rounded-2xl bg-stone-950/60 border border-stone-800 space-y-3">
               {/* Time: Roller Clock placed directly below Reminder Title section, with doubled height */}
-              <div className="pb-2 border-b border-stone-800">
+              <div className="pb-2 border-b border-stone-800 space-y-2">
                 <div 
                   dir="ltr"
                   className="grid grid-cols-2 gap-2 max-w-[210px] mx-auto px-1"
@@ -855,7 +889,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <WheelPicker
                     key={`hour-${pickerSessionKey}`}
                     selectedValue={selectedHour}
-                    onChange={(val) => setSelectedHour(val)}
+                    onChange={(val) => {
+                      setSelectedHour(val);
+                      if (validationError) setValidationError(null);
+                    }}
                     min={0}
                     max={23}
                     itemHeight={58}
@@ -867,7 +904,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   <WheelPicker
                     key={`minute-${pickerSessionKey}`}
                     selectedValue={selectedMinute}
-                    onChange={(val) => setSelectedMinute(val)}
+                    onChange={(val) => {
+                      setSelectedMinute(val);
+                      if (validationError) setValidationError(null);
+                    }}
                     min={0}
                     max={59}
                     itemHeight={58}
@@ -875,6 +915,27 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     items={MINUTE_WHEEL_ITEMS}
                   />
                 </div>
+
+                {/* Live Past-Time Warning & One-Tap Reset to Future */}
+                {isCandidateInPast && (
+                  <div className="p-2.5 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-2 animate-in fade-in">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span className="font-bold truncate">
+                        {isEn
+                          ? 'Selected time is in the past'
+                          : 'زمان انتخاب‌شده در گذشته است'}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => applyPreset(2)}
+                      className="shrink-0 px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] transition-all cursor-pointer active:scale-95"
+                    >
+                      {isEn ? 'Set to Now +2m' : 'تنظیم به زمان حال'}
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Quick Presets - Exactly 4 buttons */}
@@ -994,34 +1055,50 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         {Array.from({ length: totalDays }, (_, i) => i + 1).map((d) => {
                           const isSelected = selectedDay === d;
                           const holidayInfo = getCalendarDayHolidayInfo(selectedYear, selectedMonth, d, language);
+                          const nowDate = new Date();
+                          const nowJalali = getJalaliComponents(nowDate.getTime());
+                          const curYear = isEn ? nowDate.getFullYear() : nowJalali.year;
+                          const curMonth = isEn ? nowDate.getMonth() + 1 : nowJalali.month;
+                          const curDay = isEn ? nowDate.getDate() : nowJalali.day;
+                          const isPastDay =
+                            selectedYear < curYear ||
+                            (selectedYear === curYear && selectedMonth < curMonth) ||
+                            (selectedYear === curYear && selectedMonth === curMonth && d < curDay);
 
                           return (
                             <button
                               key={d}
                               type="button"
+                              disabled={isPastDay}
                               onClick={() => {
+                                if (isPastDay) return;
                                 setSelectedDay(d);
+                                if (validationError) setValidationError(null);
                                 setDateActiveTab(null);
                               }}
                               title={
-                                holidayInfo.occasionTitle
+                                isPastDay
+                                  ? (isEn ? 'Past date cannot be selected' : 'تاریخ گذشته قابل انتخاب نیست')
+                                  : holidayInfo.occasionTitle
                                   ? `${isEn ? 'Official Holiday:' : 'تعطیل رسمی:'} ${holidayInfo.occasionTitle}`
                                   : holidayInfo.isWeekend
                                   ? (isEn ? 'Weekend Holiday' : 'تعطیل آخر هفته')
                                   : undefined
                               }
-                              className={`min-h-[34px] sm:min-h-[38px] rounded-xl text-xs sm:text-sm font-bold flex flex-col items-center justify-center transition-all cursor-pointer active:scale-95 relative border ${
-                                isSelected
-                                  ? 'bg-indigo-600 border-indigo-400 text-white font-black shadow-md ring-2 ring-indigo-400'
+                              className={`min-h-[34px] sm:min-h-[38px] rounded-xl text-xs sm:text-sm font-bold flex flex-col items-center justify-center transition-all relative border ${
+                                isPastDay
+                                  ? 'bg-stone-950/40 border-stone-900 text-stone-600 opacity-45 cursor-not-allowed line-through'
+                                  : isSelected
+                                  ? 'bg-indigo-600 border-indigo-400 text-white font-black shadow-md ring-2 ring-indigo-400 cursor-pointer active:scale-95'
                                   : holidayInfo.isOfficialHoliday
-                                  ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 hover:bg-rose-500/30 font-black'
+                                  ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 hover:bg-rose-500/30 font-black cursor-pointer active:scale-95'
                                   : holidayInfo.isWeekend
-                                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
-                                  : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border-stone-800/80'
+                                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20 cursor-pointer active:scale-95'
+                                  : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border-stone-800/80 cursor-pointer active:scale-95'
                               }`}
                             >
                               <span>{isEn ? d : toPersianDigits(d)}</span>
-                              {holidayInfo.isOfficialHoliday && !isSelected && (
+                              {holidayInfo.isOfficialHoliday && !isSelected && !isPastDay && (
                                 <span className="w-1 h-1 rounded-full bg-rose-400 mt-0.5" />
                               )}
                             </button>
@@ -1076,22 +1153,37 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                       {(isEn ? GREGORIAN_MONTHS : PERSIAN_MONTHS).map((mName, idx) => {
                         const monthNum = idx + 1;
                         const isSelected = selectedMonth === monthNum;
+                        const nowDate = new Date();
+                        const nowJalali = getJalaliComponents(nowDate.getTime());
+                        const curYear = isEn ? nowDate.getFullYear() : nowJalali.year;
+                        const curMonth = isEn ? nowDate.getMonth() + 1 : nowJalali.month;
+                        const curDay = isEn ? nowDate.getDate() : nowJalali.day;
+                        const isPastMonth =
+                          selectedYear < curYear ||
+                          (selectedYear === curYear && monthNum < curMonth);
                         return (
                           <button
                             key={mName}
                             type="button"
+                            disabled={isPastMonth}
                             onClick={() => {
+                              if (isPastMonth) return;
                               setSelectedMonth(monthNum);
                               const maxD = isEn ? getDaysInGregorianMonth(selectedYear, monthNum) : getDaysInJalaliMonth(selectedYear, monthNum);
-                              if (selectedDay > maxD) {
+                              if (selectedYear === curYear && monthNum === curMonth && selectedDay < curDay) {
+                                setSelectedDay(curDay);
+                              } else if (selectedDay > maxD) {
                                 setSelectedDay(maxD);
                               }
+                              if (validationError) setValidationError(null);
                               setDateActiveTab(null);
                             }}
-                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all text-center cursor-pointer active:scale-95 ${
-                              isSelected
-                                ? 'bg-indigo-600 text-white font-black shadow-md ring-2 ring-indigo-400'
-                                : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80'
+                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all text-center ${
+                              isPastMonth
+                                ? 'bg-stone-950/40 text-stone-600 border border-stone-900 opacity-45 cursor-not-allowed line-through'
+                                : isSelected
+                                ? 'bg-indigo-600 text-white font-black shadow-md ring-2 ring-indigo-400 cursor-pointer active:scale-95'
+                                : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80 cursor-pointer active:scale-95'
                             }`}
                           >
                             <span>{mName}</span>
@@ -1108,19 +1200,38 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     <div className="grid grid-cols-4 sm:grid-cols-5 gap-1.5 max-h-48 overflow-y-auto no-scrollbar p-0.5">
                       {(isEn ? GREGORIAN_YEARS_GRID : JALALI_YEARS_GRID).map((yr) => {
                         const isSelected = selectedYear === yr;
+                        const nowDate = new Date();
+                        const nowJalali = getJalaliComponents(nowDate.getTime());
+                        const curYear = isEn ? nowDate.getFullYear() : nowJalali.year;
+                        const curMonth = isEn ? nowDate.getMonth() + 1 : nowJalali.month;
+                        const curDay = isEn ? nowDate.getDate() : nowJalali.day;
+                        const isPastYear = yr < curYear;
                         return (
                           <button
                             key={yr}
                             type="button"
+                            disabled={isPastYear}
                             onClick={() => {
+                              if (isPastYear) return;
                               setSelectedYear(yr);
+                              if (yr === curYear) {
+                                if (selectedMonth < curMonth) {
+                                  setSelectedMonth(curMonth);
+                                  setSelectedDay(curDay);
+                                } else if (selectedMonth === curMonth && selectedDay < curDay) {
+                                  setSelectedDay(curDay);
+                                }
+                              }
                               setCustomYearInput('');
+                              if (validationError) setValidationError(null);
                               setDateActiveTab(null);
                             }}
-                            className={`py-1.5 px-1 rounded-xl text-xs font-mono font-bold transition-all text-center cursor-pointer active:scale-95 ${
-                              isSelected
-                                ? 'bg-indigo-600 text-white font-black shadow-md ring-2 ring-indigo-400'
-                                : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80'
+                            className={`py-1.5 px-1 rounded-xl text-xs font-mono font-bold transition-all text-center ${
+                              isPastYear
+                                ? 'bg-stone-950/40 text-stone-600 border border-stone-900 opacity-45 cursor-not-allowed line-through'
+                                : isSelected
+                                ? 'bg-indigo-600 text-white font-black shadow-md ring-2 ring-indigo-400 cursor-pointer active:scale-95'
+                                : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80 cursor-pointer active:scale-95'
                             }`}
                           >
                             {isEn ? yr : toPersianDigits(yr)}

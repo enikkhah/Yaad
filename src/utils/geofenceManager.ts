@@ -17,20 +17,6 @@ export interface UserPosition {
   timestamp: number;
 }
 
-export interface GeofenceTriggerEvent {
-  reminder: Reminder;
-  triggerType: 'enter' | 'exit' | 'arrived_under_10m';
-  distance: number;
-  timestamp: number;
-}
-
-export interface SavedLocationTriggerEvent {
-  location: SavedLocation;
-  triggerType: 'enter' | 'exit' | 'arrived_under_10m';
-  distance: number;
-  timestamp: number;
-}
-
 export type GeofenceScenarioPhase =
   | 'enter_approaching'        // Scenario 'enter': 5% < d <= 105% R (10/min sonar)
   | 'enter_center_5hz'         // Scenario 'enter': d <= 5% R for 10 seconds (5 Hz sonar)
@@ -110,7 +96,15 @@ interface ItemScenarioRuntimeState {
   sonarFinishedForCycle: boolean;
   // Dismissed / acknowledged for current phase
   acknowledgedUntilExit: boolean;
+  // Anti-Ping-Pong & Debounce / Cooldown state
+  cooldownUntilMs: number;
+  lastTriggerTimestampMs: number;
+  consecutiveOutsideSamples: number;
+  consecutiveInsideSamples: number;
 }
+
+export const GEOFENCE_PASS_THROUGH_SNOOZE_MS = 30 * 60 * 1000; // 30 minutes snooze when passing through ("الان نه (Snooze)")
+export const GEOFENCE_ANTI_PINGPONG_COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes minimum cooldown between same-phase triggers
 
 const scenarioRuntimeMap = new Map<string, ItemScenarioRuntimeState>();
 
@@ -143,6 +137,10 @@ function getOrCreateRuntimeState(key: string, nowMs: number = Date.now()): ItemS
       audioMutedForCycle: false,
       sonarFinishedForCycle: false,
       acknowledgedUntilExit: false,
+      cooldownUntilMs: 0,
+      lastTriggerTimestampMs: 0,
+      consecutiveOutsideSamples: 0,
+      consecutiveInsideSamples: 0,
     };
     scenarioRuntimeMap.set(key, st);
   }
@@ -352,6 +350,7 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
     if (locState) {
       locState.acknowledgedUntilExit = true;
       locState.sonarFinishedForCycle = true;
+      locState.cooldownUntilMs = now + GEOFENCE_ANTI_PINGPONG_COOLDOWN_MS;
       locState.visual10sStartMs = 0;
       locState.center5HzStartMs = 0;
       locState.border5HzStartMs = 0;
@@ -360,6 +359,7 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
     if (remState) {
       remState.acknowledgedUntilExit = true;
       remState.sonarFinishedForCycle = true;
+      remState.cooldownUntilMs = now + GEOFENCE_ANTI_PINGPONG_COOLDOWN_MS;
       remState.visual10sStartMs = 0;
       remState.center5HzStartMs = 0;
       remState.border5HzStartMs = 0;
@@ -380,8 +380,65 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
   }
 }
 
+/**
+ * Snoozes a geofence alert when the user taps «الان نه (Snooze)» because they are just passing through.
+ * - Stops sonar & vibration immediately and closes the full-screen alert.
+ * - Keeps the geofence ENABLED for future trips (unlike "توقف").
+ * - Applies both an anti-ping-pong spatial latch (`acknowledgedUntilExit = true`) AND a 30-minute cooldown
+ *   so GPS jitter or traffic along the route never re-triggers the alert while passing through!
+ */
+export function snoozeGeofenceAlertPassThrough(
+  itemId?: string,
+  durationMs: number = GEOFENCE_PASS_THROUGH_SNOOZE_MS
+): void {
+  setSubmarineSonarMuted(false);
+  const now = Date.now();
+  const safeDuration = Math.max(60_000, durationMs);
+
+  if (itemId) {
+    const cleanId = itemId.replace(/^(loc_|rem_)/, '');
+    pausedGeofenceItemsMap.set(cleanId, {
+      reason: 'snooze',
+      pausedAt: now,
+      resumeAt: now + safeDuration,
+    });
+    for (const key of [`loc_${cleanId}`, `rem_${cleanId}`]) {
+      const st = getOrCreateRuntimeState(key, now);
+      st.acknowledgedUntilExit = true;
+      st.sonarFinishedForCycle = true;
+      st.cooldownUntilMs = now + safeDuration;
+      st.visual10sStartMs = 0;
+      st.center5HzStartMs = 0;
+      st.border5HzStartMs = 0;
+      st.consecutiveOutsideSamples = 0;
+    }
+    proximityStateMap.set(`loc_${cleanId}`, true);
+    proximityStateMap.set(`rem_${cleanId}`, true);
+    lastTransitionTimeMap.set(`loc_${cleanId}`, now);
+    lastTransitionTimeMap.set(`rem_${cleanId}`, now);
+    saveProximityStateToStorage();
+  }
+
+  if (typeof window !== 'undefined') {
+    try {
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge) {
+        if (typeof bridge.snoozeGeofenceItem === 'function') {
+          bridge.snoozeGeofenceItem(itemId || '', safeDuration);
+        } else if (typeof bridge.pauseGeofenceItemTemporarily === 'function') {
+          bridge.pauseGeofenceItemTemporarily(itemId || '', safeDuration);
+        } else if (typeof bridge.stopGeofenceAlertAudio === 'function') {
+          bridge.stopGeofenceAlertAudio();
+        }
+      }
+    } catch {
+      // Ignore bridge error on web
+    }
+  }
+}
+
 interface PausedGeofenceEntry {
-  reason: 'edit' | 'directions';
+  reason: 'edit' | 'directions' | 'snooze';
   pausedAt: number;
   resumeAt: number;
 }
@@ -390,14 +447,18 @@ const pausedGeofenceItemsMap = new Map<string, PausedGeofenceEntry>();
 
 /**
  * Temporarily pauses geofence alert emission for an item when the user clicks
- * "ویرایش" (Edit) or "مسیریابی" (Directions).
+ * "ویرایش" (Edit), "مسیریابی" (Directions), or "الان نه (Snooze)".
  * - Does NOT disable the geofence or permanently acknowledge it.
  * - If no edit is saved or if navigation is canceled/returned from, the alert resumes automatically.
  */
 export function pauseGeofenceAlertTemporarily(
   itemId?: string,
-  reason: 'edit' | 'directions' = 'edit'
+  reason: 'edit' | 'directions' | 'snooze' = 'edit'
 ): void {
+  if (reason === 'snooze') {
+    snoozeGeofenceAlertPassThrough(itemId, GEOFENCE_PASS_THROUGH_SNOOZE_MS);
+    return;
+  }
   const now = Date.now();
   const durationMs = reason === 'directions' ? 20_000 : 15 * 60_000;
   if (itemId) {
@@ -428,7 +489,7 @@ export function pauseGeofenceAlertTemporarily(
 /**
  * Resumes any temporarily paused geofence alert(s) (e.g., when closing the Edit modal without
  * disabling the geofence, or when returning from / canceling Google Maps navigation).
- * Refreshes movement timestamps so the alert and sonar resume immediately if still in range.
+ * Note: 'snooze' entries are NOT auto-resumed on modal close; they wait for their cooldown/exit.
  */
 export function resumeGeofenceAlertFromPause(
   itemId?: string,
@@ -453,13 +514,14 @@ export function resumeGeofenceAlertFromPause(
   if (itemId) {
     const cleanId = itemId.replace(/^(loc_|rem_)/, '');
     const existing = pausedGeofenceItemsMap.get(cleanId);
-    if (existing && (!reasonFilter || existing.reason === reasonFilter)) {
+    if (existing && existing.reason !== 'snooze' && (!reasonFilter || existing.reason === reasonFilter)) {
       pausedGeofenceItemsMap.delete(cleanId);
       refreshRuntimeTimers(cleanId);
       resumedAny = true;
     }
   } else {
     for (const [cleanId, entry] of Array.from(pausedGeofenceItemsMap.entries())) {
+      if (entry.reason === 'snooze') continue;
       if (!reasonFilter || entry.reason === reasonFilter) {
         if (reasonFilter === 'directions' && now - entry.pausedAt < 1200) {
           continue;
@@ -595,15 +657,34 @@ function evaluateSingleItemScenario(params: {
   const centerZoneMeters = fivePctMeters;
   const preEntryStartMeters = safeRadius + fivePctMeters;
 
-  // Fuzzy boundary hysteresis margin based on live GPS accuracy (10m..25m) so boundary jitter never flips Enter/Exit
+  // Fuzzy boundary hysteresis margin + Anti-Ping-Pong deadband (max(15m..35m, 15% of radius, capped at 80m))
+  // Prevents GPS drift or temporary signal drop near the border from ping-ponging between inside and outside!
   const fuzzyHysteresisMeters = Math.max(
-    10,
-    Math.min(25, Math.round((accuracy || 15) * 0.6))
+    12,
+    Math.min(30, Math.round((accuracy || 15) * 0.65))
+  );
+  const antiPingPongDeadbandMeters = Math.max(
+    fuzzyHysteresisMeters,
+    Math.min(80, Math.round(safeRadius * 0.15))
   );
   const innerSafeExitArmRadius = Math.max(
     centerZoneMeters,
     safeRadius - Math.max(fuzzyHysteresisMeters, Math.round(safeRadius * 0.1))
   );
+
+  // Track consecutive inside/outside samples to debounce signal drops
+  if (distance > preEntryStartMeters + antiPingPongDeadbandMeters) {
+    st.consecutiveOutsideSamples += 1;
+    st.consecutiveInsideSamples = 0;
+  } else if (distance <= safeRadius) {
+    st.consecutiveInsideSamples += 1;
+    st.consecutiveOutsideSamples = 0;
+  }
+
+  // Respect active pass-through Snooze / Cooldown window
+  if (st.cooldownUntilMs > now && st.acknowledgedUntilExit) {
+    return null;
+  }
 
   // Once the 10s 5Hz stage finishes (`sonarFinishedForCycle`), 6s sonar is permanently cut off for the rest of this cycle
   const effectivePlayAudio = playAudio && !st.audioMutedForCycle && !st.sonarFinishedForCycle;
@@ -627,7 +708,7 @@ function evaluateSingleItemScenario(params: {
     if (distance > st.maxDistanceInApproach) {
       st.maxDistanceInApproach = distance;
     }
-  } else {
+  } else if (st.consecutiveOutsideSamples >= 2) {
     st.startedOutsideBoundary = true;
     st.maxDistanceInApproach = distance;
   }
@@ -651,23 +732,30 @@ function evaluateSingleItemScenario(params: {
   // SCENARIO 1: ENTER ONLY ('enter')
   // =========================================================================
   if (triggerOn === 'enter') {
-    if (distance > preEntryStartMeters + fuzzyHysteresisMeters) {
-      st.enterAlertActive = false;
-      st.enterCycleCompleted = false;
-      st.wasInsideBorder = false;
-      st.center5HzStartMs = 0;
-      st.entryBannerStartMs = 0;
-      st.visual10sStartMs = 0;
-      st.visualCrossingType = null;
-      st.audioMutedForCycle = false;
-      st.sonarFinishedForCycle = false;
-      st.acknowledgedUntilExit = false;
-      st.minDistanceReachedInside = Number.POSITIVE_INFINITY;
-      st.maxDistanceInApproach = distance;
-      st.startedOutsideBoundary = true;
+    // Anti-Ping-Pong Reset Condition:
+    // Only reset the enter latch if the user has moved clearly outside the deadband (`preEntryStartMeters + antiPingPongDeadbandMeters`)
+    // for at least 2 consecutive valid readings AND any cooldown has expired!
+    if (distance > preEntryStartMeters + antiPingPongDeadbandMeters) {
+      if (st.consecutiveOutsideSamples >= 2 && now >= st.cooldownUntilMs) {
+        st.enterAlertActive = false;
+        st.enterCycleCompleted = false;
+        st.wasInsideBorder = false;
+        st.center5HzStartMs = 0;
+        st.entryBannerStartMs = 0;
+        st.visual10sStartMs = 0;
+        st.visualCrossingType = null;
+        st.audioMutedForCycle = false;
+        st.sonarFinishedForCycle = false;
+        st.acknowledgedUntilExit = false;
+        st.minDistanceReachedInside = Number.POSITIVE_INFINITY;
+        st.maxDistanceInApproach = distance;
+        st.startedOutsideBoundary = true;
+      }
       return null;
     }
 
+    // If GPS jitter momentarily pushes a latched inside user slightly outside `preEntryStartMeters` (within the deadband),
+    // keep the enter alert latched instead of dropping and re-triggering (Zero Ping-Pong)!
     if (st.acknowledgedUntilExit || st.enterCycleCompleted) {
       return null;
     }
@@ -1707,314 +1795,29 @@ export function getNearestActiveGeofenceDistance(
 }
 
 /**
- * Returns a strict 1000ms (1 second) polling interval whenever any geofence is active
- * to guarantee sub-2-second (< 2s) geofence alert responsiveness.
+ * Adaptive Battery-Saving GPS Polling Interval:
+ * - No active geofences: 60,000ms (Idle)
+ * - Far from all geofence boundaries (> 2500m): 12,000ms (Low-Power Battery Saver)
+ * - Medium distance (600m .. 2500m): 4,000ms (Balanced Approach)
+ * - Near or inside any geofence boundary (<= 600m): 1,000ms (High-Precision < 2s Trigger)
  */
 export function getAdaptivePollingInterval(
-  _userPos: { latitude: number; longitude: number },
+  userPos: { latitude: number; longitude: number },
   reminders: Reminder[] = [],
   locations: SavedLocation[] = []
 ): number {
-  const hasActiveLoc = locations.some(
-    (l) => !l.deletedAt && l.geofence && l.geofence.enabled
-  );
-  const hasActiveRem = reminders.some(
-    (r) => !r.deletedAt && r.status !== 'completed' && r.geofence && r.geofence.enabled
-  );
-
-  if (!hasActiveLoc && !hasActiveRem) {
+  const nearest = getNearestActiveGeofenceDistance(userPos, reminders, locations);
+  if (!nearest) {
     return 60000;
   }
 
-  return 1000;
+  const distToBoundary = Math.max(0, nearest.distance - nearest.radius);
+  if (distToBoundary <= 600) {
+    return 1000;
+  }
+  if (distToBoundary <= 2500) {
+    return 4000;
+  }
+  return 12000;
 }
 
-export function evaluateGeofences(
-  userPos: UserPosition,
-  reminders: Reminder[],
-  onTrigger: (event: GeofenceTriggerEvent) => void
-): Reminder[] {
-  const updatedReminders: Reminder[] = [];
-  const now = Date.now();
-  let stateChanged = false;
-  const DEBOUNCE_MS = 15 * 1000;
-
-  for (const reminder of reminders) {
-    if (
-      reminder.deletedAt ||
-      (reminder.status !== 'pending' && reminder.status !== 'postponed') ||
-      !reminder.geofence ||
-      !reminder.geofence.enabled
-    ) {
-      continue;
-    }
-
-    const { latitude, longitude, radius = 100, triggerOn = 'enter' } = reminder.geofence;
-    const distance = calculateHaversineDistance(
-      userPos.latitude,
-      userPos.longitude,
-      latitude,
-      longitude
-    );
-
-    const proximityKey = `rem_${reminder.id}`;
-    const under10mKey = `u10m_rem_${reminder.id}`;
-    const isInsideNow = distance <= radius;
-    const isDefinitelyOutside = distance > radius + 8;
-    const isUnder10mNow = distance <= Math.max(10, Math.round(radius * 0.1));
-
-    const wasInsideNotified = proximityStateMap.get(proximityKey);
-    const wasUnder10mNotified = proximityStateMap.get(under10mKey);
-    const lastTrigTime = lastTransitionTimeMap.get(proximityKey) || 0;
-
-    if (isDefinitelyOutside && wasUnder10mNotified === true) {
-      proximityStateMap.set(under10mKey, false);
-      stateChanged = true;
-    }
-
-    if (
-      triggerOn === 'enter' &&
-      isInsideNow &&
-      isUnder10mNow &&
-      wasInsideNotified !== true &&
-      wasUnder10mNotified !== true
-    ) {
-      proximityStateMap.set(under10mKey, true);
-      proximityStateMap.set(proximityKey, true);
-      lastTransitionTimeMap.set(proximityKey, now);
-      stateChanged = true;
-
-      const updatedReminder: Reminder = {
-        ...reminder,
-        geofence: {
-          ...reminder.geofence,
-          lastTriggeredAt: now,
-          hasTriggered: true,
-        },
-      };
-      updatedReminders.push(updatedReminder);
-      onTrigger({
-        reminder: updatedReminder,
-        triggerType: 'arrived_under_10m',
-        distance,
-        timestamp: now,
-      });
-      continue;
-    }
-
-    let shouldTrigger = false;
-    let eventType: 'enter' | 'exit' = 'enter';
-
-    if (isInsideNow) {
-      if (wasInsideNotified !== true) {
-        if (triggerOn === 'enter' || triggerOn === 'both') {
-          if (now - lastTrigTime >= DEBOUNCE_MS) {
-            shouldTrigger = true;
-            eventType = 'enter';
-          }
-        } else {
-          proximityStateMap.set(proximityKey, true);
-          stateChanged = true;
-        }
-      }
-    } else if (isDefinitelyOutside) {
-      if (wasInsideNotified === true) {
-        if (triggerOn === 'exit' || triggerOn === 'both') {
-          if (now - lastTrigTime >= DEBOUNCE_MS) {
-            shouldTrigger = true;
-            eventType = 'exit';
-          }
-        } else {
-          proximityStateMap.set(proximityKey, false);
-          stateChanged = true;
-        }
-      } else if (wasInsideNotified === undefined) {
-        proximityStateMap.set(proximityKey, false);
-        stateChanged = true;
-      }
-    }
-
-    if (shouldTrigger) {
-      proximityStateMap.set(proximityKey, eventType === 'enter');
-      lastTransitionTimeMap.set(proximityKey, now);
-      stateChanged = true;
-
-      const updatedReminder: Reminder = {
-        ...reminder,
-        geofence: {
-          ...reminder.geofence,
-          lastTriggeredAt: now,
-          hasTriggered: true,
-        },
-      };
-
-      updatedReminders.push(updatedReminder);
-
-      onTrigger({
-        reminder: updatedReminder,
-        triggerType: eventType,
-        distance,
-        timestamp: now,
-      });
-    }
-  }
-
-  if (stateChanged) {
-    saveProximityStateToStorage();
-  }
-
-  return updatedReminders;
-}
-
-export function evaluateSavedLocationGeofences(
-  userPos: UserPosition,
-  locations: SavedLocation[],
-  onTrigger: (event: SavedLocationTriggerEvent) => void
-): SavedLocation[] {
-  const updatedLocations: SavedLocation[] = [];
-  const now = Date.now();
-  let stateChanged = false;
-  const DEBOUNCE_MS = 15 * 1000;
-
-  for (const location of locations) {
-    if (location.deletedAt || !location.geofence || !location.geofence.enabled) {
-      continue;
-    }
-
-    const radius = location.geofence.radius || 100;
-    const triggerOn = location.geofence.triggerOn || 'both';
-    const distance = calculateHaversineDistance(
-      userPos.latitude,
-      userPos.longitude,
-      location.latitude,
-      location.longitude
-    );
-
-    const proximityKey = `loc_${location.id}`;
-    const under10mKey = `u10m_loc_${location.id}`;
-    const isInsideNow = distance <= radius;
-    const isDefinitelyOutside = distance > radius + 8;
-    const isUnder10mNow = distance <= Math.max(10, Math.round(radius * 0.1));
-
-    const wasInsideNotified = proximityStateMap.get(proximityKey);
-    const wasUnder10mNotified = proximityStateMap.get(under10mKey);
-    const lastTrigTime = lastTransitionTimeMap.get(proximityKey) || 0;
-
-    if (isDefinitelyOutside && wasUnder10mNotified === true) {
-      proximityStateMap.set(under10mKey, false);
-      stateChanged = true;
-    }
-
-    if (
-      triggerOn === 'enter' &&
-      isInsideNow &&
-      isUnder10mNow &&
-      wasInsideNotified !== true &&
-      wasUnder10mNotified !== true
-    ) {
-      proximityStateMap.set(under10mKey, true);
-      proximityStateMap.set(proximityKey, true);
-      lastTransitionTimeMap.set(proximityKey, now);
-      stateChanged = true;
-
-      const updatedLoc: SavedLocation = {
-        ...location,
-        geofence: {
-          ...location.geofence,
-          lastTriggeredAt: now,
-          hasTriggered: true,
-        },
-      };
-      updatedLocations.push(updatedLoc);
-      onTrigger({
-        location: updatedLoc,
-        triggerType: 'arrived_under_10m',
-        distance,
-        timestamp: now,
-      });
-      continue;
-    }
-
-    let shouldTrigger = false;
-    let eventType: 'enter' | 'exit' = 'enter';
-
-    if (isInsideNow) {
-      if (wasInsideNotified !== true) {
-        if (triggerOn === 'enter' || triggerOn === 'both') {
-          if (now - lastTrigTime >= DEBOUNCE_MS) {
-            shouldTrigger = true;
-            eventType = 'enter';
-          }
-        } else {
-          proximityStateMap.set(proximityKey, true);
-          stateChanged = true;
-        }
-      }
-    } else if (isDefinitelyOutside) {
-      if (wasInsideNotified === true) {
-        if (triggerOn === 'exit' || triggerOn === 'both') {
-          if (now - lastTrigTime >= DEBOUNCE_MS) {
-            shouldTrigger = true;
-            eventType = 'exit';
-          }
-        } else {
-          proximityStateMap.set(proximityKey, false);
-          stateChanged = true;
-        }
-      } else if (wasInsideNotified === undefined) {
-        proximityStateMap.set(proximityKey, false);
-        stateChanged = true;
-      }
-    }
-
-    if (shouldTrigger) {
-      proximityStateMap.set(proximityKey, eventType === 'enter');
-      lastTransitionTimeMap.set(proximityKey, now);
-      stateChanged = true;
-
-      const updatedLoc: SavedLocation = {
-        ...location,
-        geofence: {
-          ...location.geofence,
-          lastTriggeredAt: now,
-          hasTriggered: true,
-        },
-      };
-
-      updatedLocations.push(updatedLoc);
-
-      onTrigger({
-        location: updatedLoc,
-        triggerType: eventType,
-        distance,
-        timestamp: now,
-      });
-    }
-  }
-
-  if (stateChanged) {
-    saveProximityStateToStorage();
-  }
-
-  return updatedLocations;
-}
-
-/**
- * Checks if user is inside a saved location's geofence radius
- */
-export function isLocationInGeofence(
-  userPos: { latitude: number; longitude: number },
-  location: SavedLocation
-): { isInside: boolean; distance: number } | null {
-  if (!location.geofence) return null;
-  const distance = calculateHaversineDistance(
-    userPos.latitude,
-    userPos.longitude,
-    location.latitude,
-    location.longitude
-  );
-  return {
-    isInside: distance <= (location.geofence.radius || 100),
-    distance,
-  };
-}
