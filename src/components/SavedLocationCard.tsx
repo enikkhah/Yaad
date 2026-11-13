@@ -63,7 +63,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   const hasGeofence = !!location.geofence;
   const isCheckpointActive = location.geofence?.enabled === true;
   const radius = location.geofence?.radius || 100;
-  const triggerOn = location.geofence?.triggerOn || 'both';
+  const triggerOn = location.geofence?.triggerOn === 'exit' ? 'exit' : 'enter';
 
   const distance = userPosition
     ? calculateHaversineDistance(
@@ -76,11 +76,9 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
 
   const isInside = distance !== null ? distance <= radius : null;
 
-  const triggerOnText = triggerOn === 'enter'
-    ? (isEn ? 'On Arrival' : 'ورود به محدوده')
-    : triggerOn === 'exit'
+  const triggerOnText = triggerOn === 'exit'
     ? (isEn ? 'On Departure' : 'خروج از محدوده')
-    : (isEn ? 'Arrival & Departure' : 'ورود و خروج (هر دو)');
+    : (isEn ? 'On Arrival' : 'ورود به محدوده');
 
   return (
     <div 

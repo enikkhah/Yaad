@@ -268,7 +268,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         setGeofenceLat(initialData.geofence.latitude);
         setGeofenceLng(initialData.geofence.longitude);
         setGeofenceRadius(initialData.geofence.radius || 200);
-        setGeofenceTriggerOn(initialData.geofence.triggerOn || 'enter');
+        setGeofenceTriggerOn(initialData.geofence.triggerOn === 'exit' ? 'exit' : 'enter');
         setGeofenceSavedLocId(initialData.geofence.savedLocationId || '');
       } else {
         setEnableGeofence(defaultEnableGeofence);
@@ -1939,24 +1939,23 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     </div>
                   </div>
 
-                  {/* 4. Trigger Condition (ورود، خروج، هر دو) */}
+                  {/* 4. Trigger Condition (فقط ورود یا فقط خروج) */}
                   <div>
                     <label className="block text-[11px] font-bold text-stone-300 mb-1.5">
                       {isEn ? 'Alert Condition (Trigger):' : 'شرط فعال‌سازی هشدار:'}
                     </label>
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2.5">
                       {[
-                        { id: 'enter', labelFa: 'هنگام ورود (رسیدن)', labelEn: 'On Arrival' },
-                        { id: 'exit', labelFa: 'هنگام خروج (ترک کردن)', labelEn: 'On Departure' },
-                        { id: 'both', labelFa: 'هر دو (ورود و خروج)', labelEn: 'Both' },
+                        { id: 'enter', labelFa: 'فقط ورود به محدوده', labelEn: 'On Arrival (Enter Only)' },
+                        { id: 'exit', labelFa: 'فقط خروج از محدوده', labelEn: 'On Departure (Exit Only)' },
                       ].map((item) => {
                         const isSelected = geofenceTriggerOn === item.id;
                         return (
                           <button
                             key={item.id}
                             type="button"
-                            onClick={() => setGeofenceTriggerOn(item.id as any)}
-                            className={`py-2 px-2 rounded-xl text-[11px] font-bold border transition-all flex flex-col items-center gap-1 cursor-pointer ${
+                            onClick={() => setGeofenceTriggerOn(item.id as 'enter' | 'exit')}
+                            className={`py-2.5 px-2.5 rounded-xl text-[11px] font-bold border transition-all flex flex-col items-center gap-1 cursor-pointer ${
                               isSelected
                                 ? 'bg-emerald-500/25 border-emerald-500 text-white shadow-sm ring-1 ring-emerald-400/50'
                                 : 'bg-stone-950/80 border-stone-800 text-stone-400 hover:text-stone-200'

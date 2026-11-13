@@ -77,7 +77,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   // Checkpoint & Geofence Sub-Feature State (زیرمجموعه ثبت مکان برای اعلام ورود/خروج)
   const [enableGeofence, setEnableGeofence] = useState<boolean>(false);
   const [geofenceRadius, setGeofenceRadius] = useState<number>(100);
-  const [geofenceTriggerOn, setGeofenceTriggerOn] = useState<GeofenceTriggerType>('both');
+  const [geofenceTriggerOn, setGeofenceTriggerOn] = useState<GeofenceTriggerType>('enter');
   const [geofenceCustomMessage, setGeofenceCustomMessage] = useState<string>('');
   const [geofencePlayAudio, setGeofencePlayAudio] = useState<boolean>(true);
   const [showCollapsibleMediaAndGeofence, setShowCollapsibleMediaAndGeofence] = useState(false);
@@ -234,13 +234,13 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         if (editingLocation.geofence) {
           setEnableGeofence(editingLocation.geofence.enabled !== false);
           setGeofenceRadius(editingLocation.geofence.radius || 100);
-          setGeofenceTriggerOn(editingLocation.geofence.triggerOn || 'both');
+          setGeofenceTriggerOn(editingLocation.geofence.triggerOn === 'exit' ? 'exit' : 'enter');
           setGeofenceCustomMessage(editingLocation.geofence.customMessage || '');
           setGeofencePlayAudio(editingLocation.geofence.playAudio !== false);
         } else {
           setEnableGeofence(false);
           setGeofenceRadius(100);
-          setGeofenceTriggerOn('both');
+          setGeofenceTriggerOn('enter');
           setGeofenceCustomMessage('');
           setGeofencePlayAudio(true);
         }
@@ -268,7 +268,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         setAddress('');
         setEnableGeofence(false);
         setGeofenceRadius(100);
-        setGeofenceTriggerOn('both');
+        setGeofenceTriggerOn('enter');
         setGeofenceCustomMessage('');
         setGeofencePlayAudio(true);
         setShowCollapsibleMediaAndGeofence(false);
@@ -823,13 +823,13 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                     })()}
                   </div>
 
-                  {/* 2. شرط اعلام هشدار (Trigger on: enter / exit / both) */}
+                  {/* 2. شرط اعلام هشدار (Trigger on: enter / exit) */}
                   <div className="space-y-2">
                     <label className="block text-xs font-bold text-stone-300">
                       {isEn ? 'Alert Trigger Condition:' : 'شرط اعلام و هشدار:'}
                     </label>
 
-                    <div className="grid grid-cols-3 gap-2">
+                    <div className="grid grid-cols-2 gap-2.5">
                       <button
                         type="button"
                         onClick={() => setGeofenceTriggerOn('enter')}
@@ -840,7 +840,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                         }`}
                       >
                         <span className="text-sm">🟢</span>
-                        <span>{isEn ? 'On Arrival' : 'ورود به محدوده'}</span>
+                        <span>{isEn ? 'On Arrival (Enter Only)' : 'فقط ورود به محدوده'}</span>
                       </button>
 
                       <button
@@ -853,20 +853,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                         }`}
                       >
                         <span className="text-sm">🔴</span>
-                        <span>{isEn ? 'On Departure' : 'خروج از محدوده'}</span>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setGeofenceTriggerOn('both')}
-                        className={`p-2.5 rounded-xl border text-xs font-bold flex flex-col items-center justify-center gap-1 transition-all cursor-pointer ${
-                          geofenceTriggerOn === 'both'
-                            ? 'bg-sky-500/20 border-sky-500 text-sky-300 font-black shadow-sm'
-                            : 'bg-stone-900 border-stone-800 text-stone-400 hover:text-stone-200'
-                        }`}
-                      >
-                        <span className="text-sm">🔄</span>
-                        <span>{isEn ? 'Arrival & Exit' : 'ورود و خروج (هردو)'}</span>
+                        <span>{isEn ? 'On Departure (Exit Only)' : 'فقط خروج از محدوده'}</span>
                       </button>
                     </div>
                   </div>

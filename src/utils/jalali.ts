@@ -686,11 +686,9 @@ export function matchesLocationSearch(loc: any, query: string): boolean {
   const gComp = getGregorianComponents(loc.createdAt);
   const geofenceKeywords = loc.geofence
     ? `geofence checkpoint radar حصار مکانی رادار ${loc.geofence.customMessage || ''} ${loc.geofence.radius || ''}m ${
-        loc.geofence.triggerOn === 'enter'
-          ? 'enter arrival ورود رسیدن'
-          : loc.geofence.triggerOn === 'exit'
+        loc.geofence.triggerOn === 'exit'
           ? 'exit departure خروج ترک'
-          : 'both enter exit ورود و خروج'
+          : 'enter arrival ورود رسیدن'
       }`
     : '';
 

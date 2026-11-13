@@ -334,14 +334,11 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     if (phase === 'enter_center_5hz' || phase === 'enter_center_visual_10s') {
       return isEn ? `At center of «${item.locationTitle}»` : `در مرکز حصار مکانی «${item.locationTitle}»`;
     }
-    if (phase === 'exit_border_5hz' || phase === 'both_exit_border_5hz' || phase === 'exit_crossed_visual_10s' || phase === 'both_exited_visual_10s') {
+    if (phase === 'exit_border_5hz' || phase === 'exit_crossed_visual_10s') {
       return isEn ? `Exited «${item.locationTitle}»` : `خروج از حصار مکانی «${item.locationTitle}»`;
     }
-    if (phase === 'exit_moving_out' || phase === 'both_approaching_exit' || item.triggerType === 'exit') {
+    if (phase === 'exit_moving_out' || item.triggerType === 'exit' || item.triggerOn === 'exit') {
       return isEn ? `Exiting «${item.locationTitle}»` : `در حال خروج از حصار مکانی «${item.locationTitle}»`;
-    }
-    if (phase === 'both_approaching_enter') {
-      return isEn ? `Approaching «${item.locationTitle}»` : `نزدیک شدن به «${item.locationTitle}»`;
     }
     return isEn ? `Entered «${item.locationTitle}»` : `ورود به حصار مکانی «${item.locationTitle}»`;
   };
@@ -353,10 +350,9 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   const isPrimary5Hz = !primaryItem.isVisualOnly && primaryIntervalMs <= 200;
   const primaryRadarMode: 'enter' | 'exit' =
     primaryItem.sonarMode === 'exit' ||
-    primaryItem.sonarMode === 'both_exit' ||
     primaryItem.triggerType === 'exit' ||
-    primaryItem.scenarioPhase?.startsWith('exit') ||
-    primaryItem.scenarioPhase?.includes('exit')
+    primaryItem.triggerOn === 'exit' ||
+    primaryItem.scenarioPhase?.startsWith('exit')
       ? 'exit'
       : 'enter';
 

@@ -433,39 +433,6 @@ export async function scheduleReminderNotification(
           isRepeat: false,
         },
       },
-      ...NOTIFICATION_REPEAT_OFFSETS_MINUTES.map((offsetMins, index) => ({
-        id: ((notifId + 1000 + index + 1) % 600000000) + 1,
-        title: reminder.title,
-        body: reminder.description
-          ? `${reminder.description} • ساعت ${timeFormatted}`
-          : `ساعت ${timeFormatted}`,
-        channelId: targetChannelId,
-        schedule: {
-          at: new Date(reminder.dueTimestamp + offsetMins * 60000),
-          allowWhileIdle: true,
-        },
-        sound: soundFile,
-        iconColor: '#FF8C00',
-        priority: 2,
-        ongoing: true,
-        autoCancel: false,
-        actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
-        extra: {
-          reminderId: reminder.id,
-          dueTimestamp: reminder.dueTimestamp,
-          scheduledTzOffsetMinutes:
-            typeof reminder.scheduledTzOffsetMinutes === 'number'
-              ? reminder.scheduledTzOffsetMinutes
-              : -new Date(reminder.dueTimestamp).getTimezoneOffset(),
-          scheduledTimeZone: reminder.scheduledTimeZone || '',
-          sound: soundType,
-          volume,
-          theme: appTheme,
-          language: appLang,
-          isRepeat: true,
-          repeatIndex: index + 1,
-        },
-      })),
     ];
 
     await LocalNotifications.schedule({

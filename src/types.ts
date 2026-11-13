@@ -63,7 +63,7 @@ export interface AppSettings {
   localBackupFolderName?: string;
 }
 
-export type GeofenceTriggerType = 'enter' | 'exit' | 'both';
+export type GeofenceTriggerType = 'enter' | 'exit';
 
 export interface LocationGeofenceConfig {
   enabled: boolean;
@@ -71,7 +71,7 @@ export interface LocationGeofenceConfig {
   longitude: number;
   radius: number; // radius in meters (e.g. 100, 250, 500, 1000)
   locationName: string;
-  triggerOn: GeofenceTriggerType; // 'enter' | 'exit' | 'both'
+  triggerOn: GeofenceTriggerType; // 'enter' | 'exit'
   savedLocationId?: string;
   address?: string;
   lastTriggeredAt?: number;
@@ -81,7 +81,7 @@ export interface LocationGeofenceConfig {
 export interface LocationCheckpointConfig {
   enabled: boolean;
   radius: number; // radius in meters (50, 100, 200, 500, 1000)
-  triggerOn: GeofenceTriggerType; // 'enter' | 'exit' | 'both'
+  triggerOn: GeofenceTriggerType; // 'enter' | 'exit'
   customMessage?: string;
   playAudio?: boolean;
   lastTriggeredAt?: number;

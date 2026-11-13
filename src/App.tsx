@@ -1586,10 +1586,8 @@ export default function App() {
           return;
         }
 
-        // Trigger 1-minute alarm at dueTimestamp.
-        // Once 1 minute (60,000 ms) passes without user reaction, immediately move the reminder's dueTimestamp
-        // to +15 minutes in the future (> NOW) so it appears after NOW in the timeline and NEVER triggers AlarmModal when opening the app!
-        const REPEAT_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+        // Trigger 1-minute alarm ONLY when reminder is currently due within the 60-second active window (0 <= elapsedMs < 60,000).
+        // Never rewrite past-due reminders forward into the future, which previously caused old reminders to fire unexpectedly!
         const ONE_MINUTE_MS = 60 * 1000; // 1 minute active alarm window
         const elapsedMs = now - r.dueTimestamp;
         if (
@@ -1597,43 +1595,7 @@ export default function App() {
           elapsedMs >= 0
         ) {
           if (elapsedMs >= ONE_MINUTE_MS) {
-            // 1 minute has elapsed without reaction: advance dueTimestamp forward in 15m increments to the future (> now)
-            const completedCycles = Math.floor(elapsedMs / REPEAT_INTERVAL_MS);
-            const cycleOffsetMs = elapsedMs - completedCycles * REPEAT_INTERVAL_MS;
-            if (cycleOffsetMs < ONE_MINUTE_MS && completedCycles <= 25) {
-              // Currently inside the 1-minute ringing window of a 15-minute repeat cycle
-              const currentCycleStart = r.dueTimestamp + completedCycles * REPEAT_INTERVAL_MS;
-              const cycleKey = `${r.id}_${currentCycleStart}_0`;
-              if (
-                !triggeredAlarmsRef.current.has(cycleKey) &&
-                !triggeredAlarmsRef.current.has(r.id)
-              ) {
-                triggeredAlarmsRef.current.add(cycleKey);
-                const updatedForCycle: Reminder = { ...r, dueTimestamp: currentCycleStart, status: 'postponed' };
-                newlyDueBundle.push(updatedForCycle);
-              }
-            } else {
-              // Outside the 1-minute ringing window: move dueTimestamp to the next 15-minute mark after NOW in the timeline,
-              // but DO NOT close activeAlarmReminder if it is already open on screen waiting for user reaction!
-              const nextFutureDue = r.dueTimestamp + (completedCycles + 1) * REPEAT_INTERVAL_MS;
-              setReminders((prev) => {
-                const nextList = prev.map((item) =>
-                  item.id === r.id
-                    ? {
-                        ...item,
-                        dueTimestamp: nextFutureDue,
-                        status: 'postponed' as ReminderStatus,
-                        postponedAt: now,
-                        acknowledged: false,
-                      }
-                    : item
-                );
-                try {
-                  localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(nextList));
-                } catch {}
-                return nextList;
-              });
-            }
+            triggeredAlarmsRef.current.add(r.id);
             return;
           }
 
@@ -1733,7 +1695,7 @@ export default function App() {
     // Run immediately
     checkAlarms();
 
-    const timer = setInterval(checkAlarms, 1000);
+    const timer = setInterval(checkAlarms, 500);
 
     // Visibility and focus listeners to trigger alarms immediately upon returning
     const handleVisibilityOrFocus = () => {
@@ -1743,11 +1705,11 @@ export default function App() {
     window.addEventListener('focus', handleVisibilityOrFocus);
     window.addEventListener('yaad:native-reminder-due', handleNativeReminderDue);
 
-    // Unthrottled Web Worker timer so background tabs / minimized windows trigger notifications immediately
+    // Unthrottled Web Worker timer (500ms) so background tabs / minimized windows trigger notifications in <= 1s
     let worker: Worker | null = null;
     try {
       const blob = new Blob(
-        ['setInterval(() => postMessage("tick"), 1000);'],
+        ['setInterval(() => postMessage("tick"), 500);'],
         { type: 'application/javascript' }
       );
       worker = new Worker(URL.createObjectURL(blob));
@@ -1901,9 +1863,40 @@ export default function App() {
         return remaining;
       });
     };
+    const handleNativeAcknowledgeGeofenceItem = (e: Event) => {
+      const customEv = e as CustomEvent<{ itemId?: string }>;
+      const rawId = customEv.detail?.itemId;
+      if (!rawId) return;
+      const cleanId = rawId.replace(/^(loc_|rem_)/, '');
+      acknowledgeGeofenceAlert(cleanId);
+      setActiveGeofenceAlerts((prevList) => {
+        const remaining = prevList.filter((item) => {
+          const itemClean = item.targetId.replace(/^(loc_|rem_)/, '');
+          return itemClean !== cleanId && item.targetId !== rawId;
+        });
+        if (remaining.length === 0) {
+          stopSubmarineSonarLoop();
+          stopAlarmRinging();
+        }
+        return remaining;
+      });
+    };
+    const handleNativeDisableGeofenceRadar = () => {
+      stopSubmarineSonarLoop();
+      stopAlarmRinging();
+      setActiveGeofenceAlerts([]);
+      setIsGeofenceActive(false);
+      setGeofenceTrackingEnabled(false);
+    };
     const flushNativeStoppedGeofenceItems = () => {
       try {
         const bridge = (window as any).YaadGeofenceBridge;
+        if (bridge && typeof bridge.consumeRadarDisabledFromBackground === 'function') {
+          const wasDisabledInBg = bridge.consumeRadarDisabledFromBackground();
+          if (wasDisabledInBg) {
+            handleNativeDisableGeofenceRadar();
+          }
+        }
         if (bridge && typeof bridge.consumeStoppedGeofenceItems === 'function') {
           const rawJson = bridge.consumeStoppedGeofenceItems();
           if (rawJson) {
@@ -1924,11 +1917,17 @@ export default function App() {
     window.addEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
     window.addEventListener('yaad:stop-geofence-item', handleNativeStopGeofenceItem);
     window.addEventListener('yaad:snooze-geofence-item', handleNativeSnoozeGeofenceItem);
+    window.addEventListener('yaad:acknowledge-geofence-item', handleNativeAcknowledgeGeofenceItem);
+    window.addEventListener('yaad:disable-geofence-radar', handleNativeDisableGeofenceRadar);
+    window.addEventListener('focus', flushNativeStoppedGeofenceItems);
     document.addEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
     return () => {
       window.removeEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
       window.removeEventListener('yaad:stop-geofence-item', handleNativeStopGeofenceItem);
       window.removeEventListener('yaad:snooze-geofence-item', handleNativeSnoozeGeofenceItem);
+      window.removeEventListener('yaad:acknowledge-geofence-item', handleNativeAcknowledgeGeofenceItem);
+      window.removeEventListener('yaad:disable-geofence-radar', handleNativeDisableGeofenceRadar);
+      window.removeEventListener('focus', flushNativeStoppedGeofenceItems);
       document.removeEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
     };
   }, [verifyGpsTurnedOnForGeofence, handleStopGeofenceOperation]);
@@ -2058,7 +2057,7 @@ export default function App() {
           stopSubmarineSonarLoop();
         }
       }
-    }, 1000);
+    }, 500);
     return () => clearInterval(tickInterval);
   }, [isGeofenceActive, activeGeofenceAlerts.length, currentUserPosition]);
 
