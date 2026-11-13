@@ -737,7 +737,7 @@ function evaluateSingleItemScenario(params: {
   // =========================================================================
   if (triggerOn === 'enter') {
     if (distance > preEntryStartMeters + antiPingPongDeadbandMeters) {
-      if (st.consecutiveOutsideSamples >= 2 && now >= st.cooldownUntilMs) {
+      if (st.consecutiveOutsideSamples >= 2) {
         st.enterAlertActive = false;
         st.enterCycleCompleted = false;
         st.wasInsideBorder = false;
@@ -748,6 +748,7 @@ function evaluateSingleItemScenario(params: {
         st.audioMutedForCycle = false;
         st.sonarFinishedForCycle = false;
         st.acknowledgedUntilExit = false;
+        st.cooldownUntilMs = 0;
         st.minDistanceReachedInside = Number.POSITIVE_INFINITY;
         st.maxDistanceInApproach = distance;
         st.startedOutsideBoundary = true;
@@ -940,11 +941,12 @@ function evaluateSingleItemScenario(params: {
   // 2C. Crossed outside boundary (d > R or already in 5Hz exit stage):
   const crossedOutside = distance > safeRadius && rawDistance > centerZoneMeters;
   if (
-    (st.wasInsideForExit || st.armedForExit || !st.startedOutsideBoundary) &&
     !st.exitCycleCompleted &&
     !st.acknowledgedUntilExit &&
     (crossedOutside || st.border5HzStartMs > 0)
   ) {
+    st.wasInsideForExit = true;
+    st.armedForExit = true;
     st.bothDirectionLock = 'outward';
     st.lastExitAlertEmittedMs = now;
     if (st.border5HzStartMs === 0) {
@@ -1097,14 +1099,14 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
   st.consecutiveFivePercentInsideSamples = 0;
 
   // 2. HYSTERESIS DEADBAND AT THE 5% BORDER ("در مرز پنج درصد") & INDOOR GPS ERROR ("زیر سقف"):
-  // Compute accuracy-adaptive hysteresis buffer above centerZoneMeters so hovering near the 5% boundary
-  // or experiencing indoor GPS drift does not trigger false exit alerts.
+  // Compute a tight, responsive hysteresis margin right around the 5% border so hovering at 5% or indoor GPS jitter
+  // does not cause repeated alerts, while legitimate exits outside 5% trigger reliably within <= 1s.
   const gpsBorderBufferMeters = Math.max(
-    8,
-    Math.min(Math.round(safeRadius * 0.22), Math.round(safeAcc * 0.75))
+    4,
+    Math.min(18, Math.round(safeRadius * 0.04), Math.round(safeAcc * 0.5))
   );
   const fivePctExitEscapeMeters = Math.min(
-    Math.round(safeRadius * 0.85),
+    Math.round(safeRadius * 0.45),
     centerZoneMeters + gpsBorderBufferMeters
   );
 
@@ -1118,7 +1120,7 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
     (st.bothDirectionLock === 'outward' && trend !== 'inward') || st.border5HzStartMs > 0;
 
   if (!isAlreadyLatchedOutward) {
-    // Must clear the 5% hysteresis escape threshold before starting an exit alert
+    // Must clear the 5% border hysteresis threshold before starting an exit alert
     if (smoothedDistance <= fivePctExitEscapeMeters || rawDistance <= fivePctExitEscapeMeters) {
       st.wasInsideForExit = true;
       st.armedForExit = true;
@@ -1126,18 +1128,7 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
       return { suppressAlert: true };
     }
 
-    // Under a roof ("زیر سقف") where GPS accuracy is degraded (e.g. > 22m),
-    // verify that displacement from the closest point inside exceeds the GPS error circle.
-    const requiredDisplacementFromMin =
-      safeAcc > 22
-        ? Math.max(12, Math.min(Math.round(safeRadius * 0.4), Math.round(safeAcc * 0.8)))
-        : Math.max(6, Math.round(safeAcc * 0.45));
-
-    const hasMovedSignificantlyFromMin =
-      !Number.isFinite(st.minDistanceReachedInside) ||
-      smoothedDistance - st.minDistanceReachedInside >= requiredDisplacementFromMin;
-
-    if (isConfirmedExitingDirection && hasMovedSignificantlyFromMin) {
+    if (isConfirmedExitingDirection || trend !== 'inward') {
       if (isNewSampleTick) {
         st.consecutiveExitOutwardSamples += 1;
       }
@@ -1145,20 +1136,31 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
       st.consecutiveExitOutwardSamples = 0;
     }
 
-    // If inside the boundary (d <= R), require confirmed outward movement and at least 2 consecutive outward samples
-    // when transitioning out of the 5% zone or under degraded indoor GPS accuracy.
-    if (smoothedDistance <= safeRadius) {
-      const neededSamples = st.wasInFivePercentZoneForExit || safeAcc > 20 ? 2 : 1;
+    // Only enforce multi-sample outward confirmation when transitioning directly out of the 5% central zone
+    // or when indoor GPS accuracy is severely degraded (> 35m) near the 5% zone.
+    if (
+      smoothedDistance <= safeRadius &&
+      (st.wasInFivePercentZoneForExit || (safeAcc > 35 && smoothedDistance <= centerZoneMeters + safeAcc))
+    ) {
+      const requiredDisplacementFromMin =
+        safeAcc > 35
+          ? Math.max(8, Math.min(Math.round(safeRadius * 0.25), Math.round(safeAcc * 0.5)))
+          : Math.max(4, Math.min(12, Math.round(safeAcc * 0.3)));
+
+      const hasMovedSignificantlyFromMin =
+        !Number.isFinite(st.minDistanceReachedInside) ||
+        smoothedDistance - st.minDistanceReachedInside >= requiredDisplacementFromMin;
+
       if (
-        !isConfirmedExitingDirection ||
+        trend === 'inward' ||
         !hasMovedSignificantlyFromMin ||
-        st.consecutiveExitOutwardSamples < neededSamples
+        st.consecutiveExitOutwardSamples < 2
       ) {
         return { suppressAlert: true };
       }
     }
   } else if (smoothedDistance <= safeRadius && trend === 'inward' && smoothedDistance <= fivePctExitEscapeMeters) {
-    // User turned back inward toward the 5% zone before exiting the boundary: unlatch cleanly with anti-bounce guard
+    // User turned back inward into the 5% border margin before exiting the boundary: unlatch cleanly with anti-bounce guard
     st.bothDirectionLock = null;
     st.consecutiveExitOutwardSamples = 0;
     st.exitGpsAntiBounceUntilMs = Math.max(st.exitGpsAntiBounceUntilMs, now + 30_000);
@@ -1570,10 +1572,24 @@ export function syncGeofencesWithNativeAndroid(
       });
     }
 
+    const lastPos = lastAcceptedPosition || getLastKnownPosition();
     const payload = JSON.stringify({
       enabled: Boolean(enabled && items.length > 0),
       language,
       items,
+      lastPosition:
+        lastPos &&
+        typeof lastPos.latitude === 'number' &&
+        typeof lastPos.longitude === 'number' &&
+        !Number.isNaN(lastPos.latitude) &&
+        !Number.isNaN(lastPos.longitude)
+          ? {
+              latitude: lastPos.latitude,
+              longitude: lastPos.longitude,
+              accuracy: lastPos.accuracy || 15,
+              timestamp: lastPos.timestamp || Date.now(),
+            }
+          : null,
     });
     bridge.syncGeofences(payload);
   } catch {

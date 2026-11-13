@@ -163,6 +163,7 @@ jobs:
               "android.permission.WAKE_LOCK",
               "android.permission.DISABLE_KEYGUARD",
               "android.permission.READ_PHONE_STATE",
+              "android.permission.SYSTEM_ALERT_WINDOW",
               "android.permission.VIBRATE",
               "android.permission.RECEIVE_BOOT_COMPLETED",
           ]
@@ -184,13 +185,6 @@ jobs:
               text = text.replace(
                   "<application",
                   '<application\n        android:requestLegacyExternalStorage="true"',
-                  1
-              )
-
-          if 'android:showWhenLocked="true"' not in text and 'android:name=".MainActivity"' in text:
-              text = text.replace(
-                  'android:name=".MainActivity"',
-                  'android:name=".MainActivity"\n            android:showWhenLocked="true"\n            android:turnScreenOn="true"',
                   1
               )
 
