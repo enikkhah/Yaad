@@ -4265,6 +4265,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
@@ -4274,6 +4275,7 @@ import android.os.CountDownTimer
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.provider.Settings
 import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
 import android.text.TextUtils
@@ -11657,7 +11659,7 @@ function validateKotlinFiles(dir) {
       }
     }
 
-    // Verify all commonly used Capacitor / JSON / Android classes are imported when referenced unqualified
+    // Verify all commonly used Capacitor / JSON / Android classes and all unqualified PascalCase types are imported
     const importLines = lines.filter((l) => l.trim().startsWith('import ')).join('\n');
     const codeLines = lines
       .filter((l) => {
@@ -11679,10 +11681,119 @@ function validateKotlinFiles(dir) {
       'AlarmManager',
       'PendingIntent',
       'NotificationManagerCompat',
+      'Settings',
+      'PixelFormat',
     ]) {
       const unqualifiedRegex = new RegExp(`(?<!\\.)\\b${sym}\\b`);
       if (unqualifiedRegex.test(codeLines) && !importLines.includes(sym)) {
         throw new Error(`[KotlinValidator] Missing import for '${sym}' in ${file}`);
+      }
+    }
+  }
+
+  // Full cross-file check for any unimported PascalCase class references
+  const packageClasses = new Set([
+    'R',
+    'BuildConfig',
+  ]);
+  for (const file of files) {
+    const txt = fs.readFileSync(path.join(dir, file), 'utf8');
+    for (const m of txt.matchAll(/\b(?:class|object|interface|enum\s+class)\s+([A-Z][A-Za-z0-9_]*)/g)) {
+      packageClasses.add(m[1]);
+    }
+  }
+  const kotlinJavaBuiltins = new Set([
+    'Any', 'Unit', 'Boolean', 'Byte', 'Short', 'Int', 'Long', 'Float', 'Double', 'Char', 'String', 'CharSequence',
+    'Array', 'IntArray', 'LongArray', 'FloatArray', 'DoubleArray', 'BooleanArray', 'ByteArray', 'ShortArray', 'CharArray',
+    'List', 'MutableList', 'ArrayList', 'Map', 'MutableMap', 'HashMap', 'LinkedHashMap', 'Set', 'MutableSet', 'HashSet', 'LinkedHashSet',
+    'Pair', 'Triple', 'Regex', 'Exception', 'RuntimeException', 'IllegalArgumentException', 'IllegalStateException',
+    'SecurityException', 'InterruptedException', 'NumberFormatException', 'ClassCastException', 'NullPointerException',
+    'IndexOutOfBoundsException', 'UnsupportedOperationException', 'Throwable', 'Error', 'Number', 'Comparable',
+    'Iterable', 'Iterator', 'Collection', 'System', 'Math', 'Thread', 'Runnable', 'StringBuilder', 'Object', 'Class',
+    'Integer', 'Volatile', 'Synchronized', 'Suppress', 'Deprecated', 'JvmStatic', 'JvmOverloads', 'Override', 'Throws', 'RegexOption',
+  ]);
+  for (const file of files) {
+    const txt = fs.readFileSync(path.join(dir, file), 'utf8');
+    const imports = new Set();
+    for (const m of txt.matchAll(/^import\s+[\w.]+\.([A-Z][A-Za-z0-9_]*)/gm)) {
+      imports.add(m[1]);
+    }
+    const localTypes = new Set();
+    for (const m of txt.matchAll(/\b(?:class|object|interface|enum\s+class)\s+([A-Z][A-Za-z0-9_]*)/g)) {
+      localTypes.add(m[1]);
+    }
+    // Strip comments and string literals using a state machine so "://" inside strings is never treated as a comment
+    let out = '';
+    let sInStr = false;
+    let sInTriple = false;
+    let sInLine = false;
+    let sInBlock = false;
+    for (let i = 0; i < txt.length; i++) {
+      const c = txt[i];
+      const n1 = txt[i + 1] || '';
+      const n2 = txt[i + 2] || '';
+      if (c === '\n') {
+        sInLine = false;
+        out += '\n';
+        continue;
+      }
+      if (sInLine) continue;
+      if (sInBlock) {
+        if (c === '*' && n1 === '/') {
+          sInBlock = false;
+          i++;
+        }
+        continue;
+      }
+      if (!sInStr && !sInTriple) {
+        if (c === '/' && n1 === '/') {
+          sInLine = true;
+          i++;
+          continue;
+        }
+        if (c === '/' && n1 === '*') {
+          sInBlock = true;
+          i++;
+          continue;
+        }
+        if (c === '"' && n1 === '"' && n2 === '"') {
+          sInTriple = true;
+          i += 2;
+          out += '""';
+          continue;
+        }
+        if (c === '"') {
+          sInStr = true;
+          out += '""';
+          continue;
+        }
+        if (c === "'") {
+          i++;
+          if (txt[i] === '\\') i++;
+          if (txt[i + 1] === "'") i++;
+          out += "''";
+          continue;
+        }
+        out += c;
+      } else if (sInTriple) {
+        if (c === '"' && n1 === '"' && n2 === '"') {
+          sInTriple = false;
+          i += 2;
+        }
+      } else if (sInStr) {
+        if (c === '\\') {
+          i++;
+          continue;
+        }
+        if (c === '"') {
+          sInStr = false;
+        }
+      }
+    }
+    for (const m of out.matchAll(/(?<![.\w])([A-Z][a-z][A-Za-z0-9_]*)\b/g)) {
+      const id = m[1];
+      if (!imports.has(id) && !packageClasses.has(id) && !localTypes.has(id) && !kotlinJavaBuiltins.has(id)) {
+        throw new Error(`[KotlinValidator] Unresolved/unimported class reference '${id}' in ${file}`);
       }
     }
   }

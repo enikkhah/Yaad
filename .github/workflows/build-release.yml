@@ -163,7 +163,6 @@ jobs:
               "android.permission.WAKE_LOCK",
               "android.permission.DISABLE_KEYGUARD",
               "android.permission.READ_PHONE_STATE",
-              "android.permission.SYSTEM_ALERT_WINDOW",
               "android.permission.VIBRATE",
               "android.permission.RECEIVE_BOOT_COMPLETED",
           ]
