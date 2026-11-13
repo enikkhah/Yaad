@@ -95,6 +95,15 @@ interface ItemScenarioRuntimeState {
   lastTriggerTimestampMs: number;
   consecutiveOutsideSamples: number;
   consecutiveInsideSamples: number;
+  // Exit 5% Zone & Indoor GPS Error Anti-Bounce State
+  wasInFivePercentZoneForExit: boolean;
+  consecutiveExitOutwardSamples: number;
+  consecutiveFivePercentInsideSamples: number;
+  lastExitAlertEmittedMs: number;
+  exitGpsAntiBounceUntilMs: number;
+  exitBoundaryOscillationCount: number;
+  lastEvaluatedDistanceMeters: number;
+  lastEvaluatedSampleTimeMs: number;
 }
 
 export const GEOFENCE_PASS_THROUGH_SNOOZE_MS = 30 * 60 * 1000; // 30 minutes snooze when passing through ("الان نه (Snooze)")
@@ -135,6 +144,14 @@ function getOrCreateRuntimeState(key: string, nowMs: number = Date.now()): ItemS
       lastTriggerTimestampMs: 0,
       consecutiveOutsideSamples: 0,
       consecutiveInsideSamples: 0,
+      wasInFivePercentZoneForExit: false,
+      consecutiveExitOutwardSamples: 0,
+      consecutiveFivePercentInsideSamples: 0,
+      lastExitAlertEmittedMs: 0,
+      exitGpsAntiBounceUntilMs: 0,
+      exitBoundaryOscillationCount: 0,
+      lastEvaluatedDistanceMeters: Number.NaN,
+      lastEvaluatedSampleTimeMs: 0,
     };
     scenarioRuntimeMap.set(key, st);
   }
@@ -867,23 +884,23 @@ function evaluateSingleItemScenario(params: {
   // =========================================================================
   // SCENARIO 2: EXIT ONLY ('exit')
   // =========================================================================
-  // 2A. Inside the central 5% zone (d <= max(5% R, 15m)) while not exiting: silent & armed for exit
-  if (distance <= centerZoneMeters && !isConfirmedExitingDirection) {
-    st.wasInsideForExit = true;
-    st.armedForExit = true;
-    st.bothDirectionLock = null;
-    st.exitCycleCompleted = false;
-    st.border5HzStartMs = 0;
-    st.visual10sStartMs = 0;
-    st.audioMutedForCycle = false;
-    st.sonarFinishedForCycle = false;
-    st.acknowledgedUntilExit = false;
-    st.minDistanceReachedInside = distance;
+  const exitGuard = evaluateExitFivePercentAndGpsJitterGuard({
+    st,
+    rawDistance,
+    smoothedDistance: distance,
+    safeRadius,
+    centerZoneMeters,
+    accuracy,
+    trend,
+    isConfirmedExitingDirection,
+    now,
+  });
+
+  if (exitGuard.suppressAlert) {
     return null;
   }
 
-  // 2B. Inside boundary (d <= 100% R):
-  // Whenever the user is inside the boundary, arm for exit so any subsequent outward movement or boundary crossing triggers immediately (<1s).
+  // 2B. Inside boundary (5% + hysteresis < d <= 100% R):
   if (distance <= safeRadius && st.border5HzStartMs === 0) {
     st.wasInsideForExit = true;
     st.armedForExit = true;
@@ -893,12 +910,8 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    const isLatchedOutward = st.bothDirectionLock === 'outward' && trend !== 'inward';
-    if (!isConfirmedExitingDirection && !isLatchedOutward) {
-      return null;
-    }
-
     st.bothDirectionLock = 'outward';
+    st.lastExitAlertEmittedMs = now;
     const distToBorder = Math.max(0, safeRadius - distance);
 
     return {
@@ -925,7 +938,7 @@ function evaluateSingleItemScenario(params: {
   }
 
   // 2C. Crossed outside boundary (d > R or already in 5Hz exit stage):
-  const crossedOutside = distance > safeRadius;
+  const crossedOutside = distance > safeRadius && rawDistance > centerZoneMeters;
   if (
     (st.wasInsideForExit || st.armedForExit || !st.startedOutsideBoundary) &&
     !st.exitCycleCompleted &&
@@ -933,6 +946,7 @@ function evaluateSingleItemScenario(params: {
     (crossedOutside || st.border5HzStartMs > 0)
   ) {
     st.bothDirectionLock = 'outward';
+    st.lastExitAlertEmittedMs = now;
     if (st.border5HzStartMs === 0) {
       st.border5HzStartMs = now;
     }
@@ -990,6 +1004,168 @@ function evaluateSingleItemScenario(params: {
   }
 
   return null;
+}
+
+/**
+ * Dedicated 5% Zone Silence & Indoor/Boundary GPS Error Anti-Bounce Filter for Exit Mode ('exit'):
+ * 1. Unconditional Silence inside 5% Zone:
+ *    Whenever rawDistance <= centerZoneMeters OR smoothedDistance <= centerZoneMeters,
+ *    NO notification and NO alarm/sonar is ever allowed to fire (even if GPS drifts outward inside the 5% zone).
+ * 2. 5% Boundary Hysteresis ("در مرز پنج درصد") & Under-Roof GPS Error Protection ("زیر سقف"):
+ *    Applies an accuracy-adaptive escape margin beyond the 5% boundary (`fivePctExitThreshold`),
+ *    rejects single-sample indoor multipath spikes, and enforces an escalating anti-bounce cooldown
+ *    whenever GPS oscillates across the 5% boundary so repeated back-to-back notifications never occur.
+ */
+export function evaluateExitFivePercentAndGpsJitterGuard(params: {
+  st: ItemScenarioRuntimeState;
+  rawDistance: number;
+  smoothedDistance: number;
+  safeRadius: number;
+  centerZoneMeters: number;
+  accuracy: number;
+  trend: 'inward' | 'outward' | 'stationary';
+  isConfirmedExitingDirection: boolean;
+  now: number;
+}): { suppressAlert: boolean } {
+  const {
+    st,
+    rawDistance,
+    smoothedDistance,
+    safeRadius,
+    centerZoneMeters,
+    accuracy,
+    trend,
+    isConfirmedExitingDirection,
+    now,
+  } = params;
+
+  const safeAcc = Math.max(5, Math.min(100, accuracy || 15));
+  const isNewSampleTick =
+    Number.isNaN(st.lastEvaluatedDistanceMeters) ||
+    Math.abs(rawDistance - st.lastEvaluatedDistanceMeters) >= 1 ||
+    now - st.lastEvaluatedSampleTimeMs >= 950;
+
+  if (isNewSampleTick) {
+    st.lastEvaluatedDistanceMeters = rawDistance;
+    st.lastEvaluatedSampleTimeMs = now;
+  }
+
+  // 1. UNCONDITIONAL SILENCE INSIDE THE 5% ZONE:
+  // In Exit mode, when inside 5% of the range (rawDistance <= centerZoneMeters or smoothedDistance <= centerZoneMeters),
+  // NEVER emit any notification or alarm under any circumstance!
+  if (rawDistance <= centerZoneMeters || smoothedDistance <= centerZoneMeters) {
+    st.wasInsideForExit = true;
+    st.armedForExit = true;
+    st.wasInFivePercentZoneForExit = true;
+    st.consecutiveExitOutwardSamples = 0;
+    if (isNewSampleTick) {
+      st.consecutiveFivePercentInsideSamples += 1;
+    }
+
+    // If an exit alert was just active recently and the user/GPS dropped back into the 5% zone,
+    // record a boundary/indoor oscillation and apply an escalating anti-bounce cooldown (45s .. 180s)
+    // so GPS jitter at the 5% border or under a roof cannot trigger repeated back-to-back alerts!
+    if (
+      st.bothDirectionLock === 'outward' ||
+      st.border5HzStartMs > 0 ||
+      (st.lastExitAlertEmittedMs > 0 && now - st.lastExitAlertEmittedMs < 90_000)
+    ) {
+      if (st.bothDirectionLock === 'outward' || st.border5HzStartMs > 0) {
+        st.exitBoundaryOscillationCount = Math.min(6, st.exitBoundaryOscillationCount + 1);
+        const debounceMs = Math.min(180_000, 45_000 * st.exitBoundaryOscillationCount);
+        st.exitGpsAntiBounceUntilMs = Math.max(st.exitGpsAntiBounceUntilMs, now + debounceMs);
+      }
+      st.bothDirectionLock = null;
+      st.border5HzStartMs = 0;
+      st.visual10sStartMs = 0;
+    }
+
+    // Only clear completed/acknowledged cycle flags after staying stably inside the 5% zone
+    // and after any anti-bounce cooldown has expired.
+    if (st.consecutiveFivePercentInsideSamples >= 3 && now >= st.exitGpsAntiBounceUntilMs) {
+      st.exitCycleCompleted = false;
+      st.audioMutedForCycle = false;
+      st.sonarFinishedForCycle = false;
+      st.acknowledgedUntilExit = false;
+      st.exitBoundaryOscillationCount = 0;
+    }
+
+    st.minDistanceReachedInside = Math.min(st.minDistanceReachedInside, smoothedDistance);
+    return { suppressAlert: true };
+  }
+
+  st.consecutiveFivePercentInsideSamples = 0;
+
+  // 2. HYSTERESIS DEADBAND AT THE 5% BORDER ("در مرز پنج درصد") & INDOOR GPS ERROR ("زیر سقف"):
+  // Compute accuracy-adaptive hysteresis buffer above centerZoneMeters so hovering near the 5% boundary
+  // or experiencing indoor GPS drift does not trigger false exit alerts.
+  const gpsBorderBufferMeters = Math.max(
+    8,
+    Math.min(Math.round(safeRadius * 0.22), Math.round(safeAcc * 0.75))
+  );
+  const fivePctExitEscapeMeters = Math.min(
+    Math.round(safeRadius * 0.85),
+    centerZoneMeters + gpsBorderBufferMeters
+  );
+
+  // If an active anti-bounce cooldown is in effect from recent 5%-border or indoor oscillation,
+  // suppress inside-boundary exit re-triggers until the user genuinely crosses outside the full geofence boundary.
+  if (now < st.exitGpsAntiBounceUntilMs && smoothedDistance <= safeRadius) {
+    return { suppressAlert: true };
+  }
+
+  const isAlreadyLatchedOutward =
+    (st.bothDirectionLock === 'outward' && trend !== 'inward') || st.border5HzStartMs > 0;
+
+  if (!isAlreadyLatchedOutward) {
+    // Must clear the 5% hysteresis escape threshold before starting an exit alert
+    if (smoothedDistance <= fivePctExitEscapeMeters || rawDistance <= fivePctExitEscapeMeters) {
+      st.wasInsideForExit = true;
+      st.armedForExit = true;
+      st.consecutiveExitOutwardSamples = 0;
+      return { suppressAlert: true };
+    }
+
+    // Under a roof ("زیر سقف") where GPS accuracy is degraded (e.g. > 22m),
+    // verify that displacement from the closest point inside exceeds the GPS error circle.
+    const requiredDisplacementFromMin =
+      safeAcc > 22
+        ? Math.max(12, Math.min(Math.round(safeRadius * 0.4), Math.round(safeAcc * 0.8)))
+        : Math.max(6, Math.round(safeAcc * 0.45));
+
+    const hasMovedSignificantlyFromMin =
+      !Number.isFinite(st.minDistanceReachedInside) ||
+      smoothedDistance - st.minDistanceReachedInside >= requiredDisplacementFromMin;
+
+    if (isConfirmedExitingDirection && hasMovedSignificantlyFromMin) {
+      if (isNewSampleTick) {
+        st.consecutiveExitOutwardSamples += 1;
+      }
+    } else if (trend === 'inward') {
+      st.consecutiveExitOutwardSamples = 0;
+    }
+
+    // If inside the boundary (d <= R), require confirmed outward movement and at least 2 consecutive outward samples
+    // when transitioning out of the 5% zone or under degraded indoor GPS accuracy.
+    if (smoothedDistance <= safeRadius) {
+      const neededSamples = st.wasInFivePercentZoneForExit || safeAcc > 20 ? 2 : 1;
+      if (
+        !isConfirmedExitingDirection ||
+        !hasMovedSignificantlyFromMin ||
+        st.consecutiveExitOutwardSamples < neededSamples
+      ) {
+        return { suppressAlert: true };
+      }
+    }
+  } else if (smoothedDistance <= safeRadius && trend === 'inward' && smoothedDistance <= fivePctExitEscapeMeters) {
+    // User turned back inward toward the 5% zone before exiting the boundary: unlatch cleanly with anti-bounce guard
+    st.bothDirectionLock = null;
+    st.consecutiveExitOutwardSamples = 0;
+    st.exitGpsAntiBounceUntilMs = Math.max(st.exitGpsAntiBounceUntilMs, now + 30_000);
+    return { suppressAlert: true };
+  }
+
+  return { suppressAlert: false };
 }
 
 /**
@@ -1265,6 +1441,15 @@ export function shouldAcceptLocationUpdate(newPos: UserPosition): boolean {
     normalizedPos.latitude,
     normalizedPos.longitude
   );
+
+  if (
+    ageSinceLastMs < 45000 &&
+    lastAcceptedPosition.accuracy <= 30 &&
+    normalizedPos.accuracy > 45 &&
+    jumpMeters < normalizedPos.accuracy + lastAcceptedPosition.accuracy + 25
+  ) {
+    return false;
+  }
 
   if (
     ageSinceLastMs < 15000 &&
