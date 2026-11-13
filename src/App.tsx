@@ -939,8 +939,9 @@ export default function App() {
   const openedFromNotificationEditRef = useRef<boolean>(isInitialNotificationLaunch);
 
   // App startup splash screen (fade in & fade out in <= 1.5s; keep + menu closed by default)
+  // Keep main app container visible underneath SplashScreen so notification deep-links can never trap the screen at opacity-0.
   const [showSplash, setShowSplash] = useState<boolean>(() => !isInitialNotificationLaunch);
-  const [appVisible, setAppVisible] = useState<boolean>(() => isInitialNotificationLaunch);
+  const [appVisible, setAppVisible] = useState<boolean>(true);
   const handleStartExitSplash = useCallback(() => {
     setAppVisible(true);
   }, []);
@@ -1207,7 +1208,15 @@ export default function App() {
     }
 
     const openEditModalForReminderId = (targetId: string) => {
-      if (!targetId) return;
+      if (!targetId) {
+        setShowSplash(false);
+        setAppVisible(true);
+        setIsCreateChoiceOpen(false);
+        setActiveAlarmReminder(null);
+        setActiveGeofenceAlert(null);
+        setActiveMainTab('reminders');
+        return;
+      }
       openedFromNotificationEditRef.current = true;
       if (typeof window !== 'undefined') {
         (window as any).__yaadOpenedFromNotification = true;
@@ -1219,14 +1228,28 @@ export default function App() {
       triggeredAlarmsRef.current.add(targetId);
       recordNotificationAction(targetId);
 
-      let found = remindersRef.current?.find((r) => r.id === targetId);
+      // Always reveal UI first so the screen can never remain black even if the item was removed
+      setShowSplash(false);
+      setAppVisible(true);
+      setIsCreateChoiceOpen(false);
+      setActiveAlarmReminder(null);
+      setActiveGeofenceAlert(null);
+      setActiveMainTab('reminders');
+
+      const strippedTarget = targetId.replace(/^(rem_|loc_)+/, '');
+      const matchesTarget = (r: Reminder) =>
+        r.id === targetId ||
+        r.id === strippedTarget ||
+        r.id === `rem_${strippedTarget}`;
+
+      let found = remindersRef.current?.find(matchesTarget);
       if (!found) {
         try {
           const raw = localStorage.getItem(REMINDERS_STORAGE_KEY);
           if (raw) {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed)) {
-              found = parsed.find((r: Reminder) => r.id === targetId);
+              found = parsed.find(matchesTarget);
             }
           }
         } catch {
@@ -1235,12 +1258,6 @@ export default function App() {
       }
 
       if (found) {
-        setShowSplash(false);
-        setAppVisible(true);
-        setIsCreateChoiceOpen(false);
-        setActiveAlarmReminder(null);
-        setActiveGeofenceAlert(null);
-        setActiveMainTab('reminders');
         setEditingReminder(found);
         setIsFormOpen(true);
       }
@@ -1249,7 +1266,6 @@ export default function App() {
     const handleEditGeofenceRadiusEvent = (e: Event) => {
       const customEv = e as CustomEvent<{ geofenceItemId?: string }>;
       const rawId = customEv.detail?.geofenceItemId || '';
-      if (!rawId) return;
 
       openedFromNotificationEditRef.current = true;
       if (typeof window !== 'undefined') {
@@ -1257,27 +1273,64 @@ export default function App() {
       }
       stopSubmarineSonarLoop();
       stopAlarmRinging();
-      pauseGeofenceAlertTemporarily(rawId, 'edit');
+      if (rawId) {
+        pauseGeofenceAlertTemporarily(rawId, 'edit');
+      }
       setShowSplash(false);
       setAppVisible(true);
       setIsCreateChoiceOpen(false);
       setActiveAlarmReminder(null);
       setActiveGeofenceAlert(null);
 
+      if (!rawId) {
+        setActiveMainTab('reminders');
+        return;
+      }
+
+      const strippedId = rawId.replace(/^(rem_|loc_)+/, '');
+      const matchesReminder = (r: Reminder) =>
+        r.id === rawId || r.id === strippedId || r.id === `rem_${strippedId}`;
+      const matchesLocation = (l: SavedLocation) =>
+        l.id === rawId || l.id === strippedId || l.id === `loc_${strippedId}`;
+
       if (rawId.startsWith('rem_')) {
-        const remId = rawId.replace(/^rem_/, '');
-        const foundRem = remindersRef.current?.find((r) => r.id === remId);
+        setActiveMainTab('reminders');
+        let foundRem = remindersRef.current?.find(matchesReminder);
+        if (!foundRem) {
+          try {
+            const raw = localStorage.getItem(REMINDERS_STORAGE_KEY);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                foundRem = parsed.find(matchesReminder);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
         if (foundRem) {
-          setActiveMainTab('reminders');
           setEditingReminder(foundRem);
           setFocusGeofenceRadius(true);
           setIsFormOpen(true);
         }
       } else {
-        const locId = rawId.replace(/^loc_/, '');
-        const foundLoc = savedLocationsRef.current?.find((l) => l.id === locId);
+        setActiveMainTab('locations');
+        let foundLoc = savedLocationsRef.current?.find(matchesLocation);
+        if (!foundLoc) {
+          try {
+            const raw = localStorage.getItem(LOCATIONS_STORAGE_KEY);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                foundLoc = parsed.find(matchesLocation);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
         if (foundLoc) {
-          setActiveMainTab('locations');
           setEditingLocation(foundLoc);
           setFocusGeofenceRadius(true);
           setIsLocationModalOpen(true);
@@ -1368,7 +1421,7 @@ export default function App() {
     initNotificationChannel()
       .then(() => requestNotificationPermission())
       .catch(() => {});
-    setupNotificationListeners(
+    const cleanupNotificationListeners = setupNotificationListeners(
       (id) => {
         handleCompleteReminderRef.current(id);
       },
@@ -1416,6 +1469,7 @@ export default function App() {
 
     return () => {
       unsubscribe();
+      cleanupNotificationListeners();
       navigator.serviceWorker?.removeEventListener('message', handleSwMessage);
       window.removeEventListener('yaad:edit-geofence-radius', handleEditGeofenceRadiusEvent);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -1459,20 +1513,42 @@ export default function App() {
         cleanUrl.searchParams.delete('editReminderId');
         window.history.replaceState({}, '', cleanUrl.pathname + (cleanUrl.search ? cleanUrl.search : ''));
 
-        const found = reminders.find((r) => r.id === queryEditId);
+        openedFromNotificationEditRef.current = true;
+        (window as any).__yaadOpenedFromNotification = true;
+        stopAlarmRinging();
+        clearOutOfAppPersistentNotification(queryEditId);
+        setShowSplash(false);
+        setAppVisible(true);
+        setIsCreateChoiceOpen(false);
+        setActiveAlarmReminder(null);
+        setActiveGeofenceAlert(null);
+        setActiveMainTab('reminders');
+
+        const strippedQueryEditId = queryEditId.replace(/^(rem_|loc_)+/, '');
+        const matchesQueryEdit = (r: Reminder) =>
+          r.id === queryEditId ||
+          r.id === strippedQueryEditId ||
+          r.id === `rem_${strippedQueryEditId}`;
+
+        let found = reminders.find(matchesQueryEdit);
+        if (!found) {
+          try {
+            const raw = localStorage.getItem(REMINDERS_STORAGE_KEY);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                found = parsed.find(matchesQueryEdit);
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
         if (found) {
-          openedFromNotificationEditRef.current = true;
-          stopAlarmRinging();
-          clearOutOfAppPersistentNotification(found.id);
-          setShowSplash(false);
-          setAppVisible(true);
-          setIsCreateChoiceOpen(false);
-          setActiveAlarmReminder(null);
-          setActiveMainTab('reminders');
           setEditingReminder(found);
           setIsFormOpen(true);
-          return;
         }
+        return;
       }
 
       const queryTimelineRemId = params.get('openTimelineReminderId') || params.get('alarmId');

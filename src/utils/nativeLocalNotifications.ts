@@ -535,6 +535,8 @@ export async function syncAllRemindersWithLocalNotifications(
  * Actions with foreground: false (Done, Snooze) run strictly in the background without launching or opening the app.
  * ONLY the 'edit' action button has foreground: true, which launches the app and opens the Edit Reminder screen.
  */
+let activeNotificationListenerCleanup: (() => void) | null = null;
+
 export function setupNotificationListeners(
   onComplete?: (reminderId: string) => void,
   onSnooze?: (reminderId: string, minutes: number, snoozedUntil?: number) => void,
@@ -542,60 +544,67 @@ export function setupNotificationListeners(
   onOpen?: (reminderId: string) => void,
   onEdit?: (reminderId: string) => void,
   onNoReaction1m?: (reminderId: string, snoozedUntil?: number) => void
-): void {
-  if (!isNativeApp()) return;
+): () => void {
+  if (!isNativeApp()) return () => {};
+
+  if (activeNotificationListenerCleanup) {
+    try {
+      activeNotificationListenerCleanup();
+    } catch {}
+    activeNotificationListenerCleanup = null;
+  }
+
+  let disposed = false;
+  let receivedHandle: { remove: () => Promise<void> } | null = null;
+  let actionHandle: { remove: () => Promise<void> } | null = null;
+
+  const cleanup = () => {
+    disposed = true;
+    try {
+      receivedHandle?.remove?.().catch(() => {});
+    } catch {}
+    try {
+      actionHandle?.remove?.().catch(() => {});
+    } catch {}
+    receivedHandle = null;
+    actionHandle = null;
+    if (activeNotificationListenerCleanup === cleanup) {
+      activeNotificationListenerCleanup = null;
+    }
+  };
+  activeNotificationListenerCleanup = cleanup;
 
   try {
     // Do NOT dismiss delivered notifications when app is in foreground so that out-of-app notification audio plays cleanly without interruption
-    LocalNotifications.addListener('localNotificationReceived', () => {});
+    LocalNotifications.addListener('localNotificationReceived', () => {})
+      .then((handle) => {
+        if (disposed) {
+          handle.remove().catch(() => {});
+        } else {
+          receivedHandle = handle;
+        }
+      })
+      .catch(() => {});
 
     LocalNotifications.addListener('localNotificationActionPerformed', async (action) => {
-      const actionId = action.actionId;
-      const notifId = action.notification?.id;
-      const extraObj = action.notification?.extra || {};
-      const reminderId = extraObj.reminderId;
-      const isGeofenceNotif = Boolean(extraObj.geofence);
-      const geofenceItemId: string = extraObj.geofenceItemId || extraObj.locationId || '';
-      const snoozedUntil =
-        typeof (action as any).snoozedUntil === 'number' ? (action as any).snoozedUntil : undefined;
+      try {
+        const actionId = action.actionId;
+        const notifId = action.notification?.id;
+        const extraObj = action.notification?.extra || {};
+        const reminderId = extraObj.reminderId;
+        const isGeofenceNotif = Boolean(extraObj.geofence);
+        const geofenceItemId: string = extraObj.geofenceItemId || extraObj.locationId || '';
+        const snoozedUntil =
+          typeof (action as any).snoozedUntil === 'number' ? (action as any).snoozedUntil : undefined;
 
-      // Dedicated handling for Geofence notifications (Status Bar & Lockscreen Edit / Got It)
-      if (isGeofenceNotif) {
-        try {
-          stopAlarmRinging();
-          const bridge = (window as any).YaadGeofenceBridge;
-          if (bridge && typeof bridge.stopGeofenceAlertAudio === 'function') {
-            bridge.stopGeofenceAlertAudio();
-          }
-        } catch {}
-        if (typeof notifId === 'number') {
-          LocalNotifications.cancel({ notifications: [{ id: notifId }] }).catch(() => {});
-          LocalNotifications.removeDeliveredNotifications({
-            notifications: [{ id: notifId, title: '', body: '' }],
-          }).catch(() => {});
-        }
-        if (actionId === 'edit' && geofenceItemId) {
-          window.dispatchEvent(
-            new CustomEvent('yaad:edit-geofence-radius', {
-              detail: { geofenceItemId },
-            })
-          );
-        }
-        return;
-      }
-
-      // Handle notifications without reminderId (e.g. 60s test notification)
-      if (!reminderId) {
-        if (
-          actionId === 'done' ||
-          actionId === 'complete' ||
-          actionId === 'snooze' ||
-          actionId === 'edit' ||
-          actionId === 'stop' ||
-          actionId === 'dismiss'
-        ) {
+        // Dedicated handling for Geofence notifications (Status Bar & Lockscreen Edit / Got It / Body Tap)
+        if (isGeofenceNotif) {
           try {
             stopAlarmRinging();
+            const bridge = (window as any).YaadGeofenceBridge;
+            if (bridge && typeof bridge.stopGeofenceAlertAudio === 'function') {
+              bridge.stopGeofenceAlertAudio();
+            }
           } catch {}
           if (typeof notifId === 'number') {
             LocalNotifications.cancel({ notifications: [{ id: notifId }] }).catch(() => {});
@@ -603,64 +612,109 @@ export function setupNotificationListeners(
               notifications: [{ id: notifId, title: '', body: '' }],
             }).catch(() => {});
           }
+          if (actionId === 'edit' && geofenceItemId) {
+            window.dispatchEvent(
+              new CustomEvent('yaad:edit-geofence-radius', {
+                detail: { geofenceItemId },
+              })
+            );
+          } else if (actionId === 'tap' || !actionId || actionId === 'edit') {
+            if (onOpen) onOpen('');
+          }
+          return;
+        }
+
+        // Handle notifications without reminderId (e.g. 60s test notification)
+        if (!reminderId) {
+          if (
+            actionId === 'done' ||
+            actionId === 'complete' ||
+            actionId === 'snooze' ||
+            actionId === 'edit' ||
+            actionId === 'stop' ||
+            actionId === 'dismiss'
+          ) {
+            try {
+              stopAlarmRinging();
+            } catch {}
+            if (typeof notifId === 'number') {
+              LocalNotifications.cancel({ notifications: [{ id: notifId }] }).catch(() => {});
+              LocalNotifications.removeDeliveredNotifications({
+                notifications: [{ id: notifId, title: '', body: '' }],
+              }).catch(() => {});
+            }
+          } else if (actionId === 'tap' || !actionId) {
+            try {
+              stopAlarmRinging();
+            } catch {}
+            if (onOpen) onOpen('');
+          }
+          return;
+        }
+
+        if (actionId === 'mute_after_1m') {
+          try {
+            stopAlarmRinging();
+          } catch {}
+          // Do NOT cancel or dismiss the delivered notification! It stays pinned at the top of the dropdown shade
+          // while the reminder itself is moved to +15m in the future in the app timeline.
+          if (onNoReaction1m) onNoReaction1m(reminderId, snoozedUntil);
+          return;
+        }
+
+        if (actionId === 'done' || actionId === 'complete') {
+          try {
+            stopAlarmRinging();
+          } catch {}
+          cancelReminderNotification(reminderId).catch(() => {});
+          dismissDeliveredNotifications(reminderId).catch(() => {});
+          if (onComplete) onComplete(reminderId);
+        } else if (actionId === 'snooze') {
+          try {
+            stopAlarmRinging();
+          } catch {}
+          cancelReminderNotification(reminderId).catch(() => {});
+          dismissDeliveredNotifications(reminderId).catch(() => {});
+          if (onSnooze) onSnooze(reminderId, 15, snoozedUntil);
+        } else if (actionId === 'edit') {
+          try {
+            stopAlarmRinging();
+          } catch {}
+          cancelReminderNotification(reminderId).catch(() => {});
+          dismissDeliveredNotifications(reminderId).catch(() => {});
+          if (onEdit) onEdit(reminderId);
+        } else if (actionId === 'stop' || actionId === 'dismiss') {
+          try {
+            stopAlarmRinging();
+          } catch {}
+          cancelReminderNotification(reminderId).catch(() => {});
+          dismissDeliveredNotifications(reminderId).catch(() => {});
+          if (onStop) onStop(reminderId);
         } else if (actionId === 'tap' || !actionId) {
           try {
             stopAlarmRinging();
           } catch {}
-          if (onOpen) onOpen('');
+          // Tapping notification body opens the app directly to the Reminders Timeline
+          if (onOpen) onOpen(reminderId);
         }
-        return;
+      } catch (err) {
+        console.warn('Error handling notification action:', err);
+        if (onOpen) onOpen('');
       }
-
-      if (actionId === 'mute_after_1m') {
-        try {
-          stopAlarmRinging();
-        } catch {}
-        // Do NOT cancel or dismiss the delivered notification! It stays pinned at the top of the dropdown shade
-        // while the reminder itself is moved to +15m in the future in the app timeline.
-        if (onNoReaction1m) onNoReaction1m(reminderId, snoozedUntil);
-        return;
-      }
-
-      if (actionId === 'done' || actionId === 'complete') {
-        try {
-          stopAlarmRinging();
-        } catch {}
-        cancelReminderNotification(reminderId).catch(() => {});
-        dismissDeliveredNotifications(reminderId).catch(() => {});
-        if (onComplete) onComplete(reminderId);
-      } else if (actionId === 'snooze') {
-        try {
-          stopAlarmRinging();
-        } catch {}
-        cancelReminderNotification(reminderId).catch(() => {});
-        dismissDeliveredNotifications(reminderId).catch(() => {});
-        if (onSnooze) onSnooze(reminderId, 15, snoozedUntil);
-      } else if (actionId === 'edit') {
-        try {
-          stopAlarmRinging();
-        } catch {}
-        cancelReminderNotification(reminderId).catch(() => {});
-        dismissDeliveredNotifications(reminderId).catch(() => {});
-        if (onEdit) onEdit(reminderId);
-      } else if (actionId === 'stop' || actionId === 'dismiss') {
-        try {
-          stopAlarmRinging();
-        } catch {}
-        cancelReminderNotification(reminderId).catch(() => {});
-        dismissDeliveredNotifications(reminderId).catch(() => {});
-        if (onStop) onStop(reminderId);
-      } else if (actionId === 'tap' || !actionId) {
-        try {
-          stopAlarmRinging();
-        } catch {}
-        // Tapping notification body opens the app directly to the Reminders Timeline
-        if (onOpen) onOpen(reminderId);
-      }
-    });
+    })
+      .then((handle) => {
+        if (disposed) {
+          handle.remove().catch(() => {});
+        } else {
+          actionHandle = handle;
+        }
+      })
+      .catch(() => {});
   } catch (err) {
     console.warn('Could not set up local notification listeners:', err);
   }
+
+  return cleanup;
 }
 
 /**

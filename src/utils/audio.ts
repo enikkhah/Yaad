@@ -597,15 +597,49 @@ export const stopAlarmRinging = () => {
 let sonarLoopTimeoutId: number | null = null;
 let isSonarActive = false;
 let isSonarMuted = false;
+let isSonarPausedForPhoneCall = false;
+let wasSonarActiveBeforePhoneCall = false;
 let currentSonarDistance = 150;
 let currentSonarRadius = 200;
 let currentSonarMode: SonarScenarioMode = 'enter';
 let currentSonarVolumeOverride: number | undefined = undefined;
 let lastSonarPingTime = 0;
 
+if (typeof window !== 'undefined') {
+  window.addEventListener('yaad:phone-call-state', (ev: Event) => {
+    const detail = (ev as CustomEvent<{ active?: boolean }>).detail;
+    const inCall = Boolean(detail?.active);
+    if (inCall) {
+      isSonarPausedForPhoneCall = true;
+      if (isSonarActive) {
+        wasSonarActiveBeforePhoneCall = true;
+        if (sonarLoopTimeoutId !== null) {
+          clearTimeout(sonarLoopTimeoutId);
+          sonarLoopTimeoutId = null;
+        }
+      }
+      if (activeAlarmAudio && !activeAlarmAudio.paused) {
+        try {
+          activeAlarmAudio.pause();
+        } catch {
+          // ignore
+        }
+      }
+    } else if (isSonarPausedForPhoneCall) {
+      isSonarPausedForPhoneCall = false;
+      if (wasSonarActiveBeforePhoneCall && !isSonarMuted) {
+        wasSonarActiveBeforePhoneCall = false;
+        isSonarActive = true;
+        runSonarTick();
+      }
+    }
+  });
+}
+
 export const setSubmarineSonarMuted = (muted: boolean): void => {
   isSonarMuted = muted;
   if (muted) {
+    wasSonarActiveBeforePhoneCall = false;
     stopSubmarineSonarLoop();
     if (typeof window !== 'undefined') {
       try {
