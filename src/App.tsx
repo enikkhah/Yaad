@@ -65,6 +65,7 @@ import {
   syncGeofencesWithNativeAndroid,
   resetGeofenceProximityState,
   acknowledgeGeofenceAlert,
+  snoozeGeofenceAlertPassThrough,
   pauseGeofenceAlertTemporarily,
   resumeGeofenceAlertFromPause,
   calculateHaversineDistance,
@@ -1637,10 +1638,26 @@ export default function App() {
 
   // Robust live time & alarm triggers (with unthrottled Web Worker for background tabs)
   // Includes Simultaneous Notification Bundling / Queuing so reminders due at the same time (or within ~30s) merge into a single grouped Full-Screen Modal
+  const lastTimeStateUpdateRef = useRef<number>(0);
+  const lastAlarmCheckRunRef = useRef<number>(0);
   useEffect(() => {
-    const checkAlarms = () => {
+    const checkAlarms = (forceStateUpdate: boolean = false) => {
       const now = Date.now();
-      setCurrentTime(now);
+      if (!forceStateUpdate && now - lastAlarmCheckRunRef.current < 400) {
+        return;
+      }
+      lastAlarmCheckRunRef.current = now;
+
+      // Throttle top-level currentTime React state updates to once every 15s (or when forced)
+      // so the 4,900-line App component tree is never re-rendered 4 times per second!
+      if (
+        forceStateUpdate ||
+        now - lastTimeStateUpdateRef.current >= 15000 ||
+        Math.floor(now / 60000) !== Math.floor(lastTimeStateUpdateRef.current / 60000)
+      ) {
+        lastTimeStateUpdateRef.current = now;
+        setCurrentTime(now);
+      }
 
       const newlyDueBundle: Reminder[] = [];
       const SIMULTANEOUS_WINDOW_MS = 30 * 1000; // 30s lookahead window to bundle near-simultaneous reminders together
@@ -1688,6 +1705,8 @@ export default function App() {
 
       // If at least one reminder triggered right now, also check if any other pending reminder is scheduled within SIMULTANEOUS_WINDOW_MS (same minute/cluster)
       if (newlyDueBundle.length > 0) {
+        lastTimeStateUpdateRef.current = now;
+        setCurrentTime(now);
         reminders.forEach((candidate) => {
           if (
             candidate.deletedAt ||
@@ -1765,32 +1784,32 @@ export default function App() {
           return;
         }
       }
-      checkAlarms();
+      checkAlarms(true);
     };
 
     // Run immediately
-    checkAlarms();
+    checkAlarms(true);
 
-    const timer = setInterval(checkAlarms, 500);
+    const timer = setInterval(() => checkAlarms(false), 1000);
 
     // Visibility and focus listeners to trigger alarms immediately upon returning
     const handleVisibilityOrFocus = () => {
-      checkAlarms();
+      checkAlarms(true);
     };
     document.addEventListener('visibilitychange', handleVisibilityOrFocus);
     window.addEventListener('focus', handleVisibilityOrFocus);
     window.addEventListener('yaad:native-reminder-due', handleNativeReminderDue);
 
-    // Unthrottled Web Worker timer (500ms) so background tabs / minimized windows trigger notifications in <= 1s
+    // Unthrottled Web Worker timer (1000ms) so background tabs / minimized windows trigger notifications in <= 1s
     let worker: Worker | null = null;
     try {
       const blob = new Blob(
-        ['setInterval(() => postMessage("tick"), 500);'],
+        ['setInterval(() => postMessage("tick"), 1000);'],
         { type: 'application/javascript' }
       );
       worker = new Worker(URL.createObjectURL(blob));
       worker.onmessage = () => {
-        checkAlarms();
+        checkAlarms(false);
       };
     } catch {
       // Worker fallback
@@ -1826,16 +1845,16 @@ export default function App() {
 
   // Stops a geofence operation completely (both in-app and out-of-app) and disables the geofence for that item
   const handleStopGeofenceOperation = useCallback(
-    (rawItemId?: string) => {
+    (rawItemId?: string, fromNative: boolean = false) => {
       if (!rawItemId) {
         stopSubmarineSonarLoop();
         stopAlarmRinging();
-        setActiveGeofenceAlerts([]);
+        setActiveGeofenceAlerts((prev) => (prev.length === 0 ? prev : []));
         return;
       }
 
       const cleanId = rawItemId.replace(/^(loc_|rem_)/, '');
-      acknowledgeGeofenceAlert(cleanId);
+      acknowledgeGeofenceAlert(cleanId, !fromNative);
 
       setSavedLocations((prev) => {
         let changed = false;
@@ -1904,7 +1923,7 @@ export default function App() {
           stopSubmarineSonarLoop();
           stopAlarmRinging();
         }
-        return remaining;
+        return remaining.length === prevList.length ? prevList : remaining;
       });
     },
     [isGeofenceActive, settings.language]
@@ -1919,7 +1938,7 @@ export default function App() {
     const handleNativeStopGeofenceItem = (e: Event) => {
       const customEv = e as CustomEvent<{ itemId?: string }>;
       if (customEv.detail?.itemId) {
-        handleStopGeofenceOperation(customEv.detail.itemId);
+        handleStopGeofenceOperation(customEv.detail.itemId, true);
       }
     };
     const handleNativeSnoozeGeofenceItem = (e: Event) => {
@@ -1927,6 +1946,7 @@ export default function App() {
       const rawId = customEv.detail?.itemId;
       if (!rawId) return;
       const cleanId = rawId.replace(/^(loc_|rem_)/, '');
+      snoozeGeofenceAlertPassThrough(cleanId, undefined, false);
       setActiveGeofenceAlerts((prevList) => {
         const remaining = prevList.filter((item) => {
           const itemClean = item.targetId.replace(/^(loc_|rem_)/, '');
@@ -1936,7 +1956,7 @@ export default function App() {
           stopSubmarineSonarLoop();
           stopAlarmRinging();
         }
-        return remaining;
+        return remaining.length === prevList.length ? prevList : remaining;
       });
     };
     const handleNativeAcknowledgeGeofenceItem = (e: Event) => {
@@ -1944,7 +1964,7 @@ export default function App() {
       const rawId = customEv.detail?.itemId;
       if (!rawId) return;
       const cleanId = rawId.replace(/^(loc_|rem_)/, '');
-      acknowledgeGeofenceAlert(cleanId);
+      acknowledgeGeofenceAlert(cleanId, false);
       setActiveGeofenceAlerts((prevList) => {
         const remaining = prevList.filter((item) => {
           const itemClean = item.targetId.replace(/^(loc_|rem_)/, '');
@@ -1954,13 +1974,13 @@ export default function App() {
           stopSubmarineSonarLoop();
           stopAlarmRinging();
         }
-        return remaining;
+        return remaining.length === prevList.length ? prevList : remaining;
       });
     };
     const handleNativeDisableGeofenceRadar = () => {
       stopSubmarineSonarLoop();
       stopAlarmRinging();
-      setActiveGeofenceAlerts([]);
+      setActiveGeofenceAlerts((prev) => (prev.length === 0 ? prev : []));
       setIsGeofenceActive(false);
       setGeofenceTrackingEnabled(false);
     };
@@ -1979,7 +1999,7 @@ export default function App() {
             const ids: string[] = JSON.parse(rawJson);
             if (Array.isArray(ids)) {
               ids.forEach((id) => {
-                if (id) handleStopGeofenceOperation(id);
+                if (id) handleStopGeofenceOperation(id, true);
               });
             }
           }
@@ -2034,6 +2054,35 @@ export default function App() {
   }, [currentUserPosition]);
 
   const hadActiveSonarRef = useRef<boolean>(false);
+  const lastUiPositionUpdateMsRef = useRef<number>(0);
+
+  const areGeofenceAlertListsEqual = useCallback(
+    (prev: GeofenceAlertData[], next: GeofenceAlertData[]): boolean => {
+      if (prev === next) return true;
+      if (prev.length === 0 && next.length === 0) return true;
+      if (prev.length !== next.length) return false;
+      for (let i = 0; i < prev.length; i++) {
+        const a = prev[i];
+        const b = next[i];
+        if (
+          a.id !== b.id ||
+          a.targetId !== b.targetId ||
+          a.scenarioPhase !== b.scenarioPhase ||
+          a.initialDistance !== b.initialDistance ||
+          a.radius !== b.radius ||
+          a.isVisualOnly !== b.isVisualOnly ||
+          a.isAudioMuted !== b.isAudioMuted ||
+          a.phaseRemainingSeconds !== b.phaseRemainingSeconds ||
+          a.visualBannerMessage !== b.visualBannerMessage ||
+          a.entryToastRemainingSeconds !== b.entryToastRemainingSeconds
+        ) {
+          return false;
+        }
+      }
+      return true;
+    },
+    []
+  );
 
   const evaluateUserPositionAgainstAllGeofences = useCallback(
     (userPos: UserPosition, bypassStabilizer: boolean = false) => {
@@ -2045,9 +2094,28 @@ export default function App() {
       const curSavedLocations = savedLocationsRef.current;
       const curLang = settingsRef.current.language || 'fa';
 
+      const prevPos = currentUserPositionRef.current;
       currentUserPositionRef.current = userPos;
-      setCurrentUserPosition(userPos);
-      saveLastKnownPosition(userPos);
+      const nowMs = Date.now();
+      const movedMeters = prevPos
+        ? calculateHaversineDistance(
+            prevPos.latitude,
+            prevPos.longitude,
+            userPos.latitude,
+            userPos.longitude
+          )
+        : 999;
+
+      if (
+        bypassStabilizer ||
+        !prevPos ||
+        movedMeters >= 2 ||
+        nowMs - lastUiPositionUpdateMsRef.current >= 2500
+      ) {
+        lastUiPositionUpdateMsRef.current = nowMs;
+        setCurrentUserPosition(userPos);
+        saveLastKnownPosition(userPos);
+      }
 
       const evaluatedAlerts = evaluateAllActiveGeofenceScenarios(
         userPos,
@@ -2057,7 +2125,9 @@ export default function App() {
         formatSavedLocationTitle
       );
 
-      setActiveGeofenceAlerts(evaluatedAlerts);
+      setActiveGeofenceAlerts((prev) =>
+        areGeofenceAlertListsEqual(prev, evaluatedAlerts) ? prev : evaluatedAlerts
+      );
 
       if (evaluatedAlerts.length === 0) {
         if (hadActiveSonarRef.current) {
@@ -2082,7 +2152,7 @@ export default function App() {
         stopSubmarineSonarLoop();
       }
     },
-    []
+    [areGeofenceAlertListsEqual]
   );
 
   // Resume temporarily paused geofence alerts when Edit modals close or when user returns from / cancels Google Maps navigation
@@ -2130,7 +2200,9 @@ export default function App() {
         settingsRef.current.language || 'fa',
         formatSavedLocationTitle
       );
-      setActiveGeofenceAlerts(evaluated);
+      setActiveGeofenceAlerts((prev) =>
+        areGeofenceAlertListsEqual(prev, evaluated) ? prev : evaluated
+      );
       if (evaluated.length === 0) {
         if (hadActiveSonarRef.current) {
           hadActiveSonarRef.current = false;
@@ -2153,7 +2225,7 @@ export default function App() {
       }
     }, 500);
     return () => clearInterval(tickInterval);
-  }, [isGeofenceActive, activeGeofenceAlerts.length > 0]);
+  }, [isGeofenceActive, activeGeofenceAlerts.length > 0, areGeofenceAlertListsEqual]);
 
   // Whenever reminders or savedLocations are added/edited/toggled while geofence radar is active,
   // immediately re-evaluate against the latest known GPS position so entering/being inside a geofence triggers without delay!

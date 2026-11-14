@@ -2698,8 +2698,10 @@ const patchedPluginLoad = `        // YAAD clean foreground state, WebView confi
 
     override fun handleOnPause() {
         super.handleOnPause()
-        isAppInForegroundState = false
-        YaadGeofenceService.onAppBackgrounded(context)
+        if (YaadGeofenceService.isScreenOffOrLockedStatic(context)) {
+            isAppInForegroundState = false
+            YaadGeofenceService.onAppBackgrounded(context)
+        }
     }
 
     override fun handleOnStop() {
@@ -4359,7 +4361,7 @@ class YaadAlarmPopupActivity : Activity() {
                 suspendAndYieldForIncomingCall()
                 return
             }
-            uiHandler.postDelayed(this, 250L)
+            uiHandler.postDelayed(this, 1500L)
         }
     }
 
@@ -7446,11 +7448,23 @@ class YaadAlarmPopupActivity : Activity() {
         private var consecutiveCallIdleTicks: Int = 0
         private var callMonitorAppContext: Context? = null
 
+        @Volatile
+        private var lastPhoneCallCheckTimeMs: Long = 0L
+        @Volatile
+        private var lastPhoneCallCachedResult: Boolean = false
+
         /**
          * Reliably detects whether the phone is currently ringing (incoming cellular or VoIP call)
          * or in an active phone/communication call across all Android versions without requiring runtime permissions.
+         * Uses a short 1200ms cache to avoid excessive Binder IPC across main and audio threads.
          */
         fun isPhoneCallActiveOrRinging(context: Context): Boolean {
+            if (lastBroadcastCallActive) return true
+            val now = System.currentTimeMillis()
+            if (now - lastPhoneCallCheckTimeMs < 1200L) {
+                return lastPhoneCallCachedResult
+            }
+            var active = false
             try {
                 val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
                 if (am != null) {
@@ -7461,43 +7475,48 @@ class YaadAlarmPopupActivity : Activity() {
                         mode == AudioManager.MODE_IN_COMMUNICATION ||
                         mode == 4 // AudioManager.MODE_CALL_SCREENING
                     ) {
-                        return true
+                        active = true
                     }
                 }
             } catch (e: Exception) {
             }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!active && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                 try {
                     val telecom = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
                     if (telecom != null && telecom.isInCall) {
-                        return true
+                        active = true
                     }
                 } catch (se: SecurityException) {
                 } catch (e: Exception) {
                 }
             }
 
-            try {
-                val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-                if (tm != null) {
-                    @Suppress("DEPRECATION")
-                    val callState = tm.callState
-                    if (
-                        callState == TelephonyManager.CALL_STATE_RINGING ||
-                        callState == TelephonyManager.CALL_STATE_OFFHOOK
-                    ) {
-                        return true
+            if (!active) {
+                try {
+                    val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                    if (tm != null) {
+                        @Suppress("DEPRECATION")
+                        val callState = tm.callState
+                        if (
+                            callState == TelephonyManager.CALL_STATE_RINGING ||
+                            callState == TelephonyManager.CALL_STATE_OFFHOOK
+                        ) {
+                            active = true
+                        }
+                        if (callState == TelephonyManager.CALL_STATE_IDLE) {
+                            lastBroadcastCallActive = false
+                        }
                     }
-                    if (callState == TelephonyManager.CALL_STATE_IDLE) {
-                        lastBroadcastCallActive = false
-                    }
+                } catch (se: SecurityException) {
+                } catch (e: Exception) {
                 }
-            } catch (se: SecurityException) {
-            } catch (e: Exception) {
             }
 
-            return lastBroadcastCallActive
+            val finalRes = active || lastBroadcastCallActive
+            lastPhoneCallCachedResult = finalRes
+            lastPhoneCallCheckTimeMs = now
+            return finalRes
         }
 
         fun yieldActivePopupForPhoneCall(context: Context) {
@@ -8570,8 +8589,11 @@ class YaadGeofenceService : Service(), LocationListener {
     }
 
     private var currentGpsIntervalMs: Long = 500L
+    private var lastWebViewDispatchedTimeMs: Long = 0L
+    private var lastWebViewDispatchedLat: Double = Double.NaN
+    private var lastWebViewDispatchedLon: Double = Double.NaN
 
-    private fun startLocationUpdates(intervalMs: Long = currentGpsIntervalMs) {
+    private fun startLocationUpdates(intervalMs: Long = currentGpsIntervalMs, checkLastKnown: Boolean = true) {
         val lm = locationManager ?: return
         if (!hasLocationPermission(this)) return
         try {
@@ -8641,7 +8663,9 @@ class YaadGeofenceService : Service(), LocationListener {
             } catch (e: Exception) {
             }
             isTrackingRegistered = anyRegistered
-            checkLastKnownLocations()
+            if (checkLastKnown) {
+                checkLastKnownLocations()
+            }
         } catch (e: SecurityException) {
         } catch (e: Exception) {
         }
@@ -8654,7 +8678,7 @@ class YaadGeofenceService : Service(), LocationListener {
             else -> 10000L
         }
         if (desiredIntervalMs != currentGpsIntervalMs && isTrackingRegistered) {
-            startLocationUpdates(desiredIntervalMs)
+            startLocationUpdates(desiredIntervalMs, checkLastKnown = false)
         }
     }
 
@@ -8868,22 +8892,36 @@ class YaadGeofenceService : Service(), LocationListener {
         try {
             val appInForeground = LocalNotificationsPlugin.isAppInForeground(this)
             val screenOffOrLocked = isScreenOffOrLocked()
+            val now = System.currentTimeMillis()
 
-            // Stream live native GPS fix to WebView whenever app is in foreground for <2s in-app response
+            // Stream live native GPS fix to WebView whenever app is in foreground for <1s in-app response
+            // Throttled to once every 850ms (or >= 2m movement) to prevent WebView JS bridge queue congestion.
             if (appInForeground) {
                 if (!screenOffOrLocked && activeGeofenceNotificationId != Int.MIN_VALUE) {
                     try {
                         NotificationManagerCompat.from(this).cancel(activeGeofenceNotificationId)
                     } catch (e: Exception) {
                     }
+                    if (YaadAlarmPopupActivity.isShowingGeofencePopup()) {
+                        YaadAlarmPopupActivity.dismissIfMatching(activeGeofenceNotificationId)
+                    }
                 }
                 val lat = location.latitude
                 val lon = location.longitude
                 val acc = location.accuracy
-                val ts = System.currentTimeMillis()
-                LocalNotificationsPlugin.evaluateJsInWebView(
-                    "window.dispatchEvent(new CustomEvent('yaad:native-location', { detail: { latitude: \$lat, longitude: \$lon, accuracy: \$acc, timestamp: \$ts } }));"
-                )
+                val movedMeters = if (!lastWebViewDispatchedLat.isNaN() && !lastWebViewDispatchedLon.isNaN()) {
+                    calculateHaversineMeters(lastWebViewDispatchedLat, lastWebViewDispatchedLon, lat, lon)
+                } else {
+                    Int.MAX_VALUE
+                }
+                if (now - lastWebViewDispatchedTimeMs >= 850L || movedMeters >= 2) {
+                    lastWebViewDispatchedTimeMs = now
+                    lastWebViewDispatchedLat = lat
+                    lastWebViewDispatchedLon = lon
+                    LocalNotificationsPlugin.evaluateJsInWebView(
+                        "window.dispatchEvent(new CustomEvent('yaad:native-location', { detail: { latitude: \$lat, longitude: \$lon, accuracy: \$acc, timestamp: \$now } }));"
+                    )
+                }
             }
 
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -8892,7 +8930,6 @@ class YaadGeofenceService : Service(), LocationListener {
             val arr = JSONArray(rawItems)
             if (arr.length() == 0) return
 
-            val now = System.currentTimeMillis()
             val accuracyMeters = if (location.hasAccuracy() && location.accuracy > 0f) location.accuracy.toDouble() else 15.0
             val editor = prefs.edit()
             var prefsModified = false
@@ -8948,7 +8985,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     targetLon
                 )
 
-                val distFromBoundary = kotlin.math.abs(rawDistance - radius)
+                val distFromBoundary = if (rawDistance <= radius) 0 else (rawDistance - radius)
                 if (distFromBoundary < minDistanceToBoundaryMeters) {
                     minDistanceToBoundaryMeters = distFromBoundary
                 }
@@ -9031,13 +9068,24 @@ class YaadGeofenceService : Service(), LocationListener {
                     (maxDistApproach - smoothedDistDouble >= kotlin.math.max(4.0, fuzzyHyst * 0.45))
 
                 // Only persist background alert-phase timers (five_hz_start, banner_start, sonar_done) when out-of-app or screen is off/locked.
-                // When the user is inside the unlocked app, WebView manages its own timers so background timers stay fresh for when the user exits the app!
+                // When the user is inside the unlocked app, WebView manages its own in-app modal & timers exclusively!
                 val isOutOfAppSession = !appInForeground || screenOffOrLocked
 
                 if ((distance <= radius || wasInsideBefore) && !armedForExit) {
                     armedForExit = true
                     editor.putBoolean(armedExitKey, true)
                     prefsModified = true
+                }
+
+                if (!isOutOfAppSession) {
+                    if (distance <= radius && !wasInsideBefore) {
+                        editor.putBoolean(insideKey, true)
+                        prefsModified = true
+                    } else if (distance > radius + antiPingPongDeadband && (outsideSampleCountMap[id] ?: 0) >= 3 && wasInsideBefore) {
+                        editor.putBoolean(insideKey, false)
+                        prefsModified = true
+                    }
+                    continue
                 }
 
                 val fiveHzKey = "five_hz_start_\$id"
@@ -9139,6 +9187,11 @@ class YaadGeofenceService : Service(), LocationListener {
                             editor.putLong(entryToastStartKey, now)
                             entryToastStart = now
                             lastInwardMoveTimeMap[id] = now
+                            prefsModified = true
+                        }
+                        if (distance <= radius && latchedMode != "enter") {
+                            latchedMode = "enter"
+                            editor.putString(latchedModeKey, "enter")
                             prefsModified = true
                         }
 
@@ -9378,6 +9431,19 @@ class YaadGeofenceService : Service(), LocationListener {
 
             if (prefsModified) {
                 editor.apply()
+            }
+
+            if (appInForeground && !screenOffOrLocked) {
+                updateAdaptiveLocationInterval(minDistanceToBoundaryMeters, minDistanceToBoundaryMeters == 0)
+                if (sonarLoopActive) {
+                    sonarLoopActive = false
+                    try {
+                        sonarThread?.interrupt()
+                    } catch (e: Exception) {
+                    }
+                    sonarThread = null
+                }
+                return
             }
 
             updateAdaptiveLocationInterval(minDistanceToBoundaryMeters, activeCandidates.isNotEmpty())
@@ -9928,7 +9994,7 @@ class YaadGeofenceService : Service(), LocationListener {
             .takeIf { it != 0 } ?: applicationInfo.icon
 
         val distFormatted = if (isEn) "\${distance}m" else "\${toPersianDigits(distance.toString())} متر"
-        val headerTitle = "\$notifTitle  •  \$distFormatted"
+        val headerTitle = if (notifTitle.contains("•")) notifTitle else "\$notifTitle  •  \$distFormatted"
 
         val builder = NotificationCompat.Builder(this, alertChannelId)
             .setSmallIcon(smallIconRes)
@@ -9973,6 +10039,7 @@ class YaadGeofenceService : Service(), LocationListener {
         val nmCompat = NotificationManagerCompat.from(this)
         if (showFullScreen) {
             lastFullScreenNotificationPostMs = now
+            lastLiveStatusBarUpdatePostMs = now
             // Only cancel before re-posting if the full-screen popup is NOT already visible,
             // so an active popup/notification never flickers!
             if (!YaadAlarmPopupActivity.isShowingGeofencePopup()) {
@@ -9981,8 +10048,11 @@ class YaadGeofenceService : Service(), LocationListener {
                 } catch (e: Exception) {
                 }
             }
+            nmCompat.notify(notificationId, builder.build())
+        } else if (!isLiveUpdate || now - lastLiveStatusBarUpdatePostMs >= 3500L) {
+            lastLiveStatusBarUpdatePostMs = now
+            nmCompat.notify(notificationId, builder.build())
         }
-        nmCompat.notify(notificationId, builder.build())
 
         if (multiCardsJson.isNotEmpty()) {
             val summaryTitle = if (isEn) "Active Geofence Alerts" else "اعلان‌های حصار مکانی"
@@ -10058,6 +10128,8 @@ class YaadGeofenceService : Service(), LocationListener {
         internal var isInScreenOffSession: Boolean = false
         @Volatile
         private var lastFullScreenNotificationPostMs: Long = 0L
+        @Volatile
+        private var lastLiveStatusBarUpdatePostMs: Long = 0L
 
         fun isScreenOffOrLockedStatic(context: Context): Boolean {
             return try {
@@ -10083,6 +10155,9 @@ class YaadGeofenceService : Service(), LocationListener {
                     isInScreenOffSession = false
                     if (activeGeofenceNotificationId != Int.MIN_VALUE) {
                         NotificationManagerCompat.from(context).cancel(activeGeofenceNotificationId)
+                        if (YaadAlarmPopupActivity.isShowingGeofencePopup()) {
+                            YaadAlarmPopupActivity.dismissIfMatching(activeGeofenceNotificationId)
+                        }
                     }
                 }
             } catch (e: Exception) {
@@ -10116,23 +10191,23 @@ class YaadGeofenceService : Service(), LocationListener {
 
         private data class WeightedSample(val distance: Double, val weight: Double)
 
-        private val distanceHistoryMap = HashMap<String, ArrayList<WeightedSample>>()
-        private val lastMoveRefDistMap = HashMap<String, Double>()
-        private val lastInwardMoveTimeMap = HashMap<String, Long>()
-        private val lastOutwardMoveTimeMap = HashMap<String, Long>()
-        private val minDistInsideMap = HashMap<String, Double>()
-        private val maxDistApproachMap = HashMap<String, Double>()
-        private val startedOutsideMap = HashMap<String, Boolean>()
-        private val outsideSampleCountMap = HashMap<String, Int>()
-        private val insideSampleCountMap = HashMap<String, Int>()
-        private val exitAntiBounceUntilMap = HashMap<String, Long>()
-        private val exitOscillationCountMap = HashMap<String, Int>()
-        private val exitOutwardSampleCountMap = HashMap<String, Int>()
-        private val fivePctInsideSampleCountMap = HashMap<String, Int>()
-        private val wasInFivePctForExitMap = HashMap<String, Boolean>()
-        private val lastExitAlertEmittedTimeMap = HashMap<String, Long>()
-        private val lastSampleEvalTimeMap = HashMap<String, Long>()
-        private val lastSampleEvalDistMap = HashMap<String, Int>()
+        private val distanceHistoryMap = java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.CopyOnWriteArrayList<WeightedSample>>()
+        private val lastMoveRefDistMap = java.util.concurrent.ConcurrentHashMap<String, Double>()
+        private val lastInwardMoveTimeMap = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        private val lastOutwardMoveTimeMap = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        private val minDistInsideMap = java.util.concurrent.ConcurrentHashMap<String, Double>()
+        private val maxDistApproachMap = java.util.concurrent.ConcurrentHashMap<String, Double>()
+        private val startedOutsideMap = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        private val outsideSampleCountMap = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        private val insideSampleCountMap = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        private val exitAntiBounceUntilMap = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        private val exitOscillationCountMap = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        private val exitOutwardSampleCountMap = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        private val fivePctInsideSampleCountMap = java.util.concurrent.ConcurrentHashMap<String, Int>()
+        private val wasInFivePctForExitMap = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        private val lastExitAlertEmittedTimeMap = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        private val lastSampleEvalTimeMap = java.util.concurrent.ConcurrentHashMap<String, Long>()
+        private val lastSampleEvalDistMap = java.util.concurrent.ConcurrentHashMap<String, Int>()
         private val lastPhaseWakeTimestampMap = java.util.concurrent.ConcurrentHashMap<String, Long>()
         private val wokenAlertPhaseSet = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
@@ -10328,20 +10403,25 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             }
 
-            val list = distanceHistoryMap.getOrPut(itemId) { ArrayList() }
+            val list = distanceHistoryMap.getOrPut(itemId) { java.util.concurrent.CopyOnWriteArrayList() }
             if (list.isEmpty() || kotlin.math.abs(rawDistance - list.last().distance) >= 0.8) {
                 list.add(WeightedSample(rawDistance, weight))
                 while (list.size > 5) {
-                    list.removeAt(0)
+                    try {
+                        list.removeAt(0)
+                    } catch (e: Exception) {
+                        break
+                    }
                 }
             }
-            val smoothed = computeWeightedAvg(list)
-            if (list.size < 2) {
+            val snapshot = list.toList()
+            val smoothed = computeWeightedAvg(snapshot)
+            if (snapshot.size < 2) {
                 return Pair(smoothed, 0.0)
             }
-            val splitIdx = (list.size / 2).coerceAtLeast(1)
-            val olderAvg = computeWeightedAvg(list.subList(0, splitIdx))
-            val newerAvg = computeWeightedAvg(list.subList(splitIdx, list.size))
+            val splitIdx = (snapshot.size / 2).coerceAtLeast(1)
+            val olderAvg = computeWeightedAvg(snapshot.subList(0, splitIdx))
+            val newerAvg = computeWeightedAvg(snapshot.subList(splitIdx, snapshot.size))
             val delta = newerAvg - olderAvg
             if (delta <= -1.0) {
                 lastInwardMoveTimeMap[itemId] = nowMs
@@ -10719,7 +10799,8 @@ class YaadGeofenceService : Service(), LocationListener {
         fun acknowledgeGeofenceItemForCycle(
             context: Context,
             rawItemId: String,
-            notificationIdToCancel: Int = Int.MIN_VALUE
+            notificationIdToCancel: Int = Int.MIN_VALUE,
+            notifyWebView: Boolean = true
         ) {
             val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
             geofenceAudioMuted = false
@@ -10744,9 +10825,11 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
                 editor.apply()
 
-                LocalNotificationsPlugin.evaluateJsInWebView(
-                    "window.dispatchEvent(new CustomEvent('yaad:acknowledge-geofence-item', { detail: { itemId: '\$targetId' } }));"
-                )
+                if (notifyWebView) {
+                    LocalNotificationsPlugin.evaluateJsInWebView(
+                        "window.dispatchEvent(new CustomEvent('yaad:acknowledge-geofence-item', { detail: { itemId: '\$targetId' } }));"
+                    )
+                }
             } catch (e: Exception) {
             }
         }
@@ -10809,7 +10892,8 @@ class YaadGeofenceService : Service(), LocationListener {
             context: Context,
             rawItemId: String,
             durationMs: Long = 30 * 60_000L,
-            notificationIdToCancel: Int = Int.MIN_VALUE
+            notificationIdToCancel: Int = Int.MIN_VALUE,
+            notifyWebView: Boolean = true
         ) {
             val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
             geofenceAudioMuted = false
@@ -10837,9 +10921,11 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
                 editor.apply()
 
-                LocalNotificationsPlugin.evaluateJsInWebView(
-                    "window.dispatchEvent(new CustomEvent('yaad:snooze-geofence-item', { detail: { itemId: '\$targetId' } }));"
-                )
+                if (notifyWebView) {
+                    LocalNotificationsPlugin.evaluateJsInWebView(
+                        "window.dispatchEvent(new CustomEvent('yaad:snooze-geofence-item', { detail: { itemId: '\$targetId' } }));"
+                    )
+                }
             } catch (e: Exception) {
             }
         }
@@ -10976,11 +11062,18 @@ class YaadGeofenceService : Service(), LocationListener {
             }
         }
 
+        private val cachedSonarPcmMap = java.util.concurrent.ConcurrentHashMap<String, ShortArray>()
+        @Volatile
+        private var isSinglePingPlaying: Boolean = false
+
         private fun synthesizeSonarPingPcm(dist: Int, rad: Int, sampleRate: Int = 24000, mode: String = "enter"): ShortArray {
             val safeRad = rad.coerceAtLeast(1)
             val currentIntervalMs = computeSonarIntervalMs(dist, safeRad, mode)
             val is5Hz = currentIntervalMs <= 200L
             val isExitMode = mode == "exit" || mode == "both_exit"
+            val cacheKey = "\${isExitMode}_\${is5Hz}_\$sampleRate"
+            cachedSonarPcmMap[cacheKey]?.let { return it }
+
             val pingDurationSec = if (is5Hz) 0.14 else 0.44
             val numSamples = (sampleRate * pingDurationSec).toInt()
             val pcmBuffer = ShortArray(numSamples)
@@ -11012,11 +11105,16 @@ class YaadGeofenceService : Service(), LocationListener {
                 val combined = ((sig1 * env1) + sig2).coerceIn(-0.98, 0.98)
                 pcmBuffer[i] = (combined * Short.MAX_VALUE).toInt().toShort()
             }
+            cachedSonarPcmMap[cacheKey] = pcmBuffer
             return pcmBuffer
         }
 
         fun playSingleSubmarineSonarPing(distanceMeters: Int, radiusMeters: Int, mode: String = liveSonarMode) {
-            if (geofenceAudioMuted || sonarPausedByPhoneCall) return
+            if (geofenceAudioMuted || isSinglePingPlaying) return
+            if (sonarPausedByPhoneCall) {
+                sonarPausedByPhoneCall = false
+            }
+            isSinglePingPlaying = true
             Thread {
                 try {
                     if (geofenceAudioMuted || sonarPausedByPhoneCall) return@Thread
@@ -11024,6 +11122,8 @@ class YaadGeofenceService : Service(), LocationListener {
                     val pcm = synthesizeSonarPingPcm(distanceMeters, radiusMeters, sampleRate, mode)
                     playPcmBufferOnce(pcm, sampleRate)
                 } catch (e: Exception) {
+                } finally {
+                    isSinglePingPlaying = false
                 }
             }.apply {
                 isDaemon = true
@@ -11353,7 +11453,7 @@ class YaadGeofenceService : Service(), LocationListener {
 
         @android.webkit.JavascriptInterface
         fun acknowledgeGeofenceItem(itemId: String) {
-            acknowledgeGeofenceItemForCycle(appContext, itemId)
+            acknowledgeGeofenceItemForCycle(appContext, itemId, notifyWebView = false)
         }
 
         @android.webkit.JavascriptInterface
@@ -11383,7 +11483,7 @@ class YaadGeofenceService : Service(), LocationListener {
 
         @android.webkit.JavascriptInterface
         fun snoozeGeofenceItem(itemId: String, durationMs: Long) {
-            snoozeGeofenceItemForPassingThrough(appContext, itemId, durationMs)
+            snoozeGeofenceItemForPassingThrough(appContext, itemId, durationMs, notifyWebView = false)
         }
 
         @android.webkit.JavascriptInterface

@@ -341,11 +341,15 @@ export function resetGeofenceProximityState(itemId?: string): void {
  * Marks a geofence item as acknowledged by the user ("توقف") for the current stay,
  * ensuring the alert process and submarine sonar stop completely.
  */
-export function acknowledgeGeofenceAlert(itemId?: string): void {
+export function acknowledgeGeofenceAlert(
+  itemId?: string,
+  notifyNativeBridge: boolean = true
+): void {
   setSubmarineSonarMuted(false);
   if (itemId) {
     const cleanId = itemId.replace(/^(loc_|rem_)/, '');
     const now = Date.now();
+    pausedGeofenceItemsMap.delete(cleanId);
     proximityStateMap.set(`loc_${cleanId}`, true);
     proximityStateMap.set(`rem_${cleanId}`, true);
     proximityStateMap.set(`u10m_loc_${cleanId}`, true);
@@ -356,6 +360,7 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
     for (const key of [`loc_${cleanId}`, `rem_${cleanId}`]) {
       const st = getOrCreateRuntimeState(key, now);
       st.acknowledgedUntilExit = true;
+      st.enterAlertActive = false;
       st.enterCycleCompleted = true;
       st.exitCycleCompleted = true;
       st.sonarFinishedForCycle = true;
@@ -368,7 +373,7 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
     saveProximityStateToStorage();
   }
 
-  if (typeof window !== 'undefined') {
+  if (notifyNativeBridge && typeof window !== 'undefined') {
     try {
       const bridge = (window as any).YaadGeofenceBridge;
       if (bridge) {
@@ -393,7 +398,8 @@ export function acknowledgeGeofenceAlert(itemId?: string): void {
  */
 export function snoozeGeofenceAlertPassThrough(
   itemId?: string,
-  durationMs: number = GEOFENCE_PASS_THROUGH_SNOOZE_MS
+  durationMs: number = GEOFENCE_PASS_THROUGH_SNOOZE_MS,
+  notifyNativeBridge: boolean = true
 ): void {
   setSubmarineSonarMuted(false);
   const now = Date.now();
@@ -409,6 +415,7 @@ export function snoozeGeofenceAlertPassThrough(
     for (const key of [`loc_${cleanId}`, `rem_${cleanId}`]) {
       const st = getOrCreateRuntimeState(key, now);
       st.acknowledgedUntilExit = true;
+      st.enterAlertActive = false;
       st.sonarFinishedForCycle = true;
       st.cooldownUntilMs = now + safeDuration;
       st.visual10sStartMs = 0;
@@ -423,7 +430,7 @@ export function snoozeGeofenceAlertPassThrough(
     saveProximityStateToStorage();
   }
 
-  if (typeof window !== 'undefined') {
+  if (notifyNativeBridge && typeof window !== 'undefined') {
     try {
       const bridge = (window as any).YaadGeofenceBridge;
       if (bridge) {
@@ -738,14 +745,6 @@ function evaluateSingleItemScenario(params: {
       distance >= st.minDistanceReachedInside + directionConfirmMeters &&
       st.lastOutwardMoveMs > st.lastInwardMoveMs);
 
-  // True when user is moving toward the center (entering)
-  const isConfirmedEnteringDirection =
-    trend === 'inward' ||
-    (st.maxDistanceInApproach > 0 &&
-      distance <= st.maxDistanceInApproach - directionConfirmMeters &&
-      st.lastInwardMoveMs >= st.lastOutwardMoveMs) ||
-    (st.startedOutsideBoundary && distance <= safeRadius && !isConfirmedExitingDirection);
-
   // =========================================================================
   // SCENARIO 1: ENTER ONLY ('enter')
   // 1. Upon detecting movement toward the geofence and entering the radius (d <= R):
@@ -789,11 +788,13 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    // Latch Enter alert upon entering / being inside the geofence radius
-    if (!st.wasInsideBorder && distance <= safeRadius) {
-      st.wasInsideBorder = true;
+    // Latch Enter alert immediately upon entering / being inside the geofence radius
+    if (distance <= safeRadius) {
       st.enterAlertActive = true;
-      st.entryBannerStartMs = now;
+      if (!st.wasInsideBorder) {
+        st.wasInsideBorder = true;
+        st.entryBannerStartMs = now;
+      }
     }
 
     let entryToastMessage: string | undefined = undefined;
@@ -897,11 +898,7 @@ function evaluateSingleItemScenario(params: {
 
     // 1B. Inside geofence boundary outside the 5% central zone (centerZoneMeters < d <= R, or latched within deadband):
     // Once latched (`st.enterAlertActive`), NEVER drop out due to momentary outward GPS jitter!
-    if (
-      !st.sonarFinishedForCycle &&
-      (st.enterAlertActive ||
-        (distance <= safeRadius && (isConfirmedEnteringDirection || !isConfirmedExitingDirection)))
-    ) {
+    if (!st.sonarFinishedForCycle && (st.enterAlertActive || distance <= safeRadius)) {
       st.enterAlertActive = true;
 
       return {
@@ -1522,6 +1519,15 @@ export function shouldAcceptLocationUpdate(newPos: UserPosition): boolean {
     normalizedPos.latitude,
     normalizedPos.longitude
   );
+
+  if (
+    ageSinceLastMs < 35000 &&
+    lastAcceptedPosition.accuracy <= 28 &&
+    normalizedPos.accuracy > lastAcceptedPosition.accuracy + 12 &&
+    jumpMeters >= 25
+  ) {
+    return false;
+  }
 
   if (
     ageSinceLastMs < 45000 &&
