@@ -19,7 +19,6 @@ import {
   Edit2,
   X,
   Minus,
-  Maximize2,
   MapPin,
   Navigation,
   Volume2,
@@ -392,68 +391,61 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     <AnimatePresence>
       {activePrimary && isMinimized && (
         <motion.div
-          key="alarm-minimized-pill"
-          initial={{ y: 40, opacity: 0, scale: 0.94 }}
-          animate={{ y: 0, opacity: 1, scale: 1 }}
-          exit={{ y: 40, opacity: 0, scale: 0.94 }}
-          transition={{ type: 'spring', damping: 24, stiffness: 320 }}
-          className="fixed bottom-20 left-3 right-3 z-[105] max-w-md mx-auto select-none"
+          key="alarm-minimized-floating-btn"
+          drag
+          dragMomentum={false}
+          initial={{ scale: 0.5, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.5, opacity: 0 }}
+          whileTap={{ scale: 0.94 }}
+          transition={{ type: 'spring', damping: 22, stiffness: 340 }}
+          className="fixed bottom-24 right-4 z-[105] select-none touch-none"
           dir="ltr"
         >
-          <div
-            onClick={handleRestoreMinimized}
-            className="flex items-center justify-between gap-2.5 px-3.5 py-2.5 rounded-2xl border-2 border-[#FF8C00] bg-[#101222]/95 backdrop-blur-md shadow-[0_8px_30px_rgba(0,0,0,0.65)] cursor-pointer hover:bg-[#16192E] transition-all"
-          >
-            {/* Left: Complete Close (X) */}
+          <div className="relative pt-1.5 pl-1.5">
+            {/* Top-Left Corner Close Badge (X) */}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 handleDismiss();
               }}
-              className="w-8 h-8 rounded-xl bg-rose-500/20 hover:bg-rose-500/35 border border-rose-500/50 text-rose-200 flex items-center justify-center shrink-0 transition-all cursor-pointer active:scale-90"
+              className="absolute top-0 left-0 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border border-rose-200/90 text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
               title={isEn ? 'Close completely' : 'بستن کامل'}
+              aria-label={isEn ? 'Close completely' : 'بستن کامل'}
             >
-              <X className="w-4 h-4 stroke-[2.5]" />
+              <X className="w-3.5 h-3.5 stroke-[2.8]" />
             </button>
 
-            {/* Center: Reminder Title / Bundle Summary */}
-            <div
-              className="flex items-center gap-2.5 min-w-0 flex-1"
-              dir={isEn ? 'ltr' : 'rtl'}
-            >
-              <img
-                src={appIcon}
-                alt="YAAD"
-                className="w-8 h-8 rounded-xl object-contain shrink-0"
-                draggable={false}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs sm:text-sm font-black text-white truncate">
-                  {isBundledMode
-                    ? isEn
-                      ? `${bundledReminders.length} Simultaneous Reminders`
-                      : `${toPersianDigits(bundledReminders.length)} یادآور همزمان در انتظار`
-                    : activePrimary.title}
-                </p>
-                <p className="text-[11px] font-bold text-[#FF8C00] truncate">
-                  {isEn ? 'Tap to reopen full-screen alert' : 'برای باز کردن مجدد اعلان ضربه بزنید'}
-                </p>
-              </div>
-            </div>
-
-            {/* Right: Reopen / Maximize Button */}
+            {/* Draggable / Tappable Floating Button Body */}
             <button
               type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleRestoreMinimized();
-              }}
-              className="px-2.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/35 border border-emerald-400/60 text-emerald-200 text-xs font-black flex items-center gap-1 shrink-0 transition-all cursor-pointer active:scale-95"
-              title={isEn ? 'Reopen' : 'باز کردن مجدد'}
+              onClick={handleRestoreMinimized}
+              className="w-[74px] h-[78px] rounded-[24px] border-2 border-[#FF8C00] bg-gradient-to-b from-[#1F2442]/95 via-[#14172C]/95 to-[#0C0E1C]/95 backdrop-blur-md shadow-[0_10px_28px_rgba(0,0,0,0.75),0_0_20px_rgba(255,140,0,0.4)] flex flex-col items-center justify-between py-2 px-1.5 cursor-pointer hover:border-amber-400 transition-colors"
+              title={isEn ? 'Tap to reopen full-screen alert' : 'برای باز کردن اعلان تمام‌صفحه ضربه بزنید'}
             >
-              <Maximize2 className="w-3.5 h-3.5 stroke-[2.5]" />
-              <span>{isEn ? 'Open' : 'باز کردن'}</span>
+              <div className="relative flex items-center justify-center">
+                <span className="absolute -inset-1 rounded-full bg-[#FF8C00]/25 animate-ping" />
+                <img
+                  src={appIcon}
+                  alt="YAAD"
+                  className="relative w-9 h-9 rounded-xl object-contain"
+                  draggable={false}
+                />
+              </div>
+
+              <span
+                className="w-full rounded-lg bg-[#FF8C00]/25 border border-[#FF8C00]/60 px-1 py-0.5 text-[10px] font-black text-amber-200 truncate text-center leading-tight"
+                dir={isEn ? 'ltr' : 'rtl'}
+              >
+                {isBundledMode
+                  ? isEn
+                    ? `${bundledReminders.length} Alarms`
+                    : `${toPersianDigits(bundledReminders.length)} یادآور`
+                  : isEn
+                  ? 'Reminder'
+                  : 'یادآور'}
+              </span>
             </button>
           </div>
         </motion.div>

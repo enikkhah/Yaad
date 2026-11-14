@@ -727,6 +727,15 @@ const patchedImmediateNotify = `            if (!isSilentChannel) {
                     if (!LocalNotificationsPlugin.isAppInForeground(context)) {
                         YaadAlarmPopupActivity.launch(context, it, localNotification.source, wakeScreenOnce = true)
                     }
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try {
+                            buildNotification.fullScreenIntent = null
+                            buildNotification.category = androidx.core.app.NotificationCompat.CATEGORY_REMINDER
+                            buildNotification.flags = buildNotification.flags or Notification.FLAG_ONLY_ALERT_ONCE
+                            notificationManager.notify(it, buildNotification)
+                        } catch (e: Exception) {
+                        }
+                    }, 3_000L)
                 }
             }`;
 
@@ -1342,6 +1351,15 @@ class TimedNotificationPublisher : BroadcastReceiver() {
                     forceScreenOffDuration = wasScreenOffBeforeWake
                 )
             }
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    notification.fullScreenIntent = null
+                    notification.category = androidx.core.app.NotificationCompat.CATEGORY_REMINDER
+                    notification.flags = notification.flags or Notification.FLAG_ONLY_ALERT_ONCE
+                    notificationManager.notify(id, notification)
+                } catch (e: Exception) {
+                }
+            }, 3_000L)
         }
         if (!rescheduleNotificationIfNeeded(context, intent, id)) {
             storage.deleteNotification(id.toString())
@@ -4154,7 +4172,7 @@ const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_
 
         fun isAppInForeground(context: Context): Boolean {
             if (!isAppInForegroundState) return false
-            if (YaadAlarmPopupActivity.isShowingAnyPopup()) return false
+            if (YaadAlarmPopupActivity.isShowingAnyPopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) return false
             if (YaadGeofenceService.isScreenOffOrLockedStatic(context)) return false
             val instance = getLocalNotificationsInstance() ?: return false
             val act = instance.activity ?: return false
@@ -4242,7 +4260,7 @@ pluginContent = applyPatchOrVerify(
   'companion isAppInForeground, onAppTaskRemoved, evaluateJsInWebView, stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
   origCompanionFire,
   patchedCompanionFire,
-  'if (YaadAlarmPopupActivity.isShowingAnyPopup()) return false',
+  'if (YaadAlarmPopupActivity.isShowingAnyPopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) return false',
   [legacyCompanionFireV9, legacyCompanionFireV8, legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3, legacyCompanionFireV4, legacyCompanionFireV5, legacyCompanionFireV6, legacyCompanionFireV7]
 );
 
@@ -4269,6 +4287,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
 import android.os.Build
@@ -4283,6 +4302,7 @@ import android.telephony.TelephonyManager
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
@@ -4334,6 +4354,11 @@ class YaadAlarmPopupActivity : Activity() {
     private var isYieldingForPhoneCall: Boolean = false
     private var isPhoneStateReceiverRegistered: Boolean = false
     private var audioModeListenerObj: Any? = null
+    private var isMinimizedToFloatingBubble: Boolean = false
+    private var floatingBubbleX: Int = -1
+    private var floatingBubbleY: Int = -1
+    private var floatingBubbleDistanceTv: TextView? = null
+    private var lastBubbleRefloatTimeMs: Long = 0L
 
     private val releaseScreenKeepAwakeRunnable = Runnable {
         expireScreenKeepAwakeWindowOnly()
@@ -4856,6 +4881,50 @@ class YaadAlarmPopupActivity : Activity() {
         }
     }
 
+    override fun onStop() {
+        super.onStop()
+        if (
+            isMinimizedToFloatingBubble &&
+            !isFinishing &&
+            !isDestroyed &&
+            !isYieldingForPhoneCall &&
+            !LocalNotificationsPlugin.isAppInForeground(this)
+        ) {
+            val now = System.currentTimeMillis()
+            if (now - lastBubbleRefloatTimeMs >= 1_500L) {
+                lastBubbleRefloatTimeMs = now
+                uiHandler.postDelayed({
+                    try {
+                        if (
+                            isMinimizedToFloatingBubble &&
+                            !isFinishing &&
+                            !isDestroyed &&
+                            !isYieldingForPhoneCall &&
+                            !LocalNotificationsPlugin.isAppInForeground(this)
+                        ) {
+                            val refloatIntent = Intent(this, YaadAlarmPopupActivity::class.java).apply {
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                                    Intent.FLAG_ACTIVITY_NO_ANIMATION or
+                                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                                putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
+                                if (sourceJson != null) {
+                                    putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
+                                }
+                                putExtra("yaad_keep_minimized_bubble", true)
+                                putExtra("yaad_wake_screen_once", false)
+                            }
+                            attachTemporaryOverlayBridgeWindowIfPermitted(applicationContext)
+                            startActivity(refloatIntent)
+                            overridePendingTransition(0, 0)
+                        }
+                    } catch (e: Exception) {
+                    }
+                }, 320L)
+            }
+        }
+    }
+
     private fun registerCallInterceptionListeners() {
         if (!isPhoneStateReceiverRegistered) {
             try {
@@ -5298,6 +5367,24 @@ class YaadAlarmPopupActivity : Activity() {
             data.getLongExtra("yaad_keep_screen_on_duration_ms", SCREEN_ON_KEEP_AWAKE_MS)
                 .coerceAtLeast(SCREEN_ON_KEEP_AWAKE_MS)
         }
+
+        val forceExpand = data.getBooleanExtra("yaad_force_expand_popup", false)
+        if (forceExpand) {
+            isMinimizedToFloatingBubble = false
+            isMinimizedBubbleState = false
+        } else if (data.getBooleanExtra("yaad_keep_minimized_bubble", false)) {
+            isMinimizedToFloatingBubble = true
+            isMinimizedBubbleState = true
+        }
+
+        if (isMinimizedToFloatingBubble && !forceExpand) {
+            enterFloatingWindowMode()
+            buildFloatingBubbleUI(palette, initialDistance)
+            hasContentViewSet = true
+            return
+        }
+
+        restoreFullScreenWindowMode()
 
         if (isGeofencePopup) {
             countDownTimer?.cancel()
@@ -6234,14 +6321,7 @@ class YaadAlarmPopupActivity : Activity() {
                 overridePendingTransition(0, 0)
             },
             onMinimizeTemporarily = {
-                countDownTimer?.cancel()
-                releaseScreenWakeLock()
-                for ((itemNotifId, itemJson) in items) {
-                    dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "dismiss_popup_only")
-                }
-                activeBundledTimedReminders.clear()
-                finish()
-                overridePendingTransition(0, 0)
+                performMinimizeToFloatingButton()
             }
         )
         content.addView(bundledControlBar)
@@ -6589,7 +6669,7 @@ class YaadAlarmPopupActivity : Activity() {
                 performBackgroundAction("stop")
             },
             onMinimizeTemporarily = {
-                performBackgroundAction("dismiss_popup_only")
+                performMinimizeToFloatingButton()
             }
         )
         content.addView(minimalControlBar)
@@ -6842,15 +6922,242 @@ class YaadAlarmPopupActivity : Activity() {
     }
 
     private fun performMinimizeGeofencePopupAction() {
-        countDownTimer?.cancel()
+        performMinimizeToFloatingButton()
+    }
+
+    private fun performMinimizeToFloatingButton() {
         stopPulseAnimators()
-        releaseScreenWakeLock()
+        if (isGeofencePopup) {
+            try {
+                YaadGeofenceService.setGeofenceAudioMuteState(this, true)
+            } catch (e: Exception) {
+            }
+        } else {
+            muteReminderAudioOnly()
+        }
+        isMinimizedToFloatingBubble = true
+        isMinimizedBubbleState = true
+        val effectiveTheme = if (isGeofencePopup) {
+            if (isSub10mArrival) "geofence-sub10m" else "geofence-radar"
+        } else {
+            requestJson?.optJSONObject("extra")?.optString("theme", "dark-gold")?.takeIf { it.isNotEmpty() } ?: "dark-gold"
+        }
+        val palette = resolvePalette(effectiveTheme)
+        val curDist = requestJson?.optJSONObject("extra")?.optInt("distance", 0) ?: 0
+        enterFloatingWindowMode()
+        buildFloatingBubbleUI(palette, curDist)
+    }
+
+    private fun enterFloatingWindowMode() {
         try {
-            YaadGeofenceService.setGeofenceAudioMuteState(this, true)
+            if (floatingBubbleX < 0) {
+                floatingBubbleX = dp(16f)
+            }
+            if (floatingBubbleY < 0) {
+                floatingBubbleY = dp(110f)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                setShowWhenLocked(true)
+            }
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window.setDimAmount(0f)
+            @Suppress("DEPRECATION")
+            window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            )
+            val wlp = window.attributes
+            wlp.width = WindowManager.LayoutParams.WRAP_CONTENT
+            wlp.height = WindowManager.LayoutParams.WRAP_CONTENT
+            wlp.gravity = Gravity.BOTTOM or Gravity.START
+            wlp.x = floatingBubbleX
+            wlp.y = floatingBubbleY
+            wlp.dimAmount = 0f
+            window.attributes = wlp
         } catch (e: Exception) {
         }
-        finish()
-        overridePendingTransition(0, 0)
+    }
+
+    private fun restoreFullScreenWindowMode() {
+        try {
+            floatingBubbleDistanceTv = null
+            window.setDimAmount(0.82f)
+            @Suppress("DEPRECATION")
+            window.clearFlags(
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            )
+            @Suppress("DEPRECATION")
+            window.addFlags(
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                    WindowManager.LayoutParams.FLAG_DIM_BEHIND
+            )
+            val wlp = window.attributes
+            wlp.width = WindowManager.LayoutParams.MATCH_PARENT
+            wlp.height = WindowManager.LayoutParams.MATCH_PARENT
+            wlp.gravity = Gravity.CENTER
+            wlp.x = 0
+            wlp.y = 0
+            wlp.dimAmount = 0.82f
+            window.attributes = wlp
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun restoreFromFloatingButtonMode() {
+        isMinimizedToFloatingBubble = false
+        isMinimizedBubbleState = false
+        restoreFullScreenWindowMode()
+        intent?.removeExtra("yaad_keep_minimized_bubble")
+        intent?.putExtra("yaad_force_expand_popup", true)
+        intent?.putExtra("yaad_wake_screen_once", false)
+        bindFromIntent(intent)
+    }
+
+    private fun buildFloatingBubbleUI(palette: ThemePalette, initialDistance: Int) {
+        stopPulseAnimators()
+        distanceBadgeTextView = null
+        livePolarRadarView = null
+
+        val root = FrameLayout(this)
+        val totalW = dp(84f)
+        val totalH = dp(88f)
+        root.layoutParams = ViewGroup.LayoutParams(totalW, totalH)
+        root.setBackgroundColor(Color.TRANSPARENT)
+
+        val bubbleBtn = LinearLayout(this)
+        bubbleBtn.orientation = LinearLayout.VERTICAL
+        bubbleBtn.gravity = Gravity.CENTER
+        bubbleBtn.setPadding(dp(6f), dp(6f), dp(6f), dp(5f))
+        val bubbleBgColor = if (isGeofencePopup) Color.parseColor("#042621") else Color.parseColor("#14172C")
+        val bubbleBorderColor = if (isGeofencePopup) Color.parseColor("#10B981") else palette.accentColor
+        bubbleBtn.background = makeRoundedDrawable(bubbleBgColor, bubbleBorderColor, 2.2f, 22f)
+        bubbleBtn.elevation = dp(12f).toFloat()
+        val bubbleLp = FrameLayout.LayoutParams(dp(70f), dp(74f))
+        bubbleLp.gravity = Gravity.BOTTOM or Gravity.END
+        bubbleLp.setMargins(dp(6f), dp(8f), dp(4f), dp(4f))
+        bubbleBtn.layoutParams = bubbleLp
+
+        try {
+            val iconView = android.widget.ImageView(this)
+            val appDrawable = packageManager.getApplicationIcon(applicationInfo)
+            iconView.setImageDrawable(appDrawable)
+            iconView.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            val iconLp = LinearLayout.LayoutParams(dp(34f), dp(34f))
+            iconView.layoutParams = iconLp
+            bubbleBtn.addView(iconView)
+        } catch (e: Exception) {
+        }
+
+        val badgeTv = TextView(this)
+        badgeTv.text = if (isGeofencePopup) {
+            formatDistanceLabel(initialDistance, isSub10mArrival)
+        } else {
+            if (isPersian) "یادآور" else "Alert"
+        }
+        badgeTv.gravity = Gravity.CENTER
+        badgeTv.setTextColor(if (isGeofencePopup) Color.parseColor("#A7F3D0") else Color.parseColor("#FDE68A"))
+        badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+        badgeTv.setTypeface(Typeface.DEFAULT_BOLD)
+        badgeTv.setSingleLine(true)
+        badgeTv.ellipsize = TextUtils.TruncateAt.END
+        val badgeLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        badgeLp.topMargin = dp(3f)
+        badgeTv.layoutParams = badgeLp
+        bubbleBtn.addView(badgeTv)
+        floatingBubbleDistanceTv = badgeTv
+
+        var downRawX = 0f
+        var downRawY = 0f
+        var startWinX = 0
+        var startWinY = 0
+        var movedSignificantly = false
+        val touchSlopPx = dp(10f)
+
+        bubbleBtn.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    downRawX = event.rawX
+                    downRawY = event.rawY
+                    val wlp = window.attributes
+                    startWinX = wlp.x
+                    startWinY = wlp.y
+                    movedSignificantly = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - downRawX).toInt()
+                    val dy = (event.rawY - downRawY).toInt()
+                    if (kotlin.math.abs(dx) > touchSlopPx || kotlin.math.abs(dy) > touchSlopPx) {
+                        movedSignificantly = true
+                    }
+                    if (movedSignificantly) {
+                        try {
+                            val dm = resources.displayMetrics
+                            val maxX = (dm.widthPixels - dp(84f)).coerceAtLeast(0)
+                            val maxY = (dm.heightPixels - dp(120f)).coerceAtLeast(0)
+                            floatingBubbleX = (startWinX + dx).coerceIn(0, maxX)
+                            floatingBubbleY = (startWinY - dy).coerceIn(0, maxY)
+                            val wlp = window.attributes
+                            wlp.x = floatingBubbleX
+                            wlp.y = floatingBubbleY
+                            window.attributes = wlp
+                        } catch (e: Exception) {
+                        }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!movedSignificantly) {
+                        restoreFromFloatingButtonMode()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        root.addView(bubbleBtn)
+
+        val closeBadge = TextView(this)
+        closeBadge.text = "✕"
+        closeBadge.gravity = Gravity.CENTER
+        closeBadge.setTextColor(Color.WHITE)
+        closeBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        closeBadge.setTypeface(Typeface.DEFAULT_BOLD)
+        closeBadge.background = makeOvalDrawable(
+            Color.parseColor("#E11D48"),
+            Color.parseColor("#FDA4AF"),
+            1.2f
+        )
+        closeBadge.elevation = dp(14f).toFloat()
+        val closeLp = FrameLayout.LayoutParams(dp(24f), dp(24f))
+        closeLp.gravity = Gravity.TOP or Gravity.START
+        closeLp.setMargins(dp(2f), dp(2f), 0, 0)
+        closeBadge.layoutParams = closeLp
+        closeBadge.setOnClickListener {
+            isMinimizedToFloatingBubble = false
+            isMinimizedBubbleState = false
+            countDownTimer?.cancel()
+            stopPulseAnimators()
+            releaseScreenWakeLock()
+            if (isGeofencePopup) {
+                YaadGeofenceService.acknowledgeGeofenceItemForCycle(this, geofenceItemId, notificationId)
+                finish()
+                overridePendingTransition(0, 0)
+            } else {
+                performBackgroundAction("stop")
+            }
+        }
+        root.addView(closeBadge)
+
+        setContentView(root)
     }
 
     private fun buildActionButton(
@@ -7219,6 +7526,7 @@ class YaadAlarmPopupActivity : Activity() {
         releaseScreenWakeLock()
         if (activeInstance?.get() === this) {
             activeInstance = null
+            isMinimizedBubbleState = false
             if (!isYieldingForPhoneCall) {
                 activeBundledTimedReminders.clear()
             }
@@ -7235,6 +7543,8 @@ class YaadAlarmPopupActivity : Activity() {
         private var activeNotificationId: Int = Int.MIN_VALUE
         private val activeBundledTimedReminders = java.util.LinkedHashMap<Int, JSObject>()
         @Volatile
+        private var isMinimizedBubbleState: Boolean = false
+        @Volatile
         private var pendingAlarmClockTriggerAtMs: Long = 0L
         @Volatile
         private var pendingAlarmClockNotifId: Int = Int.MIN_VALUE
@@ -7242,6 +7552,10 @@ class YaadAlarmPopupActivity : Activity() {
         fun isShowingAnyPopup(): Boolean {
             val act = activeInstance?.get() ?: return false
             return !act.isFinishing && !act.isDestroyed
+        }
+
+        fun isMinimizedBubbleActive(): Boolean {
+            return isMinimizedBubbleState && isShowingAnyPopup()
         }
 
         fun isScreenCurrentlyInteractive(context: Context): Boolean {
@@ -7855,10 +8169,12 @@ class YaadAlarmPopupActivity : Activity() {
             act.runOnUiThread {
                 try {
                     if (!act.isFinishing && !act.isDestroyed) {
-                        act.distanceBadgeTextView?.text = act.formatDistanceLabel(
+                        val formattedDist = act.formatDistanceLabel(
                             distanceMeters,
                             sub10m || act.isSub10mArrival
                         )
+                        act.distanceBadgeTextView?.text = formattedDist
+                        act.floatingBubbleDistanceTv?.text = formattedDist
                         act.livePolarRadarView?.updateLiveState(
                             distanceMeters,
                             radiusMeters,
@@ -9717,6 +10033,7 @@ class YaadGeofenceService : Service(), LocationListener {
             val isSub10m = eventType == "arrived_under_10m"
             val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val alertChannelId = "yaad_channel_v7_geofence_lockscreen"
+            val shadeChannelId = "yaad_channel_v7_geofence_shade"
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 if (nm.getNotificationChannel(alertChannelId) == null) {
                     val ch = NotificationChannel(
@@ -9731,6 +10048,19 @@ class YaadGeofenceService : Service(), LocationListener {
                         setSound(null, null)
                     }
                     nm.createNotificationChannel(ch)
+                }
+                if (nm.getNotificationChannel(shadeChannelId) == null) {
+                    val shadeCh = NotificationChannel(
+                        shadeChannelId,
+                        "YAAD Geofence Active List",
+                        NotificationManager.IMPORTANCE_LOW
+                    ).apply {
+                        this.description = "Active geofence notifications in the notification drawer after 3s heads-up"
+                        enableVibration(false)
+                        lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                        setSound(null, null)
+                    }
+                    nm.createNotificationChannel(shadeCh)
                 }
             }
 
@@ -9774,7 +10104,7 @@ class YaadGeofenceService : Service(), LocationListener {
 
             val shouldLaunchFullScreenPopup = isTopPriority && (
                 isFirstWakeForPhase ||
-                    (!popupAlreadyShowing && nowWakeMs - lastOutOfAppPopupLaunchAttemptMs >= 6_000L)
+                    (!popupAlreadyShowing && !YaadAlarmPopupActivity.isMinimizedBubbleActive() && nowWakeMs - lastOutOfAppPopupLaunchAttemptMs >= 6_000L)
             )
 
             if (shouldLaunchFullScreenPopup && wasScreenOffBeforeWake) {
@@ -9864,6 +10194,8 @@ class YaadGeofenceService : Service(), LocationListener {
         keepScreenOnDurationMs: Long = YaadAlarmPopupActivity.SCREEN_ON_KEEP_AWAKE_MS
     ): String {
         val alertChannelId = "yaad_channel_v7_geofence_lockscreen"
+        val shadeChannelId = "yaad_channel_v7_geofence_shade"
+        val targetChannelId = if (showFullScreen) alertChannelId else shadeChannelId
 
         val extraJson = JSObject().apply {
             put("geofence", true)
@@ -9996,18 +10328,18 @@ class YaadGeofenceService : Service(), LocationListener {
         val distFormatted = if (isEn) "\${distance}m" else "\${toPersianDigits(distance.toString())} متر"
         val headerTitle = if (notifTitle.contains("•")) notifTitle else "\$notifTitle  •  \$distFormatted"
 
-        val builder = NotificationCompat.Builder(this, alertChannelId)
+        val builder = NotificationCompat.Builder(this, targetChannelId)
             .setSmallIcon(smallIconRes)
             .setContentTitle(headerTitle)
             .setContentText(notifBody)
             .setStyle(NotificationCompat.BigTextStyle().bigText(notifBody).setBigContentTitle(headerTitle))
             .setColor(if (visualOnlyBanner || isSub10m) 0xFF059669.toInt() else 0xFF04231F.toInt())
             .setColorized(true)
-            .setPriority(NotificationCompat.PRIORITY_MAX)
-            .setCategory(NotificationCompat.CATEGORY_ALARM)
+            .setPriority(if (showFullScreen) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_LOW)
+            .setCategory(if (showFullScreen) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
             .setOngoing(!visualOnlyBanner)
-            .setOnlyAlertOnce(isLiveUpdate && !showFullScreen)
+            .setOnlyAlertOnce(!showFullScreen)
             .setAutoCancel(false)
             .setGroup(GEOFENCE_MULTI_GROUP_KEY)
             .setDeleteIntent(snoozePi)
@@ -10028,11 +10360,8 @@ class YaadGeofenceService : Service(), LocationListener {
                 directionsPi
             )
 
-        // Do NOT call builder.setTimeoutAfter(20_000L) so the notification and full-screen alert stay active until user reaction!
-        if (!isLiveUpdate || showFullScreen) {
-            builder.setVibrate(longArrayOf(0, 450, 180, 450))
-        }
         if (showFullScreen) {
+            builder.setVibrate(longArrayOf(0, 450, 180, 450))
             builder.setFullScreenIntent(fullScreenPi, true)
         }
 
@@ -10040,8 +10369,6 @@ class YaadGeofenceService : Service(), LocationListener {
         if (showFullScreen) {
             lastFullScreenNotificationPostMs = now
             lastLiveStatusBarUpdatePostMs = now
-            // Only cancel before re-posting if the full-screen popup is NOT already visible,
-            // so an active popup/notification never flickers!
             if (!YaadAlarmPopupActivity.isShowingGeofencePopup()) {
                 try {
                     nmCompat.cancel(notificationId)
@@ -10049,18 +10376,49 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             }
             nmCompat.notify(notificationId, builder.build())
-        } else if (!isLiveUpdate || now - lastLiveStatusBarUpdatePostMs >= 3500L) {
+            // Collapse the heads-up peek banner after ~3 seconds and move the notification quietly into the notification shade list!
+            mainHandler.postDelayed({
+                try {
+                    if (activeGeofenceNotificationId == notificationId && activeGeofenceItemId == id) {
+                        val latestDist = if (lastNotifiedStatusBarDistance > 0) lastNotifiedStatusBarDistance else distance
+                        buildAndPostStatusBarNotification(
+                            notificationId = notificationId,
+                            id = id,
+                            notifTitle = notifTitle,
+                            notifBody = notifBody,
+                            isSub10m = isSub10m,
+                            distance = latestDist,
+                            radius = radius,
+                            targetLat = targetLat,
+                            targetLon = targetLon,
+                            bearingDeg = activeGeofenceBearingDeg,
+                            sonarMode = activeGeofenceSonarMode,
+                            isEn = isEn,
+                            isLiveUpdate = true,
+                            showFullScreen = false,
+                            postToStatusBar = true,
+                            visualOnlyBanner = visualOnlyBanner,
+                            visualBannerText = visualBannerText,
+                            multiCardsJson = multiCardsJson,
+                            wasScreenOff = false,
+                            keepScreenOnDurationMs = keepScreenOnDurationMs
+                        )
+                    }
+                } catch (e: Exception) {
+                }
+            }, 3_000L)
+        } else if (!isLiveUpdate || now - lastLiveStatusBarUpdatePostMs >= 2_800L) {
             lastLiveStatusBarUpdatePostMs = now
             nmCompat.notify(notificationId, builder.build())
         }
 
         if (multiCardsJson.isNotEmpty()) {
             val summaryTitle = if (isEn) "Active Geofence Alerts" else "اعلان‌های حصار مکانی"
-            val summaryNotif = NotificationCompat.Builder(this, alertChannelId)
+            val summaryNotif = NotificationCompat.Builder(this, shadeChannelId)
                 .setSmallIcon(smallIconRes)
                 .setContentTitle(summaryTitle)
                 .setStyle(NotificationCompat.InboxStyle().setSummaryText(summaryTitle))
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setGroup(GEOFENCE_MULTI_GROUP_KEY)
                 .setGroupSummary(true)
                 .setAutoCancel(true)
