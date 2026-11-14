@@ -637,6 +637,7 @@ if (typeof window !== 'undefined') {
 }
 
 export const setSubmarineSonarMuted = (muted: boolean): void => {
+  if (isSonarMuted === muted && !muted) return;
   isSonarMuted = muted;
   if (muted) {
     wasSonarActiveBeforePhoneCall = false;
@@ -644,8 +645,8 @@ export const setSubmarineSonarMuted = (muted: boolean): void => {
     if (typeof window !== 'undefined') {
       try {
         const bridge = (window as any).YaadGeofenceBridge;
-        if (bridge && typeof bridge.stopGeofenceAlertAudio === 'function') {
-          bridge.stopGeofenceAlertAudio();
+        if (bridge && typeof bridge.setGeofenceAudioMuted === 'function') {
+          bridge.setGeofenceAudioMuted('', true);
         }
       } catch {
         // ignore
@@ -656,7 +657,7 @@ export const setSubmarineSonarMuted = (muted: boolean): void => {
 
 /**
  * Computes the physical 5% zone threshold with a 15m minimum (capped at 35% of radius for very small geofences)
- * so normal 5-12m GPS jitter never skips the central 5% target zone or the 5% pre-entry band.
+ * so normal 5-12m GPS jitter never skips the central 5% target zone.
  */
 export const computeFivePercentZoneMeters = (radiusMeters: number = 200): number => {
   const safeRadius = Math.max(20, radiusMeters || 200);
@@ -664,7 +665,7 @@ export const computeFivePercentZoneMeters = (radiusMeters: number = 200): number
 };
 
 /**
- * Calculates the delay (ms) between submarine sonar pings and pulse beats across all 3 scenarios:
+ * Calculates the delay (ms) between submarine sonar pings and pulse beats across Enter and Exit scenarios:
  * - No gradual step-up/step-down:
  *   - Standard sonar rhythm: 10 times per minute = 6000 ms (every 6 seconds).
  *   - Distinct rapid target rhythm: 5 Hz = 200 ms (5 times per second for 10 seconds):
@@ -691,7 +692,7 @@ export const computeSubmarineSonarIntervalMs = (
   if (clampedDist <= fivePctMeters) {
     return 200; // 5 Hz rapid enter sonar for 10s in the central 5% zone
   }
-  return 6000; // 10 times per minute (every 6 seconds) from 105% R down to 5% R
+  return 6000; // 10 times per minute (every 6 seconds) from 100% R down to 5% R
 };
 
 /**
@@ -777,7 +778,7 @@ export const playSubmarineSonarPing = (
         playSoftTone(ctx, pingFreq * 1.5, now, 0.004, 0.06, 'sine', 0.12, vol);
         playSoftTone(ctx, pingFreq * 0.995, now + 0.055, 0.005, 0.08, 'sine', 0.15, vol);
       } else {
-        // Standard 10/min (every 6s) Submarine Ping from 105% R to 5% R
+        // Standard 10/min (every 6s) Submarine Ping from 100% R down to 5% R
         playSoftTone(ctx, pingFreq, now, 0.006, 0.42, 'sine', 0.36, vol);
         playSoftTone(ctx, pingFreq * 1.5, now, 0.008, 0.18, 'sine', 0.12, vol);
         playSoftTone(ctx, pingFreq * 0.995, now + 0.13, 0.012, 0.48, 'sine', 0.15, vol);
@@ -787,6 +788,8 @@ export const playSubmarineSonarPing = (
     // Ignore audio context errors
   }
 };
+
+let currentScheduledIntervalMs = 6000;
 
 const runSonarTick = () => {
   if (!isSonarActive || isSonarMuted) return;
@@ -802,6 +805,7 @@ const runSonarTick = () => {
     currentSonarRadius,
     currentSonarMode
   );
+  currentScheduledIntervalMs = nextInterval;
   if (getGlobalVibration() && typeof navigator !== 'undefined' && 'vibrate' in navigator) {
     try {
       navigator.vibrate(nextInterval <= 200 ? 40 : 80);
@@ -848,6 +852,7 @@ export const updateSubmarineSonarDistance = (
     stopSubmarineSonarLoop();
     return;
   }
+  const prevMode = currentSonarMode;
   currentSonarDistance = distanceMeters;
   if (radiusMeters && radiusMeters > 0) {
     currentSonarRadius = radiusMeters;
@@ -872,15 +877,24 @@ export const updateSubmarineSonarDistance = (
   );
   const elapsed = Date.now() - lastSonarPingTime;
 
-  if (sonarLoopTimeoutId !== null) {
-    clearTimeout(sonarLoopTimeoutId);
-    sonarLoopTimeoutId = null;
-  }
-
-  if (elapsed >= newInterval) {
-    runSonarTick();
-  } else {
-    sonarLoopTimeoutId = window.setTimeout(runSonarTick, Math.max(20, newInterval - elapsed));
+  // Only interrupt and reschedule the timer if the rhythm changed (6000ms <-> 200ms), mode changed,
+  // or if the scheduled interval has already elapsed.
+  if (
+    newInterval !== currentScheduledIntervalMs ||
+    prevMode !== currentSonarMode ||
+    elapsed >= newInterval ||
+    sonarLoopTimeoutId === null
+  ) {
+    if (sonarLoopTimeoutId !== null) {
+      clearTimeout(sonarLoopTimeoutId);
+      sonarLoopTimeoutId = null;
+    }
+    currentScheduledIntervalMs = newInterval;
+    if (elapsed >= newInterval) {
+      runSonarTick();
+    } else {
+      sonarLoopTimeoutId = window.setTimeout(runSonarTick, Math.max(20, newInterval - elapsed));
+    }
   }
 };
 

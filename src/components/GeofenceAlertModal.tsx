@@ -10,8 +10,6 @@ import {
   GeofenceScenarioPhase,
   openGoogleMapsDirections,
   pauseGeofenceAlertTemporarily,
-  saveLastKnownPosition,
-  shouldAcceptLocationUpdate,
   snoozeGeofenceAlertPassThrough,
   toggleGeofenceAlertMute,
 } from '../utils/geofenceManager';
@@ -80,14 +78,17 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     if (rawList.length === 0) return [];
 
     const enriched = rawList.map((item) => {
-      const liveDist = liveUserPos
-        ? calculateHaversineDistance(
-            liveUserPos.latitude,
-            liveUserPos.longitude,
-            item.latitude,
-            item.longitude
-          )
-        : item.initialDistance;
+      const liveDist =
+        typeof item.initialDistance === 'number' && Number.isFinite(item.initialDistance)
+          ? item.initialDistance
+          : liveUserPos
+          ? calculateHaversineDistance(
+              liveUserPos.latitude,
+              liveUserPos.longitude,
+              item.latitude,
+              item.longitude
+            )
+          : 0;
       const safeRad = Math.max(20, item.radius || 200);
       const triggerOn = item.triggerOn || (item.triggerType === 'exit' ? 'exit' : 'enter');
       const computedTargetDist =
@@ -132,42 +133,6 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   const topPriorityAlert = sortedAlerts[0] || null;
   const isMultiMode = sortedAlerts.length > 1;
 
-  // Drive submarine sonar audio strictly from the #1 priority alert (when not muted and not in visual-only phase)
-  useEffect(() => {
-    if (!topPriorityAlert) {
-      stopSubmarineSonarLoop();
-      return;
-    }
-
-    const muted = Boolean(topPriorityAlert.isAudioMuted);
-    setSubmarineSonarMuted(muted);
-
-    if (
-      topPriorityAlert.isVisualOnly ||
-      topPriorityAlert.playAudio === false ||
-      muted
-    ) {
-      stopSubmarineSonarLoop();
-      return;
-    }
-
-    const mode: SonarScenarioMode = topPriorityAlert.sonarMode || 'enter';
-    updateSubmarineSonarDistance(
-      topPriorityAlert.initialDistance,
-      topPriorityAlert.radius || 200,
-      mode
-    );
-  }, [
-    topPriorityAlert?.id,
-    topPriorityAlert?.targetId,
-    topPriorityAlert?.initialDistance,
-    topPriorityAlert?.radius,
-    topPriorityAlert?.isVisualOnly,
-    topPriorityAlert?.playAudio,
-    topPriorityAlert?.isAudioMuted,
-    topPriorityAlert?.sonarMode,
-  ]);
-
   // Listen to submarine sonar ping events to keep the pulse animation in exact lockstep with each sonar ping
   useEffect(() => {
     if (sortedAlerts.length === 0 || typeof window === 'undefined') return;
@@ -177,48 +142,6 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     window.addEventListener('yaad:sonar-ping', handleSonarPing);
     return () => {
       window.removeEventListener('yaad:sonar-ping', handleSonarPing);
-    };
-  }, [sortedAlerts.length]);
-
-  // Stabilized high-accuracy GPS watcher while GeofenceAlertModal is open
-  useEffect(() => {
-    if (sortedAlerts.length === 0) return;
-    if (typeof navigator === 'undefined' || !navigator.geolocation) return;
-
-    let watchId: number | null = null;
-    try {
-      watchId = navigator.geolocation.watchPosition(
-        (pos) => {
-          const candidatePos = {
-            latitude: pos.coords.latitude,
-            longitude: pos.coords.longitude,
-            accuracy: pos.coords.accuracy || 10,
-            timestamp: pos.timestamp || Date.now(),
-          };
-          if (!shouldAcceptLocationUpdate(candidatePos)) {
-            return;
-          }
-          saveLastKnownPosition(candidatePos);
-          setLiveUserPos({
-            latitude: candidatePos.latitude,
-            longitude: candidatePos.longitude,
-          });
-        },
-        () => {},
-        { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
-      );
-    } catch {
-      // ignore
-    }
-
-    return () => {
-      if (watchId !== null) {
-        try {
-          navigator.geolocation.clearWatch(watchId);
-        } catch {
-          // ignore
-        }
-      }
     };
   }, [sortedAlerts.length]);
 
@@ -327,20 +250,35 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   };
 
   const getConciseStatusText = (item: GeofenceAlertData): string => {
-    if (item.visualBannerMessage) {
-      return item.visualBannerMessage;
-    }
     const phase: GeofenceScenarioPhase | undefined = item.scenarioPhase;
+    const remSec =
+      typeof item.phaseRemainingSeconds === 'number' && item.phaseRemainingSeconds > 0
+        ? isEn
+          ? ` (${item.phaseRemainingSeconds}s)`
+          : ` (${toPersianDigits(item.phaseRemainingSeconds)} ثانیه)`
+        : '';
+
+    if (item.visualBannerMessage) {
+      return `${item.visualBannerMessage}${remSec}`;
+    }
     if (phase === 'enter_center_5hz' || phase === 'enter_center_visual_10s') {
-      return isEn ? `At center of «${item.locationTitle}»` : `در مرکز حصار مکانی «${item.locationTitle}»`;
+      return isEn
+        ? `Arrived at central zone of «${item.locationTitle}»${remSec}`
+        : `رسیدن به ناحیه مرکزی «${item.locationTitle}»${remSec}`;
     }
     if (phase === 'exit_border_5hz' || phase === 'exit_crossed_visual_10s') {
-      return isEn ? `Exited «${item.locationTitle}»` : `خروج از حصار مکانی «${item.locationTitle}»`;
+      return isEn
+        ? `Exited geofence «${item.locationTitle}»${remSec}`
+        : `خارج شدن از حصار مکانی «${item.locationTitle}»${remSec}`;
     }
     if (phase === 'exit_moving_out' || item.triggerType === 'exit' || item.triggerOn === 'exit') {
-      return isEn ? `Exiting «${item.locationTitle}»` : `در حال خروج از حصار مکانی «${item.locationTitle}»`;
+      return isEn
+        ? `Exiting «${item.locationTitle}»`
+        : `در حال خروج از حصار مکانی «${item.locationTitle}»`;
     }
-    return isEn ? `Entered «${item.locationTitle}»` : `ورود به حصار مکانی «${item.locationTitle}»`;
+    return isEn
+      ? `Entered «${item.locationTitle}»`
+      : `ورود به حصار مکانی «${item.locationTitle}»`;
   };
 
   if (sortedAlerts.length === 0) return null;

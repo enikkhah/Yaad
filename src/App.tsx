@@ -2028,6 +2028,13 @@ export default function App() {
     return hasLocFence || hasRemFence;
   }, [savedLocations, reminders]);
 
+  const currentUserPositionRef = useRef<UserPosition | null>(currentUserPosition);
+  useEffect(() => {
+    currentUserPositionRef.current = currentUserPosition;
+  }, [currentUserPosition]);
+
+  const hadActiveSonarRef = useRef<boolean>(false);
+
   const evaluateUserPositionAgainstAllGeofences = useCallback(
     (userPos: UserPosition, bypassStabilizer: boolean = false) => {
       if (!bypassStabilizer && !shouldAcceptLocationUpdate(userPos)) {
@@ -2038,6 +2045,7 @@ export default function App() {
       const curSavedLocations = savedLocationsRef.current;
       const curLang = settingsRef.current.language || 'fa';
 
+      currentUserPositionRef.current = userPos;
       setCurrentUserPosition(userPos);
       saveLastKnownPosition(userPos);
 
@@ -2052,7 +2060,10 @@ export default function App() {
       setActiveGeofenceAlerts(evaluatedAlerts);
 
       if (evaluatedAlerts.length === 0) {
-        stopSubmarineSonarLoop();
+        if (hadActiveSonarRef.current) {
+          hadActiveSonarRef.current = false;
+          stopSubmarineSonarLoop();
+        }
         return;
       }
 
@@ -2060,12 +2071,14 @@ export default function App() {
       const topPriority = evaluatedAlerts[0];
       setSubmarineSonarMuted(Boolean(topPriority.isAudioMuted));
       if (!topPriority.isVisualOnly && topPriority.playAudio !== false && !topPriority.isAudioMuted) {
+        hadActiveSonarRef.current = true;
         updateSubmarineSonarDistance(
           topPriority.initialDistance,
           topPriority.radius || 200,
           topPriority.sonarMode || 'enter'
         );
-      } else {
+      } else if (hadActiveSonarRef.current) {
+        hadActiveSonarRef.current = false;
         stopSubmarineSonarLoop();
       }
     },
@@ -2077,20 +2090,20 @@ export default function App() {
     if (!isFormOpen && !isLocationModalOpen) {
       const resumed = resumeGeofenceAlertFromPause(undefined, 'edit');
       if (resumed && isGeofenceActive) {
-        const pos = currentUserPosition || getLastKnownPosition();
+        const pos = currentUserPositionRef.current || getLastKnownPosition();
         if (pos) {
           evaluateUserPositionAgainstAllGeofences(pos, true);
         }
       }
     }
-  }, [isFormOpen, isLocationModalOpen, isGeofenceActive, currentUserPosition, evaluateUserPositionAgainstAllGeofences]);
+  }, [isFormOpen, isLocationModalOpen, isGeofenceActive, evaluateUserPositionAgainstAllGeofences]);
 
   useEffect(() => {
     const handleReturnFromDirections = () => {
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const resumed = resumeGeofenceAlertFromPause(undefined, 'directions');
       if (resumed && isGeofenceActive) {
-        const pos = currentUserPosition || getLastKnownPosition();
+        const pos = currentUserPositionRef.current || getLastKnownPosition();
         if (pos) {
           evaluateUserPositionAgainstAllGeofences(pos, true);
         }
@@ -2102,13 +2115,13 @@ export default function App() {
       window.removeEventListener('focus', handleReturnFromDirections);
       document.removeEventListener('visibilitychange', handleReturnFromDirections);
     };
-  }, [isGeofenceActive, currentUserPosition, evaluateUserPositionAgainstAllGeofences]);
+  }, [isGeofenceActive, evaluateUserPositionAgainstAllGeofences]);
 
-  // 1-second live scenario ticker while geofence radar or any 10-second timer (5Hz or visual-only banner) is active
+  // 500ms live scenario ticker while geofence radar or any 10s/30s scenario timer is active
   useEffect(() => {
     if (!isGeofenceActive && activeGeofenceAlerts.length === 0) return;
     const tickInterval = setInterval(() => {
-      const pos = currentUserPosition || getLastKnownPosition();
+      const pos = currentUserPositionRef.current || getLastKnownPosition();
       if (!pos) return;
       const evaluated = evaluateAllActiveGeofenceScenarios(
         pos,
@@ -2119,31 +2132,36 @@ export default function App() {
       );
       setActiveGeofenceAlerts(evaluated);
       if (evaluated.length === 0) {
-        stopSubmarineSonarLoop();
+        if (hadActiveSonarRef.current) {
+          hadActiveSonarRef.current = false;
+          stopSubmarineSonarLoop();
+        }
       } else {
         const topPriority = evaluated[0];
         setSubmarineSonarMuted(Boolean(topPriority.isAudioMuted));
         if (!topPriority.isVisualOnly && topPriority.playAudio !== false && !topPriority.isAudioMuted) {
+          hadActiveSonarRef.current = true;
           updateSubmarineSonarDistance(
             topPriority.initialDistance,
             topPriority.radius || 200,
             topPriority.sonarMode || 'enter'
           );
-        } else {
+        } else if (hadActiveSonarRef.current) {
+          hadActiveSonarRef.current = false;
           stopSubmarineSonarLoop();
         }
       }
     }, 500);
     return () => clearInterval(tickInterval);
-  }, [isGeofenceActive, activeGeofenceAlerts.length, currentUserPosition]);
+  }, [isGeofenceActive, activeGeofenceAlerts.length > 0]);
 
   // Whenever reminders or savedLocations are added/edited/toggled while geofence radar is active,
   // immediately re-evaluate against the latest known GPS position so entering/being inside a geofence triggers without delay!
   useEffect(() => {
     if (!isGeofenceActive || !hasActiveGeofences) return;
-    const pos = currentUserPosition || getLastKnownPosition();
-    if (pos && Date.now() - pos.timestamp <= 5 * 60 * 1000) {
-      evaluateUserPositionAgainstAllGeofences(pos);
+    const pos = currentUserPositionRef.current || getLastKnownPosition();
+    if (pos) {
+      evaluateUserPositionAgainstAllGeofences(pos, true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reminders, savedLocations, isGeofenceActive, hasActiveGeofences]);
@@ -2505,39 +2523,8 @@ export default function App() {
       );
 
       // Apply changes immediately to any active geofence alert or re-evaluate against current position
-      const latestPos = currentUserPosition || getLastKnownPosition();
-      setActiveGeofenceAlert((prevAlert) => {
-        if (!prevAlert || prevAlert.targetId !== editingReminder.id) return prevAlert;
-        if (!updatedReminder.geofence?.enabled) {
-          stopSubmarineSonarLoop();
-          return null;
-        }
-        const newDist = latestPos
-          ? calculateHaversineDistance(
-              latestPos.latitude,
-              latestPos.longitude,
-              updatedReminder.geofence.latitude,
-              updatedReminder.geofence.longitude
-            )
-          : prevAlert.initialDistance;
-        const newRadius = updatedReminder.geofence.radius || 200;
-        if (newDist > newRadius) {
-          stopSubmarineSonarLoop();
-          return null;
-        }
-        updateSubmarineSonarDistance(newDist, newRadius);
-        return {
-          ...prevAlert,
-          locationTitle: updatedReminder.geofence.locationName || updatedReminder.title,
-          description: updatedReminder.description || updatedReminder.title,
-          radius: newRadius,
-          latitude: updatedReminder.geofence.latitude,
-          longitude: updatedReminder.geofence.longitude,
-          initialDistance: newDist,
-        };
-      });
-
-      if (latestPos && updatedReminder.geofence?.enabled) {
+      const latestPos = currentUserPositionRef.current || getLastKnownPosition();
+      if (latestPos) {
         setTimeout(() => {
           evaluateUserPositionAgainstAllGeofences(latestPos, true);
         }, 30);
@@ -2572,7 +2559,7 @@ export default function App() {
           savedLocationsRef.current,
           settings.language
         );
-        const latestPos = currentUserPosition || getLastKnownPosition();
+        const latestPos = currentUserPositionRef.current || getLastKnownPosition();
         if (latestPos) {
           setTimeout(() => {
             evaluateUserPositionAgainstAllGeofences(latestPos, true);
@@ -2708,43 +2695,8 @@ export default function App() {
       );
 
       // Immediately propagate changes to the active geofence alert and re-evaluate against latest position
-      const latestPos = currentUserPosition || getLastKnownPosition();
-      setActiveGeofenceAlert((prevAlert) => {
-        if (!prevAlert || prevAlert.targetId !== editedId) return prevAlert;
-        if (!updatedLoc.geofence?.enabled) {
-          stopSubmarineSonarLoop();
-          return null;
-        }
-        const newDist = latestPos
-          ? calculateHaversineDistance(
-              latestPos.latitude,
-              latestPos.longitude,
-              updatedLoc.latitude,
-              updatedLoc.longitude
-            )
-          : prevAlert.initialDistance;
-        const newRadius = updatedLoc.geofence.radius || 200;
-        if (newDist > newRadius) {
-          stopSubmarineSonarLoop();
-          return null;
-        }
-        updateSubmarineSonarDistance(newDist, newRadius);
-        const displayLocTitle = formatSavedLocationTitle(updatedLoc.title, settings.language);
-        const locDetails = [updatedLoc.description, updatedLoc.geofence?.customMessage]
-          .filter(Boolean)
-          .join(' — ');
-        return {
-          ...prevAlert,
-          locationTitle: displayLocTitle,
-          description: locDetails || undefined,
-          radius: newRadius,
-          latitude: updatedLoc.latitude,
-          longitude: updatedLoc.longitude,
-          initialDistance: newDist,
-        };
-      });
-
-      if (latestPos && updatedLoc.geofence?.enabled) {
+      const latestPos = currentUserPositionRef.current || getLastKnownPosition();
+      if (latestPos) {
         setTimeout(() => {
           evaluateUserPositionAgainstAllGeofences(latestPos, true);
         }, 30);

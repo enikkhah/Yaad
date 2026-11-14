@@ -192,11 +192,7 @@ export function recordAndAnalyzeDistanceTrend(
     }
   }
 
-  if (
-    !lastSample ||
-    nowMs - lastSample.timestamp >= 450 ||
-    Math.abs(distanceMeters - lastSample.distance) >= 1
-  ) {
+  if (!lastSample || Math.abs(distanceMeters - lastSample.distance) >= 0.8) {
     st.samples.push({
       distance: distanceMeters,
       accuracy: safeAcc,
@@ -664,7 +660,6 @@ function evaluateSingleItemScenario(params: {
   // Physical 5% zone width: max(5% R, 15m) (capped at 35% R for very small radii)
   const fivePctMeters = computeFivePercentZoneMeters(safeRadius);
   const centerZoneMeters = fivePctMeters;
-  const preEntryStartMeters = safeRadius + fivePctMeters;
 
   // Fuzzy boundary hysteresis margin + Anti-Ping-Pong deadband (max(12m..30m, 15% of radius, capped at 80m))
   const fuzzyHysteresisMeters = Math.max(
@@ -676,12 +671,30 @@ function evaluateSingleItemScenario(params: {
     Math.min(80, Math.round(safeRadius * 0.15))
   );
 
+  // Only increment sample counters when a genuinely new GPS fix or >=900ms tick arrives
+  // so 500ms UI countdown ticks never artificially inflate consecutive sample counts
+  const isDistinctEvalTick =
+    triggerOn === 'exit'
+      ? true
+      : Number.isNaN(st.lastEvaluatedDistanceMeters) ||
+        Math.abs(rawDistance - st.lastEvaluatedDistanceMeters) >= 1 ||
+        now - st.lastEvaluatedSampleTimeMs >= 900;
+
+  if (triggerOn === 'enter' && isDistinctEvalTick) {
+    st.lastEvaluatedDistanceMeters = rawDistance;
+    st.lastEvaluatedSampleTimeMs = now;
+  }
+
   // Track consecutive inside/outside samples to debounce signal drops
-  if (distance > preEntryStartMeters + antiPingPongDeadbandMeters) {
-    st.consecutiveOutsideSamples += 1;
+  if (distance > safeRadius + antiPingPongDeadbandMeters) {
+    if (isDistinctEvalTick) {
+      st.consecutiveOutsideSamples += 1;
+    }
     st.consecutiveInsideSamples = 0;
   } else if (distance <= safeRadius) {
-    st.consecutiveInsideSamples += 1;
+    if (isDistinctEvalTick) {
+      st.consecutiveInsideSamples += 1;
+    }
     st.consecutiveOutsideSamples = 0;
   }
 
@@ -693,26 +706,27 @@ function evaluateSingleItemScenario(params: {
   // Once the 10s 5Hz stage finishes (`sonarFinishedForCycle`), 6s sonar is permanently cut off for the rest of this cycle
   const effectivePlayAudio = playAudio && !st.audioMutedForCycle && !st.sonarFinishedForCycle;
 
-  // Concise core status phrases
-  const msgApproaching = isEn ? `Approaching «${title}»` : `نزدیک شدن به «${title}»`;
+  // Concise core status phrases matching user specification
   const msgEntered = isEn ? `Entered «${title}»` : `ورود به حصار مکانی «${title}»`;
-  const msgCenter = isEn ? `At center of «${title}»` : `در مرکز حصار مکانی «${title}»`;
+  const msgCenter = isEn
+    ? `Arrived at central zone of «${title}»`
+    : `رسیدن به ناحیه مرکزی «${title}»`;
   const msgExiting = isEn ? `Exiting «${title}»` : `در حال خروج از حصار مکانی «${title}»`;
-  const msgExited = isEn ? `Exited «${title}»` : `خروج از حصار مکانی «${title}»`;
+  const msgExited = isEn ? `Exited geofence «${title}»` : `خارج شدن از حصار مکانی «${title}»`;
 
   const directionConfirmMeters = Math.max(4, Math.min(12, Math.round((accuracy || 12) * 0.35)));
 
   if (st.startedOutsideBoundary === undefined) {
     st.startedOutsideBoundary = distance > safeRadius;
   }
-  if (distance <= preEntryStartMeters) {
+  if (distance <= safeRadius + antiPingPongDeadbandMeters) {
     if (distance < st.minDistanceReachedInside) {
       st.minDistanceReachedInside = distance;
     }
     if (distance > st.maxDistanceInApproach) {
       st.maxDistanceInApproach = distance;
     }
-  } else if (st.consecutiveOutsideSamples >= 2) {
+  } else if (st.consecutiveOutsideSamples >= 3) {
     st.startedOutsideBoundary = true;
     st.maxDistanceInApproach = distance;
   }
@@ -730,14 +744,23 @@ function evaluateSingleItemScenario(params: {
     (st.maxDistanceInApproach > 0 &&
       distance <= st.maxDistanceInApproach - directionConfirmMeters &&
       st.lastInwardMoveMs >= st.lastOutwardMoveMs) ||
-    (st.startedOutsideBoundary && distance <= preEntryStartMeters && !isConfirmedExitingDirection);
+    (st.startedOutsideBoundary && distance <= safeRadius && !isConfirmedExitingDirection);
 
   // =========================================================================
   // SCENARIO 1: ENTER ONLY ('enter')
+  // 1. Upon detecting movement toward the geofence and entering the radius (d <= R):
+  //    - Dedicated Enter audio alert (6s submarine sonar) + Full-screen visual alert start.
+  //    - Polar Radar records trajectory with inward-pointing arrows and pulsing user icon.
+  //    - Latched (`st.enterAlertActive = true`) so it NEVER flickers off while inside d <= R + deadband!
+  // 2. Upon entering the 5% central zone (d <= max(5% R, 15m)):
+  //    - 5 Hz sonar plays for 10 seconds (0..10s).
+  //    - Then audio cuts off completely, while visual alert announcing arrival at the central zone
+  //      continues for 30 seconds (10s..40s).
+  //    - After those 30 seconds (>= 40s), all alerts automatically stop for this cycle.
   // =========================================================================
   if (triggerOn === 'enter') {
-    if (distance > preEntryStartMeters + antiPingPongDeadbandMeters) {
-      if (st.consecutiveOutsideSamples >= 2) {
+    if (distance > safeRadius + antiPingPongDeadbandMeters) {
+      if (st.consecutiveOutsideSamples >= 3) {
         st.enterAlertActive = false;
         st.enterCycleCompleted = false;
         st.wasInsideBorder = false;
@@ -760,8 +783,14 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    // Separate 10-second entry message upon crossing into <= R ONLY when entering
-    if (!st.wasInsideBorder && distance <= safeRadius && !isConfirmedExitingDirection) {
+    // Only start a new Enter alert when inside the geofence radius (d <= safeRadius),
+    // or keep it active if already latched (`st.enterAlertActive === true`) within the anti-ping-pong deadband.
+    if (distance > safeRadius && !st.enterAlertActive) {
+      return null;
+    }
+
+    // Latch Enter alert upon entering / being inside the geofence radius
+    if (!st.wasInsideBorder && distance <= safeRadius) {
       st.wasInsideBorder = true;
       st.enterAlertActive = true;
       st.entryBannerStartMs = now;
@@ -780,6 +809,9 @@ function evaluateSingleItemScenario(params: {
     }
 
     // 1A. Central 5% target zone (d <= max(5% R, 15m)):
+    // - 0..10s: 5 Hz sonar + visual arrival message
+    // - 10..40s (for 30 seconds after 5Hz audio ends): audio cuts off, visual arrival message continues
+    // - >= 40s: all alerts stop and cycle completes
     if (distance <= centerZoneMeters || st.center5HzStartMs > 0) {
       st.enterAlertActive = true;
       if (st.center5HzStartMs === 0) {
@@ -817,40 +849,58 @@ function evaluateSingleItemScenario(params: {
 
       st.sonarFinishedForCycle = true;
 
-      return {
-        id: `alert_${itemKey}`,
-        targetType,
-        targetId,
-        locationTitle: title,
-        description,
-        triggerType: 'arrived_under_10m',
-        triggerOn: 'enter',
-        scenarioPhase: 'enter_center_visual_10s',
-        sonarMode: 'enter',
-        sonarIntervalMs: 6000,
-        isVisualOnly: true,
-        visualBannerMessage: msgCenter,
-        entryToastMessage,
-        entryToastRemainingSeconds,
-        isAudioMuted: st.audioMutedForCycle,
-        initialDistance: distance,
-        targetDistance: distance,
-        radius: safeRadius,
-        latitude,
-        longitude,
-        playAudio: false,
-      };
-    }
+      // 30-second visual-only completion window after the 10-second 5Hz sonar (total 40,000 ms from center5HzStartMs)
+      if (elapsedCenter < 40_000) {
+        const remVisualSec = Math.max(1, Math.ceil((40_000 - elapsedCenter) / 1000));
+        return {
+          id: `alert_${itemKey}`,
+          targetType,
+          targetId,
+          locationTitle: title,
+          description,
+          triggerType: 'arrived_under_10m',
+          triggerOn: 'enter',
+          scenarioPhase: 'enter_center_visual_10s',
+          sonarMode: 'enter',
+          sonarIntervalMs: 6000,
+          isVisualOnly: true,
+          visualBannerMessage: msgCenter,
+          phaseRemainingSeconds: remVisualSec,
+          entryToastMessage,
+          entryToastRemainingSeconds,
+          isAudioMuted: st.audioMutedForCycle,
+          initialDistance: distance,
+          targetDistance: distance,
+          radius: safeRadius,
+          latitude,
+          longitude,
+          playAudio: false,
+        };
+      }
 
-    // 1B. Inside boundary (d <= R) or approaching within 5% outside (R < d <= 105% R):
-    if (isConfirmedExitingDirection && !st.enterAlertActive && distance > safeRadius) {
+      // 30 seconds of visual central-zone banner have completed -> stop all alerts for this cycle!
+      st.enterCycleCompleted = true;
+      st.enterAlertActive = false;
+      st.sonarFinishedForCycle = true;
+      if (typeof window !== 'undefined') {
+        try {
+          const bridge = (window as any).YaadGeofenceBridge;
+          if (bridge && typeof bridge.acknowledgeGeofenceItem === 'function') {
+            bridge.acknowledgeGeofenceItem(targetId);
+          }
+        } catch {
+          // ignore
+        }
+      }
       return null;
     }
 
+    // 1B. Inside geofence boundary outside the 5% central zone (centerZoneMeters < d <= R, or latched within deadband):
+    // Once latched (`st.enterAlertActive`), NEVER drop out due to momentary outward GPS jitter!
     if (
-      distance <= preEntryStartMeters &&
       !st.sonarFinishedForCycle &&
-      (st.enterAlertActive || distance <= safeRadius || isConfirmedEnteringDirection || !isConfirmedExitingDirection)
+      (st.enterAlertActive ||
+        (distance <= safeRadius && (isConfirmedEnteringDirection || !isConfirmedExitingDirection)))
     ) {
       st.enterAlertActive = true;
 
@@ -866,7 +916,7 @@ function evaluateSingleItemScenario(params: {
         sonarMode: 'enter',
         sonarIntervalMs: 6000,
         isVisualOnly: false,
-        visualBannerMessage: entryToastMessage || (distance > safeRadius ? msgApproaching : msgEntered),
+        visualBannerMessage: entryToastMessage || msgEntered,
         entryToastMessage,
         entryToastRemainingSeconds,
         isAudioMuted: st.audioMutedForCycle,
@@ -884,6 +934,15 @@ function evaluateSingleItemScenario(params: {
 
   // =========================================================================
   // SCENARIO 2: EXIT ONLY ('exit')
+  // 1. Inside the 5% central zone (d <= max(5% R, 15m)):
+  //    - Complete silence (NO visual or audio alert).
+  // 2. Upon detecting outward movement and exiting the 5% central zone (5% R < d <= R):
+  //    - Deeper-pitched (bass) Exit sonar starts (every 6s) + Full-screen visual Exit alert with outward radar arrows.
+  //    - Latched (`st.bothDirectionLock = 'outward'`) so it stays stably active until crossing d > R or returning inside 5% R.
+  // 3. Upon crossing outside the geofence boundary (d > R):
+  //    - 5 Hz deep Exit sonar plays for 10 seconds (0..10s) with "Exited geofence" message on the visual alert.
+  //    - Then audio cuts off completely, while visual alert with "Exited geofence" message continues for 30 seconds (10s..40s).
+  //    - After those 30 seconds (>= 40s), the operation finishes and all alerts stop.
   // =========================================================================
   const exitGuard = evaluateExitFivePercentAndGpsJitterGuard({
     st,
@@ -982,27 +1041,48 @@ function evaluateSingleItemScenario(params: {
 
     st.sonarFinishedForCycle = true;
 
-    return {
-      id: `alert_${itemKey}`,
-      targetType,
-      targetId,
-      locationTitle: title,
-      description,
-      triggerType: 'exit',
-      triggerOn: 'exit',
-      scenarioPhase: 'exit_crossed_visual_10s',
-      sonarMode: 'exit',
-      sonarIntervalMs: 6000,
-      isVisualOnly: true,
-      visualBannerMessage: msgExited,
-      isAudioMuted: st.audioMutedForCycle,
-      initialDistance: distance,
-      targetDistance: 0,
-      radius: safeRadius,
-      latitude,
-      longitude,
-      playAudio: false,
-    };
+    // 30-second visual-only completion window after the 10-second 5Hz exit sonar (total 40,000 ms from border5HzStartMs)
+    if (elapsedExit < 40_000) {
+      const remVisualSec = Math.max(1, Math.ceil((40_000 - elapsedExit) / 1000));
+      return {
+        id: `alert_${itemKey}`,
+        targetType,
+        targetId,
+        locationTitle: title,
+        description,
+        triggerType: 'exit',
+        triggerOn: 'exit',
+        scenarioPhase: 'exit_crossed_visual_10s',
+        sonarMode: 'exit',
+        sonarIntervalMs: 6000,
+        isVisualOnly: true,
+        visualBannerMessage: msgExited,
+        phaseRemainingSeconds: remVisualSec,
+        isAudioMuted: st.audioMutedForCycle,
+        initialDistance: distance,
+        targetDistance: 0,
+        radius: safeRadius,
+        latitude,
+        longitude,
+        playAudio: false,
+      };
+    }
+
+    // 30 seconds of visual exit banner have completed -> finish operation and stop all alerts!
+    st.exitCycleCompleted = true;
+    st.sonarFinishedForCycle = true;
+    st.bothDirectionLock = null;
+    if (typeof window !== 'undefined') {
+      try {
+        const bridge = (window as any).YaadGeofenceBridge;
+        if (bridge && typeof bridge.acknowledgeGeofenceItem === 'function') {
+          bridge.acknowledgeGeofenceItem(targetId);
+        }
+      } catch {
+        // ignore
+      }
+    }
+    return null;
   }
 
   return null;
@@ -1084,7 +1164,7 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
 
     // Only clear completed/acknowledged cycle flags after staying stably inside the 5% zone
     // and after any anti-bounce cooldown has expired.
-    if (st.consecutiveFivePercentInsideSamples >= 3 && now >= st.exitGpsAntiBounceUntilMs) {
+    if (st.consecutiveFivePercentInsideSamples >= 2 && now >= st.exitGpsAntiBounceUntilMs) {
       st.exitCycleCompleted = false;
       st.audioMutedForCycle = false;
       st.sonarFinishedForCycle = false;
@@ -1116,8 +1196,10 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
     return { suppressAlert: true };
   }
 
+  // Once latched outward (`st.bothDirectionLock === 'outward'`), keep the Exit alert stably latched
+  // while outside the 5% central zone so minor GPS jitter never causes the alert to flicker off and on!
   const isAlreadyLatchedOutward =
-    (st.bothDirectionLock === 'outward' && trend !== 'inward') || st.border5HzStartMs > 0;
+    st.bothDirectionLock === 'outward' || st.border5HzStartMs > 0;
 
   if (!isAlreadyLatchedOutward) {
     // Must clear the 5% border hysteresis threshold before starting an exit alert
@@ -1128,7 +1210,7 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
       return { suppressAlert: true };
     }
 
-    if (isConfirmedExitingDirection || trend !== 'inward') {
+    if (isConfirmedExitingDirection) {
       if (isNewSampleTick) {
         st.consecutiveExitOutwardSamples += 1;
       }
@@ -1136,12 +1218,8 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
       st.consecutiveExitOutwardSamples = 0;
     }
 
-    // Only enforce multi-sample outward confirmation when transitioning directly out of the 5% central zone
-    // or when indoor GPS accuracy is severely degraded (> 35m) near the 5% zone.
-    if (
-      smoothedDistance <= safeRadius &&
-      (st.wasInFivePercentZoneForExit || (safeAcc > 35 && smoothedDistance <= centerZoneMeters + safeAcc))
-    ) {
+    // Require confirmed outward movement when inside the boundary (5% < d <= R)
+    if (smoothedDistance <= safeRadius) {
       const requiredDisplacementFromMin =
         safeAcc > 35
           ? Math.max(8, Math.min(Math.round(safeRadius * 0.25), Math.round(safeAcc * 0.5)))
@@ -1151,20 +1229,21 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
         !Number.isFinite(st.minDistanceReachedInside) ||
         smoothedDistance - st.minDistanceReachedInside >= requiredDisplacementFromMin;
 
+      const neededSamples =
+        (st.wasInFivePercentZoneForExit && smoothedDistance <= fivePctExitEscapeMeters + 12) ||
+        safeAcc > 35
+          ? 2
+          : 1;
+
       if (
+        !isConfirmedExitingDirection ||
         trend === 'inward' ||
         !hasMovedSignificantlyFromMin ||
-        st.consecutiveExitOutwardSamples < 2
+        st.consecutiveExitOutwardSamples < neededSamples
       ) {
         return { suppressAlert: true };
       }
     }
-  } else if (smoothedDistance <= safeRadius && trend === 'inward' && smoothedDistance <= fivePctExitEscapeMeters) {
-    // User turned back inward into the 5% border margin before exiting the boundary: unlatch cleanly with anti-bounce guard
-    st.bothDirectionLock = null;
-    st.consecutiveExitOutwardSamples = 0;
-    st.exitGpsAntiBounceUntilMs = Math.max(st.exitGpsAntiBounceUntilMs, now + 30_000);
-    return { suppressAlert: true };
   }
 
   return { suppressAlert: false };
