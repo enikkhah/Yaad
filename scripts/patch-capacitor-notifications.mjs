@@ -713,7 +713,7 @@ const legacyImmediateNotifyV4 = `            if (!isSilentChannel) {
                 }
             }`;
 
-const patchedImmediateNotify = `            if (!isSilentChannel) {
+const legacyImmediateNotifyV5 = `            if (!isSilentChannel) {
                 try {
                     val notificationJson = JSObject(localNotification.source ?: "{}")
                     LocalNotificationsPlugin.fireReceived(notificationJson)
@@ -739,14 +739,35 @@ const patchedImmediateNotify = `            if (!isSilentChannel) {
                 }
             }`;
 
+const patchedImmediateNotify = `            if (!isSilentChannel) {
+                try {
+                    val notificationJson = JSObject(localNotification.source ?: "{}")
+                    LocalNotificationsPlugin.fireReceived(notificationJson)
+                } catch (e: JSONException) {
+                }
+            }
+            localNotification.id?.let {
+                val appInFg = LocalNotificationsPlugin.isAppInForeground(context)
+                if (appInFg) {
+                    buildNotification.fullScreenIntent = null
+                }
+                notificationManager.notify(it, buildNotification)
+                if (!isSilentChannel && (buildNotification.flags and Notification.FLAG_INSISTENT) != 0) {
+                    scheduleMuteAfterOneMinute(it, localNotification.source)
+                    if (!appInFg) {
+                        YaadAlarmPopupActivity.launch(context, it, localNotification.source, wakeScreenOnce = true)
+                    }
+                }
+            }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
   'scheduleMuteAfterOneMinute and YaadAlarmPopupActivity on immediate notify',
   origImmediateNotify,
   patchedImmediateNotify,
-  'YaadAlarmPopupActivity.launch(context, it, localNotification.source, wakeScreenOnce = true)',
-  [legacyImmediateNotifyV4, legacyImmediateNotifyV1, legacyImmediateNotifyV2, legacyImmediateNotifyV3]
+  'val appInFg = LocalNotificationsPlugin.isAppInForeground(context)',
+  [legacyImmediateNotifyV5, legacyImmediateNotifyV4, legacyImmediateNotifyV1, legacyImmediateNotifyV2, legacyImmediateNotifyV3]
 );
 
 const origOpenIntent = `        // Open intent
@@ -1339,6 +1360,9 @@ class TimedNotificationPublisher : BroadcastReceiver() {
                 "window.dispatchEvent(new CustomEvent('yaad:native-reminder-due', { detail: { reminderId: '\$safeRemId', notificationId: \$id, bundledReminderIds: [\$bundledJsArrayLiteral] } }));"
             )
         }
+        if (appInForeground) {
+            notification.fullScreenIntent = null
+        }
         notificationManager.notify(id, notification)
         if (isInsistentAlarm) {
             scheduleMuteAfterOneMinute(context, id, notificationJson.toString())
@@ -1351,15 +1375,6 @@ class TimedNotificationPublisher : BroadcastReceiver() {
                     forceScreenOffDuration = wasScreenOffBeforeWake
                 )
             }
-            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                try {
-                    notification.fullScreenIntent = null
-                    notification.category = androidx.core.app.NotificationCompat.CATEGORY_REMINDER
-                    notification.flags = notification.flags or Notification.FLAG_ONLY_ALERT_ONCE
-                    notificationManager.notify(id, notification)
-                } catch (e: Exception) {
-                }
-            }, 3_000L)
         }
         if (!rescheduleNotificationIfNeeded(context, intent, id)) {
             storage.deleteNotification(id.toString())
@@ -1587,37 +1602,10 @@ class NotificationDismissReceiver : BroadcastReceiver() {
             return
         }
 
-        // If user swiped the notification without clicking an action button (Done / Snooze / Edit):
-        // Re-post it immediately if it is an ongoing/persistent notification (up to 3 times as safety guard).
+        // If user swiped the notification from the notification shade, do not re-emit a heads-up banner.
         if (actionId == "swipe_dismiss") {
-            val existing = storage.getSavedNotification(intExtra.toString())
-            if (existing != null && !existing.cancelled && (existing.ongoing || !existing.autoCancel)) {
-                val swipeCount = prefs.getInt(swipeKey, 0)
-                if (swipeCount < 3) {
-                    prefs.edit().putInt(swipeKey, swipeCount + 1).apply()
-                    try {
-                        val savedJson = storage.getSavedNotificationAsJSObject(intExtra.toString()) ?: requestJson
-                        if (savedJson != null) {
-                            val immediateJson = JSObject(savedJson.toString())
-                            immediateJson.remove("schedule")
-                            val localNotif = LocalNotification.buildNotificationFromJSObject(immediateJson)
-                            val manager = LocalNotificationManager(storage, null, context, CapConfig.loadDefault(context))
-                            manager.schedule(null, listOf(localNotif))
-                        }
-                    } catch (e: Exception) {
-                        Logger.error(Logger.tags("LN"), "Failed to restore swiped ongoing notification", e)
-                    }
-                    return
-                } else {
-                    // Emergency escape after 4 consecutive swipes: clean up and stop alarm
-                    prefs.edit().remove(swipeKey).apply()
-                    YaadAlarmPopupActivity.dismissIfMatching(intExtra)
-                    val notificationManager = NotificationManagerCompat.from(context)
-                    cancelAllRelatedNotifications(context, storage, notificationManager, intExtra, reminderId)
-                    return
-                }
-            }
             prefs.edit().remove(swipeKey).apply()
+            val existing = storage.getSavedNotification(intExtra.toString())
             if (LocalNotificationManager.isSafeToForget(existing)) {
                 storage.deleteNotification(intExtra.toString())
             }
@@ -6056,7 +6044,14 @@ class YaadAlarmPopupActivity : Activity() {
                 countDownTimer?.cancel()
                 stopPulseAnimators()
                 releaseScreenWakeLock()
-                YaadGeofenceService.acknowledgeGeofenceItemForCycle(this, geofenceItemId, notificationId)
+                YaadGeofenceService.setGeofenceItemMinimizedState(this, geofenceItemId, false, notifyWebView = true)
+                YaadGeofenceService.acknowledgeGeofenceItemForCycle(
+                    this,
+                    geofenceItemId,
+                    notificationId,
+                    notifyWebView = true,
+                    acknowledgeAllActive = true
+                )
                 finish()
                 overridePendingTransition(0, 0)
             },
@@ -6417,6 +6412,7 @@ class YaadAlarmPopupActivity : Activity() {
             onCloseCompletely = {
                 countDownTimer?.cancel()
                 releaseScreenWakeLock()
+                YaadGeofenceService.notifyTimedAlarmClosedOutsideApp(this, "*")
                 for ((itemNotifId, itemJson) in items) {
                     dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "stop")
                 }
@@ -6770,6 +6766,7 @@ class YaadAlarmPopupActivity : Activity() {
             centerLabel = if (isPersian) "🔔 یادآور هوشمند یاد" else "🔔 YAAD Smart Reminder",
             accentColor = palette.accentColor,
             onCloseCompletely = {
+                YaadGeofenceService.notifyTimedAlarmClosedOutsideApp(this, reminderId.ifEmpty { "*" })
                 performBackgroundAction("stop")
             },
             onMinimizeTemporarily = {
@@ -7134,8 +7131,9 @@ class YaadAlarmPopupActivity : Activity() {
         livePolarRadarView = null
 
         val root = FrameLayout(this)
-        val totalW = dp(84f)
-        val totalH = dp(88f)
+        root.layoutDirection = View.LAYOUT_DIRECTION_LTR
+        val totalW = dp(76f)
+        val totalH = dp(80f)
         root.layoutParams = ViewGroup.LayoutParams(totalW, totalH)
         root.setBackgroundColor(Color.TRANSPARENT)
 
@@ -7148,8 +7146,8 @@ class YaadAlarmPopupActivity : Activity() {
         bubbleBtn.background = makeRoundedDrawable(bubbleBgColor, bubbleBorderColor, 2.2f, 22f)
         bubbleBtn.elevation = dp(12f).toFloat()
         val bubbleLp = FrameLayout.LayoutParams(dp(70f), dp(74f))
-        bubbleLp.gravity = Gravity.BOTTOM or Gravity.END
-        bubbleLp.setMargins(dp(6f), dp(8f), dp(4f), dp(4f))
+        bubbleLp.gravity = Gravity.BOTTOM or Gravity.RIGHT
+        bubbleLp.setMargins(dp(6f), dp(6f), 0, 0)
         bubbleBtn.layoutParams = bubbleLp
 
         try {
@@ -7211,7 +7209,7 @@ class YaadAlarmPopupActivity : Activity() {
                     if (movedSignificantly) {
                         try {
                             val dm = resources.displayMetrics
-                            val maxX = (dm.widthPixels - dp(84f)).coerceAtLeast(0)
+                            val maxX = (dm.widthPixels - dp(76f)).coerceAtLeast(0)
                             val maxY = (dm.heightPixels - dp(120f)).coerceAtLeast(0)
                             floatingBubbleX = (startWinX + dx).coerceIn(0, maxX)
                             floatingBubbleY = (startWinY - dy).coerceIn(0, maxY)
@@ -7244,13 +7242,13 @@ class YaadAlarmPopupActivity : Activity() {
         closeBadge.setTypeface(Typeface.DEFAULT_BOLD)
         closeBadge.background = makeOvalDrawable(
             Color.parseColor("#E11D48"),
-            Color.parseColor("#FDA4AF"),
-            1.2f
+            bubbleBorderColor,
+            1.8f
         )
         closeBadge.elevation = dp(14f).toFloat()
-        val closeLp = FrameLayout.LayoutParams(dp(24f), dp(24f))
-        closeLp.gravity = Gravity.TOP or Gravity.START
-        closeLp.setMargins(dp(2f), dp(2f), 0, 0)
+        val closeLp = FrameLayout.LayoutParams(dp(22f), dp(22f))
+        closeLp.gravity = Gravity.TOP or Gravity.LEFT
+        closeLp.setMargins(0, 0, 0, 0)
         closeBadge.layoutParams = closeLp
         closeBadge.setOnClickListener {
             isMinimizedToFloatingBubble = false
@@ -7260,10 +7258,23 @@ class YaadAlarmPopupActivity : Activity() {
             releaseScreenWakeLock()
             if (isGeofencePopup) {
                 YaadGeofenceService.setGeofenceItemMinimizedState(this, geofenceItemId, false, notifyWebView = true)
-                YaadGeofenceService.acknowledgeGeofenceItemForCycle(this, geofenceItemId, notificationId)
+                YaadGeofenceService.acknowledgeGeofenceItemForCycle(
+                    this,
+                    geofenceItemId,
+                    notificationId,
+                    notifyWebView = true,
+                    acknowledgeAllActive = true
+                )
                 finish()
                 overridePendingTransition(0, 0)
             } else {
+                YaadGeofenceService.notifyTimedAlarmClosedOutsideApp(this, reminderId.ifEmpty { "*" })
+                if (activeBundledTimedReminders.isNotEmpty()) {
+                    for ((itemNotifId, itemJson) in activeBundledTimedReminders.entries.toList()) {
+                        dispatchBackgroundActionForSpecificNotification(itemNotifId, itemJson.toString(), "stop")
+                    }
+                    activeBundledTimedReminders.clear()
+                }
                 performBackgroundAction("stop")
             }
         }
@@ -10095,38 +10106,9 @@ class YaadGeofenceService : Service(), LocationListener {
     private fun updateActiveStatusBarNotificationDistance(newDistance: Int) {
         val notifId = activeGeofenceNotificationId
         if (notifId == Int.MIN_VALUE || activeGeofenceItemId.isEmpty()) return
-        if (isScreenOffOrLocked() || YaadAlarmPopupActivity.isShowingGeofencePopup() || LocalNotificationsPlugin.isAppInForeground(this)) {
-            return
-        }
-        if (newDistance == lastNotifiedStatusBarDistance) return
         lastNotifiedStatusBarDistance = newDistance
-
-        try {
-            val (notifTitle, notifBody) = buildStatusBarTitleAndBody(
-                title = activeGeofenceTitle,
-                statusPhrase = activeGeofenceDescription,
-                distance = newDistance,
-                radius = activeGeofenceRadius,
-                isEn = activeGeofenceIsEn
-            )
-
-            buildAndPostStatusBarNotification(
-                notificationId = notifId,
-                id = activeGeofenceItemId,
-                notifTitle = notifTitle,
-                notifBody = notifBody,
-                isSub10m = activeGeofenceEventType == "arrived_under_10m",
-                distance = newDistance,
-                radius = activeGeofenceRadius,
-                targetLat = activeGeofenceLat,
-                targetLon = activeGeofenceLon,
-                isEn = activeGeofenceIsEn,
-                isLiveUpdate = true,
-                showFullScreen = false,
-                postToStatusBar = true
-            )
-        } catch (e: Exception) {
-        }
+        // Do NOT re-post status-bar notification on distance ticks; once a bannered notification
+        // has moved to the notification drawer list after ~3s, it must never be re-emitted.
     }
 
     private fun fireOutOfAppGeofenceAlert(
@@ -10223,29 +10205,22 @@ class YaadGeofenceService : Service(), LocationListener {
             }
 
             val popupAlreadyShowing = YaadAlarmPopupActivity.isShowingGeofencePopup()
-            val wakePhaseKey = "\${id}_\${sonarMode}_\${eventType}_\${is5Hz}"
+            val wakePhaseKey = "\${id}_\${sonarMode}"
             val nowWakeMs = System.currentTimeMillis()
-            // Launch the full-screen alert whenever a brand-new alert phase starts (for both Enter and Exit),
-            // OR whenever an active out-of-app alert is not yet showing its full-screen popup!
+            // Emit the status-bar banner and full-screen alert ONCE per geofence enter/exit cycle
+            // so bannered notifications never re-emit after going into the notification list!
             val isFirstWakeForPhase = isTopPriority && wokenAlertPhaseSet.add(wakePhaseKey)
             if (isFirstWakeForPhase) {
                 lastPhaseWakeTimestampMap[wakePhaseKey] = nowWakeMs
             }
 
-            val shouldLaunchFullScreenPopup = isTopPriority && (
-                isFirstWakeForPhase ||
-                    (!popupAlreadyShowing && !YaadAlarmPopupActivity.isMinimizedBubbleActive() && nowWakeMs - lastOutOfAppPopupLaunchAttemptMs >= 6_000L)
-            )
+            val shouldLaunchFullScreenPopup = isTopPriority && isFirstWakeForPhase
 
             if (shouldLaunchFullScreenPopup && wasScreenOffBeforeWake) {
                 wakeScreenForLockscreenAlert(keepAwakeDurationMs)
             }
 
-            val shouldPostNotif = if (screenOffOrLocked) {
-                !popupAlreadyShowing || shouldLaunchFullScreenPopup
-            } else {
-                true
-            }
+            val shouldPostNotif = shouldLaunchFullScreenPopup
             val shouldUseLiveUpdate = !shouldLaunchFullScreenPopup
 
             val sourceJsonStr = buildAndPostStatusBarNotification(
@@ -10505,58 +10480,10 @@ class YaadGeofenceService : Service(), LocationListener {
         if (showFullScreen) {
             lastFullScreenNotificationPostMs = now
             lastLiveStatusBarUpdatePostMs = now
-            if (!YaadAlarmPopupActivity.isShowingGeofencePopup()) {
-                try {
-                    nmCompat.cancel(notificationId)
-                } catch (e: Exception) {
-                }
-            }
-            nmCompat.notify(notificationId, builder.build())
-            // Collapse the heads-up peek banner after ~3 seconds and move the notification quietly into the notification shade list!
-            mainHandler.postDelayed({
-                try {
-                    if (LocalNotificationsPlugin.isAppInForeground(this) && !isScreenOffOrLocked()) {
-                        cancelAllGeofenceAlertNotifications(this)
-                        return@postDelayed
-                    }
-                    if (activeGeofenceNotificationId == notificationId && activeGeofenceItemId == id) {
-                        try {
-                            nmCompat.cancel(notificationId)
-                        } catch (e: Exception) {
-                        }
-                        val latestDist = if (lastNotifiedStatusBarDistance > 0) lastNotifiedStatusBarDistance else distance
-                        buildAndPostStatusBarNotification(
-                            notificationId = notificationId,
-                            id = id,
-                            notifTitle = notifTitle,
-                            notifBody = notifBody,
-                            isSub10m = isSub10m,
-                            distance = latestDist,
-                            radius = radius,
-                            targetLat = targetLat,
-                            targetLon = targetLon,
-                            bearingDeg = activeGeofenceBearingDeg,
-                            sonarMode = activeGeofenceSonarMode,
-                            isEn = isEn,
-                            isLiveUpdate = false,
-                            showFullScreen = false,
-                            postToStatusBar = true,
-                            visualOnlyBanner = visualOnlyBanner,
-                            visualBannerText = visualBannerText,
-                            multiCardsJson = multiCardsJson,
-                            wasScreenOff = false,
-                            keepScreenOnDurationMs = keepScreenOnDurationMs
-                        )
-                    }
-                } catch (e: Exception) {
-                }
-            }, 3_000L)
-        } else if (!isLiveUpdate || now - lastLiveStatusBarUpdatePostMs >= 2_800L) {
-            lastLiveStatusBarUpdatePostMs = now
             nmCompat.notify(notificationId, builder.build())
         }
 
-        if (multiCardsJson.isNotEmpty()) {
+        if (showFullScreen && multiCardsJson.isNotEmpty()) {
             val summaryTitle = if (isEn) "Active Geofence Alerts" else "اعلان‌های حصار مکانی"
             val summaryNotif = NotificationCompat.Builder(this, shadeChannelId)
                 .setSmallIcon(smallIconRes)
@@ -10608,6 +10535,8 @@ class YaadGeofenceService : Service(), LocationListener {
         private const val KEY_LANGUAGE = "geofence_lang"
         private const val KEY_ITEMS_JSON = "geofence_items_json"
         private const val KEY_STOPPED_ITEMS_QUEUE = "geofence_stopped_items_queue"
+        private const val KEY_ACKNOWLEDGED_ITEMS_QUEUE = "geofence_acknowledged_items_queue"
+        private const val KEY_TIMED_ALARM_CLOSED_OUTSIDE_QUEUE = "timed_alarm_closed_outside_queue"
         private const val KEY_RADAR_DISABLED_FROM_BG = "geofence_radar_disabled_from_bg"
         private const val KEY_LAST_SYNCED_LAT_BITS = "geofence_last_synced_lat_bits"
         private const val KEY_LAST_SYNCED_LON_BITS = "geofence_last_synced_lon_bits"
@@ -11383,37 +11312,124 @@ class YaadGeofenceService : Service(), LocationListener {
             context: Context,
             rawItemId: String,
             notificationIdToCancel: Int = Int.MIN_VALUE,
-            notifyWebView: Boolean = true
+            notifyWebView: Boolean = true,
+            acknowledgeAllActive: Boolean = false
         ) {
             val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
+            val idsToAcknowledge = LinkedHashSet<String>()
+            if (targetId.isNotEmpty()) idsToAcknowledge.add(targetId)
+            if (activeGeofenceItemId.isNotEmpty()) idsToAcknowledge.add(activeGeofenceItemId)
+            if (acknowledgeAllActive && lastActiveMultiCardsJson.isNotEmpty()) {
+                try {
+                    val arr = JSONArray(lastActiveMultiCardsJson)
+                    for (i in 0 until arr.length()) {
+                        val obj = arr.optJSONObject(i) ?: continue
+                        val cid = obj.optString("id", "")
+                        if (cid.isNotEmpty()) idsToAcknowledge.add(cid)
+                    }
+                } catch (e: Exception) {
+                }
+            }
             geofenceAudioMuted = false
-            YaadAlarmPopupActivity.clearSuspendedGeofenceIfMatching(targetId)
+            YaadAlarmPopupActivity.clearSuspendedGeofenceIfMatching(if (acknowledgeAllActive) "" else targetId)
             stopGeofenceAudio(context, notificationIdToCancel)
+            cancelAllGeofenceAlertNotifications(context)
             YaadAlarmPopupActivity.dismissIfMatching(notificationIdToCancel)
-            if (targetId.isEmpty()) return
 
             try {
                 val now = System.currentTimeMillis()
                 val cooldownUntil = now + 3 * 60_000L
-                val cleanId = targetId.removePrefix("loc_").removePrefix("rem_")
                 val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                val editor = prefs.edit()
-                for (sfx in listOf(targetId, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
-                    editor.putBoolean("completed_cycle_\$sfx", true)
-                    editor.putBoolean("sonar_done_\$sfx", true)
-                    editor.putLong("cooldown_until_\$sfx", cooldownUntil)
-                    editor.remove("five_hz_start_\$sfx")
-                    editor.remove("banner_start_\$sfx")
-                    editor.remove("banner_text_\$sfx")
+                if (acknowledgeAllActive && idsToAcknowledge.isEmpty()) {
+                    try {
+                        val rawItems = prefs.getString(KEY_ITEMS_JSON, "[]") ?: "[]"
+                        val arr = JSONArray(rawItems)
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.optJSONObject(i) ?: continue
+                            val cid = obj.optString("id", "")
+                            if (cid.isNotEmpty()) idsToAcknowledge.add(cid)
+                        }
+                    } catch (e: Exception) {
+                    }
                 }
+                val ackQueueRaw = prefs.getString(KEY_ACKNOWLEDGED_ITEMS_QUEUE, "[]") ?: "[]"
+                val ackQueueArr = try {
+                    JSONArray(ackQueueRaw)
+                } catch (e: Exception) {
+                    JSONArray()
+                }
+                val editor = prefs.edit()
+                for (itemKey in idsToAcknowledge) {
+                    val cleanId = itemKey.removePrefix("loc_").removePrefix("rem_")
+                    ackQueueArr.put(itemKey)
+                    for (sfx in listOf(itemKey, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
+                        editor.putBoolean("completed_cycle_\$sfx", true)
+                        editor.putBoolean("sonar_done_\$sfx", true)
+                        editor.putLong("cooldown_until_\$sfx", cooldownUntil)
+                        editor.remove("five_hz_start_\$sfx")
+                        editor.remove("banner_start_\$sfx")
+                        editor.remove("banner_text_\$sfx")
+                    }
+                }
+                if (acknowledgeAllActive) {
+                    ackQueueArr.put("*")
+                }
+                editor.putString(KEY_ACKNOWLEDGED_ITEMS_QUEUE, ackQueueArr.toString())
                 editor.apply()
 
                 if (notifyWebView) {
+                    val dispatchId = if (acknowledgeAllActive || targetId.isEmpty()) "*" else targetId.replace("'", "").replace("\\\\", "")
                     LocalNotificationsPlugin.evaluateJsInWebView(
-                        "window.dispatchEvent(new CustomEvent('yaad:acknowledge-geofence-item', { detail: { itemId: '\$targetId' } }));"
+                        "window.dispatchEvent(new CustomEvent('yaad:acknowledge-geofence-item', { detail: { itemId: '\$dispatchId' } }));"
                     )
                 }
             } catch (e: Exception) {
+            }
+        }
+
+        fun consumeQueuedAcknowledgedItems(context: Context): String {
+            return try {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val raw = prefs.getString(KEY_ACKNOWLEDGED_ITEMS_QUEUE, "[]") ?: "[]"
+                if (raw != "[]") {
+                    prefs.edit().putString(KEY_ACKNOWLEDGED_ITEMS_QUEUE, "[]").apply()
+                }
+                raw
+            } catch (e: Exception) {
+                "[]"
+            }
+        }
+
+        fun notifyTimedAlarmClosedOutsideApp(context: Context, reminderId: String) {
+            try {
+                val targetRemId = reminderId.ifEmpty { "*" }
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val queueRaw = prefs.getString(KEY_TIMED_ALARM_CLOSED_OUTSIDE_QUEUE, "[]") ?: "[]"
+                val queueArr = try {
+                    JSONArray(queueRaw)
+                } catch (e: Exception) {
+                    JSONArray()
+                }
+                queueArr.put(targetRemId)
+                prefs.edit().putString(KEY_TIMED_ALARM_CLOSED_OUTSIDE_QUEUE, queueArr.toString()).apply()
+                val safeRemId = targetRemId.replace("'", "").replace("\\\\", "")
+                LocalNotificationsPlugin.evaluateJsInWebView(
+                    "window.dispatchEvent(new CustomEvent('yaad:close-timed-alarm', { detail: { reminderId: '\$safeRemId' } }));"
+                )
+            } catch (e: Exception) {
+            }
+        }
+
+        fun consumeTimedAlarmClosedOutsideQueue(context: Context): String {
+            return try {
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val raw = prefs.getString(KEY_TIMED_ALARM_CLOSED_OUTSIDE_QUEUE, "[]") ?: "[]"
+                if (raw != "[]") {
+                    prefs.edit().putString(KEY_TIMED_ALARM_CLOSED_OUTSIDE_QUEUE, "[]").apply()
+                }
+                raw
+            } catch (e: Exception) {
+                "[]"
             }
         }
 
@@ -12044,6 +12060,16 @@ class YaadGeofenceService : Service(), LocationListener {
         @android.webkit.JavascriptInterface
         fun consumeStoppedGeofenceItems(): String {
             return consumeQueuedStoppedItems(appContext)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun consumeAcknowledgedGeofenceItems(): String {
+            return consumeQueuedAcknowledgedItems(appContext)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun consumeTimedAlarmClosedOutside(): String {
+            return consumeTimedAlarmClosedOutsideQueue(appContext)
         }
 
         @android.webkit.JavascriptInterface

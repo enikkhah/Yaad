@@ -402,15 +402,15 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           className="fixed bottom-24 right-4 z-[105] select-none touch-none"
           dir="ltr"
         >
-          <div className="relative pt-1.5 pl-1.5">
-            {/* Top-Left Corner Close Badge (X) */}
+          <div className="relative">
+            {/* Top-Left Corner Close Badge (X) attached directly to the button border */}
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
                 handleDismiss();
               }}
-              className="absolute top-0 left-0 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border border-rose-200/90 text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
+              className="absolute -top-1.5 -left-1.5 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-[#FF8C00] text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
               title={isEn ? 'Close completely' : 'بستن کامل'}
               aria-label={isEn ? 'Close completely' : 'بستن کامل'}
             >
