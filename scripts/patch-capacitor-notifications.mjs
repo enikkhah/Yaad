@@ -4420,6 +4420,7 @@ class YaadAlarmPopupActivity : Activity() {
     private var isGeofencePopup: Boolean = false
     private var isSub10mArrival: Boolean = false
     private var geofenceItemId: String = ""
+    private var reminderId: String = ""
     private var targetLatitude: Double = Double.NaN
     private var targetLongitude: Double = Double.NaN
     private var cleanLocationTitle: String = ""
@@ -5388,6 +5389,7 @@ class YaadAlarmPopupActivity : Activity() {
         isGeofencePopup = extraObj?.optBoolean("geofence", false) == true
         isSub10mArrival = extraObj?.optBoolean("sub10m", false) == true
         geofenceItemId = extraObj?.optString("geofenceItemId", "") ?: ""
+        reminderId = extraObj?.optString("reminderId", "") ?: ""
         val initialDistance = extraObj?.optInt("distance", 0) ?: 0
         val radiusMeters = extraObj?.optInt("radius", 200) ?: 200
         targetLatitude = extraObj?.optDouble("latitude", Double.NaN) ?: Double.NaN
@@ -6610,6 +6612,7 @@ class YaadAlarmPopupActivity : Activity() {
                 notificationId = itemNotifId
                 requestJson = itemJson
                 sourceJson = itemJson.toString()
+                reminderId = itemJson.optJSONObject("extra")?.optString("reminderId", "") ?: ""
                 activeBundledTimedReminders.remove(itemNotifId)
                 performEditAction()
             }
@@ -12526,6 +12529,167 @@ function validateKotlinFiles(dir) {
       const id = m[1];
       if (!imports.has(id) && !packageClasses.has(id) && !localTypes.has(id) && !kotlinJavaBuiltins.has(id)) {
         throw new Error(`[KotlinValidator] Unresolved/unimported class reference '${id}' in ${file}`);
+      }
+    }
+
+    // Also verify balanced braces/parens/brackets and that all standalone lowercase identifiers are declared
+    let braceDepth = 0;
+    let parenDepth = 0;
+    let bracketDepth = 0;
+    for (let i = 0; i < out.length; i++) {
+      const ch = out[i];
+      if (ch === '{') braceDepth++;
+      else if (ch === '}') braceDepth--;
+      else if (ch === '(') parenDepth++;
+      else if (ch === ')') parenDepth--;
+      else if (ch === '[') bracketDepth++;
+      else if (ch === ']') bracketDepth--;
+      if (braceDepth < 0 || parenDepth < 0 || bracketDepth < 0) {
+        throw new Error(`[KotlinValidator] Unbalanced delimiter in ${file}`);
+      }
+    }
+    if (braceDepth !== 0 || parenDepth !== 0 || bracketDepth !== 0) {
+      throw new Error(
+        `[KotlinValidator] Unclosed delimiter in ${file} (braces=${braceDepth}, parens=${parenDepth}, brackets=${bracketDepth})`
+      );
+    }
+
+    const declaredLower = new Set([
+      'package', 'import', 'class', 'interface', 'object', 'fun', 'val', 'var', 'if', 'else', 'when',
+      'for', 'while', 'do', 'try', 'catch', 'finally', 'return', 'break', 'continue', 'throw', 'this',
+      'super', 'true', 'false', 'null', 'in', 'is', 'as', 'by', 'get', 'set', 'init', 'constructor',
+      'companion', 'private', 'protected', 'public', 'internal', 'open', 'override', 'abstract', 'final',
+      'enum', 'data', 'sealed', 'inner', 'inline', 'noinline', 'crossinline', 'reified', 'vararg',
+      'lateinit', 'const', 'suspend', 'tailrec', 'operator', 'infix', 'external', 'annotation', 'out',
+      'where', 'typeof', 'it', 'field', 'value', 'and', 'or', 'xor', 'shl', 'shr', 'ushr', 'inv',
+      'until', 'downTo', 'step', 'to', 'listOf', 'mutableListOf', 'arrayListOf', 'mapOf', 'mutableMapOf',
+      'hashMapOf', 'linkedMapOf', 'setOf', 'mutableSetOf', 'hashSetOf', 'linkedSetOf', 'emptyList',
+      'emptyMap', 'emptySet', 'arrayOf', 'intArrayOf', 'longArrayOf', 'floatArrayOf', 'doubleArrayOf',
+      'booleanArrayOf', 'byteArrayOf', 'shortArrayOf', 'charArrayOf', 'arrayOfNulls', 'synchronized',
+      'run', 'let', 'apply', 'also', 'with', 'takeIf', 'takeUnless', 'repeat', 'require', 'check',
+      'error', 'print', 'println', 'maxOf', 'minOf', 'coerceIn', 'coerceAtLeast', 'coerceAtMost',
+      // Android Activity / Service / View / Context / NotificationChannel inherited or apply-receiver members
+      'window', 'intent', 'resources', 'packageName', 'packageManager', 'applicationInfo',
+      'applicationContext', 'contentResolver', 'mainLooper', 'isFinishing', 'isDestroyed',
+      'setContentView', 'finish', 'overridePendingTransition', 'getSystemService', 'startActivity',
+      'sendBroadcast', 'registerReceiver', 'unregisterReceiver', 'runOnUiThread', 'getSharedPreferences',
+      'startService', 'stopService', 'startForeground', 'stopForeground', 'onCreate', 'onStart',
+      'onResume', 'onPause', 'onStop', 'onDestroy', 'onNewIntent', 'onBind', 'onStartCommand',
+      'onReceive', 'onDraw', 'onMeasure', 'onSizeChanged', 'setShowWhenLocked', 'setTurnScreenOn',
+      'setFinishOnTouchOutside', 'invalidate', 'postInvalidate', 'requestLayout', 'width', 'height',
+      'paddingLeft', 'paddingTop', 'paddingRight', 'paddingBottom', 'clipChildren', 'clipToPadding',
+      'alpha', 'elevation', 'visibility', 'layoutParams', 'layoutDirection', 'orientation', 'gravity',
+      'background', 'text', 'textSize', 'textColor', 'typeface', 'maxLines', 'ellipsize', 'scaleType',
+      'color', 'style', 'strokeWidth', 'strokeCap', 'strokeJoin', 'textAlign', 'isAntiAlias',
+      'isDaemon', 'name', 'flags', 'action', 'categories', 'data', 'extras', 'bridge', 'activity',
+      'context', 'plugin', 'call', 'description', 'enableVibration', 'vibrationPattern',
+      'lockscreenVisibility', 'setSound', 'enableLights', 'lightColor', 'setShowBadge',
+      'duration', 'repeatCount', 'repeatMode', 'interpolator', 'addUpdateListener', 'start',
+      'put', 'putExtra', 'addFlags', 'addCategory', 'setAction', 'setPackage', 'setData',
+      'requestWindowFeature', 'setIntent', 'mainExecutor', 'setClassName', 'stopSelf',
+      'addAction', 'setContentIntent',
+      // Standard math/kotlin top-level imports
+      'sin', 'cos', 'tan', 'atan2', 'sqrt', 'exp', 'ln', 'abs', 'roundToInt', 'roundToLong',
+    ]);
+    for (const m of out.matchAll(/\b(?:val|var|fun)\s+([a-zA-Z_][a-zA-Z0-9_]*)/g)) {
+      declaredLower.add(m[1]);
+    }
+    for (const m of out.matchAll(/\b(?:val|var)\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)/g)) {
+      declaredLower.add(m[1]);
+      declaredLower.add(m[2]);
+    }
+    for (const m of out.matchAll(/\b([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(?:[A-Za-z_][\w.<>?*]*|\([^)]*\)\s*->)/g)) {
+      declaredLower.add(m[1]);
+    }
+    for (const m of out.matchAll(/for\s*\(\s*\(?([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*))?\)?\s+in\b/g)) {
+      declaredLower.add(m[1]);
+      if (m[2]) declaredLower.add(m[2]);
+    }
+    for (const m of out.matchAll(/\{\s*\(?([a-zA-Z_][a-zA-Z0-9_]*)(?:\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*))?\)?\s*->/g)) {
+      declaredLower.add(m[1]);
+      if (m[2]) declaredLower.add(m[2]);
+    }
+    for (const otherFile of files) {
+      const otherTxt = fs.readFileSync(path.join(dir, otherFile), 'utf8');
+      for (const m of otherTxt.matchAll(/\bconst\s+val\s+([a-zA-Z_][a-zA-Z0-9_]*)/g)) {
+        declaredLower.add(m[1]);
+      }
+    }
+    if (file === 'YaadAlarmPopupActivity.kt' || file === 'YaadGeofenceService.kt') {
+      const preSanitized = txt.replace(/\$\{[^{}]*\}/g, '0');
+      let cleanCode = '';
+      let inStr = false;
+      let inLineComment = false;
+      let inBlockComment = false;
+      for (let i = 0; i < preSanitized.length; i++) {
+        const c = preSanitized[i];
+        const n1 = preSanitized[i + 1] || '';
+        if (c === '\n') {
+          inLineComment = false;
+          cleanCode += '\n';
+          continue;
+        }
+        if (inLineComment) continue;
+        if (inBlockComment) {
+          if (c === '*' && n1 === '/') {
+            inBlockComment = false;
+            i++;
+          }
+          continue;
+        }
+        if (!inStr) {
+          if (c === '/' && n1 === '/') {
+            inLineComment = true;
+            i++;
+            continue;
+          }
+          if (c === '/' && n1 === '*') {
+            inBlockComment = true;
+            i++;
+            continue;
+          }
+          if (c === '"') {
+            inStr = true;
+            cleanCode += '""';
+            continue;
+          }
+          if (c === "'") {
+            i++;
+            if (preSanitized[i] === '\\') i++;
+            if (preSanitized[i + 1] === "'") i++;
+            cleanCode += "''";
+            continue;
+          }
+          cleanCode += c;
+        } else {
+          if (c === '\\') {
+            i++;
+            continue;
+          }
+          if (c === '"') {
+            inStr = false;
+          }
+        }
+      }
+      // Collapse multiline dot chains (e.g. "foo\n  .bar()") so ".bar" is recognized as a member access
+      const normalizedOut = cleanCode.replace(/(\??\.)\s+/g, '$1').replace(/\s+(\??\.)/g, '$1');
+      const outLines = normalizedOut.split('\n');
+      for (let lineIdx = 0; lineIdx < outLines.length; lineIdx++) {
+        const lineStr = outLines[lineIdx];
+        if (/^\s*(?:package|import)\b/.test(lineStr)) continue;
+        for (const m of lineStr.matchAll(/(?<![.\w@])([a-z][A-Za-z0-9_]*)\b(?!\s*=[^=])/g)) {
+          const id = m[1];
+          const afterIdx = m.index + id.length;
+          const rest = lineStr.slice(afterIdx);
+          const beforeChar = m.index > 0 ? lineStr[m.index - 1] : '';
+          if (/[0-9]/.test(beforeChar)) continue;
+          if (['android', 'androidx', 'kotlin', 'java', 'javax', 'org', 'com', 'dalvik'].includes(id) && rest.startsWith('.')) {
+            continue;
+          }
+          if (!declaredLower.has(id)) {
+            throw new Error(`[KotlinValidator] Undeclared identifier '${id}' in ${file} (around normalized line ${lineIdx + 1})`);
+          }
+        }
       }
     }
   }
