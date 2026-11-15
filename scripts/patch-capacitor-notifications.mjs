@@ -7055,6 +7055,8 @@ class YaadAlarmPopupActivity : Activity() {
 
     private fun enterFloatingWindowMode() {
         try {
+            val totalW = dp(78f)
+            val totalH = dp(82f)
             if (floatingBubbleX < 0) {
                 floatingBubbleX = dp(16f)
             }
@@ -7074,10 +7076,11 @@ class YaadAlarmPopupActivity : Activity() {
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
             )
+            window.setLayout(totalW, totalH)
             val wlp = window.attributes
-            wlp.width = WindowManager.LayoutParams.WRAP_CONTENT
-            wlp.height = WindowManager.LayoutParams.WRAP_CONTENT
-            wlp.gravity = Gravity.BOTTOM or Gravity.START
+            wlp.width = totalW
+            wlp.height = totalH
+            wlp.gravity = Gravity.BOTTOM or Gravity.LEFT
             wlp.x = floatingBubbleX
             wlp.y = floatingBubbleY
             wlp.dimAmount = 0f
@@ -7099,6 +7102,10 @@ class YaadAlarmPopupActivity : Activity() {
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                     WindowManager.LayoutParams.FLAG_DIM_BEHIND
+            )
+            window.setLayout(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT
             )
             val wlp = window.attributes
             wlp.width = WindowManager.LayoutParams.MATCH_PARENT
@@ -7133,11 +7140,13 @@ class YaadAlarmPopupActivity : Activity() {
         distanceBadgeTextView = null
         livePolarRadarView = null
 
+        val totalW = dp(78f)
+        val totalH = dp(82f)
         val root = FrameLayout(this)
         root.layoutDirection = View.LAYOUT_DIRECTION_LTR
-        val totalW = dp(76f)
-        val totalH = dp(80f)
-        root.layoutParams = ViewGroup.LayoutParams(totalW, totalH)
+        root.clipChildren = false
+        root.clipToPadding = false
+        root.layoutParams = FrameLayout.LayoutParams(totalW, totalH, Gravity.TOP or Gravity.LEFT)
         root.setBackgroundColor(Color.TRANSPARENT)
 
         val bubbleBtn = LinearLayout(this)
@@ -7148,8 +7157,10 @@ class YaadAlarmPopupActivity : Activity() {
         val bubbleBorderColor = if (isGeofencePopup) Color.parseColor("#10B981") else palette.accentColor
         bubbleBtn.background = makeRoundedDrawable(bubbleBgColor, bubbleBorderColor, 2.2f, 22f)
         bubbleBtn.elevation = dp(12f).toFloat()
+        // Both bubbleBtn and closeBadge use Gravity.TOP or Gravity.LEFT so they are locked to the exact same origin!
+        // bubbleBtn starts at (6dp, 6dp); closeBadge (22dp x 22dp) is at (0dp, 0dp) so its center (11dp, 11dp) sits directly on the top-left border line of bubbleBtn!
         val bubbleLp = FrameLayout.LayoutParams(dp(70f), dp(74f))
-        bubbleLp.gravity = Gravity.BOTTOM or Gravity.RIGHT
+        bubbleLp.gravity = Gravity.TOP or Gravity.LEFT
         bubbleLp.setMargins(dp(6f), dp(6f), 0, 0)
         bubbleBtn.layoutParams = bubbleLp
 
@@ -7212,7 +7223,7 @@ class YaadAlarmPopupActivity : Activity() {
                     if (movedSignificantly) {
                         try {
                             val dm = resources.displayMetrics
-                            val maxX = (dm.widthPixels - dp(76f)).coerceAtLeast(0)
+                            val maxX = (dm.widthPixels - totalW).coerceAtLeast(0)
                             val maxY = (dm.heightPixels - dp(120f)).coerceAtLeast(0)
                             floatingBubbleX = (startWinX + dx).coerceIn(0, maxX)
                             floatingBubbleY = (startWinY - dy).coerceIn(0, maxY)
@@ -7248,7 +7259,7 @@ class YaadAlarmPopupActivity : Activity() {
             bubbleBorderColor,
             1.8f
         )
-        closeBadge.elevation = dp(14f).toFloat()
+        closeBadge.elevation = dp(16f).toFloat()
         val closeLp = FrameLayout.LayoutParams(dp(22f), dp(22f))
         closeLp.gravity = Gravity.TOP or Gravity.LEFT
         closeLp.setMargins(0, 0, 0, 0)
@@ -7283,7 +7294,8 @@ class YaadAlarmPopupActivity : Activity() {
         }
         root.addView(closeBadge)
 
-        setContentView(root)
+        setContentView(root, ViewGroup.LayoutParams(totalW, totalH))
+        window.setLayout(totalW, totalH)
     }
 
     private fun buildActionButton(

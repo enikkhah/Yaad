@@ -410,7 +410,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
                 e.stopPropagation();
                 handleDismiss();
               }}
-              className="absolute -top-1.5 -left-1.5 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-[#FF8C00] text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
+              className="absolute -top-1 -left-1 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-[#FF8C00] text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
               title={isEn ? 'Close completely' : 'بستن کامل'}
               aria-label={isEn ? 'Close completely' : 'بستن کامل'}
             >

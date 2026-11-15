@@ -437,7 +437,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                 e.stopPropagation();
                 handleCloseAllCompletely();
               }}
-              className="absolute -top-1.5 -left-1.5 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-emerald-400 text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
+              className="absolute -top-1 -left-1 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-emerald-400 text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
               title={isEn ? 'Close completely' : 'بستن کامل'}
               aria-label={isEn ? 'Close completely' : 'بستن کامل'}
             >
