@@ -70,6 +70,9 @@ import {
   resumeGeofenceAlertFromPause,
   calculateHaversineDistance,
   shouldAcceptLocationUpdate,
+  getGeofenceMinimizedState,
+  setGeofenceMinimizedState,
+  dismissActiveGeofenceStatusBarNotification,
   UserPosition,
 } from './utils/geofenceManager';
 import { getT, formatSavedLocationTitle } from './utils/i18n';
@@ -2009,12 +2012,24 @@ export default function App() {
       }
     };
 
+    const handleNativeSetGeofenceMinimized = (e: Event) => {
+      const customEv = e as CustomEvent<{ itemId?: string; minimized?: boolean }>;
+      const rawId = customEv.detail?.itemId;
+      const minimized = Boolean(customEv.detail?.minimized);
+      setGeofenceMinimizedState(rawId, minimized, false);
+      if (minimized) {
+        setSubmarineSonarMuted(true);
+        stopSubmarineSonarLoop();
+      }
+    };
+
     flushNativeStoppedGeofenceItems();
     window.addEventListener('yaad:verify-gps-for-geofence', handleVerifyGpsEvent);
     window.addEventListener('yaad:stop-geofence-item', handleNativeStopGeofenceItem);
     window.addEventListener('yaad:snooze-geofence-item', handleNativeSnoozeGeofenceItem);
     window.addEventListener('yaad:acknowledge-geofence-item', handleNativeAcknowledgeGeofenceItem);
     window.addEventListener('yaad:disable-geofence-radar', handleNativeDisableGeofenceRadar);
+    window.addEventListener('yaad:set-geofence-minimized', handleNativeSetGeofenceMinimized);
     window.addEventListener('focus', flushNativeStoppedGeofenceItems);
     document.addEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
     return () => {
@@ -2023,6 +2038,7 @@ export default function App() {
       window.removeEventListener('yaad:snooze-geofence-item', handleNativeSnoozeGeofenceItem);
       window.removeEventListener('yaad:acknowledge-geofence-item', handleNativeAcknowledgeGeofenceItem);
       window.removeEventListener('yaad:disable-geofence-radar', handleNativeDisableGeofenceRadar);
+      window.removeEventListener('yaad:set-geofence-minimized', handleNativeSetGeofenceMinimized);
       window.removeEventListener('focus', flushNativeStoppedGeofenceItems);
       document.removeEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
     };
@@ -2137,10 +2153,15 @@ export default function App() {
         return;
       }
 
-      // Priority #1 alert (index 0) drives the submarine sonar audio if not muted and not in visual-only phase
+      // Priority #1 alert (index 0) drives the submarine sonar audio if not muted, not minimized, and not in visual-only phase
       const topPriority = evaluatedAlerts[0];
-      setSubmarineSonarMuted(Boolean(topPriority.isAudioMuted));
-      if (!topPriority.isVisualOnly && topPriority.playAudio !== false && !topPriority.isAudioMuted) {
+      const isTopMinimized = getGeofenceMinimizedState(topPriority.targetId);
+      const effectiveMuted = Boolean(topPriority.isAudioMuted) || isTopMinimized;
+      setSubmarineSonarMuted(effectiveMuted);
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        dismissActiveGeofenceStatusBarNotification();
+      }
+      if (!topPriority.isVisualOnly && topPriority.playAudio !== false && !effectiveMuted) {
         hadActiveSonarRef.current = true;
         updateSubmarineSonarDistance(
           topPriority.initialDistance,
@@ -2210,8 +2231,13 @@ export default function App() {
         }
       } else {
         const topPriority = evaluated[0];
-        setSubmarineSonarMuted(Boolean(topPriority.isAudioMuted));
-        if (!topPriority.isVisualOnly && topPriority.playAudio !== false && !topPriority.isAudioMuted) {
+        const isTopMinimized = getGeofenceMinimizedState(topPriority.targetId);
+        const effectiveMuted = Boolean(topPriority.isAudioMuted) || isTopMinimized;
+        setSubmarineSonarMuted(effectiveMuted);
+        if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+          dismissActiveGeofenceStatusBarNotification();
+        }
+        if (!topPriority.isVisualOnly && topPriority.playAudio !== false && !effectiveMuted) {
           hadActiveSonarRef.current = true;
           updateSubmarineSonarDistance(
             topPriority.initialDistance,
@@ -4893,9 +4919,19 @@ export default function App() {
           });
           showSyncNotification(
             isEn
-              ? `Location reminder «${alertData.locationTitle}» snoozed (passing through)`
-              : `یادآور مکانی «${alertData.locationTitle}» موقتاً متوقف شد (الان نه)`
+              ? `Location reminder «${alertData.locationTitle}» paused for 5 minutes (Snooze)`
+              : `یادآور مکانی «${alertData.locationTitle}» برای ۵ دقیقه متوقف شد (الان نه)`
           );
+        }}
+        onAutoTurnOffVisual={(alertData) => {
+          setActiveGeofenceAlerts((prevList) => {
+            const remaining = prevList.filter((item) => item.targetId !== alertData.targetId);
+            if (remaining.length === 0) {
+              stopSubmarineSonarLoop();
+              stopAlarmRinging();
+            }
+            return remaining;
+          });
         }}
         onEditRadius={(alertData) => {
           pauseGeofenceAlertTemporarily(alertData.targetId, 'edit');

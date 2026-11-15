@@ -4160,7 +4160,7 @@ const legacyCompanionFireV9 = `        private const val BG_ACTION_PREFS = "YAAD
             }
         }`;
 
-const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+const legacyCompanionFireV10 = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
         private const val BG_ACTION_KEY = "queued_actions"
         private var activeMediaPlayer: android.media.MediaPlayer? = null
         @Volatile
@@ -4254,14 +4254,108 @@ const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_
             }
         }`;
 
+const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+        private const val BG_ACTION_KEY = "queued_actions"
+        private var activeMediaPlayer: android.media.MediaPlayer? = null
+        @Volatile
+        private var isAppInForegroundState: Boolean = false
+
+        fun onAppTaskRemoved() {
+            isAppInForegroundState = false
+        }
+
+        fun isAppInForeground(context: Context): Boolean {
+            if (YaadAlarmPopupActivity.isShowingAnyPopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) return false
+            if (YaadGeofenceService.isScreenOffOrLockedStatic(context)) return false
+            val instance = getLocalNotificationsInstance() ?: return false
+            val act = instance.activity ?: return false
+            if (act.isFinishing || act.isDestroyed) return false
+            if (!isAppInForegroundState && !act.hasWindowFocus()) return false
+            try {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (pm != null && !pm.isInteractive) return false
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                if (km != null && km.isKeyguardLocked) return false
+            } catch (e: Exception) {
+            }
+            return true
+        }
+
+        fun evaluateJsInWebView(jsCode: String) {
+            try {
+                val instance = getLocalNotificationsInstance() ?: return
+                val wv = instance.bridge?.webView ?: return
+                wv.post {
+                    try {
+                        wv.evaluateJavascript(jsCode, null)
+                    } catch (e: Exception) {
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        fun stopActiveMediaPlayer() {
+            try {
+                activeMediaPlayer?.let { mp ->
+                    if (mp.isPlaying) {
+                        mp.stop()
+                    }
+                    mp.release()
+                }
+            } catch (e: Exception) {
+            } finally {
+                activeMediaPlayer = null
+            }
+        }
+
+        fun fireReceived(notification: JSObject?) {
+            getLocalNotificationsInstance()?.dispatchReceived(notification)
+        }
+
+        fun fireActionPerformed(dataJson: JSObject): Boolean {
+            val instance = getLocalNotificationsInstance()
+            val act = instance?.activity
+            if (instance != null && act != null && !act.isFinishing && !act.isDestroyed) {
+                instance.dispatchActionPerformed(dataJson)
+                return true
+            }
+            return false
+        }
+
+        fun queueBackgroundAction(context: Context, dataJson: JSObject) {
+            try {
+                val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BG_ACTION_KEY, "[]")
+                val arr = JSONArray(existing)
+                val newRemId = dataJson.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                val filteredArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val itemStr = arr.optString(i, null) ?: continue
+                    if (newRemId.isNotEmpty()) {
+                        try {
+                            val prevObj = JSObject(itemStr)
+                            val prevRemId = prevObj.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (prevRemId == newRemId) continue
+                        } catch (e: Exception) {
+                        }
+                    }
+                    filteredArr.put(itemStr)
+                }
+                filteredArr.put(dataJson.toString())
+                prefs.edit().putString(BG_ACTION_KEY, filteredArr.toString()).apply()
+            } catch (e: Exception) {
+            }
+        }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
   'companion isAppInForeground, onAppTaskRemoved, evaluateJsInWebView, stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
   origCompanionFire,
   patchedCompanionFire,
-  'if (YaadAlarmPopupActivity.isShowingAnyPopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) return false',
-  [legacyCompanionFireV9, legacyCompanionFireV8, legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3, legacyCompanionFireV4, legacyCompanionFireV5, legacyCompanionFireV6, legacyCompanionFireV7]
+  'if (!isAppInForegroundState && !act.hasWindowFocus()) return false',
+  [legacyCompanionFireV10, legacyCompanionFireV9, legacyCompanionFireV8, legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3, legacyCompanionFireV4, legacyCompanionFireV5, legacyCompanionFireV6, legacyCompanionFireV7]
 );
 
 // 8. Create standalone YaadAlarmPopupActivity.kt (Out-of-app minimal theme-matched 1-minute notification card)
@@ -5372,7 +5466,16 @@ class YaadAlarmPopupActivity : Activity() {
         if (forceExpand) {
             isMinimizedToFloatingBubble = false
             isMinimizedBubbleState = false
-        } else if (data.getBooleanExtra("yaad_keep_minimized_bubble", false)) {
+            if (isGeofencePopup) {
+                try {
+                    YaadGeofenceService.setGeofenceItemMinimizedState(this, geofenceItemId, false, notifyWebView = true)
+                } catch (e: Exception) {
+                }
+            }
+        } else if (
+            data.getBooleanExtra("yaad_keep_minimized_bubble", false) ||
+            (isGeofencePopup && YaadGeofenceService.isGeofenceItemMinimized(this, geofenceItemId))
+        ) {
             isMinimizedToFloatingBubble = true
             isMinimizedBubbleState = true
         }
@@ -5780,13 +5883,14 @@ class YaadAlarmPopupActivity : Activity() {
             snoozeRow.layoutParams = snoozeRowLp
 
             val passThroughSnoozeBtn = buildActionButton(
-                text = if (isPersian) "⏱ الان نه (Snooze)" else "⏱ Not Now (Snooze)",
+                text = if (isPersian) "⏱ الان نه (۵ دقیقه)" else "⏱ Not Now (5m Snooze)",
                 bgColor = Color.parseColor("#78350F"),
                 borderColor = Color.parseColor("#F59E0B"),
                 textColor = Color.parseColor("#FEF3C7"),
                 strokeDp = 1.5f
             ) {
-                YaadGeofenceService.snoozeGeofenceItemForPassingThrough(this, itemId, 30 * 60_000L, itemNotifId)
+                YaadGeofenceService.setGeofenceItemMinimizedState(this, itemId, false, notifyWebView = true)
+                YaadGeofenceService.snoozeGeofenceItemForPassingThrough(this, itemId, 5 * 60_000L, itemNotifId)
                 if (itemsArr.length() <= 1) {
                     releaseScreenWakeLock()
                     finish()
@@ -6113,7 +6217,7 @@ class YaadAlarmPopupActivity : Activity() {
         val btnMargin = dp(3f)
 
         val passThroughSnoozeBtn = buildActionButton(
-            text = if (isPersian) "⏱ الان نه (Snooze)" else "⏱ Not Now (Snooze)",
+            text = if (isPersian) "⏱ الان نه (۵ دقیقه)" else "⏱ Not Now (5m Snooze)",
             bgColor = Color.parseColor("#78350F"),
             borderColor = Color.parseColor("#F59E0B"),
             textColor = Color.parseColor("#FEF3C7"),
@@ -6930,6 +7034,7 @@ class YaadAlarmPopupActivity : Activity() {
         if (isGeofencePopup) {
             try {
                 YaadGeofenceService.setGeofenceAudioMuteState(this, true)
+                YaadGeofenceService.setGeofenceItemMinimizedState(this, geofenceItemId, true, notifyWebView = true)
             } catch (e: Exception) {
             }
         } else {
@@ -7010,6 +7115,12 @@ class YaadAlarmPopupActivity : Activity() {
     private fun restoreFromFloatingButtonMode() {
         isMinimizedToFloatingBubble = false
         isMinimizedBubbleState = false
+        if (isGeofencePopup) {
+            try {
+                YaadGeofenceService.setGeofenceItemMinimizedState(this, geofenceItemId, false, notifyWebView = true)
+            } catch (e: Exception) {
+            }
+        }
         restoreFullScreenWindowMode()
         intent?.removeExtra("yaad_keep_minimized_bubble")
         intent?.putExtra("yaad_force_expand_popup", true)
@@ -7148,6 +7259,7 @@ class YaadAlarmPopupActivity : Activity() {
             stopPulseAnimators()
             releaseScreenWakeLock()
             if (isGeofencePopup) {
+                YaadGeofenceService.setGeofenceItemMinimizedState(this, geofenceItemId, false, notifyWebView = true)
                 YaadGeofenceService.acknowledgeGeofenceItemForCycle(this, geofenceItemId, notificationId)
                 finish()
                 overridePendingTransition(0, 0)
@@ -7258,15 +7370,18 @@ class YaadAlarmPopupActivity : Activity() {
     }
 
     private fun performSnoozeGeofenceAction() {
+        isMinimizedToFloatingBubble = false
+        isMinimizedBubbleState = false
         countDownTimer?.cancel()
         stopPulseAnimators()
         releaseScreenWakeLock()
         clearSuspendedGeofenceIfMatching(geofenceItemId)
         try {
+            YaadGeofenceService.setGeofenceItemMinimizedState(this, geofenceItemId, false, notifyWebView = true)
             YaadGeofenceService.snoozeGeofenceItemForPassingThrough(
                 this,
                 geofenceItemId,
-                30 * 60_000L,
+                5 * 60_000L,
                 notificationId
             )
         } catch (e: Exception) {
@@ -8228,9 +8343,11 @@ class YaadAlarmPopupActivity : Activity() {
                 return
             }
             if (activeNotificationId == notificationId || notificationId == Int.MIN_VALUE || activeBundledTimedReminders.isEmpty()) {
+                isMinimizedBubbleState = false
                 act.runOnUiThread {
                     try {
                         if (!act.isFinishing && !act.isDestroyed) {
+                            act.isMinimizedToFloatingBubble = false
                             act.countDownTimer?.cancel()
                             act.stopPulseAnimators()
                             act.releaseScreenWakeLock()
@@ -8760,7 +8877,8 @@ class YaadGeofenceService : Service(), LocationListener {
         if (action == ACTION_SNOOZE_GEOFENCE_ALERT) {
             val notifId = intent?.getIntExtra(EXTRA_NOTIFICATION_ID, Int.MIN_VALUE) ?: Int.MIN_VALUE
             val targetItemId = intent?.getStringExtra(EXTRA_GEOFENCE_ITEM_ID) ?: activeGeofenceItemId
-            snoozeGeofenceItemForPassingThrough(applicationContext, targetItemId, 30 * 60_000L, notifId)
+            setGeofenceItemMinimizedState(applicationContext, targetItemId, false, notifyWebView = true)
+            snoozeGeofenceItemForPassingThrough(applicationContext, targetItemId, 5 * 60_000L, notifId)
             if (!shouldRun(applicationContext) || !hasLocationPermission(applicationContext)) {
                 stopLocationUpdates()
                 releaseServiceCpuWakeLock()
@@ -9213,13 +9331,10 @@ class YaadGeofenceService : Service(), LocationListener {
             // Stream live native GPS fix to WebView whenever app is in foreground for <1s in-app response
             // Throttled to once every 850ms (or >= 2m movement) to prevent WebView JS bridge queue congestion.
             if (appInForeground) {
-                if (!screenOffOrLocked && activeGeofenceNotificationId != Int.MIN_VALUE) {
-                    try {
-                        NotificationManagerCompat.from(this).cancel(activeGeofenceNotificationId)
-                    } catch (e: Exception) {
-                    }
+                if (!screenOffOrLocked) {
+                    cancelAllGeofenceAlertNotifications(this)
                     if (YaadAlarmPopupActivity.isShowingGeofencePopup()) {
-                        YaadAlarmPopupActivity.dismissIfMatching(activeGeofenceNotificationId)
+                        YaadAlarmPopupActivity.dismissIfMatching(Int.MIN_VALUE)
                     }
                 }
                 val lat = location.latitude
@@ -9280,8 +9395,23 @@ class YaadGeofenceService : Service(), LocationListener {
                 if (pausedUntil > now) {
                     continue
                 } else if (pausedUntil in 1..now) {
-                    editor.remove(pausedUntilKey)
-                    lastInwardMoveTimeMap[id] = now
+                    val cleanId = id.removePrefix("loc_").removePrefix("rem_")
+                    for (sfx in listOf(id, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
+                        editor.remove("paused_until_\$sfx")
+                        editor.remove("cooldown_until_\$sfx")
+                        editor.putBoolean("completed_cycle_\$sfx", false)
+                        editor.putBoolean("sonar_done_\$sfx", false)
+                        editor.remove("five_hz_start_\$sfx")
+                        editor.remove("banner_start_\$sfx")
+                        editor.remove("banner_text_\$sfx")
+                        editor.remove("latched_mode_\$sfx")
+                        val prefix = "\${sfx}_"
+                        for (k in wokenAlertPhaseSet.toList()) {
+                            if (k.startsWith(prefix)) wokenAlertPhaseSet.remove(k)
+                        }
+                        lastInwardMoveTimeMap[sfx] = now
+                        lastOutwardMoveTimeMap[sfx] = now
+                    }
                     prefsModified = true
                 }
 
@@ -10328,6 +10458,12 @@ class YaadGeofenceService : Service(), LocationListener {
         val distFormatted = if (isEn) "\${distance}m" else "\${toPersianDigits(distance.toString())} متر"
         val headerTitle = if (notifTitle.contains("•")) notifTitle else "\$notifTitle  •  \$distFormatted"
 
+        // Never post or keep any status-bar / heads-up notification when the user is inside the unlocked app!
+        if (LocalNotificationsPlugin.isAppInForeground(this) && !isScreenOffOrLocked()) {
+            cancelAllGeofenceAlertNotifications(this)
+            return sourceJsonStr
+        }
+
         val builder = NotificationCompat.Builder(this, targetChannelId)
             .setSmallIcon(smallIconRes)
             .setContentTitle(headerTitle)
@@ -10338,7 +10474,7 @@ class YaadGeofenceService : Service(), LocationListener {
             .setPriority(if (showFullScreen) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_LOW)
             .setCategory(if (showFullScreen) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOngoing(!visualOnlyBanner)
+            .setOngoing(showFullScreen && !visualOnlyBanner)
             .setOnlyAlertOnce(!showFullScreen)
             .setAutoCancel(false)
             .setGroup(GEOFENCE_MULTI_GROUP_KEY)
@@ -10346,7 +10482,7 @@ class YaadGeofenceService : Service(), LocationListener {
             .setContentIntent(fullScreenPi)
             .addAction(
                 0,
-                if (isEn) "⏱ Not Now (Snooze)" else "⏱ الان نه (Snooze)",
+                if (isEn) "⏱ Not Now (5m)" else "⏱ الان نه (۵ دقیقه)",
                 snoozePi
             )
             .addAction(
@@ -10379,7 +10515,15 @@ class YaadGeofenceService : Service(), LocationListener {
             // Collapse the heads-up peek banner after ~3 seconds and move the notification quietly into the notification shade list!
             mainHandler.postDelayed({
                 try {
+                    if (LocalNotificationsPlugin.isAppInForeground(this) && !isScreenOffOrLocked()) {
+                        cancelAllGeofenceAlertNotifications(this)
+                        return@postDelayed
+                    }
                     if (activeGeofenceNotificationId == notificationId && activeGeofenceItemId == id) {
+                        try {
+                            nmCompat.cancel(notificationId)
+                        } catch (e: Exception) {
+                        }
                         val latestDist = if (lastNotifiedStatusBarDistance > 0) lastNotifiedStatusBarDistance else distance
                         buildAndPostStatusBarNotification(
                             notificationId = notificationId,
@@ -10394,7 +10538,7 @@ class YaadGeofenceService : Service(), LocationListener {
                             bearingDeg = activeGeofenceBearingDeg,
                             sonarMode = activeGeofenceSonarMode,
                             isEn = isEn,
-                            isLiveUpdate = true,
+                            isLiveUpdate = false,
                             showFullScreen = false,
                             postToStatusBar = true,
                             visualOnlyBanner = visualOnlyBanner,
@@ -10507,16 +10651,97 @@ class YaadGeofenceService : Service(), LocationListener {
             }
         }
 
+        fun cancelAllGeofenceAlertNotifications(context: Context) {
+            try {
+                val nmCompat = NotificationManagerCompat.from(context)
+                if (activeGeofenceNotificationId != Int.MIN_VALUE) {
+                    nmCompat.cancel(activeGeofenceNotificationId)
+                }
+                nmCompat.cancel(GEOFENCE_GROUP_SUMMARY_ID)
+                val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                if (nm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    for (sbn in nm.activeNotifications) {
+                        if (sbn.id >= 700_000_000 && sbn.id != RADAR_FOREGROUND_NOTIFICATION_ID && sbn.id != GPS_WARNING_NOTIFICATION_ID) {
+                            nmCompat.cancel(sbn.id)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        private val minimizedGeofenceItemMap = java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+
+        fun setGeofenceItemMinimizedState(
+            context: Context,
+            rawItemId: String,
+            minimized: Boolean,
+            notifyWebView: Boolean = true
+        ) {
+            try {
+                val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
+                val cleanId = targetId.removePrefix("loc_").removePrefix("rem_")
+                minimizedGeofenceItemMap["__global__"] = minimized
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val editor = prefs.edit()
+                editor.putBoolean("minimized_bubble___global__", minimized)
+                if (cleanId.isNotEmpty()) {
+                    for (sfx in listOf(targetId, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
+                        minimizedGeofenceItemMap[sfx] = minimized
+                        editor.putBoolean("minimized_bubble_\$sfx", minimized)
+                    }
+                }
+                editor.apply()
+                if (minimized) {
+                    setGeofenceAudioMuteState(context, true)
+                }
+                if (notifyWebView) {
+                    val safeId = targetId.replace("'", "").replace("\\\\", "")
+                    LocalNotificationsPlugin.evaluateJsInWebView(
+                        "window.dispatchEvent(new CustomEvent('yaad:set-geofence-minimized', { detail: { itemId: '\$safeId', minimized: \$minimized } }));"
+                    )
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        fun isGeofenceItemMinimized(context: Context, rawItemId: String = ""): Boolean {
+            return try {
+                val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
+                val cleanId = targetId.removePrefix("loc_").removePrefix("rem_")
+                if (cleanId.isNotEmpty()) {
+                    minimizedGeofenceItemMap[cleanId]?.let { return it }
+                    minimizedGeofenceItemMap[targetId]?.let { return it }
+                }
+                minimizedGeofenceItemMap["__global__"]?.let { return it }
+                val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                if (cleanId.isNotEmpty() && prefs.contains("minimized_bubble_\$cleanId")) {
+                    val v = prefs.getBoolean("minimized_bubble_\$cleanId", false)
+                    minimizedGeofenceItemMap[cleanId] = v
+                    return v
+                }
+                val g = prefs.getBoolean("minimized_bubble___global__", false)
+                minimizedGeofenceItemMap["__global__"] = g
+                g
+            } catch (e: Exception) {
+                false
+            }
+        }
+
         fun onAppForegrounded(context: Context) {
             try {
                 if (!isScreenOffOrLockedStatic(context)) {
                     isInScreenOffSession = false
-                    if (activeGeofenceNotificationId != Int.MIN_VALUE) {
-                        NotificationManagerCompat.from(context).cancel(activeGeofenceNotificationId)
-                        if (YaadAlarmPopupActivity.isShowingGeofencePopup()) {
-                            YaadAlarmPopupActivity.dismissIfMatching(activeGeofenceNotificationId)
-                        }
+                    cancelAllGeofenceAlertNotifications(context)
+                    if (YaadAlarmPopupActivity.isShowingGeofencePopup()) {
+                        YaadAlarmPopupActivity.dismissIfMatching(Int.MIN_VALUE)
                     }
+                    val curItemId = activeGeofenceItemId
+                    val isMin = isGeofenceItemMinimized(context, curItemId)
+                    val safeId = curItemId.replace("'", "").replace("\\\\", "")
+                    LocalNotificationsPlugin.evaluateJsInWebView(
+                        "window.dispatchEvent(new CustomEvent('yaad:set-geofence-minimized', { detail: { itemId: '\$safeId', minimized: \$isMin } }));"
+                    )
                 }
             } catch (e: Exception) {
             }
@@ -11249,12 +11474,13 @@ class YaadGeofenceService : Service(), LocationListener {
         fun snoozeGeofenceItemForPassingThrough(
             context: Context,
             rawItemId: String,
-            durationMs: Long = 30 * 60_000L,
+            durationMs: Long = 5 * 60_000L,
             notificationIdToCancel: Int = Int.MIN_VALUE,
             notifyWebView: Boolean = true
         ) {
             val targetId = rawItemId.ifEmpty { activeGeofenceItemId }
             geofenceAudioMuted = false
+            setGeofenceItemMinimizedState(context, targetId, false, notifyWebView = true)
             YaadAlarmPopupActivity.clearSuspendedGeofenceIfMatching(targetId)
             stopGeofenceAudio(context, notificationIdToCancel)
             YaadAlarmPopupActivity.dismissIfMatching(notificationIdToCancel)
@@ -11269,12 +11495,16 @@ class YaadGeofenceService : Service(), LocationListener {
                 for (sfx in listOf(targetId, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
                     editor.putLong("paused_until_\$sfx", resumeAt)
                     editor.putLong("cooldown_until_\$sfx", resumeAt)
-                    editor.putBoolean("completed_cycle_\$sfx", true)
-                    editor.putBoolean("sonar_done_\$sfx", true)
-                    editor.putBoolean("inside_\$sfx", true)
+                    editor.putBoolean("completed_cycle_\$sfx", false)
+                    editor.putBoolean("sonar_done_\$sfx", false)
                     editor.remove("five_hz_start_\$sfx")
                     editor.remove("banner_start_\$sfx")
                     editor.remove("banner_text_\$sfx")
+                    editor.remove("latched_mode_\$sfx")
+                    val prefix = "\${sfx}_"
+                    for (k in wokenAlertPhaseSet.toList()) {
+                        if (k.startsWith(prefix)) wokenAlertPhaseSet.remove(k)
+                    }
                     outsideSampleCountMap[sfx] = 0
                 }
                 editor.apply()
@@ -11750,11 +11980,8 @@ class YaadGeofenceService : Service(), LocationListener {
         fun ensureServiceState(context: Context) {
             try {
                 val appCtx = context.applicationContext
-                if (LocalNotificationsPlugin.isAppInForeground(appCtx) && !isScreenOffOrLockedStatic(appCtx) && activeGeofenceNotificationId != Int.MIN_VALUE) {
-                    try {
-                        NotificationManagerCompat.from(appCtx).cancel(activeGeofenceNotificationId)
-                    } catch (e: Exception) {
-                    }
+                if (LocalNotificationsPlugin.isAppInForeground(appCtx) && !isScreenOffOrLockedStatic(appCtx)) {
+                    cancelAllGeofenceAlertNotifications(appCtx)
                 }
                 val serviceIntent = Intent(appCtx, YaadGeofenceService::class.java)
                 if (shouldRun(appCtx) && hasLocationPermission(appCtx)) {
@@ -11785,6 +12012,21 @@ class YaadGeofenceService : Service(), LocationListener {
         }
 
         @android.webkit.JavascriptInterface
+        fun dismissActiveGeofenceStatusBarNotification() {
+            cancelAllGeofenceAlertNotifications(appContext)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun setGeofenceMinimized(itemId: String, minimized: Boolean) {
+            setGeofenceItemMinimizedState(appContext, itemId, minimized, notifyWebView = false)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun isGeofenceMinimized(itemId: String): Boolean {
+            return isGeofenceItemMinimized(appContext, itemId)
+        }
+
+        @android.webkit.JavascriptInterface
         fun setGeofenceAudioMuted(itemId: String, muted: Boolean) {
             setGeofenceAudioMuteState(appContext, muted)
         }
@@ -11811,6 +12053,7 @@ class YaadGeofenceService : Service(), LocationListener {
 
         @android.webkit.JavascriptInterface
         fun acknowledgeGeofenceItem(itemId: String) {
+            setGeofenceItemMinimizedState(appContext, itemId, false, notifyWebView = false)
             acknowledgeGeofenceItemForCycle(appContext, itemId, notifyWebView = false)
         }
 
@@ -11826,6 +12069,7 @@ class YaadGeofenceService : Service(), LocationListener {
 
         @android.webkit.JavascriptInterface
         fun resetGeofenceState(itemId: String) {
+            setGeofenceItemMinimizedState(appContext, itemId, false, notifyWebView = false)
             resetSavedGeofenceState(appContext, itemId)
         }
 

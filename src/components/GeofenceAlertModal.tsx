@@ -6,10 +6,15 @@ import appIcon from '../assets/images/icon.png';
 import {
   acknowledgeGeofenceAlert,
   calculateHaversineDistance,
+  dismissActiveGeofenceStatusBarNotification,
   EvaluatedGeofenceAlertItem,
+  expireInAppGeofenceVisualPhaseAfter30s,
+  GEOFENCE_IN_APP_VISUAL_MAX_MS,
   GeofenceScenarioPhase,
+  getGeofenceMinimizedState,
   openGoogleMapsDirections,
   pauseGeofenceAlertTemporarily,
+  setGeofenceMinimizedState,
   snoozeGeofenceAlertPassThrough,
   toggleGeofenceAlertMute,
 } from '../utils/geofenceManager';
@@ -43,6 +48,7 @@ interface GeofenceAlertModalProps {
   language?: 'fa' | 'en';
   onGotIt: (targetId?: string, locationTitle?: string) => void;
   onSnoozePassThrough?: (alert: GeofenceAlertData) => void;
+  onAutoTurnOffVisual?: (alert: GeofenceAlertData) => void;
   onEditRadius: (alert: GeofenceAlertData) => void;
   onStartDirections?: (alert: GeofenceAlertData) => void;
 }
@@ -54,6 +60,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   language = 'fa',
   onGotIt,
   onSnoozePassThrough,
+  onAutoTurnOffVisual,
   onEditRadius,
   onStartDirections,
 }) => {
@@ -63,7 +70,10 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   );
   const [pingBeat, setPingBeat] = useState<number>(0);
   const [mutedMap, setMutedMap] = useState<Record<string, boolean>>({});
-  const [isMinimized, setIsMinimized] = useState<boolean>(false);
+  const [isMinimized, setIsMinimized] = useState<boolean>(() => {
+    const firstId = alerts?.[0]?.targetId || alert?.targetId;
+    return getGeofenceMinimizedState(firstId);
+  });
 
   useEffect(() => {
     if (userPosition) {
@@ -133,6 +143,96 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   const topPriorityAlert = sortedAlerts[0] || null;
   const isMultiMode = sortedAlerts.length > 1;
 
+  // 1) Whenever in-app geofence alert is active, immediately dismiss any overlapping Android status-bar / heads-up notification
+  useEffect(() => {
+    if (sortedAlerts.length === 0) return;
+    dismissActiveGeofenceStatusBarNotification();
+    const handleVisibilityOrFocus = () => {
+      if (typeof document === 'undefined' || document.visibilityState === 'visible') {
+        dismissActiveGeofenceStatusBarNotification();
+      }
+    };
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+    return () => {
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+    };
+  }, [sortedAlerts.length, topPriorityAlert?.targetId, topPriorityAlert?.scenarioPhase]);
+
+  // 2) Synchronize minimized floating button state across out-of-app Android popup and in-app modal
+  useEffect(() => {
+    if (!topPriorityAlert) return;
+    const syncMinimizedFromBridge = () => {
+      const nextMin = getGeofenceMinimizedState(topPriorityAlert.targetId);
+      setIsMinimized((prev) => {
+        if (nextMin && !prev) {
+          setSubmarineSonarMuted(true);
+          stopSubmarineSonarLoop();
+        }
+        return nextMin;
+      });
+    };
+    syncMinimizedFromBridge();
+
+    const handleNativeMinimizeEvent = (e: Event) => {
+      const customEv = e as CustomEvent<{ itemId?: string; minimized?: boolean }>;
+      if (customEv.detail && typeof customEv.detail.minimized === 'boolean') {
+        const minVal = Boolean(customEv.detail.minimized);
+        setGeofenceMinimizedState(
+          customEv.detail.itemId || topPriorityAlert.targetId,
+          minVal,
+          false
+        );
+        if (minVal) {
+          setSubmarineSonarMuted(true);
+          stopSubmarineSonarLoop();
+        }
+        setIsMinimized(minVal);
+      } else {
+        syncMinimizedFromBridge();
+      }
+    };
+
+    window.addEventListener('yaad:set-geofence-minimized', handleNativeMinimizeEvent);
+    window.addEventListener('focus', syncMinimizedFromBridge);
+    document.addEventListener('visibilitychange', syncMinimizedFromBridge);
+    return () => {
+      window.removeEventListener('yaad:set-geofence-minimized', handleNativeMinimizeEvent);
+      window.removeEventListener('focus', syncMinimizedFromBridge);
+      document.removeEventListener('visibilitychange', syncMinimizedFromBridge);
+    };
+  }, [topPriorityAlert?.targetId]);
+
+  // 3) 30-Second Auto-Turn-Off Timer for In-App Full-Screen Visual Alert (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 30_000`)
+  const activeVisualPhaseKey = topPriorityAlert
+    ? `${topPriorityAlert.targetId}_${topPriorityAlert.scenarioPhase || topPriorityAlert.triggerType}`
+    : '';
+  useEffect(() => {
+    if (!topPriorityAlert || isMinimized) return;
+    const targetAlert = topPriorityAlert;
+    const timeoutMs =
+      typeof targetAlert.phaseRemainingSeconds === 'number' &&
+      targetAlert.phaseRemainingSeconds > 0 &&
+      targetAlert.phaseRemainingSeconds <= 30
+        ? Math.max(1000, targetAlert.phaseRemainingSeconds * 1000)
+        : GEOFENCE_IN_APP_VISUAL_MAX_MS;
+
+    const timerId = window.setTimeout(() => {
+      expireInAppGeofenceVisualPhaseAfter30s(targetAlert.targetId, targetAlert.scenarioPhase);
+      stopSubmarineSonarLoop();
+      stopAlarmRinging();
+      if (onAutoTurnOffVisual) {
+        onAutoTurnOffVisual(targetAlert);
+      }
+    }, timeoutMs);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeVisualPhaseKey, isMinimized]);
+
   // Listen to submarine sonar ping events to keep the pulse animation in exact lockstep with each sonar ping
   useEffect(() => {
     if (sortedAlerts.length === 0 || typeof window === 'undefined') return;
@@ -146,6 +246,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   }, [sortedAlerts.length]);
 
   const handleStopItemOperation = (item: GeofenceAlertData) => {
+    setGeofenceMinimizedState(item.targetId, false, true);
     if (sortedAlerts.length <= 1) {
       setSubmarineSonarMuted(false);
       stopSubmarineSonarLoop();
@@ -162,6 +263,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     stopAlarmRinging();
     setIsMinimized(false);
     sortedAlerts.forEach((item) => {
+      setGeofenceMinimizedState(item.targetId, false, true);
       acknowledgeGeofenceAlert(item.targetId);
       onGotIt(item.targetId, item.locationTitle);
     });
@@ -171,17 +273,35 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     setSubmarineSonarMuted(true);
     stopSubmarineSonarLoop();
     setIsMinimized(true);
+    if (topPriorityAlert) {
+      setGeofenceMinimizedState(topPriorityAlert.targetId, true, true);
+    }
   };
 
   const handleRestoreMinimizedModal = () => {
     setIsMinimized(false);
+    if (topPriorityAlert) {
+      setGeofenceMinimizedState(topPriorityAlert.targetId, false, true);
+      const cleanId = topPriorityAlert.targetId.replace(/^(loc_|rem_)/, '');
+      const explicitlyMuted = Boolean(mutedMap[cleanId] ?? topPriorityAlert.isAudioMuted);
+      setSubmarineSonarMuted(explicitlyMuted);
+      if (!explicitlyMuted && !topPriorityAlert.isVisualOnly && topPriorityAlert.playAudio !== false) {
+        updateSubmarineSonarDistance(
+          topPriorityAlert.initialDistance,
+          topPriorityAlert.radius || 200,
+          topPriorityAlert.sonarMode || 'enter'
+        );
+      }
+    }
   };
 
   const handleSnoozePassThroughItem = (item: GeofenceAlertData) => {
+    setGeofenceMinimizedState(item.targetId, false, true);
     if (sortedAlerts.length <= 1) {
       setSubmarineSonarMuted(false);
       stopSubmarineSonarLoop();
       stopAlarmRinging();
+      setIsMinimized(false);
     }
     snoozeGeofenceAlertPassThrough(item.targetId);
     if (onSnoozePassThrough) {
@@ -482,7 +602,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               className="w-[calc(100%-8px)] min-h-[40px] py-2 px-3 rounded-2xl bg-gradient-to-r from-[#FF8C00] to-amber-500 hover:from-[#FF9E1F] hover:to-amber-400 text-stone-950 font-black text-xs sm:text-sm transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-amber-500/25 border border-amber-300/80"
             >
               <Clock className="w-4 h-4 stroke-[2.5] shrink-0" />
-              <span>{isEn ? 'Not Now (Snooze)' : 'الان نه (Snooze)'}</span>
+              <span>{isEn ? 'Not Now (5m Snooze)' : 'الان نه (۵ دقیقه)'}</span>
             </button>
 
             {/* 4B. 4 Concise Action Buttons (Compact): قطع صدا، توقف، مسیریابی، ویرایش */}
@@ -635,7 +755,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                       className="w-full min-h-[40px] py-2 px-3 rounded-xl bg-gradient-to-r from-[#FF8C00] to-amber-500 hover:from-[#FF9E1F] hover:to-amber-400 text-stone-950 font-black text-xs transition-all cursor-pointer active:scale-95 flex items-center justify-center gap-1.5 shadow-md border border-amber-300/80"
                     >
                       <Clock className="w-4 h-4 stroke-[2.5] shrink-0" />
-                      <span>{isEn ? 'Not Now (Snooze)' : 'الان نه (Snooze)'}</span>
+                      <span>{isEn ? 'Not Now (5m Snooze)' : 'الان نه (۵ دقیقه)'}</span>
                     </button>
 
                     {/* 4 Concise Buttons: قطع صدا، توقف، مسیریابی، ویرایش */}
