@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Reminder, Category, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, LocationCheckpointConfig, Occasion, OccasionType } from './types';
+import { Reminder, Category, ReminderStatus, IdeaNote, AppSettings, AppTheme, SavedLocation, Occasion, OccasionType } from './types';
 import { getJalaliComponents, getGregorianComponents, formatJalaliFull, toPersianDigits, matchesReminderSearch, matchesIdeaSearch, matchesLocationSearch, matchesOccasionSearch, reconcileReminderWithCurrentTimezone } from './utils/jalali';
 import {
   setGlobalVolume,
   setGlobalVibration,
   stopAlarmRinging,
   unlockAudio,
+  startSubmarineSonarLoop,
   updateSubmarineSonarDistance,
   stopSubmarineSonarLoop,
   setSubmarineSonarMuted,
@@ -2583,54 +2584,35 @@ export default function App() {
     );
   };
 
-  const handleUpdateLocationGeofence = (
-    locationId: string,
-    updates: Partial<LocationCheckpointConfig>
-  ) => {
-    resetGeofenceProximityState(locationId);
-    const nextLocations = savedLocationsRef.current.map((loc) => {
-      if (loc.id !== locationId || !loc.geofence) return loc;
-      return {
-        ...loc,
-        geofence: {
-          ...loc.geofence,
-          ...updates,
-          lastTriggeredAt: undefined,
-          hasTriggered: false,
-        },
-      };
-    });
-    savedLocationsRef.current = nextLocations;
-    setSavedLocations(nextLocations);
-
-    syncGeofencesWithNativeAndroid(
-      true,
-      remindersRef.current,
-      nextLocations,
-      settings.language
-    );
-
-    if (typeof updates.radius === 'number') {
-      setActiveGeofenceAlerts((prev) =>
-        prev.map((item) =>
-          item.targetId === locationId ? { ...item, radius: updates.radius! } : item
+  const handleSimulateLocationCheckpointTrigger = (location: SavedLocation, type: 'enter' | 'exit') => {
+    const displayLocTitle = formatSavedLocationTitle(location.title, settings.language);
+    const locDetails = [location.description, location.geofence?.customMessage]
+      .filter(Boolean)
+      .join(' — ');
+    const simDist = currentUserPosition
+      ? calculateHaversineDistance(
+          currentUserPosition.latitude,
+          currentUserPosition.longitude,
+          location.latitude,
+          location.longitude
         )
-      );
-    }
+      : Math.round((location.geofence?.radius || 100) * 0.6);
 
-    const latestPos = currentUserPositionRef.current || getLastKnownPosition();
-    if (latestPos) {
-      setTimeout(() => {
-        evaluateUserPositionAgainstAllGeofences(latestPos, true);
-      }, 30);
-    }
+    setActiveGeofenceAlert({
+      id: `sim_geo_${location.id}_${Date.now()}`,
+      targetType: 'location',
+      targetId: location.id,
+      locationTitle: displayLocTitle,
+      description: locDetails || undefined,
+      triggerType: type,
+      initialDistance: simDist,
+      radius: location.geofence?.radius || 100,
+      latitude: location.latitude,
+      longitude: location.longitude,
+    });
 
-    if (updates.triggerOn) {
-      showSyncNotification(
-        isEn
-          ? 'Geofence alert condition updated.'
-          : 'شرط اعلام حصار مکانی بروزرسانی شد.'
-      );
+    if (location.geofence?.playAudio !== false) {
+      startSubmarineSonarLoop(simDist, location.geofence?.radius || 100);
     }
   };
 
@@ -4586,7 +4568,7 @@ export default function App() {
                         language={settings.language}
                         userPosition={currentUserPosition}
                         onToggleCheckpoint={handleToggleLocationCheckpoint}
-                        onUpdateGeofence={handleUpdateLocationGeofence}
+                        onSimulateCheckpointTrigger={handleSimulateLocationCheckpointTrigger}
                       />
                     ))}
                 </div>

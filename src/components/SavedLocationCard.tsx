@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { 
   MapPin, 
   ExternalLink, 
@@ -14,18 +14,12 @@ import {
   Radio,
   Pause,
   Play,
-  Crosshair,
-  Sliders,
-  X
+  Crosshair
 } from 'lucide-react';
-import { SavedLocation, LocationCheckpointConfig } from '../types';
+import { SavedLocation } from '../types';
 import { formatJalaliFull, toPersianDigits } from '../utils/jalali';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
-import {
-  calculateHaversineDistance,
-  radiusToLogSliderPosition,
-  logSliderPositionToRadius,
-} from '../utils/geofenceManager';
+import { calculateHaversineDistance } from '../utils/geofenceManager';
 
 interface SavedLocationCardProps {
   location: SavedLocation;
@@ -36,7 +30,7 @@ interface SavedLocationCardProps {
   language?: AppLanguage;
   userPosition?: { latitude: number; longitude: number } | null;
   onToggleCheckpoint?: (locationId: string) => void;
-  onUpdateGeofence?: (locationId: string, updates: Partial<LocationCheckpointConfig>) => void;
+  onSimulateCheckpointTrigger?: (location: SavedLocation, type: 'enter' | 'exit') => void;
 }
 
 export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
@@ -48,12 +42,11 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   language = 'fa',
   userPosition = null,
   onToggleCheckpoint,
-  onUpdateGeofence,
+  onSimulateCheckpointTrigger,
 }) => {
   const isEn = language === 'en';
   const [copied, setCopied] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
-  const [activeInlineEdit, setActiveInlineEdit] = useState<'radius' | 'condition' | null>(null);
   const formattedDate = formatJalaliFull(location.createdAt, language);
   const displayTitle = formatSavedLocationTitle(location.title, language);
 
@@ -71,17 +64,6 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   const isCheckpointActive = location.geofence?.enabled === true;
   const radius = location.geofence?.radius || 100;
   const triggerOn = location.geofence?.triggerOn === 'exit' ? 'exit' : 'enter';
-  const [draftRadius, setDraftRadius] = useState<number>(radius);
-
-  useEffect(() => {
-    setDraftRadius(radius);
-  }, [radius]);
-
-  useEffect(() => {
-    if (!isCheckpointActive) {
-      setActiveInlineEdit(null);
-    }
-  }, [isCheckpointActive]);
 
   const distance = userPosition
     ? calculateHaversineDistance(
@@ -254,29 +236,10 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               )}
             </div>
 
-            {/* Checkpoint Details: Radius and Trigger condition (Clickable & Editable when active) */}
+            {/* Checkpoint Details: Radius and Trigger condition */}
             <div className="grid grid-cols-2 gap-1.5 text-[11px]">
-              <button
-                type="button"
-                disabled={!isCheckpointActive}
-                onClick={() => {
-                  if (!isCheckpointActive) return;
-                  setDraftRadius(radius);
-                  setActiveInlineEdit((prev) => (prev === 'radius' ? null : 'radius'));
-                }}
-                className={`bg-stone-900/80 p-1.5 rounded-lg border flex items-center justify-between text-start transition-all ${
-                  isCheckpointActive
-                    ? activeInlineEdit === 'radius'
-                      ? 'border-emerald-400 bg-emerald-950/60 ring-1 ring-emerald-400/50 cursor-pointer'
-                      : 'border-stone-800/80 hover:border-emerald-500/60 hover:bg-stone-900 cursor-pointer active:scale-[0.98]'
-                    : 'border-stone-800/80 cursor-default'
-                }`}
-                title={isCheckpointActive ? (isEn ? 'Tap to edit radius' : 'برای ویرایش شعاع محدوده کلیک کنید') : undefined}
-              >
-                <span className="text-stone-400 flex items-center gap-1">
-                  <span>{isEn ? 'Radius:' : 'شعاع محدوده:'}</span>
-                  {isCheckpointActive && <Pencil className="w-2.5 h-2.5 text-emerald-400/80 shrink-0" />}
-                </span>
+              <div className="bg-stone-900/80 p-1.5 rounded-lg border border-stone-800/80 flex items-center justify-between">
+                <span className="text-stone-400">{isEn ? 'Radius:' : 'شعاع محدوده:'}</span>
                 <span className="font-mono font-bold text-emerald-300">
                   {radius >= 1000
                     ? isEn
@@ -286,170 +249,14 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                     ? `${radius}m`
                     : `${toPersianDigits(radius)} متر`}
                 </span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!isCheckpointActive}
-                onClick={() => {
-                  if (!isCheckpointActive) return;
-                  setActiveInlineEdit((prev) => (prev === 'condition' ? null : 'condition'));
-                }}
-                className={`bg-stone-900/80 p-1.5 rounded-lg border flex items-center justify-between text-start transition-all ${
-                  isCheckpointActive
-                    ? activeInlineEdit === 'condition'
-                      ? 'border-emerald-400 bg-emerald-950/60 ring-1 ring-emerald-400/50 cursor-pointer'
-                      : 'border-stone-800/80 hover:border-emerald-500/60 hover:bg-stone-900 cursor-pointer active:scale-[0.98]'
-                    : 'border-stone-800/80 cursor-default'
-                }`}
-                title={isCheckpointActive ? (isEn ? 'Tap to edit alert condition' : 'برای ویرایش شرط اعلام کلیک کنید') : undefined}
-              >
-                <span className="text-stone-400 flex items-center gap-1">
-                  <span>{isEn ? 'Condition:' : 'شرط اعلام:'}</span>
-                  {isCheckpointActive && <Pencil className="w-2.5 h-2.5 text-emerald-400/80 shrink-0" />}
-                </span>
+              </div>
+              <div className="bg-stone-900/80 p-1.5 rounded-lg border border-stone-800/80 flex items-center justify-between">
+                <span className="text-stone-400">{isEn ? 'Condition:' : 'شرط اعلام:'}</span>
                 <span className="font-bold text-emerald-300 text-[10px] truncate">
                   {triggerOnText}
                 </span>
-              </button>
+              </div>
             </div>
-
-            {/* Inline Radius Editor when active */}
-            {isCheckpointActive && activeInlineEdit === 'radius' && (
-              <div className="p-2.5 rounded-xl bg-stone-950/95 border border-emerald-500/50 space-y-2.5 animate-in fade-in duration-150">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[11px] font-bold text-emerald-300 flex items-center gap-1">
-                    <Sliders className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>{isEn ? 'Edit Radius:' : 'ویرایش شعاع محدوده:'}</span>
-                  </span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="font-mono font-black text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2 py-0.5 rounded-md text-[11px]">
-                      {draftRadius >= 1000
-                        ? isEn
-                          ? `${Number((draftRadius / 1000).toFixed(2))} km`
-                          : `${toPersianDigits(Number((draftRadius / 1000).toFixed(2)))} کیلومتر`
-                        : isEn
-                        ? `${draftRadius}m`
-                        : `${toPersianDigits(draftRadius)} متر`}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setActiveInlineEdit(null)}
-                      className="p-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 cursor-pointer"
-                      title={isEn ? 'Close' : 'بستن'}
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Preset Radius Buttons */}
-                <div className="grid grid-cols-3 gap-1">
-                  {[100, 500, 1000, 5000, 10000, 25000].map((rVal) => (
-                    <button
-                      key={rVal}
-                      type="button"
-                      onClick={() => {
-                        setDraftRadius(rVal);
-                        onUpdateGeofence?.(location.id, { radius: rVal });
-                      }}
-                      className={`py-1 px-1.5 rounded-lg text-[10px] font-bold transition-all text-center border cursor-pointer ${
-                        draftRadius === rVal
-                          ? 'bg-emerald-500 text-stone-950 border-emerald-400 font-black shadow-xs'
-                          : 'bg-stone-900 hover:bg-stone-800 text-stone-300 border-stone-800'
-                      }`}
-                    >
-                      {isEn
-                        ? rVal >= 1000 ? `${rVal / 1000}km` : `${rVal}m`
-                        : rVal >= 1000 ? `${toPersianDigits(rVal / 1000)} کیلومتر` : `${toPersianDigits(rVal)} متر`}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Logarithmic Slider */}
-                {(() => {
-                  const sliderPos = radiusToLogSliderPosition(draftRadius);
-                  const fillPct = Math.min(100, Math.max(0, (sliderPos / 1000) * 100));
-                  return (
-                    <div className="pt-1 space-y-1">
-                      <input
-                        type="range"
-                        min="0"
-                        max="1000"
-                        step="1"
-                        dir="ltr"
-                        value={sliderPos}
-                        onChange={(e) => {
-                          const nextR = logSliderPositionToRadius(Number(e.target.value));
-                          setDraftRadius(nextR);
-                          onUpdateGeofence?.(location.id, { radius: nextR });
-                        }}
-                        style={{
-                          background: `linear-gradient(to right, #10b981 0%, #10b981 ${fillPct}%, rgba(41, 37, 36, 0.9) ${fillPct}%, rgba(41, 37, 36, 0.9) 100%)`,
-                        }}
-                        className="geofence-radius-slider cursor-pointer"
-                      />
-                      <div className="flex items-center justify-between text-[9px] font-bold text-stone-400 px-0.5" dir="ltr">
-                        <span>{isEn ? '20m' : '۲۰ متر'}</span>
-                        <span>{isEn ? '5km' : '۵ کیلومتر'}</span>
-                        <span>{isEn ? '25km' : '۲۵ کیلومتر'}</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
-            {/* Inline Condition Editor when active */}
-            {isCheckpointActive && activeInlineEdit === 'condition' && (
-              <div className="p-2.5 rounded-xl bg-stone-950/95 border border-emerald-500/50 space-y-2 animate-in fade-in duration-150">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-emerald-300">
-                    {isEn ? 'Edit Alert Condition:' : 'ویرایش شرط اعلام:'}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setActiveInlineEdit(null)}
-                    className="p-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 cursor-pointer"
-                    title={isEn ? 'Close' : 'بستن'}
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onUpdateGeofence?.(location.id, { triggerOn: 'enter' });
-                      setActiveInlineEdit(null);
-                    }}
-                    className={`py-2 px-2 rounded-xl border text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                      triggerOn === 'enter'
-                        ? 'bg-emerald-500/25 border-emerald-400 text-emerald-200 font-black shadow-xs'
-                        : 'bg-stone-900 border-stone-800 text-stone-300 hover:bg-stone-800'
-                    }`}
-                  >
-                    <span>🟢</span>
-                    <span>{isEn ? 'On Arrival' : 'ورود به محدوده'}</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onUpdateGeofence?.(location.id, { triggerOn: 'exit' });
-                      setActiveInlineEdit(null);
-                    }}
-                    className={`py-2 px-2 rounded-xl border text-[11px] font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                      triggerOn === 'exit'
-                        ? 'bg-indigo-500/25 border-indigo-400 text-indigo-200 font-black shadow-xs'
-                        : 'bg-stone-900 border-stone-800 text-stone-300 hover:bg-stone-800'
-                    }`}
-                  >
-                    <span>🔴</span>
-                    <span>{isEn ? 'On Departure' : 'خروج از محدوده'}</span>
-                  </button>
-                </div>
-              </div>
-            )}
 
             {/* Live Distance to Checkpoint */}
             {distance !== null && (
@@ -469,6 +276,27 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                     ({isInside ? (isEn ? 'Inside' : '🟢 داخل محدوده') : (isEn ? 'Outside' : 'خارج از محدوده')})
                   </span>
                 </span>
+              </div>
+            )}
+
+            {/* Test Simulation Buttons */}
+            {onSimulateCheckpointTrigger && isCheckpointActive && (
+              <div className="pt-1 flex items-center gap-1.5">
+                <span className="text-[10px] text-stone-400">{isEn ? 'Simulate alert:' : 'تست اعلام:'}</span>
+                <button
+                  type="button"
+                  onClick={() => onSimulateCheckpointTrigger(location, 'enter')}
+                  className="px-2 py-0.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold cursor-pointer transition-colors"
+                >
+                  {isEn ? 'Enter Test' : 'تست ورود'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onSimulateCheckpointTrigger(location, 'exit')}
+                  className="px-2 py-0.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold cursor-pointer transition-colors"
+                >
+                  {isEn ? 'Exit Test' : 'تست خروج'}
+                </button>
               </div>
             )}
           </div>
