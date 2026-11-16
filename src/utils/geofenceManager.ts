@@ -814,11 +814,9 @@ function evaluateSingleItemScenario(params: {
   // Only increment sample counters when a genuinely new GPS fix or >=900ms tick arrives
   // so 500ms UI countdown ticks never artificially inflate consecutive sample counts
   const isDistinctEvalTick =
-    triggerOn === 'exit'
-      ? true
-      : Number.isNaN(st.lastEvaluatedDistanceMeters) ||
-        Math.abs(rawDistance - st.lastEvaluatedDistanceMeters) >= 1 ||
-        now - st.lastEvaluatedSampleTimeMs >= 900;
+    Number.isNaN(st.lastEvaluatedDistanceMeters) ||
+    Math.abs(rawDistance - st.lastEvaluatedDistanceMeters) >= 1 ||
+    now - st.lastEvaluatedSampleTimeMs >= 900;
 
   if (triggerOn === 'enter' && isDistinctEvalTick) {
     st.lastEvaluatedDistanceMeters = rawDistance;
@@ -876,7 +874,8 @@ function evaluateSingleItemScenario(params: {
     trend === 'outward' ||
     (Number.isFinite(st.minDistanceReachedInside) &&
       distance >= st.minDistanceReachedInside + directionConfirmMeters &&
-      st.lastOutwardMoveMs > st.lastInwardMoveMs);
+      st.lastOutwardMoveMs > st.lastInwardMoveMs &&
+      now - st.lastOutwardMoveMs <= 60_000);
 
   // =========================================================================
   // SCENARIO 1: ENTER ONLY ('enter')
@@ -1091,6 +1090,34 @@ function evaluateSingleItemScenario(params: {
   //    - Then audio cuts off completely, while visual alert with "Exited geofence" message continues up to 30 seconds.
   //    - After 30 seconds, the operation finishes and all alerts stop.
   // =========================================================================
+  // Arm Exit monitoring ONLY when the user is genuinely inside the boundary (d <= R).
+  // If the user is already outside the boundary and was never armed inside, NEVER emit an exit alert!
+  if (distance <= safeRadius && rawDistance <= safeRadius + fuzzyHysteresisMeters && !st.exitCycleCompleted) {
+    st.wasInsideForExit = true;
+    st.armedForExit = true;
+  }
+
+  if (
+    distance > safeRadius + antiPingPongDeadbandMeters &&
+    st.consecutiveOutsideSamples >= 3 &&
+    st.exitCycleCompleted
+  ) {
+    st.wasInsideForExit = false;
+    st.armedForExit = false;
+    st.bothDirectionLock = null;
+    st.exitMovingOutStartMs = 0;
+    st.border5HzStartMs = 0;
+  }
+
+  if (distance > safeRadius && !st.armedForExit && !st.wasInsideForExit && st.border5HzStartMs === 0) {
+    // Still tick sample tracking cleanly while outside so subsequent entry/exit trend stays accurate
+    if (isDistinctEvalTick) {
+      st.lastEvaluatedDistanceMeters = rawDistance;
+      st.lastEvaluatedSampleTimeMs = now;
+    }
+    return null;
+  }
+
   const exitGuard = evaluateExitFivePercentAndGpsJitterGuard({
     st,
     rawDistance,
@@ -1156,15 +1183,16 @@ function evaluateSingleItemScenario(params: {
     };
   }
 
-  // 2C. Crossed outside boundary (d > R or already in 5Hz exit stage):
-  const crossedOutside = distance > safeRadius && rawDistance > centerZoneMeters;
+  // 2C. Crossed outside boundary (d > R after being inside/armed, or already in active 5Hz exit stage):
+  const crossedOutside =
+    distance > safeRadius &&
+    rawDistance > centerZoneMeters &&
+    (st.armedForExit || st.wasInsideForExit);
   if (
     !st.exitCycleCompleted &&
     !st.acknowledgedUntilExit &&
     (crossedOutside || st.border5HzStartMs > 0)
   ) {
-    st.wasInsideForExit = true;
-    st.armedForExit = true;
     st.bothDirectionLock = 'outward';
     st.lastExitAlertEmittedMs = now;
     if (st.border5HzStartMs === 0) {
@@ -1230,10 +1258,12 @@ function evaluateSingleItemScenario(params: {
       };
     }
 
-    // 30 seconds of visual exit banner have completed -> finish operation and stop all alerts!
+    // 30 seconds of visual exit banner have completed -> finish operation and disarm until re-entry!
     st.exitCycleCompleted = true;
     st.sonarFinishedForCycle = true;
     st.bothDirectionLock = null;
+    st.armedForExit = false;
+    st.wasInsideForExit = false;
     setGeofenceMinimizedState(targetId, false, false);
     if (typeof window !== 'undefined') {
       try {
@@ -1409,6 +1439,20 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
         return { suppressAlert: true };
       }
     }
+  } else if (
+    st.border5HzStartMs === 0 &&
+    smoothedDistance <= safeRadius &&
+    trend === 'inward' &&
+    st.maxDistanceInApproach - smoothedDistance >= Math.max(6, Math.round(safeAcc * 0.4))
+  ) {
+    // User turned around and is clearly moving back toward the center while still inside the boundary:
+    // unlatch the outward exit alert and re-anchor minimum inside distance for future outward movement.
+    st.bothDirectionLock = null;
+    st.exitMovingOutStartMs = 0;
+    st.consecutiveExitOutwardSamples = 0;
+    st.minDistanceReachedInside = smoothedDistance;
+    st.maxDistanceInApproach = smoothedDistance;
+    return { suppressAlert: true };
   }
 
   return { suppressAlert: false };

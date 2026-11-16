@@ -9733,7 +9733,9 @@ class YaadGeofenceService : Service(), LocationListener {
                 // When the user is inside the unlocked app, WebView manages its own in-app modal & timers exclusively!
                 val isOutOfAppSession = !appInForeground || screenOffOrLocked
 
-                if ((distance <= radius || wasInsideBefore) && !armedForExit) {
+                val completedCycleKey = "completed_cycle_\$id"
+                val isCycleDoneEarly = prefs.getBoolean(completedCycleKey, false)
+                if (distance <= radius && rawDistance <= radius + fuzzyHyst && !armedForExit && !isCycleDoneEarly) {
                     armedForExit = true
                     editor.putBoolean(armedExitKey, true)
                     prefsModified = true
@@ -9743,9 +9745,13 @@ class YaadGeofenceService : Service(), LocationListener {
                     if (distance <= radius && !wasInsideBefore) {
                         editor.putBoolean(insideKey, true)
                         prefsModified = true
-                    } else if (distance > radius + antiPingPongDeadband && (outsideSampleCountMap[id] ?: 0) >= 3 && wasInsideBefore) {
-                        editor.putBoolean(insideKey, false)
-                        prefsModified = true
+                    } else if (distance > radius + antiPingPongDeadband && (outsideSampleCountMap[id] ?: 0) >= 3) {
+                        if (wasInsideBefore || armedForExit || latchedMode.isNotEmpty()) {
+                            editor.putBoolean(insideKey, false)
+                            editor.putBoolean(armedExitKey, false)
+                            editor.remove(latchedModeKey)
+                            prefsModified = true
+                        }
                     }
                     continue
                 }
@@ -9754,13 +9760,12 @@ class YaadGeofenceService : Service(), LocationListener {
                 val bannerStartKey = "banner_start_\$id"
                 val bannerTextKey = "banner_text_\$id"
                 val entryToastStartKey = "entry_toast_start_\$id"
-                val completedCycleKey = "completed_cycle_\$id"
 
                 var fiveHzStart = prefs.getLong(fiveHzKey, 0L)
                 val bannerStart = prefs.getLong(bannerStartKey, 0L)
                 val bannerText = prefs.getString(bannerTextKey, "") ?: ""
                 var entryToastStart = prefs.getLong(entryToastStartKey, 0L)
-                var completedCycle = prefs.getBoolean(completedCycleKey, false)
+                var completedCycle = isCycleDoneEarly
 
                 // Active visual-only banner (after 10s of 5Hz sonar):
                 // Continues for 30 seconds (30_000L) with audio completely cut off, then completes the cycle and stops all alerts!
@@ -9783,6 +9788,10 @@ class YaadGeofenceService : Service(), LocationListener {
                         editor.remove(latchedModeKey)
                         editor.putBoolean(completedCycleKey, true)
                         editor.putBoolean(sonarDoneKey, true)
+                        if (triggerOn == "exit") {
+                            editor.putBoolean(armedExitKey, false)
+                            editor.putBoolean(insideKey, false)
+                        }
                         latchedMode = ""
                         completedCycle = true
                         prefsModified = true
@@ -9943,6 +9952,9 @@ class YaadGeofenceService : Service(), LocationListener {
                     }
 
                     "exit" -> {
+                        if (distance > radius && !armedForExit && !wasInsideBefore && fiveHzStart == 0L) {
+                            continue
+                        }
                         val distToBoundary = kotlin.math.max(0, radius - distance)
                         val suppressExit = shouldSuppressExitByFivePercentAndGpsFilter(
                             id = id,
@@ -9977,14 +9989,14 @@ class YaadGeofenceService : Service(), LocationListener {
                             continue
                         }
 
-                        if (!armedForExit && (wasInsideBefore || distance <= radius || !startedOutside)) {
+                        if (!armedForExit && distance <= radius && rawDistance <= radius + fuzzyHyst && !completedCycle) {
                             armedForExit = true
                             editor.putBoolean(armedExitKey, true)
                             prefsModified = true
                         }
 
-                        val crossedOutside = distance > radius
-                        if (crossedOutside && (wasInsideBefore || !startedOutside || latchedMode == "exit") && !armedForExit) {
+                        val crossedOutside = distance > radius && (armedForExit || wasInsideBefore || latchedMode == "exit")
+                        if (crossedOutside && (wasInsideBefore || latchedMode == "exit") && !armedForExit && !completedCycle) {
                             armedForExit = true
                             editor.putBoolean(armedExitKey, true)
                             prefsModified = true
@@ -11073,12 +11085,20 @@ class YaadGeofenceService : Service(), LocationListener {
                         return Pair(true, prefsChanged)
                     }
                 }
-            } else if (smoothedDistance <= fivePctExitEscapeMeters && isMovingInward && fiveHzStart == 0L) {
-                editor.remove(latchedModeKey)
-                exitOutwardSampleCountMap[id] = 0
-                exitAntiBounceUntilMap[id] = kotlin.math.max(antiBounceUntil, now + 30_000L)
-                prefsChanged = true
-                return Pair(true, prefsChanged)
+            } else if (smoothedDistance <= radius && isMovingInward && fiveHzStart == 0L) {
+                val maxApproachDist = maxDistApproachMap[id] ?: smoothedDistDouble
+                val turnedBackInwardDistance = kotlin.math.max(6.0, safeAcc * 0.4)
+                if (smoothedDistance <= fivePctExitEscapeMeters || (maxApproachDist - smoothedDistDouble >= turnedBackInwardDistance)) {
+                    editor.remove(latchedModeKey)
+                    exitOutwardSampleCountMap[id] = 0
+                    minDistInsideMap[id] = smoothedDistDouble
+                    maxDistApproachMap[id] = smoothedDistDouble
+                    if (smoothedDistance <= fivePctExitEscapeMeters) {
+                        exitAntiBounceUntilMap[id] = kotlin.math.max(antiBounceUntil, now + 30_000L)
+                    }
+                    prefsChanged = true
+                    return Pair(true, prefsChanged)
+                }
             }
 
             return Pair(false, prefsChanged)
