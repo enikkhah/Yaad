@@ -7,7 +7,6 @@ import {
   setGlobalVibration,
   stopAlarmRinging,
   unlockAudio,
-  startSubmarineSonarLoop,
   updateSubmarineSonarDistance,
   stopSubmarineSonarLoop,
   setSubmarineSonarMuted,
@@ -25,7 +24,14 @@ import { SavedLocationCard } from './components/SavedLocationCard';
 import { OccasionsView } from './components/OccasionsView';
 import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
-import { AndroidPermissionType, requestNotificationPermission, requestLocationPermission, checkDeviceGpsEnabled } from './utils/nativePermissions';
+import {
+  AndroidPermissionType,
+  requestNotificationPermission,
+  requestLocationPermission,
+  checkDeviceGpsEnabled,
+  isDeviceGpsCurrentlyOnSync,
+  hasBackgroundLocationPermission,
+} from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
 import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
@@ -645,8 +651,21 @@ export default function App() {
   const [selectedOccasionTypeFilter, setSelectedOccasionTypeFilter] = useState<OccasionType | 'all'>('all');
   const [defaultOccasionType, setDefaultOccasionType] = useState<OccasionType>('birthday');
   const [locationSearchQuery, setLocationSearchQuery] = useState('');
-  const [currentUserPosition, setCurrentUserPosition] = useState<UserPosition | null>(() => getLastKnownPosition());
+  const [currentUserPosition, setCurrentUserPosition] = useState<UserPosition | null>(() => {
+    if (isDeviceGpsCurrentlyOnSync() === false) return null;
+    const cached = getLastKnownPosition();
+    if (!cached || !cached.timestamp || Date.now() - cached.timestamp > 3 * 60 * 1000) {
+      return null;
+    }
+    return cached;
+  });
   const [isGeofenceActive, setIsGeofenceActive] = useState<boolean>(() => isGeofenceTrackingEnabled());
+  const isGeofenceActiveRef = useRef<boolean>(isGeofenceActive);
+  useEffect(() => {
+    isGeofenceActiveRef.current = isGeofenceActive;
+  }, [isGeofenceActive]);
+  const deviceGpsEnabledRef = useRef<boolean>(isDeviceGpsCurrentlyOnSync() !== false);
+  const hasShownBgLocationPromptRef = useRef<boolean>(false);
   const [isCreateChoiceOpen, setIsCreateChoiceOpen] = useState(false);
   const [locationFilter, setLocationFilter] = useState<'all' | 'checkpoints'>('all');
   const [activeAlarmReminders, setActiveAlarmReminders] = useState<Reminder[]>([]);
@@ -1829,10 +1848,13 @@ export default function App() {
     };
   }, [reminders, sortAlarmBundle, upsertBundledAlarmReminders]);
 
-  const verifyGpsTurnedOnForGeofence = useCallback(async () => {
+  const verifyGpsTurnedOnForGeofence = useCallback(async (): Promise<boolean> => {
     try {
       const gpsEnabled = await checkDeviceGpsEnabled();
+      deviceGpsEnabledRef.current = gpsEnabled;
       if (!gpsEnabled) {
+        setActiveGeofenceAlerts((prev) => prev.filter((a) => a.id.startsWith('sim_geo_')));
+        stopSubmarineSonarLoop();
         setAndroidPermissionModal({
           isOpen: true,
           type: 'gps_disabled',
@@ -1840,9 +1862,22 @@ export default function App() {
             verifyGpsTurnedOnForGeofence();
           },
         });
+        return false;
       }
+      if (!hasBackgroundLocationPermission() && !hasShownBgLocationPromptRef.current) {
+        hasShownBgLocationPromptRef.current = true;
+        setAndroidPermissionModal({
+          isOpen: true,
+          type: 'background_location',
+          onRetry: () => {
+            hasShownBgLocationPromptRef.current = false;
+            verifyGpsTurnedOnForGeofence();
+          },
+        });
+      }
+      return true;
     } catch {
-      // ignore
+      return true;
     }
   }, []);
 
@@ -2027,11 +2062,27 @@ export default function App() {
       stopSubmarineSonarLoop();
       stopAlarmRinging();
       setActiveGeofenceAlerts((prev) => (prev.length === 0 ? prev : []));
+      isGeofenceActiveRef.current = false;
       setIsGeofenceActive(false);
       setGeofenceTrackingEnabled(false);
     };
+    const handleNativeGpsDisabled = () => {
+      deviceGpsEnabledRef.current = false;
+      stopSubmarineSonarLoop();
+      setActiveGeofenceAlerts((prev) => {
+        const sims = prev.filter((a) => a.id.startsWith('sim_geo_'));
+        return sims.length === prev.length ? prev : sims;
+      });
+    };
     const flushNativeStoppedGeofenceItems = () => {
       try {
+        const syncGps = isDeviceGpsCurrentlyOnSync();
+        if (syncGps !== null) {
+          deviceGpsEnabledRef.current = syncGps;
+          if (!syncGps) {
+            handleNativeGpsDisabled();
+          }
+        }
         const bridge = (window as any).YaadGeofenceBridge;
         if (bridge && typeof bridge.consumeRadarDisabledFromBackground === 'function') {
           const wasDisabledInBg = bridge.consumeRadarDisabledFromBackground();
@@ -2109,6 +2160,7 @@ export default function App() {
     window.addEventListener('yaad:acknowledge-geofence-item', handleNativeAcknowledgeGeofenceItem);
     window.addEventListener('yaad:close-timed-alarm', handleNativeCloseTimedAlarm);
     window.addEventListener('yaad:disable-geofence-radar', handleNativeDisableGeofenceRadar);
+    window.addEventListener('yaad:gps-disabled', handleNativeGpsDisabled);
     window.addEventListener('yaad:set-geofence-minimized', handleNativeSetGeofenceMinimized);
     window.addEventListener('focus', flushNativeStoppedGeofenceItems);
     document.addEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
@@ -2119,6 +2171,7 @@ export default function App() {
       window.removeEventListener('yaad:acknowledge-geofence-item', handleNativeAcknowledgeGeofenceItem);
       window.removeEventListener('yaad:close-timed-alarm', handleNativeCloseTimedAlarm);
       window.removeEventListener('yaad:disable-geofence-radar', handleNativeDisableGeofenceRadar);
+      window.removeEventListener('yaad:gps-disabled', handleNativeGpsDisabled);
       window.removeEventListener('yaad:set-geofence-minimized', handleNativeSetGeofenceMinimized);
       window.removeEventListener('focus', flushNativeStoppedGeofenceItems);
       document.removeEventListener('visibilitychange', flushNativeStoppedGeofenceItems);
@@ -2212,6 +2265,22 @@ export default function App() {
 
   const evaluateUserPositionAgainstAllGeofences = useCallback(
     (userPos: UserPosition, bypassStabilizer: boolean = false) => {
+      const syncGps = isDeviceGpsCurrentlyOnSync();
+      if (syncGps !== null) {
+        deviceGpsEnabledRef.current = syncGps;
+      }
+      if (!isGeofenceActiveRef.current || !deviceGpsEnabledRef.current) {
+        setActiveGeofenceAlerts((prev) => {
+          const sims = prev.filter((a) => a.id.startsWith('sim_geo_'));
+          return sims.length === prev.length ? prev : sims;
+        });
+        if (hadActiveSonarRef.current) {
+          hadActiveSonarRef.current = false;
+          stopSubmarineSonarLoop();
+        }
+        return;
+      }
+
       if (!bypassStabilizer && !shouldAcceptLocationUpdate(userPos)) {
         return;
       }
@@ -2320,13 +2389,38 @@ export default function App() {
     };
   }, [isGeofenceActive, evaluateUserPositionAgainstAllGeofences]);
 
-  // 500ms live scenario ticker while geofence radar or any 10s/30s scenario timer is active
+  // 500ms live scenario ticker while geofence radar is active
   useEffect(() => {
-    if (!isGeofenceActive && activeGeofenceAlerts.length === 0) return;
+    if (!isGeofenceActive) {
+      setActiveGeofenceAlerts((prev) => {
+        const sims = prev.filter((a) => a.id.startsWith('sim_geo_'));
+        return sims.length === prev.length ? prev : sims;
+      });
+      if (hadActiveSonarRef.current) {
+        hadActiveSonarRef.current = false;
+        stopSubmarineSonarLoop();
+      }
+      return;
+    }
     const tickInterval = setInterval(() => {
+      const syncGps = isDeviceGpsCurrentlyOnSync();
+      if (syncGps !== null) {
+        deviceGpsEnabledRef.current = syncGps;
+      }
+      if (!isGeofenceActiveRef.current || !deviceGpsEnabledRef.current) {
+        setActiveGeofenceAlerts((prev) => {
+          const sims = prev.filter((a) => a.id.startsWith('sim_geo_'));
+          return sims.length === prev.length ? prev : sims;
+        });
+        if (hadActiveSonarRef.current) {
+          hadActiveSonarRef.current = false;
+          stopSubmarineSonarLoop();
+        }
+        return;
+      }
       consumePendingNativeGeofenceAcksBeforeEval();
       const pos = currentUserPositionRef.current || getLastKnownPosition();
-      if (!pos) return;
+      if (!pos || (pos.timestamp && Date.now() - pos.timestamp > 3 * 60 * 1000)) return;
       const evaluated = evaluateAllActiveGeofenceScenarios(
         pos,
         remindersRef.current,
@@ -2366,17 +2460,17 @@ export default function App() {
     return () => clearInterval(tickInterval);
   }, [
     isGeofenceActive,
-    activeGeofenceAlerts.length > 0,
     areGeofenceAlertListsEqual,
     consumePendingNativeGeofenceAcksBeforeEval,
   ]);
 
   // Whenever reminders or savedLocations are added/edited/toggled while geofence radar is active,
-  // immediately re-evaluate against the latest known GPS position so entering/being inside a geofence triggers without delay!
+  // re-evaluate ONLY if device GPS is enabled AND we have a genuinely fresh coordinate from this session!
   useEffect(() => {
     if (!isGeofenceActive || !hasActiveGeofences) return;
-    const pos = currentUserPositionRef.current || getLastKnownPosition();
-    if (pos) {
+    if (isDeviceGpsCurrentlyOnSync() === false || !deviceGpsEnabledRef.current) return;
+    const pos = currentUserPositionRef.current;
+    if (pos && pos.timestamp && Date.now() - pos.timestamp <= 90_000) {
       evaluateUserPositionAgainstAllGeofences(pos, true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2393,6 +2487,11 @@ export default function App() {
 
     const handlePositionUpdate = (pos: GeolocationPosition) => {
       if (!isMounted) return;
+      if (isDeviceGpsCurrentlyOnSync() === false) {
+        deviceGpsEnabledRef.current = false;
+        return;
+      }
+      deviceGpsEnabledRef.current = true;
       const userPos: UserPosition = {
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
@@ -2405,6 +2504,8 @@ export default function App() {
     // Also listen for direct native Android LocationManager fixes dispatched from YaadGeofenceService
     const handleNativeLocationEvent = (e: Event) => {
       if (!isMounted) return;
+      if (!isGeofenceActiveRef.current || isDeviceGpsCurrentlyOnSync() === false) return;
+      deviceGpsEnabledRef.current = true;
       const customEv = e as CustomEvent<UserPosition>;
       if (
         customEv.detail &&
@@ -2422,6 +2523,20 @@ export default function App() {
     window.addEventListener('yaad:native-location', handleNativeLocationEvent);
 
     const runGeofenceCheck = async () => {
+      const syncGps = isDeviceGpsCurrentlyOnSync();
+      if (syncGps === false) {
+        deviceGpsEnabledRef.current = false;
+        setActiveGeofenceAlerts((prev) => prev.filter((a) => a.id.startsWith('sim_geo_')));
+        if (hadActiveSonarRef.current) {
+          hadActiveSonarRef.current = false;
+          stopSubmarineSonarLoop();
+        }
+        if (isMounted) {
+          if (timerId) clearTimeout(timerId);
+          timerId = setTimeout(runGeofenceCheck, 5000);
+        }
+        return;
+      }
       if (navigator.permissions && navigator.permissions.query) {
         try {
           const permStatus = await navigator.permissions.query({ name: 'geolocation' as any });
@@ -2452,10 +2567,18 @@ export default function App() {
           if (timerId) clearTimeout(timerId);
           timerId = setTimeout(runGeofenceCheck, nextInterval);
         },
-        () => {
+        (err) => {
           if (!isMounted) return;
+          if ((err && err.code === 2) || isDeviceGpsCurrentlyOnSync() === false) {
+            deviceGpsEnabledRef.current = false;
+            setActiveGeofenceAlerts((prev) => prev.filter((a) => a.id.startsWith('sim_geo_')));
+            if (hadActiveSonarRef.current) {
+              hadActiveSonarRef.current = false;
+              stopSubmarineSonarLoop();
+            }
+          }
           if (timerId) clearTimeout(timerId);
-          timerId = setTimeout(runGeofenceCheck, 15000);
+          timerId = setTimeout(runGeofenceCheck, 10000);
         },
         { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
       );
@@ -2467,7 +2590,11 @@ export default function App() {
         (pos) => {
           handlePositionUpdate(pos);
         },
-        () => {},
+        (err) => {
+          if ((err && err.code === 2) || isDeviceGpsCurrentlyOnSync() === false) {
+            deviceGpsEnabledRef.current = false;
+          }
+        },
         { enableHighAccuracy: true, maximumAge: 0, timeout: 8000 }
       );
     } catch {
@@ -2517,102 +2644,121 @@ export default function App() {
     };
   }, [isGeofenceActive, hasActiveGeofences, evaluateUserPositionAgainstAllGeofences, verifyGpsTurnedOnForGeofence]);
 
-  const handleToggleGeofenceService = (newState?: boolean) => {
-    setIsGeofenceActive((prev) => {
-      const nextVal = typeof newState === 'boolean' ? newState : !prev;
-      setGeofenceTrackingEnabled(nextVal);
-      if (nextVal) {
-        resetGeofenceProximityState();
-        requestLocationPermission().then((granted) => {
+  const activateGeofenceMonitoringFlow = useCallback(
+    (
+      nextReminders?: Reminder[],
+      nextLocations?: SavedLocation[]
+    ) => {
+      const remList = nextReminders ?? remindersRef.current;
+      const locList = nextLocations ?? savedLocationsRef.current;
+      const lang = settingsRef.current.language || 'fa';
+
+      syncGeofencesWithNativeAndroid(true, remList, locList, lang);
+
+      requestLocationPermission()
+        .then((granted) => {
           if (!granted) {
             setAndroidPermissionModal({
               isOpen: true,
               type: 'location',
-              onRetry: () => requestLocationPermission(),
+              onRetry: () => activateGeofenceMonitoringFlow(),
             });
-          } else {
-            verifyGpsTurnedOnForGeofence();
+            return;
           }
-        }).catch(() => {});
-      }
-      showSyncNotification(
-        nextVal
-          ? (isEn ? 'Geofence radar activated' : 'رادار پایش حصار مکانی فعال شد')
-          : (isEn ? 'Geofence radar paused' : 'رادار پایش حصار مکانی متوقف شد')
+          // Re-sync immediately after permission dialog resolves so YaadGeofenceService starts in foreground
+          syncGeofencesWithNativeAndroid(
+            true,
+            remindersRef.current,
+            savedLocationsRef.current,
+            settingsRef.current.language || 'fa'
+          );
+          verifyGpsTurnedOnForGeofence();
+
+          if (typeof navigator !== 'undefined' && navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                if (isDeviceGpsCurrentlyOnSync() === false) return;
+                deviceGpsEnabledRef.current = true;
+                evaluateUserPositionAgainstAllGeofences(
+                  {
+                    latitude: pos.coords.latitude,
+                    longitude: pos.coords.longitude,
+                    accuracy: pos.coords.accuracy,
+                    timestamp: pos.timestamp || Date.now(),
+                  },
+                  true
+                );
+              },
+              () => {},
+              { enableHighAccuracy: true, timeout: 6000, maximumAge: 0 }
+            );
+          }
+        })
+        .catch(() => {});
+    },
+    [verifyGpsTurnedOnForGeofence, evaluateUserPositionAgainstAllGeofences]
+  );
+
+  const handleToggleGeofenceService = (newState?: boolean) => {
+    const nextVal = typeof newState === 'boolean' ? newState : !isGeofenceActiveRef.current;
+    isGeofenceActiveRef.current = nextVal;
+    setIsGeofenceActive(nextVal);
+    setGeofenceTrackingEnabled(nextVal);
+
+    if (nextVal) {
+      resetGeofenceProximityState();
+      activateGeofenceMonitoringFlow();
+    } else {
+      stopSubmarineSonarLoop();
+      stopAlarmRinging();
+      setGeofenceMinimizedState(undefined, false, false);
+      setActiveGeofenceAlerts((prev) => prev.filter((a) => a.id.startsWith('sim_geo_')));
+      syncGeofencesWithNativeAndroid(
+        false,
+        remindersRef.current,
+        savedLocationsRef.current,
+        settingsRef.current.language || 'fa'
       );
-      return nextVal;
-    });
+    }
+
+    showSyncNotification(
+      nextVal
+        ? (isEn ? 'Geofence radar activated' : 'رادار پایش حصار مکانی فعال شد')
+        : (isEn ? 'Geofence radar paused' : 'رادار پایش حصار مکانی متوقف شد')
+    );
   };
 
   const handleToggleLocationCheckpoint = (locationId: string) => {
     resetGeofenceProximityState(locationId);
-    setSavedLocations((prev) =>
-      prev.map((loc) => {
-        if (loc.id !== locationId) return loc;
-        if (!loc.geofence) return loc;
-        const willBeActive = !loc.geofence.enabled;
-        if (willBeActive) {
-          setIsGeofenceActive(true);
-          setGeofenceTrackingEnabled(true);
-          requestLocationPermission().then((granted) => {
-            if (!granted) {
-              setAndroidPermissionModal({
-                isOpen: true,
-                type: 'location',
-                onRetry: () => requestLocationPermission(),
-              });
-            } else {
-              verifyGpsTurnedOnForGeofence();
-            }
-          }).catch(() => {});
-        }
-        showSyncNotification(
-          willBeActive
-            ? (isEn ? `Geofence activated for ${loc.title}` : `حصار مکانی ${loc.title} فعال شد`)
-            : (isEn ? `Geofence paused for ${loc.title}` : `حصار مکانی ${loc.title} متوقف شد`)
-        );
-        return {
-          ...loc,
-          geofence: {
-            ...loc.geofence,
-            enabled: willBeActive,
-            lastTriggeredAt: undefined,
-            hasTriggered: false,
-          },
-        };
-      })
-    );
-  };
-
-  const handleSimulateLocationCheckpointTrigger = (location: SavedLocation, type: 'enter' | 'exit') => {
-    const displayLocTitle = formatSavedLocationTitle(location.title, settings.language);
-    const locDetails = [location.description, location.geofence?.customMessage]
-      .filter(Boolean)
-      .join(' — ');
-    const simDist = currentUserPosition
-      ? calculateHaversineDistance(
-          currentUserPosition.latitude,
-          currentUserPosition.longitude,
-          location.latitude,
-          location.longitude
-        )
-      : Math.round((location.geofence?.radius || 100) * 0.6);
-
-    setActiveGeofenceAlert({
-      id: `sim_geo_${location.id}_${Date.now()}`,
-      targetType: 'location',
-      targetId: location.id,
-      locationTitle: displayLocTitle,
-      description: locDetails || undefined,
-      triggerType: type,
-      initialDistance: simDist,
-      radius: location.geofence?.radius || 100,
-      latitude: location.latitude,
-      longitude: location.longitude,
+    const nextLocations = savedLocationsRef.current.map((loc) => {
+      if (loc.id !== locationId) return loc;
+      if (!loc.geofence) return loc;
+      const willBeActive = !loc.geofence.enabled;
+      if (willBeActive) {
+        isGeofenceActiveRef.current = true;
+        setIsGeofenceActive(true);
+        setGeofenceTrackingEnabled(true);
+      }
+      showSyncNotification(
+        willBeActive
+          ? (isEn ? `Geofence activated for ${loc.title}` : `حصار مکانی ${loc.title} فعال شد`)
+          : (isEn ? `Geofence paused for ${loc.title}` : `حصار مکانی ${loc.title} متوقف شد`)
+      );
+      return {
+        ...loc,
+        geofence: {
+          ...loc.geofence,
+          enabled: willBeActive,
+          lastTriggeredAt: undefined,
+          hasTriggered: false,
+        },
+      };
     });
-
-    if (location.geofence?.playAudio !== false) {
-      startSubmarineSonarLoop(simDist, location.geofence?.radius || 100);
+    savedLocationsRef.current = nextLocations;
+    setSavedLocations(nextLocations);
+    const toggledLoc = nextLocations.find((l) => l.id === locationId);
+    if (toggledLoc?.geofence?.enabled) {
+      activateGeofenceMonitoringFlow(remindersRef.current, nextLocations);
     }
   };
 
@@ -2676,19 +2822,10 @@ export default function App() {
     // If geofence is enabled, ensure location permission & device GPS are active and enable geofence tracking
     if (data.geofence?.enabled) {
       resetGeofenceProximityState(editingReminder?.id);
+      isGeofenceActiveRef.current = true;
       setIsGeofenceActive(true);
       setGeofenceTrackingEnabled(true);
-      requestLocationPermission().then((locGranted) => {
-        if (!locGranted) {
-          setAndroidPermissionModal({
-            isOpen: true,
-            type: 'location',
-            onRetry: () => requestLocationPermission(),
-          });
-        } else {
-          verifyGpsTurnedOnForGeofence();
-        }
-      });
+      activateGeofenceMonitoringFlow();
     }
 
     // Optional Google Calendar sync
@@ -2878,19 +3015,10 @@ export default function App() {
   ) => {
     if (newLocData.geofence?.enabled) {
       resetGeofenceProximityState(editingLocation?.id);
+      isGeofenceActiveRef.current = true;
       setIsGeofenceActive(true);
       setGeofenceTrackingEnabled(true);
-      requestLocationPermission().then((locGranted) => {
-        if (!locGranted) {
-          setAndroidPermissionModal({
-            isOpen: true,
-            type: 'location',
-            onRetry: () => requestLocationPermission(),
-          });
-        } else {
-          verifyGpsTurnedOnForGeofence();
-        }
-      }).catch(() => {});
+      activateGeofenceMonitoringFlow();
     }
     if (editingLocation) {
       const editedId = editingLocation.id;
@@ -4568,7 +4696,6 @@ export default function App() {
                         language={settings.language}
                         userPosition={currentUserPosition}
                         onToggleCheckpoint={handleToggleLocationCheckpoint}
-                        onSimulateCheckpointTrigger={handleSimulateLocationCheckpointTrigger}
                       />
                     ))}
                 </div>

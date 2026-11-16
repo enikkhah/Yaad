@@ -2630,7 +2630,7 @@ const legacyPluginLoadV12 = `        // YAAD clean foreground state, WebView con
         }
     }`;
 
-const patchedPluginLoad = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v3
+const patchedPluginLoad = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v4
         isAppInForegroundState = true
         configureWebViewForGoogleOAuth()
         purgeStaleOneShotNotifications()
@@ -2699,6 +2699,7 @@ const patchedPluginLoad = `        // YAAD clean foreground state, WebView confi
         isAppInForegroundState = true
         activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
         flushQueuedBackgroundActions()
+        YaadGeofenceService.ensureServiceState(context)
         YaadGeofenceService.onAppForegrounded(context)
     }
 
@@ -2808,14 +2809,115 @@ const legacyPluginLoadV12b = `        // YAAD clean foreground state, WebView co
         }
     }`;
 
+const legacyPluginLoadV13 = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v3
+        isAppInForegroundState = true
+        configureWebViewForGoogleOAuth()
+        purgeStaleOneShotNotifications()
+        LegacyNotificationMigrator.run(context, notificationStorage, manager)
+        flushQueuedBackgroundActions()
+        YaadGeofenceService.ensureServiceState(context)
+        activity?.intent?.let { handleOnNewIntent(it) }
+    }
+
+    private fun configureWebViewForGoogleOAuth() {
+        try {
+            activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+            val wv = bridge?.webView
+            if (wv != null) {
+                wv.setBackgroundColor(android.graphics.Color.parseColor("#07070D"))
+                val ua = wv.settings.userAgentString ?: ""
+                if (ua.contains("; wv") || ua.contains("Version/")) {
+                    wv.settings.userAgentString = ua
+                        .replace("; wv", "")
+                        .replace(Regex("Version/\\\\d+\\\\.\\\\d+\\\\s*"), "")
+                }
+                wv.settings.javaScriptCanOpenWindowsAutomatically = true
+                wv.settings.mediaPlaybackRequiresUserGesture = false
+                try {
+                    wv.removeJavascriptInterface("YaadGeofenceBridge")
+                } catch (e: Exception) {
+                }
+                wv.addJavascriptInterface(YaadGeofenceService.JsBridge(context.applicationContext), "YaadGeofenceBridge")
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun purgeStaleOneShotNotifications() {
+        try {
+            val now = System.currentTimeMillis()
+            for (n in notificationStorage.getSavedNotifications()) {
+                val id = n.id ?: continue
+                val savedJs = notificationStorage.getSavedNotificationAsJSObject(id.toString())
+                if (savedJs?.optJSONObject("extra")?.optBoolean("isRepeat", false) == true) {
+                    notificationStorage.deleteNotification(id.toString())
+                    continue
+                }
+                val sched = n.schedule
+                if (sched == null) {
+                    notificationStorage.deleteNotification(id.toString())
+                    continue
+                }
+                val atDate = sched.at
+                if (atDate == null) {
+                    if (!sched.isPerpetual()) {
+                        notificationStorage.deleteNotification(id.toString())
+                    }
+                    continue
+                }
+                if (!sched.isPerpetual() && atDate.time < now) {
+                    notificationStorage.deleteNotification(id.toString())
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun handleOnResume() {
+        super.handleOnResume()
+        isAppInForegroundState = true
+        activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+        flushQueuedBackgroundActions()
+        YaadGeofenceService.onAppForegrounded(context)
+    }
+
+    override fun handleOnPause() {
+        super.handleOnPause()
+        if (YaadGeofenceService.isScreenOffOrLockedStatic(context)) {
+            isAppInForegroundState = false
+            YaadGeofenceService.onAppBackgrounded(context)
+        }
+    }
+
+    override fun handleOnStop() {
+        super.handleOnStop()
+        isAppInForegroundState = false
+        YaadGeofenceService.onAppBackgrounded(context)
+    }
+
+    private fun flushQueuedBackgroundActions() {
+        try {
+            val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(BG_ACTION_KEY, null) ?: return
+            prefs.edit().remove(BG_ACTION_KEY).apply()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val itemStr = arr.optString(i, null) ?: continue
+                val itemJson = JSObject(itemStr)
+                notifyListeners("localNotificationActionPerformed", itemJson, true)
+            }
+        } catch (e: Exception) {
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
   'load configureWebViewForGoogleOAuth, foreground state tracking, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, handleOnResume flushQueuedBackgroundActions, and YaadGeofenceBridge',
   origPluginLoad,
   patchedPluginLoad,
-  '// YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v3',
-  [legacyPluginLoadV12, legacyPluginLoadV12b, legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8, legacyPluginLoadV9, legacyPluginLoadV10, legacyPluginLoadV11]
+  '// YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v4',
+  [legacyPluginLoadV13, legacyPluginLoadV12, legacyPluginLoadV12b, legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8, legacyPluginLoadV9, legacyPluginLoadV10, legacyPluginLoadV11]
 );
 
 const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
@@ -8751,7 +8853,29 @@ class YaadGeofenceService : Service(), LocationListener {
                         YaadAlarmPopupActivity.yieldActivePopupForPhoneCall(applicationContext)
                     }
                 }
-                checkLastKnownLocations()
+                val gpsEnabledNow = isDeviceLocationEnabled(applicationContext)
+                if (!gpsEnabledNow) {
+                    if (wasDeviceLocationEnabledLastTick) {
+                        wasDeviceLocationEnabledLastTick = false
+                        stopGeofenceAudio(applicationContext)
+                        cancelAllGeofenceAlertNotifications(applicationContext)
+                        YaadAlarmPopupActivity.dismissIfMatching(Int.MIN_VALUE)
+                        LocalNotificationsPlugin.evaluateJsInWebView(
+                            "window.dispatchEvent(new CustomEvent('yaad:gps-disabled'));"
+                        )
+                    }
+                } else {
+                    if (!wasDeviceLocationEnabledLastTick) {
+                        wasDeviceLocationEnabledLastTick = true
+                        startLocationUpdates(checkLastKnown = false)
+                        requestImmediateCurrentLocationUpdate(force = true)
+                    }
+                    val nowMs = System.currentTimeMillis()
+                    if (lastAcceptedLat.isNaN() || nowMs - lastAcceptedLocationTimeMs > 5000L) {
+                        requestImmediateCurrentLocationUpdate(force = false)
+                    }
+                    checkLastKnownLocations()
+                }
             } catch (e: Exception) {
             }
             // 750ms check cycle for <= 1s geofence alert response
@@ -8930,11 +9054,17 @@ class YaadGeofenceService : Service(), LocationListener {
         if (action == ACTION_APP_BACKGROUNDED_CHECK) {
             mainHandler.post {
                 try {
-                    checkLastKnownLocations()
-                    relaunchActivePopupOnLockscreenIfNeeded(
-                        wakeScreen = !isScreenInteractive(),
-                        allowWhenUnlockedOutOfApp = true
-                    )
+                    if (isDeviceLocationEnabled(applicationContext)) {
+                        val nowMs = System.currentTimeMillis()
+                        if (lastAcceptedLat.isNaN() || nowMs - lastAcceptedLocationTimeMs > 3000L) {
+                            requestImmediateCurrentLocationUpdate(force = true)
+                        }
+                        checkLastKnownLocations()
+                        relaunchActivePopupOnLockscreenIfNeeded(
+                            wakeScreen = !isScreenInteractive(),
+                            allowWhenUnlockedOutOfApp = true
+                        )
+                    }
                 } catch (e: Exception) {
                 }
             }
@@ -9052,6 +9182,10 @@ class YaadGeofenceService : Service(), LocationListener {
     private var lastWebViewDispatchedTimeMs: Long = 0L
     private var lastWebViewDispatchedLat: Double = Double.NaN
     private var lastWebViewDispatchedLon: Double = Double.NaN
+    @Volatile
+    private var lastImmediateCurrentLocRequestMs: Long = 0L
+    @Volatile
+    private var wasDeviceLocationEnabledLastTick: Boolean = true
 
     private fun startLocationUpdates(intervalMs: Long = currentGpsIntervalMs, checkLastKnown: Boolean = true) {
         val lm = locationManager ?: return
@@ -9123,11 +9257,55 @@ class YaadGeofenceService : Service(), LocationListener {
             } catch (e: Exception) {
             }
             isTrackingRegistered = anyRegistered
-            if (checkLastKnown) {
-                checkLastKnownLocations()
+            if (isDeviceLocationEnabled(this)) {
+                requestImmediateCurrentLocationUpdate(force = true)
+                if (checkLastKnown) {
+                    checkLastKnownLocations()
+                }
             }
         } catch (e: SecurityException) {
         } catch (e: Exception) {
+        }
+    }
+
+    private fun requestImmediateCurrentLocationUpdate(force: Boolean = false) {
+        val lm = locationManager ?: return
+        if (!hasLocationPermission(this) || !isDeviceLocationEnabled(this)) return
+        val now = System.currentTimeMillis()
+        if (!force && now - lastImmediateCurrentLocRequestMs < 4000L) return
+        lastImmediateCurrentLocRequestMs = now
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val exec = ContextCompat.getMainExecutor(this)
+            for (provider in listOf("fused", LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)) {
+                try {
+                    if (lm.allProviders.contains(provider) && lm.isProviderEnabled(provider)) {
+                        lm.getCurrentLocation(
+                            provider,
+                            null,
+                            exec,
+                            java.util.function.Consumer<Location?> { loc ->
+                                if (loc != null && isDeviceLocationEnabled(this)) {
+                                    if (shouldAcceptNativeLocation(loc, allowSameTimestampTick = false)) {
+                                        evaluateLocationAgainstGeofences(loc)
+                                    }
+                                }
+                            }
+                        )
+                    }
+                } catch (e: Exception) {
+                }
+            }
+        } else {
+            for (provider in listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)) {
+                try {
+                    if (lm.allProviders.contains(provider) && lm.isProviderEnabled(provider)) {
+                        @Suppress("DEPRECATION")
+                        lm.requestSingleUpdate(provider, this, Looper.getMainLooper())
+                    }
+                } catch (e: Exception) {
+                }
+            }
         }
     }
 
@@ -9210,6 +9388,7 @@ class YaadGeofenceService : Service(), LocationListener {
     private fun checkLastKnownLocations() {
         val lm = locationManager ?: return
         if (!hasLocationPermission(this)) return
+        if (!isDeviceLocationEnabled(this)) return
         try {
             val now = System.currentTimeMillis()
             var gpsLoc: Location? = null
@@ -9261,7 +9440,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 chosen = passiveLoc
             }
 
-            // Fallback to the latest WebView-synced position if LocationManager has no cached fix yet
+            // Fallback to the latest fresh WebView-synced position only if LocationManager has no cached fix yet
             if (chosen == null) {
                 val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 val syncedLat = java.lang.Double.longBitsToDouble(
@@ -9270,14 +9449,14 @@ class YaadGeofenceService : Service(), LocationListener {
                 val syncedLon = java.lang.Double.longBitsToDouble(
                     prefs.getLong(KEY_LAST_SYNCED_LON_BITS, java.lang.Double.doubleToRawLongBits(Double.NaN))
                 )
-                if (!syncedLat.isNaN() && !syncedLon.isNaN()) {
+                val syncedTime = prefs.getLong(KEY_LAST_SYNCED_TIME, 0L)
+                if (!syncedLat.isNaN() && !syncedLon.isNaN() && syncedTime > 0L && (now - syncedTime) <= 3 * 60_000L) {
                     val syncedAcc = prefs.getFloat(KEY_LAST_SYNCED_ACC, 20f)
-                    val syncedTime = prefs.getLong(KEY_LAST_SYNCED_TIME, now)
                     chosen = Location("webview_synced").apply {
                         latitude = syncedLat
                         longitude = syncedLon
                         accuracy = syncedAcc
-                        time = if (syncedTime > 0L) syncedTime else now
+                        time = syncedTime
                     }
                 }
             }
@@ -9293,6 +9472,7 @@ class YaadGeofenceService : Service(), LocationListener {
     }
 
     override fun onLocationChanged(location: Location) {
+        if (!isDeviceLocationEnabled(this)) return
         if (shouldAcceptNativeLocation(location, allowSameTimestampTick = false)) {
             evaluateLocationAgainstGeofences(location)
         }
@@ -9302,10 +9482,20 @@ class YaadGeofenceService : Service(), LocationListener {
     override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
 
     override fun onProviderEnabled(provider: String) {
+        wasDeviceLocationEnabledLastTick = true
         startLocationUpdates()
     }
 
     override fun onProviderDisabled(provider: String) {
+        if (!isDeviceLocationEnabled(this)) {
+            wasDeviceLocationEnabledLastTick = false
+            stopGeofenceAudio(applicationContext)
+            cancelAllGeofenceAlertNotifications(applicationContext)
+            YaadAlarmPopupActivity.dismissIfMatching(Int.MIN_VALUE)
+            LocalNotificationsPlugin.evaluateJsInWebView(
+                "window.dispatchEvent(new CustomEvent('yaad:gps-disabled'));"
+            )
+        }
     }
 
     private fun isDeviceKeyguardLocked(): Boolean {
@@ -11997,6 +12187,10 @@ class YaadGeofenceService : Service(), LocationListener {
                     YaadAlarmPopupActivity.dismissIfMatching(oldNotifId)
                 }
 
+                if (enabled && itemsArr.length() > 0) {
+                    editor.putBoolean(KEY_RADAR_DISABLED_FROM_BG, false)
+                }
+
                 editor
                     .putBoolean(KEY_ENABLED, enabled && itemsArr.length() > 0)
                     .putString(KEY_LANGUAGE, lang)
@@ -12090,6 +12284,34 @@ class YaadGeofenceService : Service(), LocationListener {
         @android.webkit.JavascriptInterface
         fun consumeRadarDisabledFromBackground(): Boolean {
             return consumeRadarDisabledFromBackground(appContext)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun isRadarDisabledFromBackground(): Boolean {
+            return try {
+                val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                prefs.getBoolean(KEY_RADAR_DISABLED_FROM_BG, false)
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun updateUserPosition(lat: Double, lon: Double, accuracy: Double, timestamp: Long) {
+            try {
+                if (lat.isNaN() || lon.isNaN()) return
+                if (!isDeviceLocationEnabled(appContext)) return
+                val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                val now = System.currentTimeMillis()
+                val safeTs = if (timestamp > 0L) timestamp else now
+                prefs.edit()
+                    .putLong(KEY_LAST_SYNCED_LAT_BITS, java.lang.Double.doubleToRawLongBits(lat))
+                    .putLong(KEY_LAST_SYNCED_LON_BITS, java.lang.Double.doubleToRawLongBits(lon))
+                    .putFloat(KEY_LAST_SYNCED_ACC, accuracy.toFloat().coerceAtLeast(1f))
+                    .putLong(KEY_LAST_SYNCED_TIME, safeTs)
+                    .apply()
+            } catch (e: Exception) {
+            }
         }
 
         @android.webkit.JavascriptInterface

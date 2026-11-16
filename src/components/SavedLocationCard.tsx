@@ -30,7 +30,6 @@ interface SavedLocationCardProps {
   language?: AppLanguage;
   userPosition?: { latitude: number; longitude: number } | null;
   onToggleCheckpoint?: (locationId: string) => void;
-  onSimulateCheckpointTrigger?: (location: SavedLocation, type: 'enter' | 'exit') => void;
 }
 
 export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
@@ -42,7 +41,6 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   language = 'fa',
   userPosition = null,
   onToggleCheckpoint,
-  onSimulateCheckpointTrigger,
 }) => {
   const isEn = language === 'en';
   const [copied, setCopied] = useState(false);
@@ -276,27 +274,6 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                     ({isInside ? (isEn ? 'Inside' : '🟢 داخل محدوده') : (isEn ? 'Outside' : 'خارج از محدوده')})
                   </span>
                 </span>
-              </div>
-            )}
-
-            {/* Test Simulation Buttons */}
-            {onSimulateCheckpointTrigger && isCheckpointActive && (
-              <div className="pt-1 flex items-center gap-1.5">
-                <span className="text-[10px] text-stone-400">{isEn ? 'Simulate alert:' : 'تست اعلام:'}</span>
-                <button
-                  type="button"
-                  onClick={() => onSimulateCheckpointTrigger(location, 'enter')}
-                  className="px-2 py-0.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold cursor-pointer transition-colors"
-                >
-                  {isEn ? 'Enter Test' : 'تست ورود'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onSimulateCheckpointTrigger(location, 'exit')}
-                  className="px-2 py-0.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 border border-indigo-500/30 text-[10px] font-bold cursor-pointer transition-colors"
-                >
-                  {isEn ? 'Exit Test' : 'تست خروج'}
-                </button>
               </div>
             )}
           </div>

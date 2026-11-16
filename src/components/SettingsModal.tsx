@@ -46,6 +46,7 @@ import {
   requestLocalFolderPermission,
   requestAllNativePermissions,
   checkAllPermissionsStatus,
+  hasBackgroundLocationPermission,
   openAndroidSettings,
   NativePermissionsStatus
 } from '../utils/nativePermissions';
@@ -131,6 +132,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     microphone: false,
     camera: false,
     location: false,
+    backgroundLocation: false,
     storage: false,
   });
   const [isRequestingAllPerms, setIsRequestingAllPerms] = useState(false);
@@ -178,6 +180,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   ].sort((a, b) => b.deletedAt - a.deletedAt);
 
   const [showStoragePermNotice, setShowStoragePermNotice] = useState(false);
+  const [showBgLocationNotice, setShowBgLocationNotice] = useState(false);
+  const [bgLocationNoticeDismissed, setBgLocationNoticeDismissed] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -188,6 +192,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           setNativePerms(updated);
           if (updated.storage) {
             setShowStoragePermNotice(false);
+          }
+          if (updated.location && updated.backgroundLocation) {
+            setShowBgLocationNotice(false);
+            setBgLocationNoticeDismissed(false);
           }
         });
       };
@@ -229,6 +237,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     } else if (type === 'camera') {
       granted = await requestCameraPermission();
     } else if (type === 'location') {
+      if (nativePerms.location && !nativePerms.backgroundLocation && isNativeAndroidApp()) {
+        setShowBgLocationNotice(true);
+        setBgLocationNoticeDismissed(false);
+        openAndroidSettings('background_location');
+        return;
+      }
       granted = await requestLocationPermission();
     } else if (type === 'storage') {
       const res = await requestLocalFolderPermission(false, LOCAL_BACKUP_FOLDER_NAME);
@@ -251,15 +265,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
     }
     const updated = await checkAllPermissionsStatus();
+    const locGranted = Boolean(updated.location || (type === 'location' && granted));
+    const bgLocGranted = locGranted ? hasBackgroundLocationPermission() : false;
     const merged: NativePermissionsStatus = {
       ...updated,
       [type]: updated[type] || granted,
+      location: locGranted,
+      backgroundLocation: bgLocGranted,
     };
     setNativePerms(merged);
     if (type === 'storage' && !merged.storage) {
       setShowStoragePermNotice(true);
     } else if (merged.storage) {
       setShowStoragePermNotice(false);
+    }
+    if (type === 'location') {
+      if (!merged.location || !merged.backgroundLocation) {
+        setShowBgLocationNotice(true);
+        setBgLocationNoticeDismissed(false);
+        if (isNativeAndroidApp()) {
+          openAndroidSettings('background_location');
+        }
+        return;
+      } else {
+        setShowBgLocationNotice(false);
+      }
     }
     if (!merged[type] && type !== 'storage' && isNativeAndroidApp()) {
       openAndroidSettings(type);
@@ -293,6 +323,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setShowStoragePermNotice(true);
     } else {
       setShowStoragePermNotice(false);
+    }
+    if (isNativeAndroidApp() && (!updated.location || !updated.backgroundLocation)) {
+      setShowBgLocationNotice(true);
+      setBgLocationNoticeDismissed(false);
+    } else {
+      setShowBgLocationNotice(false);
     }
     setIsRequestingAllPerms(false);
   };
@@ -895,20 +931,28 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     type="button"
                     onClick={() => handleRequestPerm('location')}
                     style={
-                      nativePerms.location
+                      nativePerms.location && nativePerms.backgroundLocation !== false
                         ? {
                             background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
                             borderColor: '#6ee7b7',
                             color: '#ffffff',
                           }
+                        : nativePerms.location && nativePerms.backgroundLocation === false
+                        ? {
+                            background: 'linear-gradient(135deg, #b45309 0%, #d97706 100%)',
+                            borderColor: '#fcd34d',
+                            color: '#ffffff',
+                          }
                         : undefined
                     }
                     className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
-                      nativePerms.location
+                      nativePerms.location && nativePerms.backgroundLocation !== false
                         ? 'perm-card-granted shadow-md shadow-emerald-900/40'
+                        : nativePerms.location && nativePerms.backgroundLocation === false
+                        ? 'shadow-md shadow-amber-950/40'
                         : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
-                    title={isFa ? 'دسترسی موقعیت مکانی GPS' : 'GPS Location'}
+                    title={isFa ? 'دسترسی موقعیت مکانی (همیشه مجاز)' : 'GPS Location (Allow all the time)'}
                   >
                     <div className="relative mb-1">
                       <MapPin className={`w-4 h-4 ${nativePerms.location ? 'text-white' : 'text-stone-400'}`} />
@@ -917,8 +961,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.location ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'موقعیت' : 'GPS'}
                     </span>
-                    <span className={`text-[9px] font-black ${nativePerms.location ? 'text-white' : 'text-indigo-400'}`}>
-                      {nativePerms.location ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
+                    <span className={`text-[9px] font-black leading-tight ${nativePerms.location ? 'text-white' : 'text-indigo-400'}`}>
+                      {nativePerms.location
+                        ? nativePerms.backgroundLocation === false
+                          ? (isFa ? 'فقط هنگام استفاده' : 'While using')
+                          : (isFa ? 'همیشه مجاز ✓' : 'Always ✓')
+                        : (isFa ? 'تایید' : 'Allow')}
                     </span>
                   </button>
 
@@ -985,6 +1033,45 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </button>
                   </div>
                 )}
+
+                {isNativeAndroidApp() &&
+                  !bgLocationNoticeDismissed &&
+                  (showBgLocationNotice || (nativePerms.location && nativePerms.backgroundLocation === false)) &&
+                  !(nativePerms.location && nativePerms.backgroundLocation) && (
+                    <div
+                      onClick={() => openAndroidSettings('background_location')}
+                      dir={isFa ? 'rtl' : 'ltr'}
+                      className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs flex items-start justify-between gap-2.5 cursor-pointer leading-relaxed"
+                    >
+                      <div className="space-y-1.5">
+                        <p className="font-bold text-stone-100">
+                          {nativePerms.location
+                            ? isFa
+                              ? 'مجوز مکان روی «فقط هنگام استفاده» است. برای اعلان فوری حصار مکانی بیرون از برنامه، آن را روی «همیشه مجاز» تنظیم کنید:'
+                              : 'Location is currently set to "While using the app". For reliable out-of-app Geofence alerts, set it to "Allow all the time":'
+                            : isFa
+                              ? 'برای عملکرد دقیق رادار حصار مکانی، مجوز مکان را از مسیر زیر روی «همیشه مجاز» قرار دهید:'
+                              : 'For reliable Geofence Radar alerts, please grant Location permission and set it to "Allow all the time":'}
+                        </p>
+                        <p className="font-black text-amber-300">
+                          {isFa
+                            ? 'تنظیمات برنامه ← مجوزها (Permissions) ← مکان (Location) ← همیشه مجاز (Allow all the time)'
+                            : 'App Info → Permissions → Location → Allow all the time'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setShowBgLocationNotice(false);
+                          setBgLocationNoticeDismissed(true);
+                        }}
+                        className="p-1 rounded-lg hover:bg-amber-500/20 text-amber-300 shrink-0 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
 
                 {/* 3.2 Request All Permissions at Once Button */}
                 <button

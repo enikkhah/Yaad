@@ -17,6 +17,7 @@ export interface NativePermissionsStatus {
   microphone: boolean;
   camera: boolean;
   location: boolean;
+  backgroundLocation?: boolean;
   storage?: boolean;
 }
 
@@ -238,6 +239,7 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     microphone: false,
     camera: false,
     location: false,
+    backgroundLocation: false,
     storage: false,
   };
 
@@ -448,6 +450,8 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     // Ignore
   }
 
+  result.backgroundLocation = result.location ? hasBackgroundLocationPermission() : false;
+
   return result;
 }
 
@@ -462,11 +466,13 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
   const locOk = await requestLocationPermission();
 
   const checked = await checkAllPermissionsStatus();
+  const locationGranted = Boolean(checked.location || locOk);
   return {
     notifications: Boolean(checked.notifications || notifOk),
     microphone: Boolean(checked.microphone || micOk),
     camera: Boolean(checked.camera || camOk),
-    location: Boolean(checked.location || locOk),
+    location: locationGranted,
+    backgroundLocation: locationGranted ? hasBackgroundLocationPermission() : false,
     storage: Boolean(checked.storage || folderRes.granted),
   };
 }
@@ -474,6 +480,7 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
 export type AndroidPermissionType =
   | 'notifications'
   | 'location'
+  | 'background_location'
   | 'gps_disabled'
   | 'microphone'
   | 'camera'
@@ -481,6 +488,40 @@ export type AndroidPermissionType =
   | 'storage'
   | 'all_files'
   | 'app_details';
+
+/**
+ * Synchronous check via native Android bridge for whether device GPS/Location is currently enabled.
+ * Returns null if native bridge is unavailable (web/PWA).
+ */
+export function isDeviceGpsCurrentlyOnSync(): boolean | null {
+  if (typeof window === 'undefined') return true;
+  try {
+    const bridge = (window as any).YaadGeofenceBridge;
+    if (bridge && typeof bridge.isLocationEnabled === 'function') {
+      return Boolean(bridge.isLocationEnabled());
+    }
+  } catch {
+    // ignore
+  }
+  return null;
+}
+
+/**
+ * Checks if Android "Allow all the time" (ACCESS_BACKGROUND_LOCATION) is granted.
+ * Returns true on Android < 10 or web environments.
+ */
+export function hasBackgroundLocationPermission(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const bridge = (window as any).YaadGeofenceBridge;
+    if (bridge && typeof bridge.hasBackgroundLocationPermission === 'function') {
+      return Boolean(bridge.hasBackgroundLocationPermission());
+    }
+  } catch {
+    // ignore
+  }
+  return true;
+}
 
 /**
  * Checks whether the device's hardware Location / GPS toggle is currently turned ON.
@@ -546,6 +587,18 @@ export async function checkDeviceGpsEnabled(): Promise<boolean> {
  */
 export function openAndroidSettings(section: AndroidPermissionType = 'app_details'): void {
   if (typeof window === 'undefined') return;
+
+  if (section === 'background_location') {
+    try {
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge && typeof bridge.openBackgroundLocationSettings === 'function') {
+        bridge.openBackgroundLocationSettings();
+        return;
+      }
+    } catch {
+      // Fallback to application details intent URL below
+    }
+  }
 
   if (section === 'location' || section === 'gps_disabled') {
     try {

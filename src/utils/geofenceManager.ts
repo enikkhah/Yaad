@@ -1584,6 +1584,11 @@ export function calculateHaversineDistance(
 export function isGeofenceTrackingEnabled(): boolean {
   if (typeof window === 'undefined') return false;
   try {
+    const bridge = (window as any).YaadGeofenceBridge;
+    if (bridge && typeof bridge.isRadarDisabledFromBackground === 'function' && bridge.isRadarDisabledFromBackground()) {
+      localStorage.setItem(GEOFENCE_TRACKING_ENABLED_KEY, JSON.stringify(false));
+      return false;
+    }
     const val = localStorage.getItem(GEOFENCE_TRACKING_ENABLED_KEY);
     if (val === null) return false;
     return JSON.parse(val) === true;
@@ -1734,6 +1739,15 @@ export function saveLastKnownPosition(pos: UserPosition): void {
   if (typeof window === 'undefined') return;
   try {
     localStorage.setItem(LAST_KNOWN_POSITION_KEY, JSON.stringify(pos));
+    const bridge = (window as any).YaadGeofenceBridge;
+    if (bridge && typeof bridge.updateUserPosition === 'function') {
+      bridge.updateUserPosition(
+        pos.latitude,
+        pos.longitude,
+        pos.accuracy || 15,
+        pos.timestamp || Date.now()
+      );
+    }
   } catch {
     // Ignore
   }
@@ -1825,24 +1839,28 @@ export function syncGeofencesWithNativeAndroid(
       });
     }
 
-    const lastPos = lastAcceptedPosition || getLastKnownPosition();
+    const gpsOn = typeof bridge.isLocationEnabled === 'function' ? Boolean(bridge.isLocationEnabled()) : true;
+    const rawLastPos = gpsOn ? (lastAcceptedPosition || getLastKnownPosition()) : null;
+    const isFreshPos =
+      rawLastPos &&
+      typeof rawLastPos.latitude === 'number' &&
+      typeof rawLastPos.longitude === 'number' &&
+      !Number.isNaN(rawLastPos.latitude) &&
+      !Number.isNaN(rawLastPos.longitude) &&
+      (!rawLastPos.timestamp || Date.now() - rawLastPos.timestamp <= 3 * 60 * 1000);
+    const lastPos = isFreshPos ? rawLastPos : null;
     const payload = JSON.stringify({
       enabled: Boolean(enabled && items.length > 0),
       language,
       items,
-      lastPosition:
-        lastPos &&
-        typeof lastPos.latitude === 'number' &&
-        typeof lastPos.longitude === 'number' &&
-        !Number.isNaN(lastPos.latitude) &&
-        !Number.isNaN(lastPos.longitude)
-          ? {
-              latitude: lastPos.latitude,
-              longitude: lastPos.longitude,
-              accuracy: lastPos.accuracy || 15,
-              timestamp: lastPos.timestamp || Date.now(),
-            }
-          : null,
+      lastPosition: lastPos
+        ? {
+            latitude: lastPos.latitude,
+            longitude: lastPos.longitude,
+            accuracy: lastPos.accuracy || 15,
+            timestamp: lastPos.timestamp || Date.now(),
+          }
+        : null,
     });
     bridge.syncGeofences(payload);
   } catch {

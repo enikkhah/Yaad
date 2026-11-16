@@ -67,16 +67,27 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
           sectionNameFa: 'تنظیمات مکان‌یاب (Location / GPS) در اندروید',
           sectionNameEn: 'Android Location Services (GPS) Settings',
         };
+      case 'background_location':
+        return {
+          icon: MapPin,
+          color: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/40',
+          titleFa: 'دسترسی موقعیت مکانی در پس‌زمینه (همیشه مجاز)',
+          titleEn: 'Background Location Permission (Allow All the Time)',
+          descFa: 'در حال حاضر مجوز مکان‌یاب برنامه روی «فقط هنگام استفاده» است.\nبرای اینکه رادار حصار مکانی بیرون از برنامه و روی صفحه قفل در همان بار اول فعال‌سازی به‌درستی اعلان صادر کند، لطفاً از مسیر زیر گزینه را روی «همیشه مجاز» (Allow all the time) قرار دهید:\n\nتنظیمات برنامه ← مجوزها (Permissions) ← مکان (Location) ← همیشه مجاز (Allow all the time)',
+          descEn: 'Location access is currently set to "While using the app".\nFor Geofence Radar to trigger reliably out of the app and on the lock screen right from the first activation, please set Location permission to "Allow all the time":\n\nApp Info → Permissions → Location → Allow all the time',
+          sectionNameFa: 'تنظیمات برنامه ← مجوزها ← مکان ← همیشه مجاز',
+          sectionNameEn: 'App Info → Permissions → Location → Allow all the time',
+        };
       case 'location':
         return {
           icon: MapPin,
           color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-          titleFa: 'دسترسی موقعیت مکانی (GPS)',
-          titleEn: 'Location Permission (GPS)',
-          descFa: 'برای فعال‌سازی یادآورهای مکان‌محور (حضور در مکان، ورود یا خروج از محدوده مقصد)، نیاز به دسترسی به موقعیت مکانی دستگاه دارید.',
-          descEn: 'Required for location checkpoints (remind me when arriving at or leaving a place).',
-          sectionNameFa: 'بخش موقعیت مکانی در تنظیمات اندروید',
-          sectionNameEn: 'Android Location Settings Section',
+          titleFa: 'دسترسی موقعیت مکانی (همیشه مجاز)',
+          titleEn: 'Location Permission (Allow All the Time)',
+          descFa: 'برای فعال‌سازی یادآورهای مکان‌محور و عملکرد دقیق رادار حصار مکانی بیرون از برنامه، دسترسی موقعیت مکانی را از مسیر زیر روی «همیشه مجاز» (Allow all the time) تنظیم کنید:\n\nتنظیمات برنامه ← مجوزها (Permissions) ← مکان (Location) ← همیشه مجاز (Allow all the time)',
+          descEn: 'For location checkpoints and reliable out-of-app Geofence Radar alerts, please grant Location permission and set it to "Allow all the time":\n\nApp Info → Permissions → Location → Allow all the time',
+          sectionNameFa: 'تنظیمات برنامه ← مجوزها ← مکان ← همیشه مجاز',
+          sectionNameEn: 'App Info → Permissions → Location → Allow all the time',
         };
       case 'microphone':
         return {
@@ -119,7 +130,7 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
   const Icon = details.icon;
 
   const handleOpenSettings = () => {
-    openAndroidSettings(permissionType);
+    openAndroidSettings(permissionType === 'location' ? 'background_location' : permissionType);
   };
 
   return (
