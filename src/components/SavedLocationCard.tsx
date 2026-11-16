@@ -30,6 +30,7 @@ interface SavedLocationCardProps {
   language?: AppLanguage;
   userPosition?: { latitude: number; longitude: number } | null;
   onToggleCheckpoint?: (locationId: string) => void;
+  onUpdateGeofence?: (locationId: string, updates: { radius?: number; triggerOn?: 'enter' | 'exit' }) => void;
 }
 
 export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
@@ -41,10 +42,13 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   language = 'fa',
   userPosition = null,
   onToggleCheckpoint,
+  onUpdateGeofence,
 }) => {
   const isEn = language === 'en';
   const [copied, setCopied] = useState(false);
   const [imgLoaded, setImgLoaded] = useState(false);
+  const [editingGeofenceField, setEditingGeofenceField] = useState<'radius' | 'triggerOn' | null>(null);
+  const [draftRadius, setDraftRadius] = useState<string>(String(location.geofence?.radius || 100));
   const formattedDate = formatJalaliFull(location.createdAt, language);
   const displayTitle = formatSavedLocationTitle(location.title, language);
 
@@ -234,9 +238,28 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               )}
             </div>
 
-            {/* Checkpoint Details: Radius and Trigger condition */}
+            {/* Checkpoint Details: Radius and Trigger condition (clickable to edit inline) */}
             <div className="grid grid-cols-2 gap-1.5 text-[11px]">
-              <div className="bg-stone-900/80 p-1.5 rounded-lg border border-stone-800/80 flex items-center justify-between">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!onUpdateGeofence) return;
+                  if (editingGeofenceField === 'radius') {
+                    setEditingGeofenceField(null);
+                  } else {
+                    setDraftRadius(String(radius));
+                    setEditingGeofenceField('radius');
+                  }
+                }}
+                className={`p-1.5 rounded-lg border flex items-center justify-between gap-1 text-start transition-colors ${
+                  onUpdateGeofence ? 'cursor-pointer hover:border-emerald-500/60' : ''
+                } ${
+                  editingGeofenceField === 'radius'
+                    ? 'bg-emerald-500/15 border-emerald-400/70'
+                    : 'bg-stone-900/80 border-stone-800/80'
+                }`}
+                title={isEn ? 'Click to edit radius' : 'برای ویرایش شعاع کلیک کنید'}
+              >
                 <span className="text-stone-400">{isEn ? 'Radius:' : 'شعاع محدوده:'}</span>
                 <span className="font-mono font-bold text-emerald-300">
                   {radius >= 1000
@@ -247,14 +270,137 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                     ? `${radius}m`
                     : `${toPersianDigits(radius)} متر`}
                 </span>
-              </div>
-              <div className="bg-stone-900/80 p-1.5 rounded-lg border border-stone-800/80 flex items-center justify-between">
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!onUpdateGeofence) return;
+                  setEditingGeofenceField((prev) => (prev === 'triggerOn' ? null : 'triggerOn'));
+                }}
+                className={`p-1.5 rounded-lg border flex items-center justify-between gap-1 text-start transition-colors ${
+                  onUpdateGeofence ? 'cursor-pointer hover:border-emerald-500/60' : ''
+                } ${
+                  editingGeofenceField === 'triggerOn'
+                    ? 'bg-emerald-500/15 border-emerald-400/70'
+                    : 'bg-stone-900/80 border-stone-800/80'
+                }`}
+                title={isEn ? 'Click to edit condition' : 'برای ویرایش شرط اعلام کلیک کنید'}
+              >
                 <span className="text-stone-400">{isEn ? 'Condition:' : 'شرط اعلام:'}</span>
                 <span className="font-bold text-emerald-300 text-[10px] truncate">
                   {triggerOnText}
                 </span>
-              </div>
+              </button>
             </div>
+
+            {/* Inline Radius Editor */}
+            {onUpdateGeofence && editingGeofenceField === 'radius' && (
+              <div className="p-2.5 rounded-xl bg-stone-900/95 border border-emerald-500/40 space-y-2 animate-in fade-in duration-150">
+                <div className="grid grid-cols-3 gap-1.5">
+                  {[100, 500, 1000, 5000, 10000, 25000].map((rVal) => (
+                    <button
+                      key={rVal}
+                      type="button"
+                      onClick={() => {
+                        onUpdateGeofence(location.id, { radius: rVal });
+                        setEditingGeofenceField(null);
+                      }}
+                      className={`py-1.5 px-1 rounded-lg text-[11px] font-bold transition-all text-center border cursor-pointer ${
+                        radius === rVal
+                          ? 'bg-emerald-500 text-stone-950 border-emerald-400 font-black'
+                          : 'bg-stone-950 hover:bg-stone-800 text-stone-300 border-stone-800'
+                      }`}
+                    >
+                      {isEn
+                        ? (rVal >= 1000 ? `${rVal / 1000}km` : `${rVal}m`)
+                        : (rVal >= 1000 ? `${toPersianDigits(rVal / 1000)} کیلومتر` : `${toPersianDigits(rVal)} متر`)}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="number"
+                    min={10}
+                    max={25000}
+                    dir="ltr"
+                    value={draftRadius}
+                    onChange={(e) => setDraftRadius(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const parsed = Number(draftRadius);
+                        if (Number.isFinite(parsed) && parsed >= 10) {
+                          onUpdateGeofence(location.id, {
+                            radius: Math.max(10, Math.min(25000, Math.round(parsed))),
+                          });
+                          setEditingGeofenceField(null);
+                        }
+                      }
+                    }}
+                    className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-stone-950 border border-stone-700 text-white font-mono text-xs focus:outline-none focus:border-emerald-500"
+                    placeholder={isEn ? 'Meters (10-25000)' : 'متر (۱۰ تا ۲۵۰۰۰)'}
+                  />
+                  <span className="text-[10px] text-stone-400 shrink-0">{isEn ? 'm' : 'متر'}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const parsed = Number(draftRadius);
+                      if (Number.isFinite(parsed) && parsed >= 10) {
+                        onUpdateGeofence(location.id, {
+                          radius: Math.max(10, Math.min(25000, Math.round(parsed))),
+                        });
+                        setEditingGeofenceField(null);
+                      }
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-[11px] cursor-pointer transition-colors shrink-0"
+                  >
+                    {isEn ? 'Save' : 'ثبت'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditingGeofenceField(null)}
+                    className="px-2 py-1.5 rounded-lg bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold text-[11px] cursor-pointer transition-colors shrink-0"
+                  >
+                    {isEn ? 'Cancel' : 'بستن'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Inline Trigger Condition Editor */}
+            {onUpdateGeofence && editingGeofenceField === 'triggerOn' && (
+              <div className="p-2 rounded-xl bg-stone-900/95 border border-emerald-500/40 grid grid-cols-2 gap-1.5 animate-in fade-in duration-150">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateGeofence(location.id, { triggerOn: 'enter' });
+                    setEditingGeofenceField(null);
+                  }}
+                  className={`py-2 px-2 rounded-lg border text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                    triggerOn === 'enter'
+                      ? 'bg-emerald-500/20 border-emerald-500 text-emerald-300 font-black'
+                      : 'bg-stone-950 border-stone-800 text-stone-300 hover:bg-stone-800'
+                  }`}
+                >
+                  <span>🟢</span>
+                  <span>{isEn ? 'On Arrival' : 'ورود به محدوده'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateGeofence(location.id, { triggerOn: 'exit' });
+                    setEditingGeofenceField(null);
+                  }}
+                  className={`py-2 px-2 rounded-lg border text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-colors ${
+                    triggerOn === 'exit'
+                      ? 'bg-indigo-500/20 border-indigo-500 text-indigo-300 font-black'
+                      : 'bg-stone-950 border-stone-800 text-stone-300 hover:bg-stone-800'
+                  }`}
+                >
+                  <span>🔴</span>
+                  <span>{isEn ? 'On Departure' : 'خروج از محدوده'}</span>
+                </button>
+              </div>
+            )}
 
             {/* Live Distance to Checkpoint */}
             {distance !== null && (

@@ -2762,6 +2762,40 @@ export default function App() {
     }
   };
 
+  const handleUpdateLocationGeofence = (
+    locationId: string,
+    updates: { radius?: number; triggerOn?: 'enter' | 'exit' }
+  ) => {
+    resetGeofenceProximityState(locationId);
+    const nextLocations = savedLocationsRef.current.map((loc) => {
+      if (loc.id !== locationId || !loc.geofence) return loc;
+      return {
+        ...loc,
+        geofence: {
+          ...loc.geofence,
+          ...(typeof updates.radius === 'number'
+            ? { radius: Math.max(10, Math.min(25000, Math.round(updates.radius))) }
+            : {}),
+          ...(updates.triggerOn ? { triggerOn: updates.triggerOn } : {}),
+          lastTriggeredAt: undefined,
+          hasTriggered: false,
+        },
+      };
+    });
+    savedLocationsRef.current = nextLocations;
+    setSavedLocations(nextLocations);
+
+    const updatedLoc = nextLocations.find((l) => l.id === locationId);
+    if (updatedLoc?.geofence?.enabled) {
+      syncGeofencesWithNativeAndroid(
+        isGeofenceActiveRef.current,
+        remindersRef.current,
+        nextLocations,
+        settingsRef.current.language || 'fa'
+      );
+    }
+  };
+
   // Google sign in / out handlers
   const handleGoogleSignIn = async (options?: {
     openCalendar?: boolean;
@@ -4696,6 +4730,7 @@ export default function App() {
                         language={settings.language}
                         userPosition={currentUserPosition}
                         onToggleCheckpoint={handleToggleLocationCheckpoint}
+                        onUpdateGeofence={handleUpdateLocationGeofence}
                       />
                     ))}
                 </div>
