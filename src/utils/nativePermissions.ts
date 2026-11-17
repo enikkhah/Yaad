@@ -680,6 +680,18 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
     }
   }
 
+  if (section === 'battery') {
+    try {
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge && typeof bridge.openBatteryOptimizationSettings === 'function') {
+        bridge.openBatteryOptimizationSettings();
+        return;
+      }
+    } catch {
+      // Fallback to intent URL below
+    }
+  }
+
   const pkg = 'com.yaad.reminder';
   let intentUrl = `intent:#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;data=package:${pkg};end`;
 

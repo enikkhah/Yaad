@@ -1,6 +1,6 @@
 const config = {
   appId: 'com.yaad.reminder',
-  appName: 'YAAD',
+  appName: 'یاد',
   webDir: 'dist',
   server: {
     androidScheme: 'https',

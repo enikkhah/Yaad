@@ -4323,8 +4323,8 @@ export default function App() {
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
                     <p>
                       {isEn
-                        ? 'Your reminders, occasions, ideas, and places are stored 100% locally on your device with automatic backup in the root YAAD folder (cloud backup is removed). Geofence GPS runs adaptively only when enabled. External services like Google Calendar/Tasks or address lookup (OpenStreetMap) are used strictly on your explicit action.'
-                        : 'تمامی یادآورها، مناسبت‌ها، ایده‌ها و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و پوشه پشتیبان خودکار YAAD ذخیره می‌شوند و پشتیبان‌گیری ابری حذف شده است. پایش GPS حصار مکانی غیردائمی و تطبیقی بوده و سرویس‌های بیرونی مانند تقویم/تسک گوگل یا آدرس‌یابی نقشه صرفاً به درخواست مستقیم شما فعال می‌شوند.'}
+                        ? 'Your reminders, occasions, ideas, and places are stored privately on your device (auto-backup in app-private storage does not survive uninstall—export JSON regularly to keep a permanent copy). GPS runs adaptively only when Geofence radar is active. Coordinates are sent to OpenStreetMap Nominatim only on address lookup, optional feedback is sent only if you submit it, and store billing/reviews are handled via Bazaar/Myket.'
+                        : 'داده‌های شما در فضای خصوصی دستگاه ذخیره می‌شوند (بک‌آپ خودکار داخلی با حذف نصب اپ پاک می‌شود؛ برای نگهداری دائمی از خروجی JSON استفاده کنید). رادار GPS فقط هنگام فعال بودن به‌صورت کم‌مصرف کار می‌کند. مختصات فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد کاملاً اختیاری است و پرداخت/امتیازدهی در محیط امن بازار یا مایکت انجام می‌گیرد.'}
                     </p>
                     <a
                       href="/privacy.html"

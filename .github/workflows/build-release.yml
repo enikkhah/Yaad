@@ -43,6 +43,10 @@ jobs:
         uses: actions/setup-node@v5
         with:
           node-version: 22
+          cache: npm
+
+      - name: Install dependencies (locked)
+        run: npm ci --legacy-peer-deps
 
       - name: Sync App Version Before Web Build (Splash, About, Settings & Package)
         id: versioning
@@ -114,11 +118,8 @@ jobs:
                   f.write(f"v_name={raw_name}\n")
           PY
 
-      - name: Install dependencies
-        run: npm install --legacy-peer-deps
-
-      - name: Install Capacitor
-        run: npm install @capacitor/core @capacitor/cli @capacitor/android @capacitor/filesystem @capacitor/share --legacy-peer-deps --ignore-scripts
+      - name: Run TypeScript & Build Verification Lint
+        run: npm run lint
 
       - name: Build web app with synced version
         env:
@@ -137,42 +138,50 @@ jobs:
         run: |
           python3 - <<'PY'
           from pathlib import Path
+          import re
 
           path = Path("android/app/src/main/AndroidManifest.xml")
-          text = path.read_text()
+          text = path.read_text(encoding="utf-8")
+
+          # Replace any existing unattributed SCHEDULE_EXACT_ALARM with maxSdkVersion="32"
+          text = re.sub(
+              r'\s*<uses-permission[^>]*android:name="android\.permission\.SCHEDULE_EXACT_ALARM"[^>]*\/?>',
+              '',
+              text
+          )
 
           permissions = [
-              "android.permission.CAMERA",
-              "android.permission.RECORD_AUDIO",
-              "android.permission.MODIFY_AUDIO_SETTINGS",
-              "android.permission.ACCESS_COARSE_LOCATION",
-              "android.permission.ACCESS_FINE_LOCATION",
-              "android.permission.ACCESS_BACKGROUND_LOCATION",
-              "android.permission.FOREGROUND_SERVICE",
-              "android.permission.FOREGROUND_SERVICE_LOCATION",
-              "android.permission.POST_NOTIFICATIONS",
-              "android.permission.SCHEDULE_EXACT_ALARM",
-              "android.permission.USE_EXACT_ALARM",
-              "android.permission.USE_FULL_SCREEN_INTENT",
-              "android.permission.WAKE_LOCK",
-              "android.permission.VIBRATE",
-              "android.permission.RECEIVE_BOOT_COMPLETED",
+              ("android.permission.CAMERA", ""),
+              ("android.permission.RECORD_AUDIO", ""),
+              ("android.permission.MODIFY_AUDIO_SETTINGS", ""),
+              ("android.permission.ACCESS_COARSE_LOCATION", ""),
+              ("android.permission.ACCESS_FINE_LOCATION", ""),
+              ("android.permission.ACCESS_BACKGROUND_LOCATION", ""),
+              ("android.permission.FOREGROUND_SERVICE", ""),
+              ("android.permission.FOREGROUND_SERVICE_LOCATION", ""),
+              ("android.permission.POST_NOTIFICATIONS", ""),
+              ("android.permission.SCHEDULE_EXACT_ALARM", ' android:maxSdkVersion="32"'),
+              ("android.permission.USE_EXACT_ALARM", ""),
+              ("android.permission.USE_FULL_SCREEN_INTENT", ""),
+              ("android.permission.WAKE_LOCK", ""),
+              ("android.permission.VIBRATE", ""),
+              ("android.permission.RECEIVE_BOOT_COMPLETED", ""),
           ]
 
           marker = "<application"
 
-          for permission in permissions:
-              if permission not in text:
+          for permission, extra_attrs in permissions:
+              if f'android:name="{permission}"' not in text:
                   text = text.replace(
                       marker,
-                      f'<uses-permission android:name="{permission}" />\n\n    {marker}',
+                      f'<uses-permission android:name="{permission}"{extra_attrs} />\n\n    {marker}',
                       1
                   )
 
           if 'android:allowBackup="true"' in text:
               text = text.replace('android:allowBackup="true"', 'android:allowBackup="false"')
 
-          path.write_text(text)
+          path.write_text(text, encoding="utf-8")
           PY
 
       - name: Copy notification audio files to Android
@@ -194,6 +203,21 @@ jobs:
       - name: Sync Capacitor
         run: npx cap sync android
 
+      - name: Ensure Android Launcher Name (یاد) in strings.xml
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          strings_path = Path("android/app/src/main/res/values/strings.xml")
+          if strings_path.exists():
+              text = strings_path.read_text(encoding="utf-8")
+              text = re.sub(r'(<string name="app_name">)(.*?)(</string>)', r'\g<1>یاد\g<3>', text)
+              text = re.sub(r'(<string name="title_activity_main">)(.*?)(</string>)', r'\g<1>یاد\g<3>', text)
+              strings_path.write_text(text, encoding="utf-8")
+              print("Updated strings.xml app_name and title_activity_main to 'یاد'")
+          PY
+
       - name: Setup Cafe Bazaar Poolakey Billing Plugin
         run: node scripts/setup-bazaar-poolakey.mjs
 
@@ -202,6 +226,122 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+
+      - name: Download and Verify Official Gradle Distribution (SHA-256)
+        working-directory: android
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          chmod +x ./gradlew
+
+          PROPS_FILE="gradle/wrapper/gradle-wrapper.properties"
+          WRAPPER_MATCH=$(grep -oE 'gradle-[0-9.]+-(all|bin)\.zip' "$PROPS_FILE" | head -n 1 || true)
+          GRADLE_ZIP=${WRAPPER_MATCH:-gradle-8.14.3-bin.zip}
+          GRADLE_VER=$(echo "$GRADLE_ZIP" | sed -E 's/gradle-([0-9.]+)-(all|bin)\.zip/\1/')
+          GRADLE_TYPE=$(echo "$GRADLE_ZIP" | sed -E 's/gradle-[0-9.]+-(all|bin)\.zip/\1/')
+          OFFICIAL_URL="https://services.gradle.org/distributions/${GRADLE_ZIP}"
+          OFFICIAL_SHA_URL="${OFFICIAL_URL}.sha256"
+
+          mkdir -p /tmp/gradle-dist
+          LOCAL_ZIP="/tmp/gradle-dist/${GRADLE_ZIP}"
+          LOCAL_SHA="/tmp/gradle-dist/${GRADLE_ZIP}.sha256"
+
+          echo "Fetching official SHA-256 for ${GRADLE_ZIP}..."
+          curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 30 \
+            -A "Mozilla/5.0" "${OFFICIAL_SHA_URL}" -o "${LOCAL_SHA}"
+
+          OFFICIAL_SHA=$(tr -d ' \t\r\n' < "${LOCAL_SHA}" | grep -oE '^[0-9a-fA-F]{64}' | tr '[:upper:]' '[:lower:]')
+          if [ -z "$OFFICIAL_SHA" ]; then
+            echo "::error::Failed to retrieve a valid official SHA-256 checksum for ${GRADLE_ZIP}."
+            exit 1
+          fi
+
+          EXISTING_SHA=$(grep -E '^distributionSha256Sum=' "$PROPS_FILE" | head -n 1 | cut -d'=' -f2 | tr -d ' \t\r\n' | tr '[:upper:]' '[:lower:]' || true)
+          if [ -n "$EXISTING_SHA" ] && [ "$EXISTING_SHA" != "$OFFICIAL_SHA" ]; then
+            echo "::error::gradle-wrapper.properties distributionSha256Sum (${EXISTING_SHA}) does not match official Gradle SHA-256 (${OFFICIAL_SHA})!"
+            exit 1
+          fi
+
+          echo "Downloading official ${GRADLE_ZIP}..."
+          if [ ! -s "${LOCAL_ZIP}" ]; then
+            curl -fL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 \
+              -A "Mozilla/5.0" "${OFFICIAL_URL}" -o "${LOCAL_ZIP}" || rm -f "${LOCAL_ZIP}"
+          fi
+          if [ ! -s "${LOCAL_ZIP}" ]; then
+            gh release download "v${GRADLE_VER}" --repo gradle/gradle-distributions --pattern "${GRADLE_ZIP}" --dir /tmp/gradle-dist --clobber || true
+          fi
+          if [ ! -s "${LOCAL_ZIP}" ]; then
+            echo "::error::Failed to download ${GRADLE_ZIP} from official sources."
+            exit 1
+          fi
+
+          echo "Verifying SHA-256 checksum for ${LOCAL_ZIP}..."
+          echo "${OFFICIAL_SHA}  ${LOCAL_ZIP}" | sha256sum -c -
+
+          python3 - "$PROPS_FILE" "$OFFICIAL_URL" "$OFFICIAL_SHA" "$GRADLE_VER" "$GRADLE_TYPE" "$LOCAL_ZIP" <<'PY'
+          from pathlib import Path
+          import hashlib
+          import os
+          import shutil
+          import sys
+
+          props_path = Path(sys.argv[1])
+          official_url = sys.argv[2]
+          official_sha = sys.argv[3]
+          gradle_ver = sys.argv[4]
+          gradle_type = sys.argv[5]
+          local_zip = Path(sys.argv[6])
+
+          escaped_url = official_url.replace("://", "\\://")
+          lines = props_path.read_text(encoding="utf-8").splitlines()
+          out_lines = []
+          has_url = False
+          has_validate = False
+          has_sha = False
+
+          for line in lines:
+              if line.startswith("distributionUrl="):
+                  out_lines.append(f"distributionUrl={escaped_url}")
+                  has_url = True
+              elif line.startswith("validateDistributionUrl="):
+                  out_lines.append("validateDistributionUrl=true")
+                  has_validate = True
+              elif line.startswith("distributionSha256Sum="):
+                  out_lines.append(f"distributionSha256Sum={official_sha}")
+                  has_sha = True
+              else:
+                  out_lines.append(line)
+
+          if not has_url:
+              out_lines.append(f"distributionUrl={escaped_url}")
+          if not has_validate:
+              out_lines.append("validateDistributionUrl=true")
+          if not has_sha:
+              out_lines.append(f"distributionSha256Sum={official_sha}")
+
+          props_path.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+
+          # Pre-seed Gradle Wrapper cache using exact Java BigInteger(1, MD5).toString(36) path
+          md5_num = int.from_bytes(hashlib.md5(official_url.encode("utf-8")).digest(), "big")
+          alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+          if md5_num == 0:
+              dist_hash = "0"
+          else:
+              chars = []
+              while md5_num > 0:
+                  md5_num, rem = divmod(md5_num, 36)
+                  chars.append(alphabet[rem])
+              dist_hash = "".join(reversed(chars))
+
+          gradle_home = Path(os.environ.get("GRADLE_USER_HOME", str(Path.home() / ".gradle")))
+          cache_dir = gradle_home / "wrapper" / "dists" / f"gradle-{gradle_ver}-{gradle_type}" / dist_hash
+          cache_dir.mkdir(parents=True, exist_ok=True)
+          shutil.copy2(local_zip, cache_dir / local_zip.name)
+          print(f"Pre-seeded verified Gradle archive in {cache_dir}")
+          PY
+
+          cat "$PROPS_FILE"
+          ./gradlew --version --no-daemon
 
       - name: Restore release keystore
         env:
@@ -220,7 +360,7 @@ jobs:
           import re
 
           path = Path("android/app/build.gradle")
-          text = path.read_text()
+          text = path.read_text(encoding="utf-8")
 
           v_code = int(os.environ.get("V_CODE", "1"))
           v_name = os.environ.get("V_NAME", "1.2.5")
@@ -252,7 +392,7 @@ jobs:
           if count != 1:
               raise RuntimeError("Release build type not found")
 
-          path.write_text(text)
+          path.write_text(text, encoding="utf-8")
 
           # Add HTTP retry and timeout resilience to android/gradle.properties
           gradle_props = Path("android/gradle.properties")
@@ -275,50 +415,11 @@ jobs:
       - name: Build Release AAB and APK
         working-directory: android
         env:
-          GH_TOKEN: ${{ github.token }}
           STORE_PASSWORD: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
         run: |
-          chmod +x ./gradlew
-
-          # 1. Pre-download Gradle binary zip locally using authenticated GH_TOKEN or non-GitHub mirror
-          # so ./gradlew reads from local disk (file:///) and NEVER hits GitHub unauthenticated rate limits.
-          GRADLE_VER=$(grep -oE 'gradle-[0-9.]+-(all|bin)\.zip' gradle/wrapper/gradle-wrapper.properties | sed -E 's/gradle-([0-9.]+)-(all|bin)\.zip/\1/' | head -n 1)
-          GRADLE_VER=${GRADLE_VER:-8.14.3}
-          GRADLE_ZIP="gradle-${GRADLE_VER}-bin.zip"
-          LOCAL_ZIP="/tmp/gradle-dist/${GRADLE_ZIP}"
-          mkdir -p /tmp/gradle-dist
-
-          echo "Downloading ${GRADLE_ZIP} to local disk (${LOCAL_ZIP})..."
-          if [ ! -s "${LOCAL_ZIP}" ]; then
-            gh release download "v${GRADLE_VER}" --repo gradle/gradle-distributions --pattern "${GRADLE_ZIP}" --dir /tmp/gradle-dist --clobber || true
-          fi
-
-          if [ ! -s "${LOCAL_ZIP}" ]; then
-            echo "Trying direct cloud mirror (mirrors.cloud.tencent.com)..."
-            curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 30 \
-              "https://mirrors.cloud.tencent.com/gradle/${GRADLE_ZIP}" -o "${LOCAL_ZIP}" || rm -f "${LOCAL_ZIP}"
-          fi
-
-          if [ ! -s "${LOCAL_ZIP}" ]; then
-            echo "Trying services.gradle.org with browser User-Agent..."
-            curl -fL --retry 5 --retry-all-errors --retry-delay 3 --connect-timeout 30 \
-              -A "Mozilla/5.0" \
-              "https://services.gradle.org/distributions/${GRADLE_ZIP}" -o "${LOCAL_ZIP}" || rm -f "${LOCAL_ZIP}"
-          fi
-
-          if [ -s "${LOCAL_ZIP}" ]; then
-            ls -lh "${LOCAL_ZIP}"
-            sed -i -E "s|^distributionUrl=.*|distributionUrl=file\\\\:///tmp/gradle-dist/${GRADLE_ZIP}|" gradle/wrapper/gradle-wrapper.properties
-            sed -i -E "s|^validateDistributionUrl=.*|validateDistributionUrl=false|" gradle/wrapper/gradle-wrapper.properties
-            sed -i -E "/^distributionSha256Sum=/d" gradle/wrapper/gradle-wrapper.properties
-            cat gradle/wrapper/gradle-wrapper.properties
-          fi
-
-          ./gradlew --version --no-daemon
-
-          # 2. Run release AAB + APK build with automatic retry on transient network timeouts
+          # Run release AAB + APK build using verified Gradle distribution with automatic retry on transient network timeouts
           BUILD_OK=0
           for attempt in 1 2 3; do
             echo "Running Gradle bundleRelease assembleRelease (attempt $attempt/3)..."
@@ -377,7 +478,7 @@ jobs:
           if-no-files-found: error
           overwrite: true
 
-      - name: Verify Both Artifacts & Publish Build Summary
+      - name: Inspect Built Manifest & Publish Build Summary
         env:
           AAB_ID: ${{ steps.upload_aab.outputs.artifact-id }}
           AAB_URL: ${{ steps.upload_aab.outputs.artifact-url }}
@@ -394,14 +495,109 @@ jobs:
             echo "::error::APK artifact upload did not return an artifact ID."
             exit 1
           fi
+
+          APK_PATH=$(find dist-release/apk -name "*.apk" | head -n 1)
+          MERGED_MANIFEST="android/app/build/intermediates/merged_manifest/release/processReleaseManifest/AndroidManifest.xml"
+          AAPT2_BIN=$(find "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools" -name aapt2 2>/dev/null | sort -V | tail -n 1 || true)
+
+          MANIFEST_REPORT=$(python3 - "$MERGED_MANIFEST" "$APK_PATH" "$AAPT2_BIN" <<'PY'
+          from pathlib import Path
+          import subprocess
+          import sys
+          import xml.etree.ElementTree as ET
+
+          manifest_path = Path(sys.argv[1])
+          apk_path = sys.argv[2]
+          aapt2_bin = sys.argv[3]
+
+          android_ns = "{http://schemas.android.com/apk/res/android}"
+          perms = []
+          target_sdk = "unknown"
+          min_sdk = "unknown"
+          v_code = "unknown"
+          v_name = "unknown"
+          app_label = "unknown"
+
+          if aapt2_bin and apk_path:
+              try:
+                  badging = subprocess.check_output([aapt2_bin, "dump", "badging", apk_path], text=True)
+                  for line in badging.splitlines():
+                      if line.startswith("package:"):
+                          for part in line.split():
+                              if part.startswith("versionCode="):
+                                  v_code = part.split("=", 1)[1].strip("'")
+                              elif part.startswith("versionName="):
+                                  v_name = part.split("=", 1)[1].strip("'")
+                      elif line.startswith("sdkVersion:"):
+                          min_sdk = line.split(":", 1)[1].strip().strip("'")
+                      elif line.startswith("targetSdkVersion:"):
+                          target_sdk = line.split(":", 1)[1].strip().strip("'")
+                      elif line.startswith("application-label:"):
+                          app_label = line.split(":", 1)[1].strip().strip("'")
+              except Exception as exc:
+                  print(f"aapt2 badging warning: {exc}", file=sys.stderr)
+
+          if manifest_path.exists():
+              tree = ET.parse(manifest_path)
+              root = tree.getroot()
+              if v_code == "unknown":
+                  v_code = root.attrib.get(f"{android_ns}versionCode", v_code)
+              if v_name == "unknown":
+                  v_name = root.attrib.get(f"{android_ns}versionName", v_name)
+              uses_sdk = root.find("uses-sdk")
+              if uses_sdk is not None:
+                  if target_sdk == "unknown":
+                      target_sdk = uses_sdk.attrib.get(f"{android_ns}targetSdkVersion", target_sdk)
+                  if min_sdk == "unknown":
+                      min_sdk = uses_sdk.attrib.get(f"{android_ns}minSdkVersion", min_sdk)
+              for el in root.findall("uses-permission"):
+                  name = el.attrib.get(f"{android_ns}name", "")
+                  max_sdk = el.attrib.get(f"{android_ns}maxSdkVersion", "")
+                  if name:
+                      perms.append(f"{name}" + (f" (maxSdkVersion={max_sdk})" if max_sdk else ""))
+
+          if not perms and aapt2_bin and apk_path:
+              try:
+                  dump_perms = subprocess.check_output([aapt2_bin, "dump", "permissions", apk_path], text=True)
+                  for line in dump_perms.splitlines():
+                      if line.startswith("uses-permission:"):
+                          perms.append(line)
+              except Exception as exc:
+                  print(f"aapt2 permissions warning: {exc}", file=sys.stderr)
+
+          print(f"APP_LABEL={app_label}")
+          print(f"TARGET_SDK={target_sdk}")
+          print(f"MIN_SDK={min_sdk}")
+          print(f"MANIFEST_VCODE={v_code}")
+          print(f"MANIFEST_VNAME={v_name}")
+          print("PERMS_START")
+          for p in sorted(set(perms)):
+              print(f"- `{p}`")
+          print("PERMS_END")
+          PY
+          )
+
+          echo "$MANIFEST_REPORT"
+          TARGET_SDK=$(echo "$MANIFEST_REPORT" | sed -n 's/^TARGET_SDK=//p' | head -n 1)
+          MIN_SDK=$(echo "$MANIFEST_REPORT" | sed -n 's/^MIN_SDK=//p' | head -n 1)
+          MANIFEST_VCODE=$(echo "$MANIFEST_REPORT" | sed -n 's/^MANIFEST_VCODE=//p' | head -n 1)
+          MANIFEST_VNAME=$(echo "$MANIFEST_REPORT" | sed -n 's/^MANIFEST_VNAME=//p' | head -n 1)
+          APP_LABEL=$(echo "$MANIFEST_REPORT" | sed -n 's/^APP_LABEL=//p' | head -n 1)
+          PERMS_LIST=$(echo "$MANIFEST_REPORT" | awk '/^PERMS_START$/{flag=1;next}/^PERMS_END$/{flag=0}flag')
+
           {
             echo "### ✅ ساخت نسخه‌های انتشار یاد (AAB و APK) با موفقیت انجام شد"
             echo ""
-            echo "- **نام نسخه اعمال‌شده در کل اپ (اسپلش، درباره، تنظیمات و اندروید):** \`${V_NAME}\`"
-            echo "- **کد نسخه (versionCode):** \`${V_CODE}\`"
+            echo "- **نام برنامه در مانیفست (Launcher):** \`${APP_LABEL}\`"
+            echo "- **نام نسخه اعمال‌شده در کل اپ و اندروید:** \`${MANIFEST_VNAME:-$V_NAME}\`"
+            echo "- **کد نسخه (versionCode در مانیفست):** \`${MANIFEST_VCODE:-$V_CODE}\`"
+            echo "- **targetSdk:** \`${TARGET_SDK}\` • **minSdk:** \`${MIN_SDK}\`"
             echo ""
             echo "| نوع خروجی | نام آرتیفکت | وضعیت | لینک دانلود مستقیم |"
             echo "| :--- | :--- | :--- | :--- |"
             echo "| **AAB (کافه‌بازار و مایکت)** | \`Yaad-Release-AAB\` | ✅ آماده (\`#${AAB_ID}\`) | [دانلود Yaad-Release-AAB](${AAB_URL}) |"
             echo "| **APK (نصب مستقیم)** | \`Yaad-Release-APK\` | ✅ آماده (\`#${APK_ID}\`) | [دانلود Yaad-Release-APK](${APK_URL}) |"
+            echo ""
+            echo "#### فهرست مجوزهای مانیفست نهایی"
+            echo "${PERMS_LIST}"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -13065,6 +13065,21 @@ class YaadGeofenceService : Service(), LocationListener {
             }
             openBackgroundLocationSettings()
         }
+
+        @android.webkit.JavascriptInterface
+        fun openBatteryOptimizationSettings() {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    return
+                }
+            } catch (e: Exception) {
+            }
+            openBackgroundLocationSettings()
+        }
     }
 }
 `;
@@ -13155,11 +13170,26 @@ if (fs.existsSync(manifestPath)) {
     'android.permission.READ_MEDIA_IMAGES',
     'android.permission.READ_EXTERNAL_STORAGE',
     'android.permission.WRITE_EXTERNAL_STORAGE',
+    'android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS',
   ];
   for (const perm of disallowedPluginPerms) {
     manifestContent = manifestContent.replace(
       new RegExp(`\\s*<uses-permission[^>]*android:name="${perm.replace(/\./g, '\\.')}"[^>]*\\/?>`, 'g'),
       ''
+    );
+  }
+  manifestContent = manifestContent.replace(
+    /\s*<uses-permission[^>]*android:name="android\.permission\.SCHEDULE_EXACT_ALARM"[^>]*\/?>/g,
+    ''
+  );
+  manifestContent = manifestContent.replace(
+    '</manifest>',
+    '    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>\n</manifest>'
+  );
+  if (!manifestContent.includes('android.permission.USE_EXACT_ALARM')) {
+    manifestContent = manifestContent.replace(
+      '</manifest>',
+      '    <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>\n</manifest>'
     );
   }
   fs.writeFileSync(manifestPath, manifestContent, 'utf8');

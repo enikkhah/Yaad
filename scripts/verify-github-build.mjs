@@ -123,6 +123,7 @@ for (const scriptRel of [
   'scripts/generate-transparent-icons.mjs',
   'scripts/setup-bazaar-poolakey.mjs',
   'scripts/patch-capacitor-notifications.mjs',
+  'scripts/sync-privacy.mjs',
 ]) {
   const scriptPath = path.join(rootDir, scriptRel);
   if (!fs.existsSync(scriptPath)) {
@@ -131,6 +132,10 @@ for (const scriptRel of [
   }
   execFileSync('node', ['--check', scriptPath], { stdio: 'inherit' });
 }
+
+execFileSync('node', [path.join(rootDir, 'scripts/sync-privacy.mjs')], {
+  stdio: 'inherit',
+});
 
 execFileSync('node', [path.join(rootDir, 'scripts/patch-capacitor-notifications.mjs')], {
   stdio: 'inherit',

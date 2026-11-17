@@ -34,7 +34,8 @@ import {
   Download,
   Upload,
   BellRing,
-  AlertTriangle
+  AlertTriangle,
+  BatteryCharging
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION } from '../utils/version';
@@ -902,6 +903,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         <span>{testAlarmFeedback.text}</span>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* 2.4 Battery Optimization Guide Card (Native Android — opens OS settings directly, no extra permission) */}
+                {isNativeAndroidApp() && (
+                  <div className="p-3.5 rounded-2xl bg-stone-900/75 border border-amber-500/35 space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <div className="p-2 rounded-xl bg-amber-500/15 border border-amber-500/35 text-amber-400 shrink-0">
+                          <BatteryCharging className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-xs font-bold text-stone-100 block">
+                            {isFa ? 'راهنمای بهینه‌سازی باتری برای زنگ بموقع' : 'Battery Optimization Guide'}
+                          </span>
+                          <span className="text-[11px] text-stone-400 block mt-0.5 leading-relaxed">
+                            {isFa
+                              ? 'برای جلوگیری از بسته‌شدن خودکار آلارم‌ها در پس‌زمینه، «یاد» را در حالت بدون محدودیت (Unrestricted) قرار دهید.'
+                              : 'Set YAAD to Unrestricted battery usage in Android settings so background alarms fire reliably.'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => openAndroidSettings('battery')}
+                        className="min-h-[44px] px-3.5 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer shrink-0 flex items-center justify-center gap-1.5"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>{isFa ? 'تنظیمات باتری' : 'Battery Settings'}</span>
+                      </button>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-stone-950/75 border border-stone-800/80 text-[10.5px] text-stone-300 space-y-1.5 leading-relaxed">
+                      <p>
+                        <strong className="text-amber-300">{isFa ? 'شیائومی (MIUI / HyperOS):' : 'Xiaomi:'}</strong>{' '}
+                        {isFa
+                          ? 'اطلاعات برنامه (App Info) ← Autostart (شروع خودکار) را روشن و Battery saver را روی No restrictions بگذارید.'
+                          : 'App Info → Enable Autostart and set Battery saver to "No restrictions".'}
+                      </p>
+                      <p>
+                        <strong className="text-sky-300">{isFa ? 'سامسونگ (One UI):' : 'Samsung:'}</strong>{' '}
+                        {isFa
+                          ? 'اطلاعات برنامه ← باتری (Battery) ← گزینه Unrestricted (بدون محدودیت) را انتخاب کنید و در Sleeping apps نگذارید.'
+                          : 'App Info → Battery → Choose "Unrestricted" and exclude from Sleeping apps.'}
+                      </p>
+                      <p>
+                        <strong className="text-emerald-300">{isFa ? 'هوآوی (EMUI):' : 'Huawei:'}</strong>{' '}
+                        {isFa
+                          ? 'تنظیمات ← باتری ← راه‌اندازی برنامه (App launch) ← «یاد» را روی مدیریت دستی (Manage manually) با ۳ تیک فعال بگذارید.'
+                          : 'Settings → Battery → App launch → Set YAAD to "Manage manually" with all 3 toggles ON.'}
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2015,8 +2069,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <p>
                     {isFa
-                      ? 'تمامی یادآورها، مناسبت‌ها، ایده‌ها و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و به‌طور خودکار در پوشه YAAD در ریشه حافظه ذخیره می‌شوند و پشتیبان‌گیری ابری حذف شده است. پایش GPS در حصار مکانی غیردائمی و تطبیقی (کم‌مصرف) بوده و سرویس‌های بیرونی مانند تقویم/تسک گوگل یا آدرس‌یابی نقشه صرفاً به درخواست مستقیم شما فعال می‌شوند.'
-                      : 'Your reminders, occasions, ideas, and places are stored 100% locally on your device with automatic backup in the root YAAD folder (cloud backup is removed). Geofence GPS is adaptive and non-continuous. External services like Google Calendar/Tasks or address lookup (OpenStreetMap) run strictly on your explicit action.'}
+                      ? 'داده‌های شما به‌صورت محلی در فضای خصوصی دستگاه ذخیره می‌شوند و دسترسی به ریشه حافظه حذف شده است. بک‌آپ خودکار داخلی پس از حذف نصب برنامه پاک می‌شود؛ برای نگهداری دائمی حتماً از «خروجی گرفتن (JSON)» استفاده کنید. مختصات GPS فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، بازخورد پشتیبانی کاملاً اختیاری است و پرداخت/امتیاز درگاه رسمی کافه‌بازار یا مایکت را دارد.'
+                      : 'Your reminders, occasions, ideas, and places are stored privately on your device (auto-backup in app-private storage does not survive uninstall; export a JSON backup regularly). Geofence GPS is adaptive and non-continuous. Coordinates go to OpenStreetMap Nominatim only on address lookup, feedback submission is strictly optional, and store purchases/ratings run through Cafe Bazaar or Myket.'}
                   </p>
                   <p className="text-[10.5px] text-stone-400">
                     {isFa

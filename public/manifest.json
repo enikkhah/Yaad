@@ -1,8 +1,8 @@
 {
   "id": "/?source=pwa",
-  "name": "YAAD",
-  "short_name": "YAAD",
-  "description": "YAAD — اپلیکیشن هوشمند یادآور و ثبت ایده با تقویم فارسی، اعلان‌های سیستمی و نقشه",
+  "name": "یاد",
+  "short_name": "یاد",
+  "description": "یاد؛ یادآور آنچه مهم است — مدیریت هوشمند یادآورها، مناسبت‌ها، ثبت ایده و یادآور مکانی",
   "lang": "fa",
   "dir": "rtl",
   "start_url": "/?source=pwa",
