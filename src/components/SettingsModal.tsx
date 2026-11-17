@@ -55,7 +55,6 @@ import {
 import {
   retrieveFromLocalYaadFolder,
   getSnapshotItemCount,
-  LOCAL_BACKUP_FOLDER_NAME
 } from '../utils/backupStorage';
 import {
   openGoogleCalendarAccount
@@ -254,7 +253,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
       granted = await requestLocationPermission();
     } else if (type === 'storage') {
-      const res = await requestLocalFolderPermission(false, LOCAL_BACKUP_FOLDER_NAME);
+      const res = await requestLocalFolderPermission(false);
       granted = res.granted;
       if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
         onRestoreData(
@@ -268,7 +267,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           'merge'
         );
       }
-      onUpdateSettings({ localBackupFolderName: LOCAL_BACKUP_FOLDER_NAME });
       if (!res.granted) {
         setShowStoragePermNotice(true);
       }
@@ -311,7 +309,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setNativePerms(updated);
     if (updated.storage && onRestoreData) {
       try {
-        const snap = await retrieveFromLocalYaadFolder(LOCAL_BACKUP_FOLDER_NAME);
+        const snap = await retrieveFromLocalYaadFolder();
         if (snap && getSnapshotItemCount(snap) > 0) {
           onRestoreData(
             {
@@ -991,7 +989,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </span>
                   </button>
 
-                  {/* 5. Folder / Storage (Yaad reminder) */}
+                  {/* 5. Folder / Storage (YAAD) */}
                   <button
                     type="button"
                     onClick={() => handleRequestPerm('storage')}
@@ -1451,13 +1449,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             <button
               type="button"
               onClick={(e) => toggleSection('recycleBin', e.currentTarget)}
-              className="w-full flex items-center justify-between p-3.5 sm:p-4 bg-stone-900/80 hover:bg-stone-800/80 transition-colors text-right cursor-pointer"
+              className="w-full flex items-center justify-between p-3.5 sm:p-4 bg-stone-900/80 hover:bg-stone-800/80 transition-colors text-start cursor-pointer"
             >
               <div className="flex items-center gap-2.5">
                 <div className="w-8 h-8 rounded-xl bg-rose-500/15 text-rose-400 border border-rose-500/30 flex items-center justify-center shrink-0">
                   <Trash2 className="w-4 h-4" />
                 </div>
-                <div className="text-right">
+                <div className="text-start">
                   <span className="font-bold text-sm text-white block">
                     {isFa ? 'سطل بازیافت' : 'Recycle Bin'}
                   </span>
@@ -1712,8 +1710,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   </div>
                   <p>
                     {isFa
-                      ? 'تمامی یادآورها، مناسبت‌ها، ایده‌ها (به همراه یادآورهای متصل به ایده) و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و به‌طور خودکار در پوشه YAAD در ریشه حافظه ذخیره می‌شوند. پایش GPS در حصار مکانی غیردائمی و تطبیقی (کم‌مصرف) بوده، پشتیبان‌گیری ابری حذف شده و هیچ اطلاعاتی به سرورهای خارجی ارسال نمی‌شود.'
-                      : 'All reminders, occasions, ideas (including idea reminders), and places are stored 100% locally on your device with automatic backup in the root YAAD folder. Geofence GPS polling is adaptive and non-continuous, cloud backup is removed, and no data leaves your device.'}
+                      ? 'تمامی یادآورها، مناسبت‌ها، ایده‌ها و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و به‌طور خودکار در پوشه YAAD در ریشه حافظه ذخیره می‌شوند و پشتیبان‌گیری ابری حذف شده است. پایش GPS در حصار مکانی غیردائمی و تطبیقی (کم‌مصرف) بوده و سرویس‌های بیرونی مانند تقویم/تسک گوگل یا آدرس‌یابی نقشه صرفاً به درخواست مستقیم شما فعال می‌شوند.'
+                      : 'Your reminders, occasions, ideas, and places are stored 100% locally on your device with automatic backup in the root YAAD folder (cloud backup is removed). Geofence GPS is adaptive and non-continuous. External services like Google Calendar/Tasks or address lookup (OpenStreetMap) run strictly on your explicit action.'}
                   </p>
                   <p className="text-[10.5px] text-stone-400">
                     {isFa

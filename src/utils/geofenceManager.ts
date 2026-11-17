@@ -110,7 +110,7 @@ interface ItemScenarioRuntimeState {
 
 export const GEOFENCE_PASS_THROUGH_SNOOZE_MS = 5 * 60 * 1000; // 5 minutes snooze ("الان نه (Snooze)") after which the alert process re-emits
 export const GEOFENCE_ANTI_PINGPONG_COOLDOWN_MS = 3 * 60 * 1000; // 3 minutes minimum cooldown between same-phase triggers
-export const GEOFENCE_IN_APP_VISUAL_MAX_MS = 30 * 1000; // 30 seconds auto-off for in-app full-screen visual alert
+export const GEOFENCE_IN_APP_VISUAL_MAX_MS = 10 * 1000; // 10 seconds auto-off for in-app full-screen visual alert
 
 const scenarioRuntimeMap = new Map<string, ItemScenarioRuntimeState>();
 const minimizedGeofenceMap = new Map<string, boolean>();
@@ -466,12 +466,12 @@ export function acknowledgeGeofenceAlert(
 }
 
 /**
- * Automatically turns off the in-app full-screen visual alert after 30 seconds for the current phase:
- * - If in `enter_approaching` or `exit_moving_out`, marks the 30s approach visual window as finished
+ * Automatically turns off the in-app full-screen visual alert after 10 seconds for the current phase:
+ * - If in `enter_approaching` or `exit_moving_out`, marks the 10s approach visual window as finished
  *   (while still allowing the 5% central zone arrival or outer border crossing stage to trigger when reached).
  * - If in the final `enter_center_*` or `exit_border_*` / `exit_crossed_*` stage, completes the cycle.
  */
-export function expireInAppGeofenceVisualPhaseAfter30s(
+export function expireInAppGeofenceVisualPhase(
   itemId?: string,
   phase?: GeofenceScenarioPhase
 ): void {
@@ -756,7 +756,7 @@ export function toggleGeofenceAlertMute(itemId?: string, forceMute?: boolean): b
 /**
  * Evaluates a single SavedLocation or Reminder geofence item against 'enter' or 'exit'
  * with Fuzzy Boundary Hysteresis, <= 1s immediate activation, permanent sonar stop after 10s of 5 Hz,
- * 30s auto-off for in-app full-screen visual alerts, and strict directional discrimination.
+ * 10s auto-off for in-app full-screen visual alerts, and strict directional discrimination.
  */
 function evaluateSingleItemScenario(params: {
   itemKey: string;
@@ -881,11 +881,11 @@ function evaluateSingleItemScenario(params: {
   // SCENARIO 1: ENTER ONLY ('enter')
   // 1. Upon detecting movement toward the geofence and entering the radius (d <= R):
   //    - Dedicated Enter audio alert (6s submarine sonar) + Full-screen visual alert start.
-  //    - In-app full-screen visual alert turns off after 30 seconds if the user has not yet reached the 5% central zone.
+  //    - In-app full-screen visual alert turns off after 10 seconds if the user has not yet reached the 5% central zone.
   // 2. Upon entering the 5% central zone (d <= max(5% R, 15m)):
   //    - 5 Hz sonar plays for 10 seconds (0..10s).
   //    - Then audio cuts off completely, while visual alert announcing arrival at the central zone
-  //      continues up to 30 seconds, and then all alerts automatically stop for this cycle.
+  //      continues for 10 seconds, and then all alerts automatically stop for this cycle.
   // =========================================================================
   if (triggerOn === 'enter') {
     if (distance > safeRadius + antiPingPongDeadbandMeters) {
@@ -943,8 +943,8 @@ function evaluateSingleItemScenario(params: {
 
     // 1A. Central 5% target zone (d <= max(5% R, 15m)):
     // - 0..10s: 5 Hz sonar + visual arrival message
-    // - 10..30s: audio cuts off, visual arrival message continues up to 30 seconds total
-    // - >= 30s: all alerts stop and cycle completes
+    // - Next 10s: audio cuts off, visual arrival message continues for 10 seconds
+    // - After 10s visual window: all alerts stop and cycle completes
     if (distance <= centerZoneMeters || st.center5HzStartMs > 0) {
       st.enterAlertActive = true;
       if (st.center5HzStartMs === 0) {
@@ -953,7 +953,7 @@ function evaluateSingleItemScenario(params: {
       const elapsedCenter = now - st.center5HzStartMs;
 
       if (elapsedCenter < 10_000) {
-        const remSec = Math.max(1, Math.ceil((GEOFENCE_IN_APP_VISUAL_MAX_MS - elapsedCenter) / 1000));
+        const remSec = Math.max(1, Math.ceil((10_000 - elapsedCenter) / 1000));
         return {
           id: `alert_${itemKey}`,
           targetType,
@@ -982,11 +982,16 @@ function evaluateSingleItemScenario(params: {
 
       st.sonarFinishedForCycle = true;
 
-      // Visual-only completion window up to 30 seconds total (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 30_000`)
-      if (elapsedCenter < GEOFENCE_IN_APP_VISUAL_MAX_MS) {
+      if (st.visual10sStartMs === 0) {
+        st.visual10sStartMs = now;
+      }
+      const elapsedVisual = now - st.visual10sStartMs;
+
+      // Visual-only continuation window for 10 seconds (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 10_000`)
+      if (elapsedVisual < GEOFENCE_IN_APP_VISUAL_MAX_MS) {
         const remVisualSec = Math.max(
           1,
-          Math.ceil((GEOFENCE_IN_APP_VISUAL_MAX_MS - elapsedCenter) / 1000)
+          Math.ceil((GEOFENCE_IN_APP_VISUAL_MAX_MS - elapsedVisual) / 1000)
         );
         return {
           id: `alert_${itemKey}`,
@@ -1014,7 +1019,7 @@ function evaluateSingleItemScenario(params: {
         };
       }
 
-      // 30 seconds of visual central-zone alert have completed -> stop all alerts for this cycle!
+      // 10 seconds of visual central-zone alert have completed -> stop all alerts for this cycle!
       st.enterCycleCompleted = true;
       st.enterAlertActive = false;
       st.sonarFinishedForCycle = true;
@@ -1033,7 +1038,7 @@ function evaluateSingleItemScenario(params: {
     }
 
     // 1B. Inside geofence boundary outside the 5% central zone (centerZoneMeters < d <= R, or latched within deadband):
-    // Turn off the in-app full-screen visual alert after 30 seconds (`GEOFENCE_IN_APP_VISUAL_MAX_MS`),
+    // Turn off the in-app full-screen visual alert after 10 seconds (`GEOFENCE_IN_APP_VISUAL_MAX_MS`),
     // while keeping the 5% central zone arrival stage armed to fire when `distance <= centerZoneMeters`!
     if (!st.sonarFinishedForCycle && (st.enterAlertActive || distance <= safeRadius)) {
       st.enterAlertActive = true;
@@ -1084,11 +1089,11 @@ function evaluateSingleItemScenario(params: {
   //    - Complete silence (NO visual or audio alert).
   // 2. Upon detecting outward movement and exiting the 5% central zone (5% R < d <= R):
   //    - Deeper-pitched (bass) Exit sonar starts (every 6s) + Full-screen visual Exit alert with outward radar arrows.
-  //    - In-app full-screen visual alert turns off after 30 seconds if the user has not yet crossed outside d > R.
+  //    - In-app full-screen visual alert turns off after 10 seconds if the user has not yet crossed outside d > R.
   // 3. Upon crossing outside the geofence boundary (d > R):
   //    - 5 Hz deep Exit sonar plays for 10 seconds (0..10s) with "Exited geofence" message on the visual alert.
-  //    - Then audio cuts off completely, while visual alert with "Exited geofence" message continues up to 30 seconds.
-  //    - After 30 seconds, the operation finishes and all alerts stop.
+  //    - Then audio cuts off completely, while visual alert with "Exited geofence" message continues for 10 seconds.
+  //    - After 10 seconds visual continuation, the operation finishes and all alerts stop.
   // =========================================================================
   // Arm Exit monitoring ONLY when the user is genuinely inside the boundary (d <= R).
   // If the user is already outside the boundary and was never armed inside, NEVER emit an exit alert!
@@ -1201,7 +1206,7 @@ function evaluateSingleItemScenario(params: {
     const elapsedExit = now - st.border5HzStartMs;
 
     if (elapsedExit < 10_000) {
-      const remSec = Math.max(1, Math.ceil((GEOFENCE_IN_APP_VISUAL_MAX_MS - elapsedExit) / 1000));
+      const remSec = Math.max(1, Math.ceil((10_000 - elapsedExit) / 1000));
       return {
         id: `alert_${itemKey}`,
         targetType,
@@ -1228,11 +1233,16 @@ function evaluateSingleItemScenario(params: {
 
     st.sonarFinishedForCycle = true;
 
-    // Visual-only completion window up to 30 seconds total (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 30_000`)
-    if (elapsedExit < GEOFENCE_IN_APP_VISUAL_MAX_MS) {
+    if (st.visual10sStartMs === 0) {
+      st.visual10sStartMs = now;
+    }
+    const elapsedVisual = now - st.visual10sStartMs;
+
+    // Visual-only continuation window for 10 seconds (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 10_000`)
+    if (elapsedVisual < GEOFENCE_IN_APP_VISUAL_MAX_MS) {
       const remVisualSec = Math.max(
         1,
-        Math.ceil((GEOFENCE_IN_APP_VISUAL_MAX_MS - elapsedExit) / 1000)
+        Math.ceil((GEOFENCE_IN_APP_VISUAL_MAX_MS - elapsedVisual) / 1000)
       );
       return {
         id: `alert_${itemKey}`,
@@ -1258,7 +1268,7 @@ function evaluateSingleItemScenario(params: {
       };
     }
 
-    // 30 seconds of visual exit banner have completed -> finish operation and disarm until re-entry!
+    // 10 seconds of visual exit banner have completed -> finish operation and disarm until re-entry!
     st.exitCycleCompleted = true;
     st.sonarFinishedForCycle = true;
     st.bothDirectionLock = null;

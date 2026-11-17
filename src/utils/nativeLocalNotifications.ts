@@ -348,7 +348,8 @@ export async function requestNotificationPermission(): Promise<boolean> {
  */
 export async function scheduleReminderNotification(
   reminder: Reminder,
-  currentSettings?: AppSettings
+  currentSettings?: AppSettings,
+  options?: { overrideNotificationId?: number; isAutoRepeat?: boolean }
 ): Promise<boolean> {
   // Only active (non-deleted, non-acknowledged) pending or postponed reminders in the future should be scheduled
   const now = Date.now();
@@ -361,7 +362,10 @@ export async function scheduleReminderNotification(
     return false;
   }
 
-  const notifId = reminder.notificationId || getNotificationId(reminder.id);
+  const notifId =
+    options?.overrideNotificationId ||
+    reminder.notificationId ||
+    getNotificationId(reminder.id);
   const scheduledDate = new Date(reminder.dueTimestamp);
   const timeFormatted = formatJalaliTime(reminder.dueTimestamp);
 
@@ -431,6 +435,7 @@ export async function scheduleReminderNotification(
           theme: appTheme,
           language: appLang,
           isRepeat: false,
+          isAutoRepeat: Boolean(options?.isAutoRepeat),
         },
       },
     ];
@@ -444,6 +449,23 @@ export async function scheduleReminderNotification(
     console.warn(`Failed to schedule Local Notification for reminder ${reminder.id}:`, err);
     return false;
   }
+}
+
+/**
+ * Schedules a +15m unanswered repeat notification in a deterministic repeat slot
+ * so the currently pinned status-bar notification remains visible until the repeat rings.
+ */
+export async function scheduleReminderRepeatNotification(
+  reminder: Reminder,
+  currentSettings?: AppSettings
+): Promise<boolean> {
+  const baseId = reminder.notificationId || getNotificationId(reminder.id);
+  const slotIndex = Math.abs(Math.floor(reminder.dueTimestamp / 60000)) % 25;
+  const repeatId = ((baseId + 1000 + slotIndex + 1) % 600000000) + 1;
+  return scheduleReminderNotification(reminder, currentSettings, {
+    overrideNotificationId: repeatId,
+    isAutoRepeat: true,
+  });
 }
 
 /**

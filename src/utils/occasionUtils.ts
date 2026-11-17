@@ -1,11 +1,13 @@
 import { Occasion, OccasionType, Reminder } from '../types';
 import { 
   getJalaliComponents, 
+  getGregorianComponents,
   jalaliToTimestamp, 
   toPersianDigits, 
   PERSIAN_MONTHS, 
   GREGORIAN_MONTHS,
-  getDaysInJalaliMonth 
+  getDaysInJalaliMonth,
+  getDaysInGregorianMonth
 } from './jalali';
 
 export const OCCASIONS_STORAGE_KEY = 'yaad_occasions_data';
@@ -312,53 +314,75 @@ export function calculateNextOccasionOccurrence(
   formattedTargetDate: string;
 } {
   const isEn = language === 'en';
-  const currentJalali = getJalaliComponents(referenceTimestamp);
-  const curYear = currentJalali.year;
+  const storedCalendar: 'jalali' | 'gregorian' =
+    occasion.calendar || (occasion.solarYear && occasion.solarYear >= 1900 ? 'gregorian' : 'jalali');
 
   // Split hour and minute from notifyTime (default "09:00")
-  let [hStr, mStr] = (occasion.notifyTime || '09:00').split(':');
-  const hour = parseInt(hStr || '9', 10);
-  const minute = parseInt(mStr || '0', 10);
+  const [hStr, mStr] = (occasion.notifyTime || '09:00').split(':');
+  const parsedHour = parseInt(hStr || '9', 10);
+  const parsedMinute = parseInt(mStr || '0', 10);
+  const hour = Number.isFinite(parsedHour) ? Math.max(0, Math.min(23, parsedHour)) : 9;
+  const minute = Number.isFinite(parsedMinute) ? Math.max(0, Math.min(59, parsedMinute)) : 0;
 
-  // Check this year
-  const maxDaysThisYear = getDaysInJalaliMonth(curYear, occasion.solarMonth);
-  const dayThisYear = Math.min(occasion.solarDay, maxDaysThisYear);
-  const timestampThisYear = jalaliToTimestamp(curYear, occasion.solarMonth, dayThisYear, hour, minute);
+  let occurrenceYear: number;
+  let nextTimestamp: number;
+  let isDateToday: boolean;
 
-  // If timestamp for this year has passed, next occurrence is next year
-  let occurrenceYear = curYear;
-  let nextTimestamp = timestampThisYear;
+  if (storedCalendar === 'gregorian') {
+    const currentGreg = getGregorianComponents(referenceTimestamp);
+    const curYear = currentGreg.year;
+    const maxDaysThisYear = getDaysInGregorianMonth(curYear, occasion.solarMonth);
+    const dayThisYear = Math.min(occasion.solarDay, maxDaysThisYear);
+    const timestampThisYear = new Date(curYear, occasion.solarMonth - 1, dayThisYear, hour, minute, 0, 0).getTime();
 
-  // Consider "passed" if timestamp has passed today (past end of day or past notification moment)
-  // To allow showing "امروز" if today is the day:
-  const isDateToday = 
-    currentJalali.month === occasion.solarMonth && 
-    currentJalali.day === occasion.solarDay;
+    occurrenceYear = curYear;
+    nextTimestamp = timestampThisYear;
+    isDateToday = currentGreg.month === occasion.solarMonth && currentGreg.day === dayThisYear;
 
-  if (nextTimestamp < referenceTimestamp && !isDateToday) {
-    occurrenceYear = curYear + 1;
-    const maxDaysNextYear = getDaysInJalaliMonth(occurrenceYear, occasion.solarMonth);
-    const dayNextYear = Math.min(occasion.solarDay, maxDaysNextYear);
-    nextTimestamp = jalaliToTimestamp(occurrenceYear, occasion.solarMonth, dayNextYear, hour, minute);
+    if (nextTimestamp < referenceTimestamp && !isDateToday) {
+      occurrenceYear = curYear + 1;
+      const maxDaysNextYear = getDaysInGregorianMonth(occurrenceYear, occasion.solarMonth);
+      const dayNextYear = Math.min(occasion.solarDay, maxDaysNextYear);
+      nextTimestamp = new Date(occurrenceYear, occasion.solarMonth - 1, dayNextYear, hour, minute, 0, 0).getTime();
+    }
+  } else {
+    const currentJalali = getJalaliComponents(referenceTimestamp);
+    const curYear = currentJalali.year;
+    const maxDaysThisYear = getDaysInJalaliMonth(curYear, occasion.solarMonth);
+    const dayThisYear = Math.min(occasion.solarDay, maxDaysThisYear);
+    const timestampThisYear = jalaliToTimestamp(curYear, occasion.solarMonth, dayThisYear, hour, minute);
+
+    occurrenceYear = curYear;
+    nextTimestamp = timestampThisYear;
+    isDateToday = currentJalali.month === occasion.solarMonth && currentJalali.day === dayThisYear;
+
+    if (nextTimestamp < referenceTimestamp && !isDateToday) {
+      occurrenceYear = curYear + 1;
+      const maxDaysNextYear = getDaysInJalaliMonth(occurrenceYear, occasion.solarMonth);
+      const dayNextYear = Math.min(occasion.solarDay, maxDaysNextYear);
+      nextTimestamp = jalaliToTimestamp(occurrenceYear, occasion.solarMonth, dayNextYear, hour, minute);
+    }
   }
 
-  // Calculate days difference
+  // Calculate days difference relative to referenceTimestamp day boundaries
   const oneDayMs = 24 * 60 * 60 * 1000;
-  // Day boundaries calculation for clean day count
-  const todayStart = new Date();
+  const todayStart = new Date(referenceTimestamp);
   todayStart.setHours(0, 0, 0, 0);
   const targetDateObj = new Date(nextTimestamp);
   targetDateObj.setHours(0, 0, 0, 0);
   const daysDiff = Math.round((targetDateObj.getTime() - todayStart.getTime()) / oneDayMs);
-  const daysRemaining = Math.max(0, daysDiff);
+  const daysRemaining = isDateToday ? 0 : Math.max(0, daysDiff);
 
   const yearsPassed = occasion.solarYear ? occurrenceYear - occasion.solarYear : null;
 
-  const monthNameFa = PERSIAN_MONTHS[occasion.solarMonth - 1] || 'فروردین';
-  const monthNameEn = GREGORIAN_MONTHS[occasion.solarMonth - 1] || 'January';
-  const formattedTargetDate = isEn 
-    ? `${monthNameEn} ${occasion.solarDay}, ${occurrenceYear}`
-    : `${toPersianDigits(occasion.solarDay)} ${monthNameFa} ${toPersianDigits(occurrenceYear)}`;
+  // Format target date from the actual resolved timestamp in the active display language
+  const targetJalali = getJalaliComponents(nextTimestamp);
+  const targetGreg = getGregorianComponents(nextTimestamp);
+  const monthNameFa = PERSIAN_MONTHS[targetJalali.month - 1] || 'فروردین';
+  const monthNameEn = GREGORIAN_MONTHS[targetGreg.month - 1] || 'January';
+  const formattedTargetDate = isEn
+    ? `${monthNameEn} ${targetGreg.day}, ${targetGreg.year}`
+    : `${toPersianDigits(targetJalali.day)} ${monthNameFa} ${toPersianDigits(targetJalali.year)}`;
 
   return {
     nextTimestamp,
@@ -420,36 +444,54 @@ export function createReminderFromOccasion(
   options?: {
     daysBefore?: number;
     referenceTimestamp?: number;
+    language?: 'fa' | 'en';
   }
 ): Omit<Reminder, 'id' | 'createdAt' | 'status' | 'postponeCount'> {
-  const { nextTimestamp, yearsPassed, formattedTargetDate } = calculateNextOccasionOccurrence(
+  const refNow = options?.referenceTimestamp || Date.now();
+  const lang: 'fa' | 'en' = options?.language === 'en' ? 'en' : 'fa';
+  const isEn = lang === 'en';
+
+  const { nextTimestamp, daysRemaining, yearsPassed, formattedTargetDate } = calculateNextOccasionOccurrence(
     occasion,
-    options?.referenceTimestamp || Date.now()
+    refNow,
+    lang
   );
 
-  const daysBefore = options?.daysBefore !== undefined ? options.daysBefore : occasion.notifyDaysBefore;
-  
-  // Calculate trigger timestamp (subtract daysBefore)
-  const triggerTimestamp = nextTimestamp - (daysBefore * 24 * 60 * 60 * 1000);
+  const requestedDaysBefore = options?.daysBefore !== undefined ? options.daysBefore : occasion.notifyDaysBefore;
+  const triggerTimestamp = nextTimestamp - requestedDaysBefore * 24 * 60 * 60 * 1000;
+  const isTriggerAlreadyPassed = triggerTimestamp <= refNow;
+  const effectiveDaysBefore = isTriggerAlreadyPassed ? daysRemaining : requestedDaysBefore;
 
-  const annivLabel = getOccasionAnniversaryLabel(occasion, yearsPassed, 'fa');
-  const whenLabel = daysBefore === 0 
-    ? 'امروز' 
-    : `${toPersianDigits(daysBefore)} روز مانده (${formattedTargetDate})`;
+  const annivLabel = getOccasionAnniversaryLabel(occasion, yearsPassed, lang);
+  const whenLabel =
+    effectiveDaysBefore === 0
+      ? isEn
+        ? 'Today'
+        : 'امروز'
+      : isEn
+      ? effectiveDaysBefore === 1
+        ? `Tomorrow (${formattedTargetDate})`
+        : `${effectiveDaysBefore} days left (${formattedTargetDate})`
+      : `${toPersianDigits(effectiveDaysBefore)} روز مانده (${formattedTargetDate})`;
 
-  const reminderTitle = `مناسبت: ${annivLabel} (${whenLabel})`;
+  const reminderTitle = isEn
+    ? `Occasion: ${annivLabel} (${whenLabel})`
+    : `مناسبت: ${annivLabel} (${whenLabel})`;
+
   const reminderDesc = [
-    occasion.customNote ? `یادداشت: ${occasion.customNote}` : '',
-    occasion.personName ? `شخص: ${occasion.personName}` : '',
-    `تاریخ اصلی: ${formattedTargetDate}`,
-  ].filter(Boolean).join('\n');
+    occasion.customNote ? (isEn ? `Note: ${occasion.customNote}` : `یادداشت: ${occasion.customNote}`) : '',
+    occasion.personName ? (isEn ? `Person: ${occasion.personName}` : `شخص: ${occasion.personName}`) : '',
+    isEn ? `Occasion Date: ${formattedTargetDate}` : `تاریخ اصلی: ${formattedTargetDate}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   return {
     title: reminderTitle,
     description: reminderDesc,
     category: occasion.type === 'work' ? 'work' : 'family',
     priority: 'high',
-    dueTimestamp: Math.max(Date.now() + 60000, triggerTimestamp),
+    dueTimestamp: Math.max(refNow + 60000, triggerTimestamp),
     ringTune: occasion.ringTune || 'family',
     voiceReadAloud: true,
     recurrence: 'none',

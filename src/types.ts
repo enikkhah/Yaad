@@ -59,8 +59,6 @@ export interface AppSettings {
   alarmVolume: number; // 0.0 - 1.0
   vibrationEnabled?: boolean;
   autoVoiceInput: boolean;
-  googleMapsApiKey?: string;
-  localBackupFolderName?: string;
 }
 
 export type GeofenceTriggerType = 'enter' | 'exit';
@@ -168,7 +166,8 @@ export interface Occasion {
   title: string;                 // عنوان مناسبت (مثلاً تولد علی)
   personName?: string;          // نام شخص مرتبط (اختیاری)
   type: OccasionType;           // نوع مناسبت
-  solarYear?: number;           // سال شروع/رویداد شمسی (اختیاری، مثلاً ۱۳۷۰ برای محاسبه سن/سالگرد)
+  calendar?: 'jalali' | 'gregorian'; // تقویم مبنا برای تاریخ ثبت‌شده (پیش‌فرض شمسی)
+  solarYear?: number;           // سال شروع/رویداد (اختیاری، مثلاً ۱۳۷۰ یا 1995 برای محاسبه سن/سالگرد)
   solarMonth: number;           // ماه شمسی (۱ تا ۱۲)
   solarDay: number;             // روز شمسی (۱ تا ۳۱)
   notifyDaysBefore: number;     // هشدار چند روز قبل (۰ = همان روز، ۱ = ۱ روز قبل، ۲، ۳، ۷)

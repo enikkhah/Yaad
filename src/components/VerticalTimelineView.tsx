@@ -65,7 +65,6 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   const [emeraldFadeIds, setEmeraldFadeIds] = useState<Record<string, boolean>>({});
 
   const nowMarkerRef = useRef<HTMLDivElement>(null);
-  const hasAutoScrolledRef = useRef<boolean>(false);
   const completionTimersRef = useRef<Record<string, number>>({});
   const seenExternalActionRef = useRef<Record<string, number>>({});
 
@@ -238,7 +237,6 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     const scrollToNow = () => {
       if (nowMarkerRef.current) {
         nowMarkerRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        hasAutoScrolledRef.current = true;
       }
     };
     const t0 = setTimeout(scrollToNow, 40);

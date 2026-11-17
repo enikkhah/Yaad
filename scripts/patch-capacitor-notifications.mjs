@@ -1002,7 +1002,7 @@ const origDismissVisible = `    private fun dismissVisibleNotification(notificat
         NotificationManagerCompat.from(context).cancel(notificationId)
     }`;
 
-const patchedDismissVisible = `    private fun scheduleMuteAfterOneMinute(id: Int, sourceJson: String?) {
+const legacyDismissVisibleV1 = `    private fun scheduleMuteAfterOneMinute(id: Int, sourceJson: String?) {
         try {
             val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val muteIntent = Intent(context, NotificationDismissReceiver::class.java)
@@ -1051,13 +1051,70 @@ const patchedDismissVisible = `    private fun scheduleMuteAfterOneMinute(id: In
         NotificationManagerCompat.from(context).cancel(notificationId)
     }`;
 
+const patchedDismissVisible = `    fun repostDeliveredAsSilentPinned(localNotification: LocalNotification) {
+        val notificationManager = NotificationManagerCompat.from(context)
+        if (!notificationManager.areNotificationsEnabled()) return
+        buildNotification(notificationManager, localNotification, null)
+    }
+
+    private fun scheduleMuteAfterOneMinute(id: Int, sourceJson: String?) {
+        try {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val muteIntent = Intent(context, NotificationDismissReceiver::class.java)
+            muteIntent.putExtra(NOTIFICATION_INTENT_KEY, id)
+            muteIntent.putExtra(ACTION_INTENT_KEY, "mute_after_1m")
+            muteIntent.putExtra("yaad_schedule_15m_repeat", true)
+            if (sourceJson != null) {
+                muteIntent.putExtra(NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
+            }
+            var flags = PendingIntent.FLAG_UPDATE_CURRENT
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                flags = flags or PendingIntent.FLAG_MUTABLE
+            }
+            val pi = PendingIntent.getBroadcast(context, id + 500000, muteIntent, flags)
+            val triggerAt = System.currentTimeMillis() + 60_000L
+            val canExact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarmManager.canScheduleExactAlarms()
+            if (canExact) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+            } else {
+                alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAt, pi)
+            }
+        } catch (e: Exception) {
+            Logger.error(Logger.tags("LN"), "Failed to schedule 1m mute timer", e)
+        }
+    }
+
+    private fun cancelMuteTimerForNotification(notificationId: Int) {
+        try {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            val muteIntent = Intent(context, NotificationDismissReceiver::class.java)
+            var flags = PendingIntent.FLAG_NO_CREATE
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                flags = flags or PendingIntent.FLAG_MUTABLE
+            }
+            val pi = PendingIntent.getBroadcast(context, notificationId + 500000, muteIntent, flags)
+            if (pi != null) {
+                alarmManager.cancel(pi)
+                pi.cancel()
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun dismissVisibleNotification(notificationId: Int) {
+        cancelMuteTimerForNotification(notificationId)
+        YaadAlarmPopupActivity.dismissIfMatching(notificationId)
+        NotificationManagerCompat.from(context).cancel(notificationId)
+    }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'scheduleMuteAfterOneMinute and cancelMuteTimerForNotification helpers',
+  'scheduleMuteAfterOneMinute, repostDeliveredAsSilentPinned and cancelMuteTimerForNotification helpers',
   origDismissVisible,
   patchedDismissVisible,
-  'private fun scheduleMuteAfterOneMinute(id: Int, sourceJson: String?)'
+  'fun repostDeliveredAsSilentPinned(localNotification: LocalNotification)',
+  [legacyDismissVisibleV1]
 );
 
 const origSetExactIfPossible = `        if (useExact) {
@@ -1404,6 +1461,7 @@ class TimedNotificationPublisher : BroadcastReceiver() {
             val muteIntent = Intent(context, NotificationDismissReceiver::class.java)
             muteIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, id)
             muteIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, "mute_after_1m")
+            muteIntent.putExtra("yaad_schedule_15m_repeat", true)
             if (sourceJson != null) {
                 muteIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
             }
@@ -1590,15 +1648,113 @@ class NotificationDismissReceiver : BroadcastReceiver() {
         }
         val reminderId = requestJson?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
 
-        // After 1 minute of continuous alarm ringing without user reaction, or when user minimizes popup ('dismiss_popup_only'),
-        // silence the alarm audio without saving schedule-less notifications to storage or scheduling spurious repeat alarms.
-        if (actionId == "mute_after_1m" || actionId == "dismiss_popup_only") {
-            if (actionId == "dismiss_popup_only") {
-                YaadAlarmPopupActivity.dismissIfMatching(intExtra)
-            } else {
-                YaadAlarmPopupActivity.onReminderAudioMutedAfterOneMinute(intExtra)
-            }
+        // After 1 minute of continuous alarm ringing without user reaction, silence audio,
+        // keep notification pinned quietly at top of shade, and schedule +15m repeat alarm.
+        if (actionId == "dismiss_popup_only") {
+            YaadAlarmPopupActivity.dismissIfMatching(intExtra)
             LocalNotificationsPlugin.stopActiveMediaPlayer()
+            return
+        }
+
+        if (actionId == "mute_after_1m") {
+            val shouldSchedule15mRepeat = intent.getBooleanExtra("yaad_schedule_15m_repeat", false)
+            YaadAlarmPopupActivity.onReminderAudioMutedAfterOneMinute(intExtra)
+            LocalNotificationsPlugin.stopActiveMediaPlayer()
+
+            if (requestJson != null) {
+                try {
+                    val silentJson = JSObject(requestJson.toString())
+                    silentJson.put("id", intExtra)
+                    silentJson.put("channelId", "yaad_channel_v3_silent")
+                    silentJson.remove("sound")
+                    silentJson.remove("schedule")
+                    val silentNotif = LocalNotification.buildNotificationFromJSObject(silentJson)
+                    val silentManager = LocalNotificationManager(storage, null, context, CapConfig.loadDefault(context))
+                    silentManager.repostDeliveredAsSilentPinned(silentNotif)
+                } catch (e: Exception) {
+                    Logger.error(Logger.tags("LN"), "Failed to silence pinned notification in-place", e)
+                }
+            }
+
+            if (!shouldSchedule15mRepeat) {
+                return
+            }
+
+            val nowMs = System.currentTimeMillis()
+            val muteGuardKey = "muted_1m_ts_\$intExtra"
+            val prevMuteTs = prefs.getLong(muteGuardKey, 0L)
+            if (nowMs - prevMuteTs < 30_000L) {
+                return
+            }
+            prefs.edit().putLong(muteGuardKey, nowMs).apply()
+
+            try {
+                val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                val muteIntent = Intent(context, NotificationDismissReceiver::class.java)
+                var muteFlags = PendingIntent.FLAG_NO_CREATE
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    muteFlags = muteFlags or PendingIntent.FLAG_MUTABLE
+                }
+                val mutePi = PendingIntent.getBroadcast(context, intExtra + 500000, muteIntent, muteFlags)
+                if (mutePi != null) {
+                    alarmManager.cancel(mutePi)
+                    mutePi.cancel()
+                }
+            } catch (e: Exception) {
+            }
+
+            val repeatAtMs = nowMs + 15L * 60L * 1000L
+            val dataJson = JSObject()
+            dataJson.put("actionId", "mute_after_1m")
+            dataJson.put("actionTimestamp", nowMs)
+            dataJson.put("snoozedUntil", repeatAtMs)
+            if (requestJson != null) {
+                dataJson.put("notification", requestJson)
+            } else {
+                val fallbackNotif = JSObject()
+                fallbackNotif.put("id", intExtra)
+                dataJson.put("notification", fallbackNotif)
+            }
+
+            val dispatched = LocalNotificationsPlugin.fireActionPerformed(dataJson)
+            if (!dispatched) {
+                LocalNotificationsPlugin.queueBackgroundAction(context, dataJson)
+                if (requestJson != null) {
+                    try {
+                        val repeatJson = JSObject(requestJson.toString())
+                        val baseId = if (reminderId.isNotEmpty()) computeBaseId(reminderId) else intExtra
+                        var slotIndex = ((repeatAtMs / 60_000L) % 25L).toInt()
+                        var repeatNotifId = (((baseId.toLong() + 1000L + slotIndex.toLong() + 1L) % 600000000L).toInt() + 1)
+                        if (repeatNotifId == intExtra) {
+                            slotIndex = (slotIndex + 1) % 25
+                            repeatNotifId = (((baseId.toLong() + 1000L + slotIndex.toLong() + 1L) % 600000000L).toInt() + 1)
+                        }
+                        repeatJson.put("id", repeatNotifId)
+                        val extraObj = repeatJson.optJSONObject("extra") ?: org.json.JSONObject()
+                        extraObj.put("isRepeat", false)
+                        extraObj.put("isAutoRepeat", true)
+                        extraObj.put("dueTimestamp", repeatAtMs)
+                        repeatJson.put("extra", extraObj)
+                        val currentChannel = repeatJson.optString("channelId", "")
+                        if (currentChannel == "yaad_channel_v3_silent" || currentChannel == "yaad_channel_v2_silent" || currentChannel.isEmpty()) {
+                            repeatJson.put("channelId", resolveOriginalSoundChannel(extraObj))
+                        }
+                        val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+                        sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
+                        val scheduleObj = JSObject()
+                        scheduleObj.put("at", sdf.format(Date(repeatAtMs)))
+                        scheduleObj.put("allowWhileIdle", true)
+                        repeatJson.put("schedule", scheduleObj)
+
+                        val localNotif = LocalNotification.buildNotificationFromJSObject(repeatJson)
+                        val manager = LocalNotificationManager(storage, null, context, CapConfig.loadDefault(context))
+                        manager.schedule(null, listOf(localNotif))
+                        storage.appendNotifications(listOf(localNotif))
+                    } catch (e: Exception) {
+                        Logger.error(Logger.tags("LN"), "Failed to schedule native 15m unanswered repeat", e)
+                    }
+                }
+            }
             return
         }
 
@@ -1663,8 +1819,8 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                     }
                     // Ensure snoozed notification rings again on its original sound channel rather than silent channel
                     val currentChannel = snoozedJson.optString("channelId", "")
-                    if (currentChannel == "yaad_channel_v2_silent") {
-                        snoozedJson.put("channelId", "yaad_channel_v2_default")
+                    if (currentChannel == "yaad_channel_v3_silent" || currentChannel == "yaad_channel_v2_silent" || currentChannel.isEmpty()) {
+                        snoozedJson.put("channelId", resolveOriginalSoundChannel(snoozedJson.optJSONObject("extra")))
                     }
                     val sdf = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
                     sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
@@ -1682,6 +1838,22 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                 }
             }
         }
+    }
+
+    private fun resolveOriginalSoundChannel(extraObj: org.json.JSONObject?): String {
+        val volume = extraObj?.optDouble("volume", 0.85) ?: 0.85
+        val vibrationEnabled = extraObj?.optBoolean("vibrationEnabled", true) ?: true
+        if (volume <= 0.01) {
+            return if (vibrationEnabled) "yaad_channel_v3_vibrate_only" else "yaad_channel_v3_silent"
+        }
+        val rawSound = extraObj?.optString("sound", "digital_beep") ?: "digital_beep"
+        val normalized = rawSound.replace("-", "_").substringBeforeLast(".")
+        val key = when (normalized) {
+            "digital_beep", "radar", "marimba", "morning_chime", "urgent_bell", "beep",
+            "zen_bowl", "soft_harp", "ocean_drop", "wind_chimes", "warm_pad", "calm_piano" -> normalized
+            else -> "digital_beep"
+        }
+        return if (vibrationEnabled) "yaad_channel_v3_\$key" else "yaad_channel_v3_\${key}_novib"
     }
 
     private fun computeBaseId(reminderId: String): Int {
@@ -1756,6 +1928,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
         for (id in idsToCancel) {
             notificationManager.cancel(id)
             prefsEditor.remove("swipe_count_\$id")
+            prefsEditor.remove("muted_1m_ts_\$id")
             val alarmIntent = Intent(context, TimedNotificationPublisher::class.java)
             val pi = PendingIntent.getBroadcast(context, id, alarmIntent, flags)
             if (pi != null) {
@@ -7527,6 +7700,7 @@ class YaadAlarmPopupActivity : Activity() {
             val broadcastIntent = Intent(this, NotificationDismissReceiver::class.java)
             broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
             broadcastIntent.putExtra(LocalNotificationManager.ACTION_INTENT_KEY, "mute_after_1m")
+            broadcastIntent.putExtra("yaad_schedule_15m_repeat", true)
             if (sourceJson != null) {
                 broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
             }
@@ -10348,7 +10522,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 var completedCycle = isCycleDoneEarly
 
                 // Active visual-only banner (after 10s of 5Hz sonar):
-                // Continues for 30 seconds (30_000L) with audio completely cut off, then completes the cycle and stops all alerts!
+                // Continues for 10 seconds (10_000L) with audio completely cut off, then completes the cycle and stops all alerts!
                 if (bannerStart > 0L && !completedCycle) {
                     val shouldUnlatchOutsideEnter = triggerOn == "enter" && distance > radius + antiPingPongDeadband && (outsideSampleCountMap[id] ?: 0) >= 3
                     val shouldUnlatchCenterExit = triggerOn == "exit" && (distance <= centerZoneMeters || rawDistance <= centerZoneMeters)
@@ -10360,8 +10534,8 @@ class YaadGeofenceService : Service(), LocationListener {
                         editor.remove(latchedModeKey)
                         latchedMode = ""
                         prefsModified = true
-                    } else if (elapsedBannerMs >= 30_000L) {
-                        // 30-second visual completion phase finished -> stop all alerts and mark cycle completed!
+                    } else if (elapsedBannerMs >= 10_000L) {
+                        // 10-second visual completion phase finished -> stop all alerts and mark cycle completed!
                         editor.remove(bannerStartKey)
                         editor.remove(bannerTextKey)
                         editor.remove(fiveHzKey)

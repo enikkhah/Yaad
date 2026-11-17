@@ -33,7 +33,7 @@ import {
   hasBackgroundLocationPermission,
 } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
-import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY } from './utils/backupStorage';
+import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY, LOCAL_BACKUP_FOLDER_NAME } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
 import { useFabVisibility } from './hooks/useFabVisibility';
@@ -47,10 +47,11 @@ import {
 } from './utils/googleSync';
 import { User } from 'firebase/auth';
 import appIcon from './assets/images/icon.png';
-import { getNextRecurrenceTimestamp } from './utils/recurrence';
+import { getNextRecurrenceTimestamp, recoverMissedRecurringReminder } from './utils/recurrence';
 import { 
   initNotificationChannel, 
   scheduleReminderNotification, 
+  scheduleReminderRepeatNotification,
   cancelReminderNotification, 
   rescheduleReminderNotification, 
   syncAllRemindersWithLocalNotifications, 
@@ -221,12 +222,14 @@ export default function App() {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
           const bootNow = Date.now();
-          // Filter out any default seed reminders and auto-acknowledge past reminders (> 60s before app boot)
-          // so old reminders from earlier sessions never fire an unrelated alarm when opening the app
+          // Filter out any default seed reminders, recover missed recurring reminders,
+          // and auto-acknowledge non-recurring past reminders (> 60s before app boot)
           return parsed
             .filter((r: any) => r && !r.id?.startsWith('seed-'))
             .map((r: Reminder) =>
-              r.dueTimestamp <= bootNow - 60000 ? { ...r, acknowledged: true } : r
+              r.dueTimestamp <= bootNow - 60000
+                ? recoverMissedRecurringReminder(r, bootNow - 60000, bootNow).reminder
+                : r
             );
         }
       }
@@ -332,7 +335,7 @@ export default function App() {
   const activeSavedLocations = useMemo(() => savedLocations.filter((l) => !l.deletedAt), [savedLocations]);
   const activeOccasions = useMemo(() => occasions.filter((o) => !o.deletedAt), [occasions]);
 
-  // Auto-recall/restore from Google Drive (Priority 1 if enabled/available) or Local "YAAD REMIDER" Folder (Priority 2) upon app open or re-installation
+  // Auto-recall/restore strictly from Local "YAAD" Folder upon app open or re-installation
   const [isVaultInitialized, setIsVaultInitialized] = useState(false);
 
   const applyRestoredBackupIfNeeded = useCallback(
@@ -358,8 +361,15 @@ export default function App() {
           .filter((r: Reminder) => r?.id && !r.id.startsWith('seed-'))
           .map((r: Reminder) => {
             if (r.dueTimestamp <= restoreNow || r.deletedAt) {
-              triggeredAlarmsRef.current.add(r.id);
-              return r.dueTimestamp <= restoreNow ? { ...r, acknowledged: true } : r;
+              if (r.deletedAt) {
+                triggeredAlarmsRef.current.add(r.id);
+                return r;
+              }
+              const recovered = recoverMissedRecurringReminder(r, restoreNow, restoreNow);
+              if (!recovered.advanced) {
+                triggeredAlarmsRef.current.add(r.id);
+              }
+              return recovered.reminder;
             }
             return r;
           });
@@ -546,10 +556,7 @@ export default function App() {
     let isMounted = true;
     const autoRestoreOnOpen = async () => {
       try {
-        const { snapshot, source } = await retrieveLatestBackupWithPriority(
-          undefined,
-          settingsRef.current
-        );
+        const { snapshot, source } = await retrieveLatestBackupWithPriority();
         if (snapshot && isMounted) {
           applyRestoredBackupIfNeeded(snapshot, source);
         }
@@ -595,7 +602,7 @@ export default function App() {
     };
   }, [applyRestoredBackupIfNeeded]);
 
-  // Automatic backup to local "YAAD REMIDER" folder (and Google Drive if enabled by user) after every change
+  // Automatic backup strictly to local "YAAD" folder after every change
   useEffect(() => {
     if (isVaultInitialized) {
       // SAFETY: Never overwrite an existing backup on disk with empty state during initial mount / startup
@@ -1094,7 +1101,7 @@ export default function App() {
     baseRightOffset: 20,
   });
 
-  // Automatic persistent backup & recall on every app open & close (Drive priority -> Local YAAD REMIDER fallback)
+  // Automatic persistent backup & recall on every app open & close (Local YAAD folder)
   useEffect(() => {
     requestPersistentStorage();
 
@@ -1110,10 +1117,7 @@ export default function App() {
 
     const recallOnAppOpen = async () => {
       try {
-        const { snapshot, source } = await retrieveLatestBackupWithPriority(
-          undefined,
-          settingsRef.current
-        );
+        const { snapshot, source } = await retrieveLatestBackupWithPriority();
         if (snapshot) {
           applyRestoredBackupIfNeeded(snapshot, source);
         }
@@ -1688,6 +1692,7 @@ export default function App() {
       }
 
       const newlyDueBundle: Reminder[] = [];
+      const recoveredRecurringMap = new Map<string, Reminder>();
       const SIMULTANEOUS_WINDOW_MS = 30 * 1000; // 30s lookahead window to bundle near-simultaneous reminders together
 
       reminders.forEach((r) => {
@@ -1708,7 +1713,7 @@ export default function App() {
         }
 
         // Trigger 1-minute alarm ONLY when reminder is currently due within the 60-second active window (0 <= elapsedMs < 60,000).
-        // Never rewrite past-due reminders forward into the future, which previously caused old reminders to fire unexpectedly!
+        // If a recurring reminder missed its window (e.g., background/frozen tab), advance it to its next valid occurrence.
         const ONE_MINUTE_MS = 60 * 1000; // 1 minute active alarm window
         const elapsedMs = now - r.dueTimestamp;
         if (
@@ -1716,6 +1721,17 @@ export default function App() {
           elapsedMs >= 0
         ) {
           if (elapsedMs >= ONE_MINUTE_MS) {
+            if (
+              r.recurrence &&
+              r.recurrence !== 'none' &&
+              !activeAlarmRemindersRef.current.some((active) => active.id === r.id)
+            ) {
+              const recovered = recoverMissedRecurringReminder(r, now - ONE_MINUTE_MS, now);
+              if (recovered.advanced) {
+                recoveredRecurringMap.set(r.id, recovered.reminder);
+                return;
+              }
+            }
             triggeredAlarmsRef.current.add(r.id);
             return;
           }
@@ -1730,6 +1746,20 @@ export default function App() {
           }
         }
       });
+
+      if (recoveredRecurringMap.size > 0) {
+        recoveredRecurringMap.forEach((recoveredRem, id) => {
+          triggeredAlarmsRef.current.delete(id);
+          scheduleReminderNotification(recoveredRem, settingsRef.current).catch(() => {});
+        });
+        setReminders((prev) => {
+          const next = prev.map((item) => recoveredRecurringMap.get(item.id) || item);
+          try {
+            localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+      }
 
       // If at least one reminder triggered right now, also check if any other pending reminder is scheduled within SIMULTANEOUS_WINDOW_MS (same minute/cluster)
       if (newlyDueBundle.length > 0) {
@@ -2973,7 +3003,7 @@ export default function App() {
     let linkedRemId = editingIdea?.linkedReminderId;
 
     if (reminderData) {
-      const existingRem = linkedRemId ? reminders.find((r) => r.id === linkedRemId) : undefined;
+      const existingRem = linkedRemId ? remindersRef.current.find((r) => r.id === linkedRemId) : undefined;
       if (existingRem && linkedRemId) {
         triggeredAlarmsRef.current.delete(linkedRemId);
         recentNotificationActionsRef.current.delete(linkedRemId);
@@ -2985,7 +3015,9 @@ export default function App() {
           lastActionAt: undefined,
         };
         rescheduleReminderNotification(linkedRemId, updatedRem, settings).catch(() => {});
-        setReminders((prev) => prev.map((r) => (r.id === linkedRemId ? updatedRem : r)));
+        const nextReminders = remindersRef.current.map((r) => (r.id === linkedRemId ? updatedRem : r));
+        remindersRef.current = nextReminders;
+        setReminders(nextReminders);
       } else {
         const newRemId = 'rem_idea_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         linkedRemId = newRemId;
@@ -2999,14 +3031,18 @@ export default function App() {
           postponeCount: 0,
         };
         scheduleReminderNotification(newRem, settings).catch(() => {});
-        setReminders((prev) => [newRem, ...prev]);
+        const nextReminders = [newRem, ...remindersRef.current];
+        remindersRef.current = nextReminders;
+        setReminders(nextReminders);
         triggerReviewFlow({ delayMs: 800 }).catch(() => {});
       }
     } else if (editingIdea?.linkedReminderId) {
       // User turned off the reminder for this idea
       const oldRemId = editingIdea.linkedReminderId;
       cancelReminderNotification(oldRemId).catch(() => {});
-      setReminders((prev) => prev.filter((r) => r.id !== oldRemId));
+      const nextReminders = remindersRef.current.filter((r) => r.id !== oldRemId);
+      remindersRef.current = nextReminders;
+      setReminders(nextReminders);
       linkedRemId = undefined;
     }
 
@@ -3087,7 +3123,7 @@ export default function App() {
       }
 
       setEditingLocation(null);
-      showSyncNotification('موقعیت مکانی با موفقیت ویرایش شد.');
+      showSyncNotification(settings.language === 'en' ? 'Location updated successfully.' : 'موقعیت مکانی با موفقیت ویرایش شد.');
     } else {
       const newLocation: SavedLocation = {
         ...newLocData,
@@ -3106,7 +3142,7 @@ export default function App() {
           nextLocations,
           settings.language
         );
-        const latestPos = currentUserPosition || getLastKnownPosition();
+        const latestPos = currentUserPositionRef.current || getLastKnownPosition();
         if (latestPos) {
           setTimeout(() => {
             evaluateUserPositionAgainstAllGeofences(latestPos, true);
@@ -3114,25 +3150,31 @@ export default function App() {
         }
       }
 
-      showSyncNotification('موقعیت مکانی با موفقیت ذخیره شد.');
+      showSyncNotification(settings.language === 'en' ? 'Location saved successfully.' : 'موقعیت مکانی با موفقیت ذخیره شد.');
 
       // If user checked "ثبت همزمان در لیست یادآورها"
       if (alsoCreateReminder) {
+        const remId = 'rem_loc_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
         const reminderPayload: Reminder = {
-          id: 'rem_loc_' + Date.now(),
-          title: `مراجعه به مکان: ${newLocData.title}`,
-          description: `${newLocData.description ? newLocData.description + '\n' : ''}لینک گوگل مپ: ${newLocData.googleMapsUrl}`,
+          id: remId,
+          notificationId: getNotificationId(remId),
+          title: settings.language === 'en' ? `Visit place: ${newLocData.title}` : `مراجعه به مکان: ${newLocData.title}`,
+          description: `${newLocData.description ? newLocData.description + '\n' : ''}${settings.language === 'en' ? 'Google Maps link:' : 'لینک گوگل مپ:'} ${newLocData.googleMapsUrl}`,
           category: 'work',
           priority: 'medium',
           dueTimestamp: Date.now() + 3600000 * 2, // 2 hours from now
           status: 'pending',
+          acknowledged: false,
           createdAt: Date.now(),
           postponeCount: 0,
           ringTune: 'work',
           voiceReadAloud: false,
           imageUrl: newLocData.photoUrl,
         };
-        setReminders((prev) => [reminderPayload, ...prev]);
+        scheduleReminderNotification(reminderPayload, settings).catch(() => {});
+        const nextReminders = [reminderPayload, ...remindersRef.current];
+        remindersRef.current = nextReminders;
+        setReminders(nextReminders);
       }
     }
     scrollToLocationsTop();
@@ -3160,9 +3202,32 @@ export default function App() {
   }, [activeMainTab, isLocationModalOpen, locationFilter]);
 
   const handleDeleteLocation = (id: string) => {
-    setSavedLocations((prev) =>
-      prev.map((loc) => (loc.id === id ? { ...loc, deletedAt: Date.now() } : loc))
+    const nextLocations = savedLocationsRef.current.map((loc) =>
+      loc.id === id ? { ...loc, deletedAt: Date.now() } : loc
     );
+    savedLocationsRef.current = nextLocations;
+    setSavedLocations(nextLocations);
+
+    resetGeofenceProximityState(id);
+    const cleanId = id.replace(/^(loc_|rem_)/, '');
+    acknowledgeGeofenceAlert(cleanId, true);
+    setActiveGeofenceAlerts((prevList) => {
+      const remaining = prevList.filter((item) => {
+        const itemClean = item.targetId.replace(/^(loc_|rem_)/, '');
+        return itemClean !== cleanId && item.targetId !== id;
+      });
+      if (remaining.length === 0) {
+        stopSubmarineSonarLoop();
+      }
+      return remaining.length === prevList.length ? prevList : remaining;
+    });
+    syncGeofencesWithNativeAndroid(
+      isGeofenceActiveRef.current,
+      remindersRef.current,
+      nextLocations,
+      settings.language
+    );
+
     showSyncNotification(settings.language === 'en' ? 'Location moved to recycle bin.' : 'مکان به سطل بازیافت منتقل شد.');
   };
 
@@ -3179,7 +3244,7 @@ export default function App() {
         prev.map((o) => (o.id === editingOccasion.id ? { ...o, ...newOccData } : o))
       );
       setEditingOccasion(null);
-      showSyncNotification('مناسبت با موفقیت ویرایش شد.');
+      showSyncNotification(settings.language === 'en' ? 'Occasion updated successfully.' : 'مناسبت با موفقیت ویرایش شد.');
     } else {
       const newOccasion: Occasion = {
         ...newOccData,
@@ -3187,11 +3252,13 @@ export default function App() {
         createdAt: Date.now(),
       };
       setOccasions((prev) => [newOccasion, ...prev]);
-      showSyncNotification('مناسبت جدید با موفقیت ثبت شد.');
+      showSyncNotification(settings.language === 'en' ? 'New occasion saved successfully.' : 'مناسبت جدید با موفقیت ثبت شد.');
 
       // Automatically create a Reminder with alarm if requested (staying on current page!)
       if (alsoCreateReminder) {
-        const reminderPayload = createReminderFromOccasion(newOccasion);
+        const reminderPayload = createReminderFromOccasion(newOccasion, {
+          language: settings.language === 'en' ? 'en' : 'fa',
+        });
         handleSaveReminder(reminderPayload, false, true);
       }
     }
@@ -3205,9 +3272,15 @@ export default function App() {
   };
 
   const handleCreateReminderFromOccasion = (occasion: Occasion) => {
-    const reminderPayload = createReminderFromOccasion(occasion);
+    const reminderPayload = createReminderFromOccasion(occasion, {
+      language: settings.language === 'en' ? 'en' : 'fa',
+    });
     handleSaveReminder(reminderPayload, false, true);
-    showSyncNotification(`آلارم یادآور برای مناسبت «${occasion.title}» تنظیم شد.`);
+    showSyncNotification(
+      settings.language === 'en'
+        ? `Reminder set for "${occasion.title}".`
+        : `آلارم یادآور برای مناسبت «${occasion.title}» تنظیم شد.`
+    );
   };
 
   // Handler: Restore local backup data (پشتیبان‌گیری و بازیابی محلی)
@@ -3228,8 +3301,15 @@ export default function App() {
       .filter((r) => r?.id && !r.id.startsWith('seed-'))
       .map((r) => {
         if (r.dueTimestamp <= restoreNow || r.deletedAt) {
-          triggeredAlarmsRef.current.add(r.id);
-          return r.dueTimestamp <= restoreNow ? { ...r, acknowledged: true } : r;
+          if (r.deletedAt) {
+            triggeredAlarmsRef.current.add(r.id);
+            return r;
+          }
+          const recovered = recoverMissedRecurringReminder(r, restoreNow, restoreNow);
+          if (!recovered.advanced) {
+            triggeredAlarmsRef.current.add(r.id);
+          }
+          return recovered.reminder;
         }
         return r;
       });
@@ -3323,7 +3403,7 @@ export default function App() {
       const vaultPayload = {
         version: 3,
         updatedAt: Date.now(),
-        folder: finalSettings?.localBackupFolderName || 'Yaad reminder',
+        folder: LOCAL_BACKUP_FOLDER_NAME,
         source: 'local_folder',
         reminders: finalReminders,
         ideas: finalIdeas,
@@ -3632,17 +3712,22 @@ export default function App() {
               ? explicitNextDueTimestamp
               : Math.max(now, r.dueTimestamp) + 15 * 60000;
           triggeredAlarmsRef.current.delete(id);
-          return {
+          const nextRem: Reminder = {
             ...r,
             dueTimestamp: nextDue,
             status: 'postponed' as ReminderStatus,
             postponedAt: now,
             acknowledged: false,
           };
+          if (nextDue > now) {
+            scheduleReminderRepeatNotification(nextRem, settingsRef.current).catch(() => {});
+          }
+          return nextRem;
         }
         return r;
       });
 
+      remindersRef.current = updated;
       try {
         localStorage.setItem(REMINDERS_STORAGE_KEY, JSON.stringify(updated));
       } catch (err) {
@@ -3657,15 +3742,30 @@ export default function App() {
   // Handler: Delete reminder (soft delete into Recycle Bin)
   const handleDelete = (id: string) => {
     stopAlarmRinging();
-    setActiveAlarmReminder((curr) => (curr?.id === id ? null : curr));
+    setActiveAlarmReminders((prevList) => prevList.filter((r) => r.id !== id));
     triggeredAlarmsRef.current.delete(id);
+
+    // Clear any active geofence popup / sonar alert for this deleted reminder
+    resetGeofenceProximityState(id);
+    const cleanId = id.replace(/^(loc_|rem_)/, '');
+    acknowledgeGeofenceAlert(cleanId, true);
+    setActiveGeofenceAlerts((prevList) => {
+      const remaining = prevList.filter((item) => {
+        const itemClean = item.targetId.replace(/^(loc_|rem_)/, '');
+        return itemClean !== cleanId && item.targetId !== id;
+      });
+      if (remaining.length === 0) {
+        stopSubmarineSonarLoop();
+      }
+      return remaining.length === prevList.length ? prevList : remaining;
+    });
 
     // Cancel continuous out-of-app & Android Local Notification immediately
     clearOutOfAppPersistentNotification(id);
     cancelReminderNotification(id).catch(() => {});
 
-    const targetIndex = reminders.findIndex((r) => r.id === id);
-    const targetReminder = reminders[targetIndex];
+    const targetIndex = remindersRef.current.findIndex((r) => r.id === id);
+    const targetReminder = remindersRef.current[targetIndex];
 
     if (targetReminder) {
       if (undoToast?.timer) {
@@ -3684,8 +3784,16 @@ export default function App() {
     }
 
     // Soft delete: keep in storage with deletedAt timestamp for Recycle Bin
-    setReminders((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, deletedAt: Date.now() } : r))
+    const nextReminders = remindersRef.current.map((r) =>
+      r.id === id ? { ...r, deletedAt: Date.now() } : r
+    );
+    remindersRef.current = nextReminders;
+    setReminders(nextReminders);
+    syncGeofencesWithNativeAndroid(
+      isGeofenceActiveRef.current,
+      nextReminders,
+      savedLocationsRef.current,
+      settings.language
     );
     showSyncNotification(settings.language === 'en' ? 'Reminder moved to recycle bin.' : 'یادآور به سطل بازیافت منتقل شد.');
   };
@@ -3745,15 +3853,29 @@ export default function App() {
 
   // Handler: Permanent delete item from Recycle Bin
   const handlePermanentDeleteItem = (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => {
-    const nextReminders = type === 'reminder' ? reminders.filter((r) => r.id !== id) : reminders;
-    const nextLocations = type === 'location' ? savedLocations.filter((l) => l.id !== id) : savedLocations;
+    const nextReminders = type === 'reminder' ? remindersRef.current.filter((r) => r.id !== id) : remindersRef.current;
+    const nextLocations = type === 'location' ? savedLocationsRef.current.filter((l) => l.id !== id) : savedLocationsRef.current;
     const nextOccasions = type === 'occasion' ? occasions.filter((o) => o.id !== id) : occasions;
-    const nextIdeas = type === 'idea' ? ideas.filter((i) => i.id !== id) : ideas;
+    const nextIdeas =
+      type === 'idea'
+        ? ideas.filter((i) => i.id !== id)
+        : type === 'reminder'
+        ? ideas.map((i) =>
+            i.linkedReminderId === id
+              ? { ...i, linkedReminderId: undefined, reminderDueTimestamp: undefined }
+              : i
+          )
+        : ideas;
 
     if (type === 'reminder') {
       cancelReminderNotification(id).catch(() => {});
+      remindersRef.current = nextReminders;
       setReminders(nextReminders);
+      if (nextIdeas.some((i, idx) => i !== ideas[idx])) {
+        setIdeas(nextIdeas);
+      }
     } else if (type === 'location') {
+      savedLocationsRef.current = nextLocations;
       setSavedLocations(nextLocations);
     } else if (type === 'occasion') {
       setOccasions(nextOccasions);
@@ -3775,16 +3897,26 @@ export default function App() {
 
   // Handler: Empty Recycle Bin
   const handleEmptyRecycleBin = () => {
-    reminders.forEach((r) => {
+    const deletedReminderIds = new Set<string>();
+    remindersRef.current.forEach((r) => {
       if (r.deletedAt) {
+        deletedReminderIds.add(r.id);
         cancelReminderNotification(r.id).catch(() => {});
       }
     });
-    const nextReminders = reminders.filter((r) => !r.deletedAt);
-    const nextIdeas = ideas.filter((i) => !i.deletedAt);
-    const nextLocations = savedLocations.filter((l) => !l.deletedAt);
+    const nextReminders = remindersRef.current.filter((r) => !r.deletedAt);
+    const nextIdeas = ideas
+      .filter((i) => !i.deletedAt)
+      .map((i) =>
+        i.linkedReminderId && deletedReminderIds.has(i.linkedReminderId)
+          ? { ...i, linkedReminderId: undefined, reminderDueTimestamp: undefined }
+          : i
+      );
+    const nextLocations = savedLocationsRef.current.filter((l) => !l.deletedAt);
     const nextOccasions = occasions.filter((o) => !o.deletedAt);
 
+    remindersRef.current = nextReminders;
+    savedLocationsRef.current = nextLocations;
     setReminders(nextReminders);
     setIdeas(nextIdeas);
     setSavedLocations(nextLocations);
@@ -4048,8 +4180,8 @@ export default function App() {
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
                     <p>
                       {isEn
-                        ? 'All reminders, occasions, ideas (with idea reminders), and places are stored 100% locally on your device and backed up automatically in the root YAAD folder. Geofence GPS is adaptive & non-continuous, cloud backup is removed, and no data leaves your device.'
-                        : 'تمامی یادآورها، مناسبت‌ها، ایده‌ها (و یادآورهای متصل به ایده) و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و پوشه پشتیبان خودکار YAAD ذخیره می‌شوند. پایش GPS حصار مکانی غیردائمی و کم‌مصرف بوده و هیچ داده‌ای به سرور یا فضای ابری ارسال نمی‌گردد.'}
+                        ? 'Your reminders, occasions, ideas, and places are stored 100% locally on your device with automatic backup in the root YAAD folder (cloud backup is removed). Geofence GPS runs adaptively only when enabled. External services like Google Calendar/Tasks or address lookup (OpenStreetMap) are used strictly on your explicit action.'
+                        : 'تمامی یادآورها، مناسبت‌ها، ایده‌ها و مکان‌های شما ۱۰۰٪ به‌صورت محلی در حافظه دستگاه و پوشه پشتیبان خودکار YAAD ذخیره می‌شوند و پشتیبان‌گیری ابری حذف شده است. پایش GPS حصار مکانی غیردائمی و تطبیقی بوده و سرویس‌های بیرونی مانند تقویم/تسک گوگل یا آدرس‌یابی نقشه صرفاً به درخواست مستقیم شما فعال می‌شوند.'}
                     </p>
                     <a
                       href="/privacy.html"
@@ -5047,7 +5179,7 @@ export default function App() {
         onSave={handleSaveReminder}
         initialData={editingReminder}
         googleToken={googleToken}
-        savedLocations={savedLocations}
+        savedLocations={activeSavedLocations}
         language={settings.language}
         focusGeofenceRadius={focusGeofenceRadius}
       />

@@ -8,7 +8,7 @@ import {
   calculateHaversineDistance,
   dismissActiveGeofenceStatusBarNotification,
   EvaluatedGeofenceAlertItem,
-  expireInAppGeofenceVisualPhaseAfter30s,
+  expireInAppGeofenceVisualPhase,
   GEOFENCE_IN_APP_VISUAL_MAX_MS,
   GeofenceScenarioPhase,
   getGeofenceMinimizedState,
@@ -221,7 +221,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     };
   }, []);
 
-  // 3) 30-Second Auto-Turn-Off Timer for In-App Full-Screen Visual Alert (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 30_000`)
+  // 3) 10-Second Auto-Turn-Off Timer for In-App Full-Screen Visual Alert (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 10_000`)
   const activeVisualPhaseKey = topPriorityAlert
     ? `${topPriorityAlert.targetId}_${topPriorityAlert.scenarioPhase || topPriorityAlert.triggerType}`
     : '';
@@ -231,12 +231,12 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     const timeoutMs =
       typeof targetAlert.phaseRemainingSeconds === 'number' &&
       targetAlert.phaseRemainingSeconds > 0 &&
-      targetAlert.phaseRemainingSeconds <= 30
+      targetAlert.phaseRemainingSeconds <= 10
         ? Math.max(1000, targetAlert.phaseRemainingSeconds * 1000)
         : GEOFENCE_IN_APP_VISUAL_MAX_MS;
 
     const timerId = window.setTimeout(() => {
-      expireInAppGeofenceVisualPhaseAfter30s(targetAlert.targetId, targetAlert.scenarioPhase);
+      expireInAppGeofenceVisualPhase(targetAlert.targetId, targetAlert.scenarioPhase);
       stopSubmarineSonarLoop();
       stopAlarmRinging();
       if (onAutoTurnOffVisual) {

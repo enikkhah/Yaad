@@ -37,7 +37,6 @@ interface LocationCaptureModalProps {
   onSave: (location: Omit<SavedLocation, 'id' | 'createdAt'>, createReminder?: boolean) => void;
   onUpdateLocation?: (id: string, location: Partial<SavedLocation>) => void;
   editingLocation?: SavedLocation | null;
-  googleMapsApiKey?: string;
   language?: AppLanguage;
   focusGeofenceRadius?: boolean;
 }
@@ -61,7 +60,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [address, setAddress] = useState<string>('');
   const [isLocating, setIsLocating] = useState<boolean>(false);
   const [locationError, setLocationError] = useState<string | null>(null);
-  const [validationError, setValidationError] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [alsoCreateReminder, setAlsoCreateReminder] = useState(false);
@@ -275,7 +273,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         fetchCurrentLocation();
       }
       setLocationError(null);
-      setValidationError(null);
       setAlsoCreateReminder(false);
       if (!focusGeofenceRadius) {
         setTimeout(() => {
@@ -311,7 +308,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
       return;
     }
 
-    setValidationError(null);
     const finalTitle = title.trim();
     const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`;
 
@@ -374,7 +370,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
     ? `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}` 
     : '';
   const embedMapUrl = latitude && longitude
-    ? `https://maps.google.com/maps?q=${latitude},${longitude}&hl=fa&z=15&output=embed`
+    ? `https://maps.google.com/maps?q=${latitude},${longitude}&hl=${isEn ? 'en' : 'fa'}&z=15&output=embed`
     : '';
 
   return (
@@ -424,14 +420,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
 
           {/* Form Content - Strictly bounded scroll container */}
           <div ref={formScrollContainerRef} className="flex-1 min-h-0 p-4 sm:p-5 space-y-4 overflow-y-auto overscroll-contain">
-            {/* Required Field Validation Alert Banner */}
-            {validationError && (
-              <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/40 text-rose-300 text-xs font-bold flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                <span>{validationError}</span>
-              </div>
-            )}
-
             {/* Primary Field: Location Title & Name (عنوان و نام مکان) */}
             <div className="p-3.5 sm:p-4 rounded-2xl bg-gradient-to-br from-emerald-500/15 via-stone-900/95 to-stone-950 border-2 border-emerald-500/60 shadow-lg shadow-emerald-500/10 space-y-2.5">
               <div className="flex items-center justify-between gap-2">

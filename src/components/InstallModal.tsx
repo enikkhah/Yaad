@@ -7,7 +7,6 @@ import {
   requestLocalFolderPermission,
   checkLocalFolderPermissionStatus,
   AutoBackupSnapshot,
-  LOCAL_BACKUP_FOLDER_NAME
 } from '../utils/backupStorage';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 
@@ -49,7 +48,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
     setFolderStatusMsg(null);
     try {
       await requestNotificationPermission().catch(() => {});
-      const res = await requestLocalFolderPermission(interactive, LOCAL_BACKUP_FOLDER_NAME);
+      const res = await requestLocalFolderPermission(interactive);
       setFolderGranted(res.granted);
       if (res.restoredSnapshot && onRestoreBackup) {
         onRestoreBackup(res.restoredSnapshot);

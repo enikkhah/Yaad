@@ -18,7 +18,7 @@ const DB_NAME = 'yaad_persistent_vault';
 const DB_VERSION = 2;
 const STORE_NAME = 'app_backups';
 const HANDLE_STORE_NAME = 'folder_handles';
-const CACHE_BACKUP_NAME = 'yaad-remider-folder-vault-v1';
+const CACHE_BACKUP_NAME = 'yaad-folder-vault-v1';
 const CACHE_BACKUP_URL = '/YAAD/yaad_backup.json';
 
 export interface AutoBackupSnapshot {
@@ -187,7 +187,7 @@ function openVaultDB(): Promise<IDBDatabase | null> {
 /**
  * Save or retrieve FileSystemDirectoryHandle in IndexedDB
  */
-async function saveDirectoryHandleToDB(handle: any, keyId: string = 'yaad_remider_dir'): Promise<void> {
+async function saveDirectoryHandleToDB(handle: any, keyId: string = 'yaad_folder_dir'): Promise<void> {
   const db = await openVaultDB();
   if (!db) return;
   await new Promise<void>((resolve) => {
@@ -203,7 +203,7 @@ async function saveDirectoryHandleToDB(handle: any, keyId: string = 'yaad_remide
   });
 }
 
-async function getDirectoryHandleFromDB(keyId: string = 'yaad_remider_dir'): Promise<any | null> {
+async function getDirectoryHandleFromDB(keyId: string = 'yaad_folder_dir'): Promise<any | null> {
   const db = await openVaultDB();
   if (!db) return null;
   return new Promise<any | null>((resolve) => {
@@ -220,22 +220,19 @@ async function getDirectoryHandleFromDB(keyId: string = 'yaad_remider_dir'): Pro
 }
 
 /**
- * Initializes & verifies access to the local "Yaad reminder" folder.
+ * Initializes & verifies access strictly to the local "YAAD" folder.
  * When interactivePicker = true and supported by browser, opens directory picker
- * to create/select the "Yaad reminder" folder on device storage.
+ * to create/select the "YAAD" folder on device storage.
  */
 export async function requestLocalFolderPermission(
-  interactivePicker: boolean = false,
-  customLocalFolder?: string
+  interactivePicker: boolean = false
 ): Promise<{
   granted: boolean;
   nativePickerOpened: boolean;
   folderName: string;
   restoredSnapshot?: AutoBackupSnapshot | null;
 }> {
-  const rawFolder = (customLocalFolder || LOCAL_BACKUP_FOLDER_NAME).trim() || LOCAL_BACKUP_FOLDER_NAME;
-  let effectiveFolderName =
-    rawFolder.toUpperCase() === 'YAAD REMIDER' ? LOCAL_BACKUP_FOLDER_NAME : rawFolder;
+  const effectiveFolderName = LOCAL_BACKUP_FOLDER_NAME;
   let restoredFromPickedFolder: AutoBackupSnapshot | null = null;
   let nativePickerOpened = false;
 
@@ -261,24 +258,17 @@ export async function requestLocalFolderPermission(
   ) {
     try {
       const pickedHandle = await (window as any).showDirectoryPicker({
-        id: 'yaad_remider_backup',
+        id: 'yaad_folder_backup',
         mode: 'readwrite',
       });
       nativePickerOpened = true;
       if (pickedHandle) {
         let targetFolderHandle = pickedHandle;
         const pickedName = (pickedHandle.name || '').trim();
-        if (
-          pickedName.toUpperCase() !== effectiveFolderName.toUpperCase() &&
-          pickedName.toUpperCase() !== 'YAAD REMIDER' &&
-          pickedName.toUpperCase() !== 'YAAD REMINDER'
-        ) {
-          targetFolderHandle = await pickedHandle.getDirectoryHandle(effectiveFolderName, {
+        if (pickedName.toUpperCase() !== LOCAL_BACKUP_FOLDER_NAME) {
+          targetFolderHandle = await pickedHandle.getDirectoryHandle(LOCAL_BACKUP_FOLDER_NAME, {
             create: true,
           });
-          effectiveFolderName = `${pickedName}/${effectiveFolderName}`;
-        } else if (pickedName) {
-          effectiveFolderName = pickedName;
         }
         await saveDirectoryHandleToDB(targetFolderHandle);
         restoredFromPickedFolder = await readFromDirectoryHandle(targetFolderHandle);
@@ -293,29 +283,23 @@ export async function requestLocalFolderPermission(
 
   await requestPersistentStorage();
 
-  // 2. Ensure OPFS "Yaad reminder" directory exists
+  // 2. Ensure OPFS "YAAD" directory exists
   try {
     if (typeof navigator !== 'undefined' && navigator.storage && (navigator.storage as any).getDirectory) {
       const rootDir = await (navigator.storage as any).getDirectory();
-      const cleanSubName = effectiveFolderName.split('/').pop() || LOCAL_BACKUP_FOLDER_NAME;
-      await rootDir.getDirectoryHandle(cleanSubName, { create: true });
+      await rootDir.getDirectoryHandle(LOCAL_BACKUP_FOLDER_NAME, { create: true });
     }
   } catch {
     // ignore OPFS errors
   }
 
-  // 3. Request Android storage permission & create physical "Yaad reminder" folder via @capacitor/filesystem
+  // 3. Request Android storage permission & create physical "YAAD" folder via @capacitor/filesystem
   try {
     if (Capacitor.isNativePlatform() || (window as any).Capacitor?.Plugins?.Filesystem) {
       await Promise.race([
         Filesystem.requestPermissions(),
         new Promise((resolve) => setTimeout(resolve, 3500)),
       ]).catch(() => {});
-
-      const cleanSubName =
-        effectiveFolderName
-          .replace(/^(Documents|Download|InternalStorage)\//i, '')
-          .trim() || LOCAL_BACKUP_FOLDER_NAME;
 
       const targetDirs = [
         Directory.External,
@@ -326,16 +310,8 @@ export async function requestLocalFolderPermission(
 
       for (const dir of targetDirs) {
         await Filesystem.mkdir({
-          path: cleanSubName,
+          path: LOCAL_BACKUP_FOLDER_NAME,
           directory: dir,
-          recursive: true,
-        }).catch(() => {});
-      }
-
-      if (/^Download\//i.test(effectiveFolderName)) {
-        await Filesystem.mkdir({
-          path: `Download/${cleanSubName}`,
-          directory: Directory.ExternalStorage,
           recursive: true,
         }).catch(() => {});
       }
@@ -345,7 +321,7 @@ export async function requestLocalFolderPermission(
   }
 
   if (!restoredFromPickedFolder) {
-    restoredFromPickedFolder = await retrieveFromLocalYaadFolder(effectiveFolderName);
+    restoredFromPickedFolder = await retrieveFromLocalYaadFolder();
   }
 
   let isStorageActuallyGranted = false;
@@ -356,19 +332,15 @@ export async function requestLocalFolderPermission(
       if (perms && typeof perms.storage === 'string') {
         isStorageActuallyGranted = perms.storage === 'granted';
       } else {
-        const cleanSubName =
-          effectiveFolderName
-            .replace(/^(Documents|Download|InternalStorage)\//i, '')
-            .trim() || LOCAL_BACKUP_FOLDER_NAME;
         await Filesystem.writeFile({
-          path: `${cleanSubName}/.yaad_perm_probe`,
+          path: `${LOCAL_BACKUP_FOLDER_NAME}/.yaad_perm_probe`,
           data: 'ok',
           directory: Directory.ExternalStorage,
           encoding: Encoding.UTF8,
           recursive: true,
         });
         await Filesystem.deleteFile({
-          path: `${cleanSubName}/.yaad_perm_probe`,
+          path: `${LOCAL_BACKUP_FOLDER_NAME}/.yaad_perm_probe`,
           directory: Directory.ExternalStorage,
         }).catch(() => {});
         isStorageActuallyGranted = true;
@@ -480,7 +452,7 @@ export async function checkLocalFolderPermissionStatus(): Promise<boolean> {
 }
 
 /**
- * Helper to write backup JSON into a FileSystemDirectoryHandle ('Yaad reminder')
+ * Helper to write backup JSON into a FileSystemDirectoryHandle ('YAAD')
  */
 async function writeToDirectoryHandle(dirHandle: any, payload: AutoBackupSnapshot): Promise<boolean> {
   if (!dirHandle) return false;
@@ -500,7 +472,7 @@ async function writeToDirectoryHandle(dirHandle: any, payload: AutoBackupSnapsho
 }
 
 /**
- * Helper to read backup JSON from a FileSystemDirectoryHandle ('Yaad reminder')
+ * Helper to read backup JSON from a FileSystemDirectoryHandle ('YAAD')
  */
 async function readFromDirectoryHandle(dirHandle: any): Promise<AutoBackupSnapshot | null> {
   if (!dirHandle) return null;
@@ -520,7 +492,7 @@ async function readFromDirectoryHandle(dirHandle: any): Promise<AutoBackupSnapsh
 }
 
 /**
- * Writes backup to OPFS 'Yaad reminder/yaad_backup.json'
+ * Writes backup to OPFS 'YAAD/yaad_backup.json'
  */
 async function writeToOpfsYaadFolder(payload: AutoBackupSnapshot): Promise<boolean> {
   try {
@@ -543,7 +515,7 @@ async function writeToOpfsYaadFolder(payload: AutoBackupSnapshot): Promise<boole
 }
 
 /**
- * Reads backup from OPFS 'Yaad reminder/yaad_backup.json'
+ * Reads backup from OPFS 'YAAD/yaad_backup.json'
  */
 async function readFromOpfsYaadFolder(): Promise<AutoBackupSnapshot | null> {
   try {
@@ -563,12 +535,12 @@ async function readFromOpfsYaadFolder(): Promise<AutoBackupSnapshot | null> {
 }
 
 /**
- * Writes backup to physical 'Yaad reminder/yaad_backup.json' via backend endpoint & Cache Storage
+ * Writes backup to physical 'YAAD/yaad_backup.json' via backend endpoint & Cache Storage
  */
 async function writeToServerAndCacheYaadFolder(payload: AutoBackupSnapshot): Promise<void> {
   const jsonStr = JSON.stringify(payload);
 
-  // 1. Cache Storage '/YAAD_REMIDER/yaad_backup.json'
+  // 1. Cache Storage '/YAAD/yaad_backup.json'
   try {
     if (typeof caches !== 'undefined') {
       const cache = await caches.open(CACHE_BACKUP_NAME);
@@ -583,7 +555,7 @@ async function writeToServerAndCacheYaadFolder(payload: AutoBackupSnapshot): Pro
     // ignore
   }
 
-  // 2. Physical 'Yaad reminder/yaad_backup.json' folder on host
+  // 2. Physical 'YAAD/yaad_backup.json' folder on host
   try {
     await fetch('/api/local-folder-backup', {
       method: 'POST',
@@ -597,10 +569,10 @@ async function writeToServerAndCacheYaadFolder(payload: AutoBackupSnapshot): Pro
 }
 
 /**
- * Reads backup from physical 'Yaad reminder/yaad_backup.json' via backend endpoint or Cache Storage
+ * Reads backup from physical 'YAAD/yaad_backup.json' via backend endpoint or Cache Storage
  */
 async function readFromServerOrCacheYaadFolder(): Promise<AutoBackupSnapshot | null> {
-  // 1. Check physical 'Yaad reminder/yaad_backup.json'
+  // 1. Check physical 'YAAD/yaad_backup.json'
   try {
     const res = await fetch('/api/local-folder-backup');
     if (res.ok) {
@@ -613,7 +585,7 @@ async function readFromServerOrCacheYaadFolder(): Promise<AutoBackupSnapshot | n
     // ignore
   }
 
-  // 2. Check Cache Storage '/YAAD_REMIDER/yaad_backup.json'
+  // 2. Check Cache Storage '/YAAD/yaad_backup.json'
   try {
     if (typeof caches !== 'undefined') {
       const cache = await caches.open(CACHE_BACKUP_NAME);
@@ -811,12 +783,12 @@ export async function performAutoBackup(
 /**
  * Retrieves the best/latest backup from the Local 'YAAD' folder in root storage across all local storage layers.
  */
-export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): Promise<AutoBackupSnapshot | null> {
+export async function retrieveFromLocalYaadFolder(): Promise<AutoBackupSnapshot | null> {
   const candidates: { snap: AutoBackupSnapshot; isPhysicalDisk: boolean }[] = [];
 
   // 1. User-granted Device Folder Handle ('YAAD/yaad_backup.json')
   try {
-    const dirHandle = await getDirectoryHandleFromDB('yaad_remider_dir');
+    const dirHandle = await getDirectoryHandleFromDB();
     if (dirHandle) {
       const fromHandle = await readFromDirectoryHandle(dirHandle);
       if (fromHandle) candidates.push({ snap: fromHandle, isPhysicalDisk: true });
@@ -825,11 +797,9 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
     // ignore
   }
 
-  // 2. Native Android Capacitor Filesystem (fast direct check + targeted folder scan)
+  // 2. Native Android Capacitor Filesystem (strictly inside YAAD folder)
   if (Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).Capacitor?.Plugins?.Filesystem)) {
     try {
-      const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
-
       const searchDirs = [
         Directory.ExternalStorage,
         Directory.External,
@@ -837,12 +807,7 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
         Directory.Data,
       ];
 
-      const folderPathsToTry = [
-        cleanSubName,
-        'Yaad reminder',
-        `Download/${cleanSubName}`,
-        `Documents/${cleanSubName}`,
-      ];
+      const folderPathsToTry = [LOCAL_BACKUP_FOLDER_NAME];
 
       for (const dir of searchDirs) {
         const isExternalDisk = dir !== Directory.Data;
@@ -1004,13 +969,13 @@ export async function retrieveFromLocalYaadFolder(_customLocalFolder?: string): 
 }
 
 /**
- * Automatic Recall / Restore from Local 'Yaad reminder' Folder on Device Storage
+ * Automatic Recall / Restore strictly from Local 'YAAD' Folder on Device Storage
  */
-export async function retrieveLatestBackupWithPriority(
-  _unusedToken?: string | null,
-  settings?: Partial<AppSettings>
-): Promise<{ snapshot: AutoBackupSnapshot | null; source: 'local_folder' | null }> {
-  const localSnapshot = await retrieveFromLocalYaadFolder(settings?.localBackupFolderName);
+export async function retrieveLatestBackupWithPriority(): Promise<{
+  snapshot: AutoBackupSnapshot | null;
+  source: 'local_folder' | null;
+}> {
+  const localSnapshot = await retrieveFromLocalYaadFolder();
   if (localSnapshot) {
     return { snapshot: localSnapshot, source: 'local_folder' };
   }

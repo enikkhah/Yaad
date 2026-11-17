@@ -17,19 +17,21 @@ import {
   Bell
 } from 'lucide-react';
 import { formatJalaliFull } from '../utils/jalali';
+import { usePersistentMediaUrl } from '../utils/mediaStorage';
 
 interface IdeaCardProps {
   idea: IdeaNote;
   onDelete: (id: string) => void;
   onEdit?: (idea: IdeaNote) => void;
   onSetReminder?: (idea: IdeaNote) => void;
-  onSyncToGoogle?: (idea: IdeaNote) => void;
   onViewImage?: (url: string) => void;
   language?: AppLanguage;
 }
 
 export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSetReminder, onViewImage, language = 'fa' }) => {
   const [drawingLoaded, setDrawingLoaded] = useState(false);
+  const resolvedAudioUrl = usePersistentMediaUrl(idea.audioRecordUrl);
+  const resolvedVideoUrl = usePersistentMediaUrl(idea.videoRecordUrl);
 
   const getCategoryBadge = () => {
     switch (idea.category) {
@@ -134,7 +136,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSe
             <span className="text-xs text-indigo-400 font-bold flex items-center gap-1.5">
               <Volume2 className="w-3.5 h-3.5" /> {language === 'en' ? 'Audio Memo' : 'یادداشت صوتی'}
             </span>
-            <audio controls src={idea.audioRecordUrl} preload="none" className="w-full h-9" />
+            <audio controls src={resolvedAudioUrl} preload="metadata" className="w-full h-9" />
           </div>
         )}
 
@@ -144,7 +146,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSe
             <span className="text-xs text-indigo-400 font-bold px-2.5 py-1.5 flex items-center gap-1.5">
               <Video className="w-3.5 h-3.5" /> {language === 'en' ? 'Video Memo' : 'یادداشت ویدیویی'}
             </span>
-            <video controls preload="metadata" src={idea.videoRecordUrl} className="w-full max-h-52 object-cover" />
+            <video controls playsInline preload="metadata" src={resolvedVideoUrl} className="w-full max-h-52 object-cover" />
           </div>
         )}
 

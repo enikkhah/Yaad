@@ -730,8 +730,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
           ? {
               enabled: true,
               locationName: geofenceLocationName.trim() || title.trim() || (isEn ? 'Geofence Place' : 'حصار مکانی'),
-              latitude: Number(geofenceLat),
-              longitude: Number(geofenceLng),
+              latitude: Number.isFinite(Number(geofenceLat)) ? Number(geofenceLat) : 35.6892,
+              longitude: Number.isFinite(Number(geofenceLng)) ? Number(geofenceLng) : 51.3890,
               radius: Number(geofenceRadius) || 200,
               triggerOn: geofenceTriggerOn,
               savedLocationId: geofenceSavedLocId || undefined,
@@ -1511,7 +1511,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                           }
                         }
                       }}
-                      className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between cursor-pointer active:scale-95 ${
+                      className={`p-2.5 rounded-xl border text-start transition-all flex items-center justify-between cursor-pointer active:scale-95 ${
                         isSelected
                           ? 'bg-indigo-500/15 border-indigo-500/80 text-white shadow-md shadow-indigo-500/15 ring-1 ring-indigo-400/50'
                           : 'bg-stone-900/70 border-stone-800 text-stone-400 hover:text-stone-200 hover:bg-stone-900'
@@ -1849,8 +1849,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
 
               {enableGeofence && (
                 <div className="space-y-3 pt-3 border-t border-emerald-500/20 animate-in fade-in">
-                  {/* 1. Pick from Saved Locations if available */}
-                  {savedLocations && savedLocations.length > 0 && (
+                  {/* 1. Pick from Saved Locations if available (excluding soft-deleted items) */}
+                  {savedLocations && savedLocations.some((l) => !l.deletedAt) && (
                     <div>
                       <label className="block text-[11px] font-bold text-stone-300 mb-1">
                         {isEn ? 'Select from Saved Places:' : 'انتخاب از مکان‌های ثبت‌شده:'}
@@ -1861,11 +1861,13 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                         className="w-full bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-bold"
                       >
                         <option value="">{isEn ? '-- Custom GPS / Coordinates --' : '-- انتخاب دستی یا GPS جدید --'}</option>
-                        {savedLocations.map((loc) => (
-                          <option key={loc.id} value={loc.id}>
-                            📍 {formatSavedLocationTitle(loc.title, language)} {loc.address ? `(${loc.address.slice(0, 28)}...)` : ''}
-                          </option>
-                        ))}
+                        {savedLocations
+                          .filter((loc) => !loc.deletedAt)
+                          .map((loc) => (
+                            <option key={loc.id} value={loc.id}>
+                              📍 {formatSavedLocationTitle(loc.title, language)} {loc.address ? `(${loc.address.slice(0, 28)}...)` : ''}
+                            </option>
+                          ))}
                       </select>
                     </div>
                   )}

@@ -459,7 +459,7 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
 }
 
 /**
- * Requests all essential native permissions (Notifications, Mic, Cam, Location, Local Folder YAAD REMIDER) with 1 click
+ * Requests all essential native permissions (Notifications, Mic, Cam, Location, Local Folder YAAD) with 1 click
  */
 export async function requestAllNativePermissions(): Promise<NativePermissionsStatus> {
   const notifOk = await requestNotificationPermission();

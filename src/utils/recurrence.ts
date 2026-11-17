@@ -73,13 +73,13 @@ export function getRecurrenceLabel(reminder: Reminder, language: AppLanguage = '
         return isEn ? 'Every day' : 'تکرار هر روز هفته';
       }
       if (isEn) {
-        const names = days
+        const names = [...days]
           .sort((a, b) => a - b)
           .map((idx) => ENGLISH_WEEK_DAYS.find((d) => d.index === idx)?.short || '')
           .filter(Boolean);
         return `Weekly (${names.join(', ')})`;
       }
-      const names = days
+      const names = [...days]
         .sort((a, b) => a - b)
         .map((idx) => PERSIAN_WEEK_DAYS.find((d) => d.index === idx)?.short || '')
         .filter(Boolean);
@@ -236,4 +236,54 @@ export function getNextRecurrenceTimestamp(
     default:
       return null;
   }
+}
+
+/**
+ * Recovers a past-due reminder after app reboot, backup restore, or missed window:
+ * - Active recurring reminders with remaining repeats advance cleanly to their next future occurrence.
+ * - Non-recurring or exhausted reminders past the cutoff are marked acknowledged so stale alarms do not fire.
+ */
+export function recoverMissedRecurringReminder(
+  reminder: Reminder,
+  cutoffTimestamp: number,
+  referenceNow: number = Date.now()
+): { reminder: Reminder; advanced: boolean } {
+  if (reminder.dueTimestamp > cutoffTimestamp) {
+    return { reminder, advanced: false };
+  }
+
+  if (
+    !reminder.deletedAt &&
+    (reminder.status === 'pending' || reminder.status === 'postponed') &&
+    reminder.recurrence &&
+    reminder.recurrence !== 'none'
+  ) {
+    const hasRemainingRepeats =
+      reminder.recurrenceCount === undefined || reminder.recurrenceCount > 1;
+    if (hasRemainingRepeats) {
+      const nextDue = getNextRecurrenceTimestamp(reminder, referenceNow);
+      if (nextDue && nextDue > referenceNow) {
+        return {
+          advanced: true,
+          reminder: {
+            ...reminder,
+            dueTimestamp: nextDue,
+            recurrenceCount:
+              reminder.recurrenceCount && reminder.recurrenceCount > 1
+                ? reminder.recurrenceCount - 1
+                : undefined,
+            status: 'pending',
+            completedAt: undefined,
+            postponeCount: 0,
+            acknowledged: false,
+          },
+        };
+      }
+    }
+  }
+
+  return {
+    advanced: false,
+    reminder: reminder.acknowledged ? reminder : { ...reminder, acknowledged: true },
+  };
 }

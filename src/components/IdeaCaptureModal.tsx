@@ -60,6 +60,7 @@ import {
   markPermissionGranted,
 } from '../utils/nativePermissions';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
+import { saveMediaBlob, usePersistentMediaUrl } from '../utils/mediaStorage';
 
 const JALALI_YEARS_GRID = Array.from({ length: 1425 - 1404 + 1 }, (_, i) => 1404 + i);
 const GREGORIAN_YEARS_GRID = Array.from({ length: 2046 - 2025 + 1 }, (_, i) => 2025 + i);
@@ -179,6 +180,19 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   const videoPreviewRef = useRef<HTMLVideoElement | null>(null);
   const videoStreamRef = useRef<MediaStream | null>(null);
   const videoAudioStreamRef = useRef<MediaStream | null>(null);
+  const pendingMediaSaveRef = useRef<Promise<void> | null>(null);
+  const audioUrlLatestRef = useRef<string | null>(null);
+  const videoUrlLatestRef = useRef<string | null>(null);
+  const resolvedAudioPreviewUrl = usePersistentMediaUrl(audioBlobUrl);
+  const resolvedVideoPreviewUrl = usePersistentMediaUrl(videoBlobUrl);
+
+  useEffect(() => {
+    audioUrlLatestRef.current = audioBlobUrl;
+  }, [audioBlobUrl]);
+
+  useEffect(() => {
+    videoUrlLatestRef.current = videoBlobUrl;
+  }, [videoBlobUrl]);
 
   // Rear-camera-only photo capture state
   const [isPhotoCameraActive, setIsPhotoCameraActive] = useState(false);
@@ -313,7 +327,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         setContent(editingIdea.content || '');
         setCategory(editingIdea.category || 'work');
         setAudioBlobUrl(editingIdea.audioRecordUrl || null);
+        audioUrlLatestRef.current = editingIdea.audioRecordUrl || null;
         setVideoBlobUrl(editingIdea.videoRecordUrl || null);
+        videoUrlLatestRef.current = editingIdea.videoRecordUrl || null;
         setPhotoDataUrl(editingIdea.photoDataUrl || null);
         setDrawingDataUrl(editingIdea.drawingDataUrl || null);
 
@@ -353,7 +369,9 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
         setContent('');
         setCategory('work');
         setAudioBlobUrl(null);
+        audioUrlLatestRef.current = null;
         setVideoBlobUrl(null);
+        videoUrlLatestRef.current = null;
         setPhotoDataUrl(null);
         setDrawingDataUrl(null);
 
@@ -759,10 +777,18 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       };
 
       recorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        const url = URL.createObjectURL(audioBlob);
-        setAudioBlobUrl(url);
+        const finalMime = recorder.mimeType || 'audio/webm';
+        const audioBlob = new Blob(audioChunksRef.current, { type: finalMime });
         stream.getTracks().forEach((track) => track.stop());
+        const savePromise = saveMediaBlob(audioBlob)
+          .then((persistentUri) => {
+            audioUrlLatestRef.current = persistentUri;
+            setAudioBlobUrl(persistentUri);
+          })
+          .catch((saveErr) => {
+            console.warn('Failed to persist audio recording:', saveErr);
+          });
+        pendingMediaSaveRef.current = savePromise;
       };
 
       recorder.start();
@@ -1040,8 +1066,15 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       recorder.onstop = () => {
         const finalMime = recorder.mimeType || selectedMime || 'video/webm';
         const videoBlob = new Blob(videoChunksRef.current, { type: finalMime });
-        const url = URL.createObjectURL(videoBlob);
-        setVideoBlobUrl(url);
+        const savePromise = saveMediaBlob(videoBlob)
+          .then((persistentUri) => {
+            videoUrlLatestRef.current = persistentUri;
+            setVideoBlobUrl(persistentUri);
+          })
+          .catch((saveErr) => {
+            console.warn('Failed to persist video recording:', saveErr);
+          });
+        pendingMediaSaveRef.current = savePromise;
 
         if (videoAudioStreamRef.current) {
           videoAudioStreamRef.current.getTracks().forEach((t) => t.stop());
@@ -1315,6 +1348,10 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
     }
 
     setValidationError(null);
+    if (pendingMediaSaveRef.current) {
+      await pendingMediaSaveRef.current.catch(() => {});
+      pendingMediaSaveRef.current = null;
+    }
     const finalTitle = title.trim();
 
     let reminderPayload: Omit<Reminder, 'id' | 'createdAt' | 'status' | 'postponeCount'> | null = null;
@@ -1342,12 +1379,15 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       };
     }
 
+    const finalAudioUrl = audioUrlLatestRef.current || audioBlobUrl || undefined;
+    const finalVideoUrl = videoUrlLatestRef.current || videoBlobUrl || undefined;
+
     const ideaPayload: Omit<IdeaNote, 'id' | 'createdAt'> = {
       title: finalTitle,
       content: content.trim(),
       category,
-      audioRecordUrl: audioBlobUrl || undefined,
-      videoRecordUrl: videoBlobUrl || undefined,
+      audioRecordUrl: finalAudioUrl,
+      videoRecordUrl: finalVideoUrl,
       photoDataUrl: photoDataUrl || undefined,
       drawingDataUrl: drawingDataUrl || undefined,
       googleSynced: syncWithGoogle && !!googleToken,
@@ -1364,13 +1404,17 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
 
     if (editingIdea && onUpdateIdea) {
       onUpdateIdea(editingIdea.id, ideaPayload);
+    } else {
+      onSaveIdea(ideaPayload, reminderPayload);
     }
-    onSaveIdea(ideaPayload, reminderPayload);
 
     // Sync with Google Tasks if enabled
     if (syncWithGoogle && googleToken) {
       try {
-        await syncToGoogleTasks({ title: `[ایده] ${finalTitle}`, description: content }, googleToken);
+        await syncToGoogleTasks(
+          { title: `${isEn ? '[Idea]' : '[ایده]'} ${finalTitle}`, description: content },
+          googleToken
+        );
       } catch (err) {
         console.warn('Google tasks sync failed for idea:', err);
       }
@@ -1659,7 +1703,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                   <span className="text-xs text-emerald-400 flex items-center gap-1">
                     <Check className="w-4 h-4" /> فایل صوتی با موفقیت ضبط شد
                   </span>
-                  <audio controls src={audioBlobUrl} className="w-full max-w-md h-10 rounded-lg" />
+                  <audio controls src={resolvedAudioPreviewUrl} className="w-full max-w-md h-10 rounded-lg" />
                 </div>
               )}
             </div>
@@ -1820,7 +1864,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 />
 
                 {!isRecordingVideo && !isVideoPreviewActive && videoBlobUrl && (
-                  <video src={videoBlobUrl} controls playsInline className="w-full h-full object-cover relative z-10" />
+                  <video src={resolvedVideoPreviewUrl} controls playsInline className="w-full h-full object-cover relative z-10" />
                 )}
 
                 {!isRecordingVideo && !isVideoPreviewActive && !videoBlobUrl && (
@@ -2598,7 +2642,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                                     }
                                   }
                                 }}
-                                className={`p-2.5 rounded-xl border text-right transition-all flex items-center justify-between cursor-pointer active:scale-95 ${
+                                className={`p-2.5 rounded-xl border text-start transition-all flex items-center justify-between cursor-pointer active:scale-95 ${
                                   isSelected
                                     ? 'bg-indigo-500/15 border-indigo-500/80 text-white shadow-md shadow-indigo-500/15 ring-1 ring-indigo-400/50'
                                     : 'bg-stone-950/70 border-stone-800 text-stone-400 hover:text-stone-200 hover:bg-stone-900'

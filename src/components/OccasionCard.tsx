@@ -127,11 +127,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
             </button>
             <button
               type="button"
-              onClick={() => {
-                if (window.confirm(isEn ? `Delete occasion "${occasion.title}"?` : `آیا مناسبت «${occasion.title}» حذف شود؟`)) {
-                  onDelete(occasion.id);
-                }
-              }}
+              onClick={() => onDelete(occasion.id)}
               className="p-1.5 rounded-lg text-stone-400 hover:text-red-400 hover:bg-stone-800 transition-colors cursor-pointer"
               title={isEn ? 'Delete' : 'حذف'}
             >

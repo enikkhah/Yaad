@@ -10,7 +10,7 @@ const isProd = process.env.NODE_ENV === 'production';
 const DEFAULT_BACKUP_FOLDER_NAME = 'YAAD';
 const SERVER_BACKUP_ROOT = path.join(os.tmpdir(), 'yaad_server_backups');
 
-function getSafeFolderDir(_folderName?: string) {
+function getSafeFolderDir() {
   const cleaned = DEFAULT_BACKUP_FOLDER_NAME;
   const dirPath = path.resolve(SERVER_BACKUP_ROOT, cleaned);
   return {
@@ -20,8 +20,8 @@ function getSafeFolderDir(_folderName?: string) {
   };
 }
 
-function ensureBackupFolder(folderName?: string) {
-  const info = getSafeFolderDir(folderName);
+function ensureBackupFolder() {
+  const info = getSafeFolderDir();
   try {
     if (!fs.existsSync(info.dirPath)) {
       fs.mkdirSync(info.dirPath, { recursive: true });
@@ -32,7 +32,7 @@ function ensureBackupFolder(folderName?: string) {
   return info;
 }
 
-ensureBackupFolder(DEFAULT_BACKUP_FOLDER_NAME);
+ensureBackupFolder();
 
 app.use(express.json({ limit: '15mb' }));
 
@@ -115,11 +115,10 @@ app.get('/api/firebase-config', (req: Request, res: Response) => {
   }
 });
 
-// Get latest backup from local YAAD REMIDER (or custom named) folder
-app.get('/api/local-folder-backup', (req: Request, res: Response) => {
+// Get latest backup from local YAAD folder
+app.get('/api/local-folder-backup', (_req: Request, res: Response) => {
   try {
-    const requestedFolder = typeof req.query.folder === 'string' ? req.query.folder : DEFAULT_BACKUP_FOLDER_NAME;
-    const info = ensureBackupFolder(requestedFolder);
+    const info = ensureBackupFolder();
     if (!fs.existsSync(info.filePath)) {
       res.status(404).json({ ok: false, message: `No backup file in ${info.folderName} folder yet` });
       return;
@@ -132,7 +131,7 @@ app.get('/api/local-folder-backup', (req: Request, res: Response) => {
   }
 });
 
-// Save backup to local YAAD REMIDER (or custom named) folder
+// Save backup to local YAAD folder
 app.post('/api/local-folder-backup', (req: Request, res: Response) => {
   try {
     const payload = req.body;
@@ -140,7 +139,7 @@ app.post('/api/local-folder-backup', (req: Request, res: Response) => {
       res.status(400).json({ ok: false, error: 'Invalid backup payload' });
       return;
     }
-    const info = ensureBackupFolder(payload.folder || DEFAULT_BACKUP_FOLDER_NAME);
+    const info = ensureBackupFolder();
     fs.writeFileSync(info.filePath, JSON.stringify(payload, null, 2), 'utf-8');
     res.json({
       ok: true,

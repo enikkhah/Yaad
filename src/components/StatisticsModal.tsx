@@ -201,7 +201,7 @@ export const StatisticsModal: React.FC<StatisticsModalProps> = ({
               </div>
             </div>
           </div>
-          <div className="text-right">
+          <div className="text-end">
             <span className="text-xl font-black font-mono text-emerald-400">
               {formatNum(completionRate)}%
             </span>
