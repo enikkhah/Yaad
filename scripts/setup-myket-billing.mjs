@@ -9,7 +9,7 @@ if (!fs.existsSync(androidDir)) {
   process.exit(1);
 }
 
-// 1. Patch android/build.gradle (Root Gradle: Kotlin plugin + Myket Maven + JitPack repository)
+// 1. Patch android/build.gradle (Root Gradle: Kotlin plugin + JitPack repository)
 const rootGradlePath = path.join(androidDir, 'build.gradle');
 if (fs.existsSync(rootGradlePath)) {
   let content = fs.readFileSync(rootGradlePath, 'utf8');
@@ -21,13 +21,6 @@ if (fs.existsSync(rootGradlePath)) {
     );
   }
 
-  if (!content.includes('https://maven.myket.ir')) {
-    content = content.replace(
-      /allprojects\s*\{\s*repositories\s*\{/,
-      `allprojects {\n    repositories {\n        maven { url 'https://maven.myket.ir' }`
-    );
-  }
-
   if (!content.includes('https://jitpack.io')) {
     content = content.replace(
       /allprojects\s*\{\s*repositories\s*\{/,
@@ -36,10 +29,10 @@ if (fs.existsSync(rootGradlePath)) {
   }
 
   fs.writeFileSync(rootGradlePath, content, 'utf8');
-  console.log('✅ Patched android/build.gradle with Kotlin 2.0.21, Myket Maven & JitPack');
+  console.log('✅ Patched android/build.gradle with Kotlin 2.0.21 & JitPack');
 }
 
-// 2. Patch android/app/build.gradle (Apply kotlin-android, jvmToolchain(21), and Myket Billing SDK 1.19.0)
+// 2. Patch android/app/build.gradle (Apply kotlin-android, jvmToolchain(21), manifestPlaceholders, and Myket Billing Client 1.19)
 const appGradlePath = path.join(androidDir, 'app', 'build.gradle');
 if (fs.existsSync(appGradlePath)) {
   let content = fs.readFileSync(appGradlePath, 'utf8');
@@ -51,6 +44,13 @@ if (fs.existsSync(appGradlePath)) {
     );
   }
 
+  if (!content.includes('marketApplicationId')) {
+    content = content.replace(
+      /defaultConfig\s*\{/,
+      `defaultConfig {\n        def marketApplicationId = "ir.mservices.market"\n        def marketBindAddress = "ir.mservices.market.InAppBillingService.BIND"\n        manifestPlaceholders = [\n            marketApplicationId: "\${marketApplicationId}",\n            marketBindAddress  : "\${marketBindAddress}",\n            marketPermission   : "\${marketApplicationId}.BILLING"\n        ]`
+    );
+  }
+
   if (!content.includes('jvmToolchain(21)')) {
     content += `\nkotlin {\n    jvmToolchain(21)\n}\n`;
   }
@@ -58,24 +58,31 @@ if (fs.existsSync(appGradlePath)) {
   if (!content.includes('com.github.myketstore:myket-billing-client')) {
     content = content.replace(
       /dependencies\s*\{/,
-      `dependencies {\n    implementation "com.github.myketstore:myket-billing-client:1.19.0"`
+      `dependencies {\n    implementation("com.github.myketstore:myket-billing-client:1.19") {\n        exclude group: "com.google.android.gms", module: "play-services-ads-identifier"\n    }`
     );
   }
 
   fs.writeFileSync(appGradlePath, content, 'utf8');
-  console.log('✅ Patched android/app/build.gradle with Myket Billing Client 1.19.0 & Kotlin Android');
+  console.log('✅ Patched android/app/build.gradle with Myket Billing Client 1.19, manifestPlaceholders & Kotlin Android');
 }
 
-// 3. Patch android/app/src/main/AndroidManifest.xml (Myket billing permission & <queries>, no Bazaar permission)
+// 3. Patch android/app/src/main/AndroidManifest.xml (Myket billing permission, remove AD_ID if transitive, & <queries>)
 const manifestPath = path.join(androidDir, 'app', 'src', 'main', 'AndroidManifest.xml');
 if (fs.existsSync(manifestPath)) {
   let content = fs.readFileSync(manifestPath, 'utf8');
+
+  if (!content.includes('xmlns:tools=')) {
+    content = content.replace(
+      '<manifest ',
+      '<manifest xmlns:tools="http://schemas.android.com/tools" '
+    );
+  }
 
   const myketPerm = 'ir.mservices.market.BILLING';
   if (!content.includes(myketPerm)) {
     content = content.replace(
       '<application',
-      `<uses-permission android:name="${myketPerm}" />\n\n    <application`
+      `<uses-permission android:name="${myketPerm}" />\n    <uses-permission android:name="com.google.android.gms.permission.AD_ID" tools:node="remove" />\n\n    <application`
     );
   }
 
@@ -110,6 +117,8 @@ if (fs.existsSync(oldMainActivityJava)) {
 const pluginKtContent = `package com.yaad.reminder
 
 import android.content.Intent
+import android.os.Handler
+import android.os.Looper
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -118,6 +127,8 @@ import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import ir.myket.billingclient.IabHelper
 import ir.myket.billingclient.util.Purchase
+import java.util.LinkedList
+import java.util.Queue
 
 @CapacitorPlugin(name = "MyketBilling")
 class MyketBillingPlugin : Plugin() {
@@ -125,6 +136,36 @@ class MyketBillingPlugin : Plugin() {
     private var iabHelper: IabHelper? = null
     private var isSetupDone: Boolean = false
     private var currentRsaKey: String? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val operationQueue: Queue<(() -> Unit) -> Unit> = LinkedList()
+    private var isOperationRunning: Boolean = false
+
+    @Synchronized
+    private fun enqueueOperation(task: (onDone: () -> Unit) -> Unit) {
+        operationQueue.add(task)
+        if (!isOperationRunning) {
+            runNextOperation()
+        }
+    }
+
+    @Synchronized
+    private fun runNextOperation() {
+        val next = operationQueue.poll()
+        if (next == null) {
+            isOperationRunning = false
+            return
+        }
+        isOperationRunning = true
+        mainHandler.post {
+            try {
+                next {
+                    runNextOperation()
+                }
+            } catch (_: Exception) {
+                runNextOperation()
+            }
+        }
+    }
 
     private fun extractRequestedSkus(call: PluginCall): List<String> {
         val list = mutableListOf<String>()
@@ -176,19 +217,19 @@ class MyketBillingPlugin : Plugin() {
             val helper = IabHelper(context, cleanKey)
             iabHelper = helper
             currentRsaKey = cleanKey
-            helper.startSetup { result ->
-                if (!result.isSuccess) {
+            helper.startSetup(IabHelper.OnIabSetupFinishedListener { result ->
+                if (result == null || !result.isSuccess) {
                     isSetupDone = false
                     onError(
                         "ارتباط با سرویس پرداخت مایکت برقرار نشد. مطمئن شوید برنامه مایکت روی گوشی نصب است و وارد حساب کاربری خود شده‌اید.",
                         "CONNECTION_FAILED",
                         null
                     )
-                    return@startSetup
+                    return@OnIabSetupFinishedListener
                 }
                 isSetupDone = true
                 onReady(helper)
-            }
+            })
         } catch (e: Exception) {
             isSetupDone = false
             onError(
@@ -210,38 +251,54 @@ class MyketBillingPlugin : Plugin() {
         }
 
         val rsaPublicKey = call.getString("rsaPublicKey")?.trim()
-        ensureReady(
-            rsaPublicKey = rsaPublicKey,
-            onReady = { helper ->
-                helper.queryInventoryAsync(true, skuIds) { queryResult, inventory ->
-                    if (queryResult.isFailure || inventory == null) {
-                        call.reject(
-                            "خطا در دریافت قیمت محصولات از مایکت: \${queryResult.message ?: "خطای نامشخص"}",
-                            "SKU_QUERY_FAILED"
+        enqueueOperation { onDone ->
+            ensureReady(
+                rsaPublicKey = rsaPublicKey,
+                onReady = { helper ->
+                    try {
+                        helper.queryInventoryAsync(
+                            true,
+                            skuIds,
+                            IabHelper.QueryInventoryFinishedListener { queryResult, inventory ->
+                                try {
+                                    if (queryResult == null || queryResult.isFailure || inventory == null) {
+                                        call.reject(
+                                            "خطا در دریافت قیمت محصولات از مایکت: \${queryResult?.message ?: "خطای نامشخص"}",
+                                            "SKU_QUERY_FAILED"
+                                        )
+                                        return@QueryInventoryFinishedListener
+                                    }
+                                    val items = JSArray()
+                                    for (sku in skuIds) {
+                                        val detail = inventory.getSkuDetails(sku)
+                                        if (detail != null) {
+                                            val obj = JSObject()
+                                            obj.put("sku", detail.sku)
+                                            obj.put("title", detail.title)
+                                            obj.put("price", detail.price)
+                                            obj.put("description", detail.description)
+                                            items.put(obj)
+                                        }
+                                    }
+                                    val res = JSObject()
+                                    res.put("skuDetails", items)
+                                    call.resolve(res)
+                                } finally {
+                                    onDone()
+                                }
+                            }
                         )
-                        return@queryInventoryAsync
+                    } catch (e: Exception) {
+                        call.reject("خطا در استعلام قیمت محصولات مایکت", "SKU_QUERY_FAILED", e)
+                        onDone()
                     }
-                    val items = JSArray()
-                    for (sku in skuIds) {
-                        val detail = inventory.getSkuDetails(sku)
-                        if (detail != null) {
-                            val obj = JSObject()
-                            obj.put("sku", detail.sku)
-                            obj.put("title", detail.title)
-                            obj.put("price", detail.price)
-                            obj.put("description", detail.description)
-                            items.put(obj)
-                        }
-                    }
-                    val res = JSObject()
-                    res.put("skuDetails", items)
-                    call.resolve(res)
+                },
+                onError = { message, code, throwable ->
+                    call.reject(message, code, throwable?.let { Exception(it) })
+                    onDone()
                 }
-            },
-            onError = { message, code, throwable ->
-                call.reject(message, code, throwable?.let { Exception(it) })
-            }
-        )
+            )
+        }
     }
 
     @PluginMethod
@@ -260,57 +317,91 @@ class MyketBillingPlugin : Plugin() {
             return
         }
 
-        ensureReady(
-            rsaPublicKey = rsaPublicKey,
-            onReady = { helper ->
-                hostActivity.runOnUiThread {
-                    try {
-                        helper.launchPurchaseFlow(hostActivity, productId, { result, purchase ->
-                            if (result.isFailure || purchase == null) {
-                                if (result.response == IabHelper.IABHELPER_USER_CANCELLED) {
-                                    call.reject(
-                                        "کاربر از ادامه پرداخت انصراف داد.",
-                                        "PURCHASE_CANCELLED"
-                                    )
-                                } else {
-                                    // بررسی مالکیت قبلی در صورت تکرار خرید
-                                    helper.queryInventoryAsync(false, listOf(productId)) { qRes, inventory ->
-                                        val existing = if (qRes.isSuccess && inventory != null) inventory.getPurchase(productId) else null
-                                        if (existing != null && existing.purchaseState == 0) {
-                                            call.resolve(buildPurchaseResult(existing, "ALREADY_OWNED"))
+        enqueueOperation { onDone ->
+            ensureReady(
+                rsaPublicKey = rsaPublicKey,
+                onReady = { helper ->
+                    hostActivity.runOnUiThread {
+                        try {
+                            helper.launchPurchaseFlow(
+                                hostActivity,
+                                productId,
+                                IabHelper.OnIabPurchaseFinishedListener { result, purchase ->
+                                    if (result == null || result.isFailure || purchase == null) {
+                                        if (result?.response == IabHelper.IABHELPER_USER_CANCELLED ||
+                                            result?.response == IabHelper.BILLING_RESPONSE_RESULT_USER_CANCELED
+                                        ) {
+                                            call.reject(
+                                                "کاربر از ادامه پرداخت انصراف داد.",
+                                                "PURCHASE_CANCELLED"
+                                            )
+                                            onDone()
+                                        } else {
+                                            try {
+                                                helper.queryInventoryAsync(
+                                                    false,
+                                                    listOf(productId),
+                                                    IabHelper.QueryInventoryFinishedListener { qRes, inventory ->
+                                                        try {
+                                                            val existing =
+                                                                if (qRes != null && qRes.isSuccess && inventory != null)
+                                                                    inventory.getPurchase(productId)
+                                                                else null
+                                                            if (existing != null && existing.purchaseState == 0) {
+                                                                call.resolve(buildPurchaseResult(existing, "ALREADY_OWNED"))
+                                                            } else {
+                                                                call.reject(
+                                                                    "پرداخت انجام نشد: \${result?.message ?: "خطای تراکنش"}",
+                                                                    "PURCHASE_FAILED"
+                                                                )
+                                                            }
+                                                        } finally {
+                                                            onDone()
+                                                        }
+                                                    }
+                                                )
+                                            } catch (_: Exception) {
+                                                call.reject(
+                                                    "پرداخت انجام نشد: \${result?.message ?: "خطای تراکنش"}",
+                                                    "PURCHASE_FAILED"
+                                                )
+                                                onDone()
+                                            }
+                                        }
+                                        return@OnIabPurchaseFinishedListener
+                                    }
+
+                                    try {
+                                        if (purchase.purchaseState == 0) {
+                                            call.resolve(buildPurchaseResult(purchase, "PURCHASED"))
                                         } else {
                                             call.reject(
-                                                "پرداخت انجام نشد: \${result.message ?: "خطای تراکنش"}",
-                                                "PURCHASE_FAILED"
+                                                "تراکنش خرید در وضعیت معتبر قرار ندارد (لغو یا بازپرداخت شده است).",
+                                                "PURCHASE_INVALID_STATE"
                                             )
                                         }
+                                    } finally {
+                                        onDone()
                                     }
-                                }
-                                return@launchPurchaseFlow
-                            }
-
-                            if (purchase.purchaseState == 0) {
-                                call.resolve(buildPurchaseResult(purchase, "PURCHASED"))
-                            } else {
-                                call.reject(
-                                    "تراکنش خرید در وضعیت معتبر قرار ندارد (لغو یا بازپرداخت شده است).",
-                                    "PURCHASE_INVALID_STATE"
-                                )
-                            }
-                        }, payload)
-                    } catch (e: Exception) {
-                        call.reject(
-                            "خطا در باز کردن پنجره پرداخت مایکت: \${e.localizedMessage ?: "خطای نامشخص"}",
-                            "FLOW_FAILED",
-                            e
-                        )
+                                },
+                                payload
+                            )
+                        } catch (e: Exception) {
+                            call.reject(
+                                "خطا در باز کردن پنجره پرداخت مایکت: \${e.localizedMessage ?: "خطای نامشخص"}",
+                                "FLOW_FAILED",
+                                e
+                            )
+                            onDone()
+                        }
                     }
+                },
+                onError = { message, code, throwable ->
+                    call.reject(message, code, throwable?.let { Exception(it) })
+                    onDone()
                 }
-            },
-            onError = { message, code, throwable ->
-                call.reject(message, code, throwable?.let { Exception(it) })
-            }
-        )
+            )
+        }
     }
 
     @PluginMethod
@@ -322,47 +413,63 @@ class MyketBillingPlugin : Plugin() {
         }
 
         val rsaPublicKey = call.getString("rsaPublicKey")?.trim()
-        ensureReady(
-            rsaPublicKey = rsaPublicKey,
-            onReady = { helper ->
-                helper.queryInventoryAsync(false, requestedSkus) { queryResult, inventory ->
-                    if (queryResult.isFailure || inventory == null) {
-                        call.reject(
-                            "خطا در استعلام سوابق خرید از مایکت: \${queryResult.message ?: "خطای نامشخص"}",
-                            "QUERY_FAILED"
+        enqueueOperation { onDone ->
+            ensureReady(
+                rsaPublicKey = rsaPublicKey,
+                onReady = { helper ->
+                    try {
+                        helper.queryInventoryAsync(
+                            false,
+                            requestedSkus,
+                            IabHelper.QueryInventoryFinishedListener { queryResult, inventory ->
+                                try {
+                                    if (queryResult == null || queryResult.isFailure || inventory == null) {
+                                        call.reject(
+                                            "خطا در استعلام سوابق خرید از مایکت: \${queryResult?.message ?: "خطای نامشخص"}",
+                                            "QUERY_FAILED"
+                                        )
+                                        return@QueryInventoryFinishedListener
+                                    }
+
+                                    val activePurchases = mutableListOf<Purchase>()
+                                    val purchasesArr = JSArray()
+                                    for (sku in requestedSkus) {
+                                        val purchase = inventory.getPurchase(sku)
+                                        if (purchase != null && purchase.purchaseState == 0) {
+                                            activePurchases.add(purchase)
+                                            purchasesArr.put(buildPurchaseResult(purchase, "PURCHASED"))
+                                        }
+                                    }
+
+                                    val primary = activePurchases.firstOrNull()
+                                    if (primary != null) {
+                                        val result = buildPurchaseResult(primary, "PURCHASED")
+                                        result.put("isProOwned", true)
+                                        result.put("purchases", purchasesArr)
+                                        call.resolve(result)
+                                    } else {
+                                        val result = JSObject()
+                                        result.put("isProOwned", false)
+                                        result.put("status", "NOT_PURCHASED")
+                                        result.put("purchases", JSArray())
+                                        call.resolve(result)
+                                    }
+                                } finally {
+                                    onDone()
+                                }
+                            }
                         )
-                        return@queryInventoryAsync
+                    } catch (e: Exception) {
+                        call.reject("خطا در استعلام سوابق خرید از مایکت", "QUERY_FAILED", e)
+                        onDone()
                     }
-
-                    val activePurchases = mutableListOf<Purchase>()
-                    val purchasesArr = JSArray()
-                    for (sku in requestedSkus) {
-                        val purchase = inventory.getPurchase(sku)
-                        if (purchase != null && purchase.purchaseState == 0) {
-                            activePurchases.add(purchase)
-                            purchasesArr.put(buildPurchaseResult(purchase, "PURCHASED"))
-                        }
-                    }
-
-                    val primary = activePurchases.firstOrNull()
-                    if (primary != null) {
-                        val result = buildPurchaseResult(primary, "PURCHASED")
-                        result.put("isProOwned", true)
-                        result.put("purchases", purchasesArr)
-                        call.resolve(result)
-                    } else {
-                        val result = JSObject()
-                        result.put("isProOwned", false)
-                        result.put("status", "NOT_PURCHASED")
-                        result.put("purchases", JSArray())
-                        call.resolve(result)
-                    }
+                },
+                onError = { message, code, throwable ->
+                    call.reject(message, code, throwable?.let { Exception(it) })
+                    onDone()
                 }
-            },
-            onError = { message, code, throwable ->
-                call.reject(message, code, throwable?.let { Exception(it) })
-            }
-        )
+            )
+        }
     }
 
     @PluginMethod
