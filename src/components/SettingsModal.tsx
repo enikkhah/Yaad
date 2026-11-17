@@ -29,7 +29,12 @@ import {
   ExternalLink,
   FolderOpen,
   Mail,
-  Layers
+  Clock,
+  Maximize2,
+  Download,
+  Upload,
+  BellRing,
+  AlertTriangle
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION } from '../utils/version';
@@ -48,15 +53,18 @@ import {
   requestAllNativePermissions,
   checkAllPermissionsStatus,
   hasBackgroundLocationPermission,
-  hasOverlayPermission,
+  hasExactAlarmPermission,
+  hasFullScreenIntentPermission,
   openAndroidSettings,
   NativePermissionsStatus
 } from '../utils/nativePermissions';
 import {
   retrieveFromLocalYaadFolder,
+  exportBackupToFile,
+  importBackupFromFile,
   getSnapshotItemCount,
 } from '../utils/backupStorage';
-import {
+import { 
   openGoogleCalendarAccount
 } from '../utils/googleSync';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -93,6 +101,7 @@ interface SettingsModalProps {
   onRestoreItem?: (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => void;
   onPermanentDeleteItem?: (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => void;
   onEmptyRecycleBin?: () => void;
+  onScheduleTestAlarm?: () => Promise<boolean | void> | void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -114,6 +123,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onRestoreItem,
   onPermanentDeleteItem,
   onEmptyRecycleBin,
+  onScheduleTestAlarm,
 }) => {
   const currentLanguage = settings?.language || 'fa';
   const isFa = currentLanguage === 'fa';
@@ -123,6 +133,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const [playingSoundId, setPlayingSoundId] = useState<PhoneAlarmSound | null>(null);
   const soundTimeoutRef = useRef<number | null>(null);
+  const [testAlarmFeedback, setTestAlarmFeedback] = useState<{ type: 'success' | 'warning'; text: string } | null>(null);
+  const [isSchedulingTestAlarm, setIsSchedulingTestAlarm] = useState(false);
+  const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isBackupBusy, setIsBackupBusy] = useState(false);
+  const importBackupInputRef = useRef<HTMLInputElement | null>(null);
 
   // Recycle Bin state
   const [isConfirmingEmptyBin, setIsConfirmingEmptyBin] = useState<boolean>(false);
@@ -135,7 +150,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     location: false,
     backgroundLocation: false,
     storage: false,
-    overlay: false,
+    exactAlarm: !isNativeAndroidApp(),
+    fullScreenIntent: !isNativeAndroidApp(),
   });
   const [isRequestingAllPerms, setIsRequestingAllPerms] = useState(false);
 
@@ -230,11 +246,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen]);
 
-  const handleRequestPerm = async (type: 'notifications' | 'microphone' | 'camera' | 'location' | 'storage' | 'overlay') => {
-    if (type === 'overlay') {
-      openAndroidSettings('overlay');
+  const handleRequestPerm = async (
+    type: 'notifications' | 'microphone' | 'camera' | 'location' | 'storage' | 'exact_alarm' | 'full_screen_intent'
+  ) => {
+    if (type === 'exact_alarm') {
+      openAndroidSettings('exact_alarm');
       const updated = await checkAllPermissionsStatus();
-      setNativePerms({ ...updated, overlay: hasOverlayPermission() });
+      setNativePerms({ ...updated, exactAlarm: hasExactAlarmPermission() });
+      return;
+    }
+    if (type === 'full_screen_intent') {
+      openAndroidSettings('full_screen_intent');
+      const updated = await checkAllPermissionsStatus();
+      setNativePerms({ ...updated, fullScreenIntent: hasFullScreenIntentPermission() });
       return;
     }
     let granted = false;
@@ -253,6 +277,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
       granted = await requestLocationPermission();
     } else if (type === 'storage') {
+      if (isNativeAndroidApp()) return;
       const res = await requestLocalFolderPermission(false);
       granted = res.granted;
       if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
@@ -276,14 +301,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     const bgLocGranted = locGranted ? hasBackgroundLocationPermission() : false;
     const merged: NativePermissionsStatus = {
       ...updated,
-      [type]: updated[type] || granted,
+      [type]: updated[type as keyof NativePermissionsStatus] || granted,
       location: locGranted,
       backgroundLocation: bgLocGranted,
     };
     setNativePerms(merged);
-    if (type === 'storage' && !merged.storage) {
-      setShowStoragePermNotice(true);
-    } else if (merged.storage) {
+    if (!isNativeAndroidApp()) {
+      if (type === 'storage' && !merged.storage) {
+        setShowStoragePermNotice(true);
+      } else if (merged.storage) {
+        setShowStoragePermNotice(false);
+      }
+    } else {
       setShowStoragePermNotice(false);
     }
     if (type === 'location') {
@@ -298,7 +327,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         setShowBgLocationNotice(false);
       }
     }
-    if (!merged[type] && type !== 'storage' && isNativeAndroidApp()) {
+    if (!merged[type as keyof NativePermissionsStatus] && type !== 'storage' && isNativeAndroidApp()) {
       openAndroidSettings(type);
     }
   };
@@ -307,27 +336,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setIsRequestingAllPerms(true);
     const updated = await requestAllNativePermissions();
     setNativePerms(updated);
-    if (updated.storage && onRestoreData) {
-      try {
-        const snap = await retrieveFromLocalYaadFolder();
-        if (snap && getSnapshotItemCount(snap) > 0) {
-          onRestoreData(
-            {
-              reminders: snap.reminders || [],
-              ideas: snap.ideas || [],
-              savedLocations: snap.savedLocations || [],
-              occasions: snap.occasions || [],
-              settings: snap.settings,
-            },
-            'merge'
-          );
+    if (!isNativeAndroidApp()) {
+      if (updated.storage && onRestoreData) {
+        try {
+          const snap = await retrieveFromLocalYaadFolder();
+          if (snap && getSnapshotItemCount(snap) > 0) {
+            onRestoreData(
+              {
+                reminders: snap.reminders || [],
+                ideas: snap.ideas || [],
+                savedLocations: snap.savedLocations || [],
+                occasions: snap.occasions || [],
+                settings: snap.settings,
+              },
+              'merge'
+            );
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
-    }
-    if (!updated.storage) {
-      setShowStoragePermNotice(true);
+      if (!updated.storage) {
+        setShowStoragePermNotice(true);
+      } else {
+        setShowStoragePermNotice(false);
+      }
     } else {
       setShowStoragePermNotice(false);
     }
@@ -800,6 +833,77 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     })}
                   </div>
                 </div>
+
+                {/* 2.3 Test Alarm Trigger (1 Minute Reminder Verification) */}
+                {onScheduleTestAlarm && (
+                  <div className="p-3.5 rounded-2xl bg-stone-900/75 border border-indigo-500/35 space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        <div className="p-2 rounded-xl bg-indigo-500/15 border border-indigo-500/35 text-indigo-400 shrink-0">
+                          <BellRing className="w-4 h-4" />
+                        </div>
+                        <div className="min-w-0">
+                          <span className="text-xs font-bold text-stone-100 block">
+                            {isFa ? 'بررسی عملکرد زنگ و اعلان در پس‌زمینه' : 'Test Background Alarm (1 Minute)'}
+                          </span>
+                          <span className="text-[11px] text-stone-400 block mt-0.5 leading-relaxed">
+                            {isFa
+                              ? 'یک یادآور واقعی برای ۱ دقیقه دیگر ثبت می‌کند تا با بستن اپ، به صدا درآمدن زنگ را تست کنید.'
+                              : 'Schedules a real 1-minute reminder so you can close the app and verify alarm delivery.'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        disabled={isSchedulingTestAlarm}
+                        onClick={async () => {
+                          setIsSchedulingTestAlarm(true);
+                          setTestAlarmFeedback(null);
+                          try {
+                            const updatedPerms = await checkAllPermissionsStatus();
+                            setNativePerms(updatedPerms);
+                            const ok = await onScheduleTestAlarm();
+                            if (ok === false) {
+                              setTestAlarmFeedback({
+                                type: 'warning',
+                                text: isFa
+                                  ? 'برای عملکرد دقیق تست آلارم، مجوز اعلان یا آلارم دقیق اندروید باید فعال شود.'
+                                  : 'Please enable notification and exact alarm permissions first.',
+                              });
+                            } else {
+                              setTestAlarmFeedback({
+                                type: 'success',
+                                text: isFa
+                                  ? 'یادآور تست برای ۱ دقیقه دیگر ثبت شد؛ می‌توانید اپ را ببندید و صبر کنید.'
+                                  : 'Test reminder scheduled for 1 minute from now. You can close the app to verify.',
+                              });
+                            }
+                          } finally {
+                            setIsSchedulingTestAlarm(false);
+                          }
+                        }}
+                        className="min-h-[44px] px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs shadow-md shadow-indigo-950/40 active:scale-95 transition-all cursor-pointer shrink-0 flex items-center justify-center gap-1.5 disabled:opacity-60"
+                      >
+                        <BellRing className="w-3.5 h-3.5" />
+                        <span>{isFa ? 'تست آلارم' : 'Test Alarm'}</span>
+                      </button>
+                    </div>
+
+                    {testAlarmFeedback && (
+                      <div
+                        className={`p-2.5 rounded-xl text-[11px] font-bold flex items-center gap-2 ${
+                          testAlarmFeedback.type === 'success'
+                            ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
+                            : 'bg-amber-500/15 border border-amber-500/40 text-amber-300'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                        <span>{testAlarmFeedback.text}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -830,8 +934,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         nativePerms.microphone,
                         nativePerms.camera,
                         nativePerms.location,
-                        nativePerms.storage,
-                        ...(hasNative ? [Boolean(nativePerms.overlay)] : []),
+                        ...(hasNative
+                          ? [Boolean(nativePerms.exactAlarm), Boolean(nativePerms.fullScreenIntent)]
+                          : [nativePerms.storage]),
                       ].filter(Boolean).length;
                       return isFa
                         ? `${toPersianDigits(grantedCount)} از ${toPersianDigits(totalCount)} دسترسی تایید شده است`
@@ -989,45 +1094,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </span>
                   </button>
 
-                  {/* 5. Folder / Storage (YAAD) */}
-                  <button
-                    type="button"
-                    onClick={() => handleRequestPerm('storage')}
-                    style={
-                      nativePerms.storage
-                        ? {
-                            background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
-                            borderColor: '#6ee7b7',
-                            color: '#ffffff',
-                          }
-                        : undefined
-                    }
-                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
-                      nativePerms.storage
-                        ? 'perm-card-granted shadow-md shadow-emerald-900/40'
-                        : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
-                    }`}
-                    title={isFa ? 'دسترسی پوشه YAAD' : 'YAAD Folder'}
-                  >
-                    <div className="relative mb-1">
-                      <FolderOpen className={`w-4 h-4 ${nativePerms.storage ? 'text-white' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.storage ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
-                    </div>
-                    <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.storage ? 'text-white' : 'text-stone-200'}`}>
-                      {isFa ? 'پوشه و حافظه' : 'Folders'}
-                    </span>
-                    <span className={`text-[9px] font-black ${nativePerms.storage ? 'text-white' : 'text-indigo-400'}`}>
-                      {nativePerms.storage ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
-                    </span>
-                  </button>
-
-                  {/* 6. Display Over Other Apps (Floating Window) — Native Android */}
-                  {isNativeAndroidApp() && (
+                  {/* 5. Web/PWA Local Folder / Storage (Hidden on Native Android scoped-storage APK) */}
+                  {!isNativeAndroidApp() && (
                     <button
                       type="button"
-                      onClick={() => handleRequestPerm('overlay')}
+                      onClick={() => handleRequestPerm('storage')}
                       style={
-                        nativePerms.overlay
+                        nativePerms.storage
                           ? {
                               background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
                               borderColor: '#6ee7b7',
@@ -1036,42 +1109,105 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                           : undefined
                       }
                       className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
-                        nativePerms.overlay
+                        nativePerms.storage
                           ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                           : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                       }`}
-                      title={isFa ? 'نمایش روی سایر برنامه‌ها (پنجره شناور)' : 'Display over other apps'}
+                      title={isFa ? 'دسترسی پوشه YAAD' : 'YAAD Folder'}
                     >
                       <div className="relative mb-1">
-                        <Layers className={`w-4 h-4 ${nativePerms.overlay ? 'text-white' : 'text-stone-400'}`} />
-                        <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.overlay ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
+                        <FolderOpen className={`w-4 h-4 ${nativePerms.storage ? 'text-white' : 'text-stone-400'}`} />
+                        <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.storage ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
                       </div>
-                      <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.overlay ? 'text-white' : 'text-stone-200'}`}>
-                        {isFa ? 'پنجره شناور' : 'Floating'}
+                      <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.storage ? 'text-white' : 'text-stone-200'}`}>
+                        {isFa ? 'پوشه و حافظه' : 'Folders'}
                       </span>
-                      <span className={`text-[9px] font-black ${nativePerms.overlay ? 'text-white' : 'text-indigo-400'}`}>
-                        {nativePerms.overlay ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
+                      <span className={`text-[9px] font-black ${nativePerms.storage ? 'text-white' : 'text-indigo-400'}`}>
+                        {nativePerms.storage ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
+                      </span>
+                    </button>
+                  )}
+
+                  {/* 5B. Exact Alarms (Android 12+) — Native Android */}
+                  {isNativeAndroidApp() && (
+                    <button
+                      type="button"
+                      onClick={() => handleRequestPerm('exact_alarm')}
+                      style={
+                        nativePerms.exactAlarm
+                          ? {
+                              background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                              borderColor: '#6ee7b7',
+                              color: '#ffffff',
+                            }
+                          : undefined
+                      }
+                      className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                        nativePerms.exactAlarm
+                          ? 'perm-card-granted shadow-md shadow-emerald-900/40'
+                          : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
+                      }`}
+                      title={isFa ? 'آلارم دقیق (اندروید ۱۲+)' : 'Exact Alarms (Android 12+)'}
+                    >
+                      <div className="relative mb-1">
+                        <Clock className={`w-4 h-4 ${nativePerms.exactAlarm ? 'text-white' : 'text-stone-400'}`} />
+                        <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.exactAlarm ? 'bg-white' : 'bg-amber-400 animate-pulse'}`} />
+                      </div>
+                      <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.exactAlarm ? 'text-white' : 'text-stone-200'}`}>
+                        {isFa ? 'آلارم دقیق' : 'Exact Alarm'}
+                      </span>
+                      <span className={`text-[9px] font-black ${nativePerms.exactAlarm ? 'text-white' : 'text-amber-300'}`}>
+                        {nativePerms.exactAlarm ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تنظیمات' : 'Settings')}
+                      </span>
+                    </button>
+                  )}
+
+                  {/* 6. Full-Screen Intent (Android 14+) — Native Android */}
+                  {isNativeAndroidApp() && (
+                    <button
+                      type="button"
+                      onClick={() => handleRequestPerm('full_screen_intent')}
+                      style={
+                        nativePerms.fullScreenIntent
+                          ? {
+                              background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                              borderColor: '#6ee7b7',
+                              color: '#ffffff',
+                            }
+                          : undefined
+                      }
+                      className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                        nativePerms.fullScreenIntent
+                          ? 'perm-card-granted shadow-md shadow-emerald-900/40'
+                          : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
+                      }`}
+                      title={isFa ? 'اعلان تمام‌صفحه روی صفحه قفل (اندروید ۱۴+)' : 'Full-Screen Intent (Android 14+)'}
+                    >
+                      <div className="relative mb-1">
+                        <Maximize2 className={`w-4 h-4 ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-400'}`} />
+                        <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.fullScreenIntent ? 'bg-white' : 'bg-amber-400 animate-pulse'}`} />
+                      </div>
+                      <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-200'}`}>
+                        {isFa ? 'نمایش قفل' : 'Lock Alert'}
+                      </span>
+                      <span className={`text-[9px] font-black ${nativePerms.fullScreenIntent ? 'text-white' : 'text-amber-300'}`}>
+                        {nativePerms.fullScreenIntent ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تنظیمات' : 'Settings')}
                       </span>
                     </button>
                   )}
                 </div>
 
-                {showStoragePermNotice && !nativePerms.storage && (
+                {!isNativeAndroidApp() && showStoragePermNotice && !nativePerms.storage && (
                   <div
-                    onClick={() => openAndroidSettings('all_files')}
+                    onClick={() => openAndroidSettings('notifications')}
                     dir={isFa ? 'rtl' : 'ltr'}
                     className="p-3 rounded-xl bg-[#FF8C00]/15 border border-[#FF8C00]/40 text-[#FF8C00] text-xs flex items-start justify-between gap-2.5 cursor-pointer leading-relaxed"
                   >
                     <div className="space-y-1.5">
                       <p className="font-bold text-stone-100">
                         {isFa
-                          ? 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:'
-                          : 'To create the backup folder, please grant the required permission from the following path:'}
-                      </p>
-                      <p className="font-black text-[#FF8C00]">
-                        {isFa
-                          ? 'تنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد'
-                          : 'Setting → Apps → 3-point menu → Special access → All files access → Yaad slide key'}
+                          ? 'برای دسترسی پوشه پشتیبان در نسخه وب، پوشه را مجدد انتخاب کنید:'
+                          : 'Please select a backup folder in your browser to grant folder access:'}
                       </p>
                     </div>
                     <button
@@ -1084,6 +1220,50 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     >
                       <X className="w-3.5 h-3.5" />
                     </button>
+                  </div>
+                )}
+
+                {isNativeAndroidApp() && nativePerms.exactAlarm === false && (
+                  <div
+                    onClick={() => openAndroidSettings('exact_alarm')}
+                    dir={isFa ? 'rtl' : 'ltr'}
+                    className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-2.5 cursor-pointer leading-relaxed"
+                  >
+                    <div className="space-y-1">
+                      <p className="font-black text-amber-300">
+                        {isFa
+                          ? 'مجوز «آلارم دقیق» (Alarms & reminders) در اندروید ۱۲+ غیرفعال است'
+                          : 'Exact Alarm permission (Android 12+) is disabled'}
+                      </p>
+                      <p className="text-[11px] text-stone-200">
+                        {isFa
+                          ? 'برای به صدا درآمدن سر وقت یادآورها، اینجا را لمس کنید و در صفحه تنظیمات اندروید گزینه Allow setting alarms and reminders را روشن کنید.'
+                          : 'Tap here to open Android Settings and enable "Allow setting alarms and reminders".'}
+                      </p>
+                    </div>
+                    <ExternalLink className="w-4 h-4 text-amber-300 shrink-0" />
+                  </div>
+                )}
+
+                {isNativeAndroidApp() && nativePerms.fullScreenIntent === false && (
+                  <div
+                    onClick={() => openAndroidSettings('full_screen_intent')}
+                    dir={isFa ? 'rtl' : 'ltr'}
+                    className="p-3 rounded-xl bg-amber-500/15 border border-amber-500/40 text-amber-200 text-xs flex items-center justify-between gap-2.5 cursor-pointer leading-relaxed"
+                  >
+                    <div className="space-y-1">
+                      <p className="font-black text-amber-300">
+                        {isFa
+                          ? 'مجوز «اعلان تمام‌صفحه» (Android 14+) غیرفعال است'
+                          : 'Full-Screen Intent permission (Android 14+) is disabled'}
+                      </p>
+                      <p className="text-[11px] text-stone-200">
+                        {isFa
+                          ? 'برای نمایش صفحه زنگ یادآور روی صفحه قفل گوشی، اینجا را لمس کرده و دسترسی Full-screen notifications را برای «یاد» فعال کنید.'
+                          : 'Tap here to enable Full-screen notifications on the lock screen in Android Settings.'}
+                      </p>
+                    </div>
+                    <ExternalLink className="w-4 h-4 text-amber-300 shrink-0" />
                   </div>
                 )}
 
@@ -1162,7 +1342,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {isFa ? '۴. همگام‌سازی و سرویس‌ها' : '4. Sync & Services'}
                   </h4>
                   <p className="text-[11px] text-stone-400 truncate">
-                    {googleUser
+                    {isNativeAndroidApp()
+                      ? (isFa ? 'نقشه و رادار حصار مکانی (Geofence)' : 'Maps & Geofence Radar')
+                      : googleUser
                       ? (isFa ? `گوگل کلندر: ${googleUser.email}` : `Google Calendar: ${googleUser.email}`)
                       : (isFa ? 'اتصال به تقویم گوگل، نقشه و حصار مکانی' : 'Google Calendar, Maps & Geofence')}
                   </p>
@@ -1173,7 +1355,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
             {openSections.sync && (
               <div className="p-3 sm:p-4 space-y-4 animate-in fade-in">
-                {/* 4.1 Google Workspace Sync */}
+                {/* 4.1 Google Workspace Sync (Web/PWA only — completely hidden & disabled on native Android) */}
+                {!isNativeAndroidApp() && (
                 <div className="p-3.5 rounded-2xl bg-stone-900/70 border border-stone-800 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 text-xs font-bold text-stone-200">
@@ -1245,6 +1428,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     </div>
                   </div>
                 </div>
+                )}
 
                 {/* 4.2 Geofence Radar */}
                 <div className="p-3.5 rounded-2xl bg-stone-900/70 border border-stone-800 space-y-3">
@@ -1389,7 +1573,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {isFa ? '۵. پشتیبان‌گیری و اطلاعات' : '5. Backup & Data'}
                   </h4>
                   <p className="text-[11px] text-stone-400 truncate">
-                    {isFa ? 'پشتیبان‌گیری خودکار در پوشه YAAD • آمار عملکرد' : 'Auto Backup in YAAD Folder • Performance Stats'}
+                    {isNativeAndroidApp()
+                      ? (isFa ? 'نسخه پشتیبان داخلی امن • خروجی و ورود فایل JSON' : 'Private Auto Backup • JSON Export & Import')
+                      : (isFa ? 'پشتیبان‌گیری خودکار • خروجی و بازیابی JSON • آمار' : 'Auto Backup • JSON Export & Import • Stats')}
                   </p>
                 </div>
               </div>
@@ -1416,6 +1602,125 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     <span className="text-[10px] text-stone-500 block">{isFa ? 'مکان‌های GPS' : 'GPS Places'}</span>
                     <span className="font-bold text-emerald-400 text-sm">{isFa ? toPersianDigits(savedLocations.length) : savedLocations.length}</span>
                   </div>
+                </div>
+
+                {/* 5.2 Scoped-Storage Compliant Manual JSON Export & Import */}
+                <div className="p-3.5 rounded-2xl bg-stone-900/75 border border-stone-800 space-y-3">
+                  <div className="space-y-1">
+                    <span className="text-xs font-bold text-stone-200 block">
+                      {isFa ? 'خروجی و بازیابی دستی نسخه پشتیبان (JSON)' : 'Manual Backup Export & Import (JSON)'}
+                    </span>
+                    <p className="text-[11px] text-stone-400 leading-relaxed">
+                      {isFa
+                        ? 'نسخه پشتیبان خودکار درون فضای خصوصی برنامه برای بازیابی پس از خطا ذخیره می‌شود، اما با حذف و نصب مجدد برنامه پاک می‌گردد؛ برای نگهداری همیشگی فایل بک‌آپ را ذخیره یا ارسال کنید.'
+                        : 'Automatic crash-recovery backups are stored in app-private storage and are removed if you uninstall the app. Export a JSON file regularly to keep your data safe.'}
+                    </p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      disabled={isBackupBusy}
+                      onClick={async () => {
+                        setIsBackupBusy(true);
+                        setBackupFeedback(null);
+                        try {
+                          const res = await exportBackupToFile(
+                            { reminders, ideas, savedLocations, occasions, settings },
+                            currentLanguage
+                          );
+                          if (res.ok) {
+                            setBackupFeedback({
+                              type: 'success',
+                              text: isFa
+                                ? `فایل پشتیبان (${res.fileName}) آماده و ذخیره/ارسال شد.`
+                                : `Backup file (${res.fileName}) exported successfully.`,
+                            });
+                          } else {
+                            setBackupFeedback({
+                              type: 'error',
+                              text: res.error || (isFa ? 'خروجی گرفتن انجام نشد.' : 'Export failed.'),
+                            });
+                          }
+                        } finally {
+                          setIsBackupBusy(false);
+                        }
+                      }}
+                      className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      <Download className="w-4 h-4 shrink-0" />
+                      <span>{isFa ? 'خروجی گرفتن (JSON)' : 'Export Backup'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isBackupBusy}
+                      onClick={() => importBackupInputRef.current?.click()}
+                      className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      <Upload className="w-4 h-4 shrink-0" />
+                      <span>{isFa ? 'وارد کردن بک‌آپ' : 'Import Backup'}</span>
+                    </button>
+
+                    <input
+                      ref={importBackupInputRef}
+                      type="file"
+                      accept=".json,application/json"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = '';
+                        if (!file) return;
+                        setIsBackupBusy(true);
+                        setBackupFeedback(null);
+                        try {
+                          const snap = await importBackupFromFile(file);
+                          if (!snap) {
+                            setBackupFeedback({
+                              type: 'error',
+                              text: isFa
+                                ? 'فایل انتخاب‌شده معتبر نیست یا ساختار پشتیبان یاد را ندارد.'
+                                : 'Invalid backup file format.',
+                            });
+                            return;
+                          }
+                          if (onRestoreData) {
+                            onRestoreData(
+                              {
+                                reminders: snap.reminders || [],
+                                ideas: snap.ideas || [],
+                                savedLocations: snap.savedLocations || [],
+                                occasions: snap.occasions || [],
+                                settings: snap.settings,
+                              },
+                              'merge'
+                            );
+                          }
+                          const restoredCount = getSnapshotItemCount(snap);
+                          setBackupFeedback({
+                            type: 'success',
+                            text: isFa
+                              ? `${toPersianDigits(restoredCount)} مورد با موفقیت از فایل پشتیبان بازیابی و ادغام شد.`
+                              : `Successfully imported and merged ${restoredCount} item(s).`,
+                          });
+                        } finally {
+                          setIsBackupBusy(false);
+                        }
+                      }}
+                    />
+                  </div>
+
+                  {backupFeedback && (
+                    <div
+                      className={`p-2.5 rounded-xl text-[11px] font-bold ${
+                        backupFeedback.type === 'success'
+                          ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
+                          : 'bg-rose-500/15 border border-rose-500/40 text-rose-300'
+                      }`}
+                    >
+                      {backupFeedback.text}
+                    </div>
+                  )}
                 </div>
 
                 {/* Performance Statistics Modal Trigger */}

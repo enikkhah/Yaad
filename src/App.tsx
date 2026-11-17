@@ -26,14 +26,28 @@ import { OccasionFormModal } from './components/OccasionFormModal';
 import { AndroidPermissionModal } from './components/AndroidPermissionModal';
 import {
   AndroidPermissionType,
+  isNativeAndroidApp,
   requestNotificationPermission,
   requestLocationPermission,
   checkDeviceGpsEnabled,
   isDeviceGpsCurrentlyOnSync,
   hasBackgroundLocationPermission,
+  hasExactAlarmPermission,
+  hasFullScreenIntentPermission,
+  checkAllPermissionsStatus,
 } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
-import { performAutoBackup, retrieveLatestBackupWithPriority, requestPersistentStorage, AUTO_BACKUP_STORAGE_KEY, LAST_LOCAL_BACKUP_KEY, LOCAL_BACKUP_FOLDER_NAME } from './utils/backupStorage';
+import {
+  performAutoBackup,
+  retrieveLatestBackupWithPriority,
+  requestPersistentStorage,
+  exportBackupToFile,
+  snoozePeriodicBackupPrompt,
+  shouldShowPeriodicBackupPrompt,
+  AUTO_BACKUP_STORAGE_KEY,
+  LAST_LOCAL_BACKUP_KEY,
+  LOCAL_BACKUP_FOLDER_NAME,
+} from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
 import { SplashScreen } from './components/SplashScreen';
 import { useFabVisibility } from './hooks/useFabVisibility';
@@ -335,7 +349,18 @@ export default function App() {
   const activeSavedLocations = useMemo(() => savedLocations.filter((l) => !l.deletedAt), [savedLocations]);
   const activeOccasions = useMemo(() => occasions.filter((o) => !o.deletedAt), [occasions]);
 
-  // Auto-recall/restore strictly from Local "YAAD" Folder upon app open or re-installation
+  const totalActiveDataCount =
+    activeReminders.length +
+    activeIdeas.length +
+    activeSavedLocations.length +
+    activeOccasions.length;
+  const [showPeriodicBackupBanner, setShowPeriodicBackupBanner] = useState(false);
+
+  useEffect(() => {
+    setShowPeriodicBackupBanner(shouldShowPeriodicBackupPrompt(totalActiveDataCount));
+  }, [totalActiveDataCount]);
+
+  // Auto-recall/restore strictly from private internal vault on app open (or web folder on PWA)
   const [isVaultInitialized, setIsVaultInitialized] = useState(false);
 
   const applyRestoredBackupIfNeeded = useCallback(
@@ -1206,18 +1231,24 @@ export default function App() {
     }
   };
 
-  // Setup Google Auth listener and background alarm listeners on mount
+  // Setup Google Auth listener (Web/PWA only) and background alarm listeners on mount
   useEffect(() => {
-    const unsubscribe = initGoogleAuth(
-      (user, token) => {
-        setGoogleUser(user);
-        setGoogleToken(token);
-      },
-      () => {
-        setGoogleUser(null);
-        setGoogleToken(null);
-      }
-    );
+    let unsubscribe = () => {};
+    if (isNativeAndroidApp()) {
+      setGoogleUser(null);
+      setGoogleToken(null);
+    } else {
+      unsubscribe = initGoogleAuth(
+        (user, token) => {
+          setGoogleUser(user);
+          setGoogleToken(token);
+        },
+        () => {
+          setGoogleUser(null);
+          setGoogleToken(null);
+        }
+      );
+    }
 
     // Register Service Worker for PWA offline caching only in web browser environment
     if (!Capacitor.isNativePlatform()) {
@@ -2832,10 +2863,11 @@ export default function App() {
     }
   };
 
-  // Google sign in / out handlers
+  // Google sign in / out handlers (Web/PWA only; disabled on native Android APK)
   const handleGoogleSignIn = async (options?: {
     openCalendar?: boolean;
   }) => {
+    if (isNativeAndroidApp()) return;
     try {
       const result = await signInWithGoogle(options);
       setGoogleUser(result.user);
@@ -2868,6 +2900,95 @@ export default function App() {
     setTimeout(() => setSyncToast(null), 3500);
   };
 
+  // Schedule a real 1-minute reminder so user can close the app and verify background alarm delivery
+  const handleScheduleTestAlarm = async (): Promise<boolean> => {
+    const notifGranted = await requestNotificationPermission().catch(() => false);
+    if (!notifGranted && isNativeAndroidApp()) {
+      setAndroidPermissionModal({
+        isOpen: true,
+        type: 'notifications',
+        onRetry: () => requestNotificationPermission(),
+      });
+      return false;
+    }
+
+    if (isNativeAndroidApp()) {
+      const perms = await checkAllPermissionsStatus().catch(() => ({
+        notifications: notifGranted,
+        exactAlarm: hasExactAlarmPermission(),
+        fullScreenIntent: hasFullScreenIntentPermission(),
+      }));
+      if (perms.exactAlarm === false) {
+        setAndroidPermissionModal({
+          isOpen: true,
+          type: 'exact_alarm',
+        });
+        return false;
+      }
+      if (perms.fullScreenIntent === false) {
+        setAndroidPermissionModal({
+          isOpen: true,
+          type: 'full_screen_intent',
+        });
+        return false;
+      }
+    }
+
+    const dueTimestamp = Date.now() + 60 * 1000;
+    const dueDate = new Date(dueTimestamp);
+    const j = getJalaliComponents(dueTimestamp);
+    const testId = 'rem_test_' + Date.now();
+    const testReminder: Reminder = {
+      id: testId,
+      notificationId: getNotificationId(testId),
+      title: isEn ? 'YAAD Test Alarm (1 Min)' : 'تست زنگ یادآور یاد (۱ دقیقه)',
+      description: isEn
+        ? 'Background alarm & notification delivery test.'
+        : 'بررسی عملکرد زنگ هشدار و اعلان تمام‌صفحه پس از بستن برنامه.',
+      category: 'other',
+      priority: 'high',
+      priorityLevel: 5,
+      dueTimestamp,
+      scheduledTzOffsetMinutes: -dueDate.getTimezoneOffset(),
+      scheduledTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      wallClockTime: isEn
+        ? {
+            year: dueDate.getFullYear(),
+            month: dueDate.getMonth() + 1,
+            day: dueDate.getDate(),
+            hour: dueDate.getHours(),
+            minute: dueDate.getMinutes(),
+            calendar: 'gregorian',
+          }
+        : {
+            year: j.year,
+            month: j.month,
+            day: j.day,
+            hour: j.hour,
+            minute: j.minute,
+            calendar: 'jalali',
+          },
+      createdAt: Date.now(),
+      status: 'pending',
+      acknowledged: false,
+      postponeCount: 0,
+      ringTune: settings.defaultRingTune || 'work',
+      voiceReadAloud: true,
+      sourceApp: 'manual',
+    };
+
+    await scheduleReminderNotification(testReminder, settings).catch(() => {});
+    const nextReminders = [testReminder, ...remindersRef.current];
+    remindersRef.current = nextReminders;
+    setReminders(nextReminders);
+    showSyncNotification(
+      isEn
+        ? '1-minute test alarm scheduled. Close the app to verify!'
+        : 'یادآور تست برای ۱ دقیقه دیگر ثبت شد؛ برای بررسی اپ را ببندید.'
+    );
+    return true;
+  };
+
   // Handler: Save Reminder
   const handleSaveReminder = async (
     data: Omit<Reminder, 'id' | 'createdAt' | 'status' | 'postponeCount'>,
@@ -2876,8 +2997,30 @@ export default function App() {
   ) => {
     let calendarEventId: string | undefined = undefined;
 
-    // Check native notification permission on Android/browser
-    if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
+    // Check native notification, exact alarm (Android 12+), and full-screen intent (Android 14+) permissions
+    if (isNativeAndroidApp()) {
+      const perms = await checkAllPermissionsStatus().catch(() => null);
+      if (perms && !perms.notifications) {
+        const granted = await requestNotificationPermission().catch(() => false);
+        if (!granted) {
+          setAndroidPermissionModal({
+            isOpen: true,
+            type: 'notifications',
+            onRetry: () => requestNotificationPermission(),
+          });
+        }
+      } else if (perms && perms.exactAlarm === false) {
+        setAndroidPermissionModal({
+          isOpen: true,
+          type: 'exact_alarm',
+        });
+      } else if (perms && perms.fullScreenIntent === false) {
+        setAndroidPermissionModal({
+          isOpen: true,
+          type: 'full_screen_intent',
+        });
+      }
+    } else if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') {
       requestNotificationPermission().then((granted) => {
         if (!granted) {
           setAndroidPermissionModal({
@@ -2898,8 +3041,8 @@ export default function App() {
       activateGeofenceMonitoringFlow();
     }
 
-    // Optional Google Calendar sync
-    if (syncGoogle && googleToken) {
+    // Optional Google Calendar sync (Web/PWA only)
+    if (!isNativeAndroidApp() && syncGoogle && googleToken) {
       try {
         const dummyReminder: Reminder = {
           ...data,
@@ -4603,6 +4746,64 @@ export default function App() {
 
       {/* Main Container - Maximum Width coverage across screen with ample padding for bottom nav and FAB */}
       <main className="flex-1 w-full px-3 sm:px-6 py-4 sm:py-6 space-y-6 pb-36 sm:pb-44">
+
+        {/* Gentle 30-day Manual Backup Prompt */}
+        {showPeriodicBackupBanner && (
+          <div
+            dir={isEn ? 'ltr' : 'rtl'}
+            className="p-3.5 rounded-2xl bg-emerald-950/50 border border-emerald-500/40 shadow-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in"
+          >
+            <div className="flex items-start gap-2.5 min-w-0">
+              <div className="p-2 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 shrink-0">
+                <Download className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs sm:text-sm font-black text-white">
+                  {isEn ? 'Back up your YAAD data' : 'از اطلاعاتت بک‌آپ بگیر'}
+                </p>
+                <p className="text-[11px] text-stone-300 leading-relaxed mt-0.5">
+                  {isEn
+                    ? 'Save an external JSON backup file so your reminders and ideas remain safe even if you uninstall or switch phones.'
+                    : 'برای حفظ یادآورها و ایده‌هایت هنگام حذف برنامه یا تعویض گوشی، هر ۳۰ روز یک فایل پشتیبان ذخیره کن.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await exportBackupToFile(
+                    { reminders, ideas, savedLocations, occasions, settings },
+                    settings.language
+                  );
+                  if (res.ok) {
+                    setShowPeriodicBackupBanner(false);
+                    showSyncNotification(
+                      isEn ? 'Backup exported successfully.' : 'فایل پشتیبان با موفقیت آماده و ذخیره شد.'
+                    );
+                  } else {
+                    showSyncNotification(
+                      res.error || (isEn ? 'Backup export failed.' : 'خروجی گرفتن از پشتیبان انجام نشد.')
+                    );
+                  }
+                }}
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow-sm active:scale-95 transition-all cursor-pointer"
+              >
+                {isEn ? 'Export Backup' : 'خروجی گرفتن'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  snoozePeriodicBackupPrompt();
+                  setShowPeriodicBackupBanner(false);
+                }}
+                className="px-3 py-2 rounded-xl bg-stone-800/90 hover:bg-stone-700 text-stone-300 text-xs font-bold transition-colors cursor-pointer"
+              >
+                {isEn ? 'Later' : 'بعداً'}
+              </button>
+            </div>
+          </div>
+        )}
         
         {/* VIEW 1: REMINDERS TAB - SINGLE VERTICAL TIMELINE */}
         {activeMainTab === 'reminders' && (
@@ -5178,7 +5379,7 @@ export default function App() {
         }}
         onSave={handleSaveReminder}
         initialData={editingReminder}
-        googleToken={googleToken}
+        googleToken={isNativeAndroidApp() ? null : googleToken}
         savedLocations={activeSavedLocations}
         language={settings.language}
         focusGeofenceRadius={focusGeofenceRadius}
@@ -5193,7 +5394,7 @@ export default function App() {
           setOpenIdeaReminderMenuByDefault(false);
         }}
         onSaveIdea={handleSaveIdea}
-        googleToken={googleToken}
+        googleToken={isNativeAndroidApp() ? null : googleToken}
         editingIdea={editingIdea}
         language={settings.language}
         defaultOpenReminderMenu={openIdeaReminderMenuByDefault}
@@ -5232,8 +5433,8 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         settings={settings}
         onUpdateSettings={(newS) => setSettings((prev) => ({ ...prev, ...newS }))}
-        googleUser={googleUser}
-        googleToken={googleToken}
+        googleUser={isNativeAndroidApp() ? null : googleUser}
+        googleToken={isNativeAndroidApp() ? null : googleToken}
         onGoogleSignIn={handleGoogleSignIn}
         onGoogleSignOut={handleGoogleSignOut}
         onOpenStats={() => setIsStatsOpen(true)}
@@ -5247,6 +5448,7 @@ export default function App() {
         onRestoreItem={handleRestoreItem}
         onPermanentDeleteItem={handlePermanentDeleteItem}
         onEmptyRecycleBin={handleEmptyRecycleBin}
+        onScheduleTestAlarm={handleScheduleTestAlarm}
       />
 
       {/* INSTALL MODAL */}

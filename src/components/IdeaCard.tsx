@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { formatJalaliFull } from '../utils/jalali';
 import { usePersistentMediaUrl } from '../utils/mediaStorage';
+import { isNativeAndroidApp } from '../utils/nativePermissions';
 
 interface IdeaCardProps {
   idea: IdeaNote;
@@ -77,7 +78,7 @@ export const IdeaCard: React.FC<IdeaCardProps> = ({ idea, onDelete, onEdit, onSe
                 <span>{formatJalaliFull(idea.reminderDueTimestamp, language)}</span>
               </button>
             )}
-            {idea.googleSynced && (
+            {!isNativeAndroidApp() && idea.googleSynced && (
               <span className="flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-lg bg-stone-800/80 text-stone-300 border border-stone-700/60 font-medium">
                 <Cloud className="w-3.5 h-3.5 text-stone-400" /> {language === 'en' ? 'Google Tasks' : 'گوگل Tasks'}
               </span>

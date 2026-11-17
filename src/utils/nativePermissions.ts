@@ -18,8 +18,9 @@ export interface NativePermissionsStatus {
   camera: boolean;
   location: boolean;
   backgroundLocation?: boolean;
+  exactAlarm?: boolean;
+  fullScreenIntent?: boolean;
   storage?: boolean;
-  overlay?: boolean;
 }
 
 export const PERM_NOTIF_GRANTED_KEY = 'yaad_perm_notif_granted';
@@ -241,8 +242,9 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     camera: false,
     location: false,
     backgroundLocation: false,
+    exactAlarm: !isNativeAndroidApp(),
+    fullScreenIntent: !isNativeAndroidApp(),
     storage: false,
-    overlay: false,
   };
 
   if (typeof window === 'undefined') return result;
@@ -310,17 +312,11 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
             } catch {}
           }
         }
-        if (typeof nativePerms.storage === 'string') {
-          nativeExplicitStorageChecked = true;
-          if (nativePerms.storage === 'granted') {
-            result.storage = true;
-            markPermissionGranted('storage');
-          } else {
-            result.storage = false;
-            try {
-              localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
-            } catch {}
-          }
+        if (typeof nativePerms.exactAlarm === 'string') {
+          result.exactAlarm = nativePerms.exactAlarm === 'granted';
+        }
+        if (typeof nativePerms.fullScreenIntent === 'string') {
+          result.fullScreenIntent = nativePerms.fullScreenIntent === 'granted';
         }
       }
     } catch {
@@ -328,7 +324,7 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     }
   }
 
-  // 2. Check Notification & Local Folder Backup storage status accurately
+  // 2. Check Notification & Web/PWA Local Folder status
   if (!result.notifications && !nativeExplicitNotifDenied) {
     const notifOk = await checkNotificationPermission();
     if (notifOk) {
@@ -342,7 +338,7 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     }
   }
 
-  if (!nativeExplicitStorageChecked) {
+  if (!isNativeAndroidApp() && !nativeExplicitStorageChecked) {
     const storageOk = await checkLocalFolderPermissionStatus();
     result.storage = storageOk;
   }
@@ -453,17 +449,25 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
   }
 
   result.backgroundLocation = result.location ? hasBackgroundLocationPermission() : false;
-  result.overlay = hasOverlayPermission();
+  if (isNativeAndroidApp()) {
+    result.exactAlarm = result.exactAlarm || hasExactAlarmPermission();
+    result.fullScreenIntent = result.fullScreenIntent || hasFullScreenIntentPermission();
+  } else {
+    result.exactAlarm = true;
+    result.fullScreenIntent = true;
+  }
 
   return result;
 }
 
 /**
- * Requests all essential native permissions (Notifications, Mic, Cam, Location, Local Folder YAAD) with 1 click
+ * Requests essential native permissions (Notifications, Mic, Cam, Location, plus Web Folder on PWA)
  */
 export async function requestAllNativePermissions(): Promise<NativePermissionsStatus> {
   const notifOk = await requestNotificationPermission();
-  const folderRes = await requestLocalFolderPermission(false);
+  const folderRes = isNativeAndroidApp()
+    ? { granted: true }
+    : await requestLocalFolderPermission(false);
   const micOk = await requestMicrophonePermission();
   const camOk = await requestCameraPermission();
   const locOk = await requestLocationPermission();
@@ -476,8 +480,9 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
     camera: Boolean(checked.camera || camOk),
     location: locationGranted,
     backgroundLocation: locationGranted ? hasBackgroundLocationPermission() : false,
-    storage: Boolean(checked.storage || folderRes.granted),
-    overlay: hasOverlayPermission(),
+    exactAlarm: isNativeAndroidApp() ? Boolean(checked.exactAlarm || hasExactAlarmPermission()) : true,
+    fullScreenIntent: isNativeAndroidApp() ? Boolean(checked.fullScreenIntent || hasFullScreenIntentPermission()) : true,
+    storage: isNativeAndroidApp() ? true : Boolean(checked.storage || folderRes.granted),
   };
 }
 
@@ -489,9 +494,9 @@ export type AndroidPermissionType =
   | 'microphone'
   | 'camera'
   | 'battery'
+  | 'exact_alarm'
+  | 'full_screen_intent'
   | 'storage'
-  | 'all_files'
-  | 'overlay'
   | 'app_details';
 
 /**
@@ -529,20 +534,37 @@ export function hasBackgroundLocationPermission(): boolean {
 }
 
 /**
- * Checks if Android "Display over other apps" (SYSTEM_ALERT_WINDOW) is granted.
- * Returns true on web/PWA environments.
+ * Checks Android 12+ (API 31+) AlarmManager.canScheduleExactAlarms via native bridge.
+ * Returns true on Android < 12 or Web/PWA.
  */
-export function hasOverlayPermission(): boolean {
-  if (typeof window === 'undefined') return true;
+export function hasExactAlarmPermission(): boolean {
+  if (typeof window === 'undefined' || !isNativeAndroidApp()) return true;
   try {
     const bridge = (window as any).YaadGeofenceBridge;
-    if (bridge && typeof bridge.hasOverlayPermission === 'function') {
-      return Boolean(bridge.hasOverlayPermission());
+    if (bridge && typeof bridge.hasExactAlarmPermission === 'function') {
+      return Boolean(bridge.hasExactAlarmPermission());
     }
   } catch {
     // ignore
   }
-  return !isNativeAndroidApp();
+  return true;
+}
+
+/**
+ * Checks Android 14+ (API 34+) NotificationManager.canUseFullScreenIntent via native bridge.
+ * Returns true on Android < 14 or Web/PWA.
+ */
+export function hasFullScreenIntentPermission(): boolean {
+  if (typeof window === 'undefined' || !isNativeAndroidApp()) return true;
+  try {
+    const bridge = (window as any).YaadGeofenceBridge;
+    if (bridge && typeof bridge.hasFullScreenIntentPermission === 'function') {
+      return Boolean(bridge.hasFullScreenIntentPermission());
+    }
+  } catch {
+    // ignore
+  }
+  return true;
 }
 
 /**
@@ -634,11 +656,23 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
     }
   }
 
-  if (section === 'overlay') {
+  if (section === 'exact_alarm') {
     try {
       const bridge = (window as any).YaadGeofenceBridge;
-      if (bridge && typeof bridge.openOverlaySettings === 'function') {
-        bridge.openOverlaySettings();
+      if (bridge && typeof bridge.openExactAlarmSettings === 'function') {
+        bridge.openExactAlarmSettings();
+        return;
+      }
+    } catch {
+      // Fallback to intent URL below
+    }
+  }
+
+  if (section === 'full_screen_intent') {
+    try {
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge && typeof bridge.openFullScreenIntentSettings === 'function') {
+        bridge.openFullScreenIntentSettings();
         return;
       }
     } catch {
@@ -654,6 +688,14 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
       // Directs to Android App Notification Settings
       intentUrl = `intent:#Intent;action=android.settings.APP_NOTIFICATION_SETTINGS;S.android.provider.extra.APP_PACKAGE=${pkg};end`;
       break;
+    case 'exact_alarm':
+      // Directs to Android 12+ Alarms & Reminders screen
+      intentUrl = `intent:#Intent;action=android.settings.REQUEST_SCHEDULE_EXACT_ALARM;data=package:${pkg};end`;
+      break;
+    case 'full_screen_intent':
+      // Directs to Android 14+ Full Screen Intent notifications screen
+      intentUrl = `intent:#Intent;action=android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT;data=package:${pkg};end`;
+      break;
     case 'location':
     case 'gps_disabled':
       // Directs to Android Location Source Settings
@@ -663,16 +705,7 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
       // Directs to Android Battery Optimization settings
       intentUrl = `intent:#Intent;action=android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS;end`;
       break;
-    case 'overlay':
-      intentUrl = `intent:#Intent;action=android.settings.action.MANAGE_OVERLAY_PERMISSION;data=package:${pkg};end`;
-      break;
     case 'storage':
-    case 'all_files':
-      // On Android 11-15, Folder / All Files Access is in Special App Access -> All files access, NOT in App Permissions!
-      intentUrl = `intent:#Intent;action=android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION;data=package:${pkg};S.browser_fallback_url=${encodeURIComponent(
-        `intent:#Intent;action=android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION;end`
-      )};end`;
-      break;
     case 'microphone':
     case 'camera':
     case 'app_details':

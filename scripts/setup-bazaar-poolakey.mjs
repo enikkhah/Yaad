@@ -351,11 +351,16 @@ class BazaarBillingPlugin : Plugin() {
 
 const mainActivityKtContent = `package com.yaad.reminder
 
+import android.content.pm.ApplicationInfo
 import android.os.Bundle
+import android.webkit.WebView
 import com.getcapacitor.BridgeActivity
 
 class MainActivity : BridgeActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        // فعال‌سازی دیباگ WebView فقط در نسخه دیباگ و غیرفعال‌سازی قطعی در release
+        val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+        WebView.setWebContentsDebuggingEnabled(isDebuggable)
         // ثبت پلاگین پرداخت درون‌برنامه‌ای کافه‌بازار (پولاکی) قبل از super.onCreate
         registerPlugin(BazaarBillingPlugin::class.java)
         super.onCreate(savedInstanceState)

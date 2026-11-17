@@ -10,8 +10,8 @@ import {
   X, 
   CheckCircle2, 
   Smartphone,
-  FolderOpen,
-  Layers
+  Clock,
+  Maximize2
 } from 'lucide-react';
 import { AndroidPermissionType, openAndroidSettings } from '../utils/nativePermissions';
 
@@ -34,17 +34,27 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
 
   const getPermissionDetails = () => {
     switch (permissionType) {
-      case 'storage':
-      case 'all_files':
+      case 'exact_alarm':
         return {
-          icon: FolderOpen,
-          color: 'text-teal-400 bg-teal-500/10 border-teal-500/30',
-          titleFa: 'دسترسی به حافظه',
-          titleEn: 'Storage Access',
-          descFa: 'برای ایجاد پوشه پشتیبان‌گیری، اجازه دسترسی لازم را از مسیر زیر بدهید:\nتنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد',
-          descEn: 'To create the backup folder, please grant the required permission from the following path:\nSetting → Apps → 3-point menu → Special access → All files access → Yaad slide key',
-          sectionNameFa: 'تنظیمات گوشی ← برنامه‌ها ← منوی سه نقطه ← دسترسی ویژه ← دسترسی به همه فایل‌ها ← کلید کشویی یاد',
-          sectionNameEn: 'Setting → Apps → 3-point menu → Special access → All files access → Yaad slide key',
+          icon: Clock,
+          color: 'text-amber-400 bg-amber-500/15 border-amber-500/40',
+          titleFa: 'مجوز زمان‌بندی آلارم دقیق (اندروید ۱۲+)',
+          titleEn: 'Exact Alarms & Reminders (Android 12+)',
+          descFa: 'برای اینکه زنگ هشدار و یادآورهای «یاد» دقیقاً در ساعت مشخص‌شده و حتی زمانی که برنامه بسته است به صدا درآیند، باید مجوز «آلارم‌ها و یادآورها» فعال باشد.',
+          descEn: 'To trigger alarms and reminders accurately at the scheduled time even when the app is closed, please enable "Alarms & reminders" for YAAD.',
+          sectionNameFa: 'تنظیمات برنامه ← هشدارها و یادآورها (Alarms & reminders)',
+          sectionNameEn: 'App Info → Alarms & reminders',
+        };
+      case 'full_screen_intent':
+        return {
+          icon: Maximize2,
+          color: 'text-indigo-400 bg-indigo-500/15 border-indigo-500/40',
+          titleFa: 'مجوز نمایش تمام‌صفحه اعلان زنگ (اندروید ۱۴+)',
+          titleEn: 'Full-Screen Alarm Intent (Android 14+)',
+          descFa: 'برای نمایش صفحه کامل زنگ هشدار روی صفحه قفل در اندروید ۱۴ و بالاتر، لطفاً دسترسی «اعلان‌های تمام‌صفحه» را در تنظیمات برای یاد فعال کنید.',
+          descEn: 'To show the full-screen alarm screen over the lock screen on Android 14+, please enable "Full screen intents" for YAAD in Settings.',
+          sectionNameFa: 'تنظیمات گوشی ← اعلان‌های تمام‌صفحه (Full screen intents)',
+          sectionNameEn: 'System Settings → Full screen intents',
         };
       case 'notifications':
         return {
@@ -94,10 +104,10 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
         return {
           icon: Mic,
           color: 'text-sky-400 bg-sky-500/10 border-sky-500/30',
-          titleFa: 'دسترسی میکروفون (تایپ صوتی)',
-          titleEn: 'Microphone Permission (Voice Input)',
-          descFa: 'برای تبدیل گفتار به متن و ثبت آسان یادآورها با صدای شما، دسترسی به میکروفون دستگاه نیاز است.',
-          descEn: 'Required for speech-to-text and hands-free voice reminder creation.',
+          titleFa: 'دسترسی میکروفون (ضبط صدا)',
+          titleEn: 'Microphone Permission (Audio Note)',
+          descFa: 'برای ضبط یادداشت صوتی و ثبت ایده‌ها با صدای شما، دسترسی به میکروفون دستگاه نیاز است.',
+          descEn: 'Required for recording audio voice memos.',
           sectionNameFa: 'بخش مجوزهای برنامه در اندروید',
           sectionNameEn: 'Android App Permissions Section',
         };
@@ -112,17 +122,7 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
           sectionNameFa: 'بخش مجوزهای برنامه در اندروید',
           sectionNameEn: 'Android App Permissions Section',
         };
-      case 'overlay':
-        return {
-          icon: Layers,
-          color: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/40',
-          titleFa: 'نمایش روی سایر برنامه‌ها (پنجره شناور)',
-          titleEn: 'Display Over Other Apps (Floating Window)',
-          descFa: 'برای اینکه هنگام مینیمایز کردن اعلان یادآور به دکمه شناور، دسترسی کامل به صفحه اصلی و سایر برنامه‌های گوشی داشته باشید، لطفاً اجازه «نمایش روی برنامه‌های دیگر» را برای یاد فعال کنید.',
-          descEn: 'To access your home screen and other apps freely while an alert is minimized as a floating button, please enable "Display over other apps" for YAAD.',
-          sectionNameFa: 'تنظیمات برنامه ← نمایش روی سایر برنامه‌ها (Display over other apps)',
-          sectionNameEn: 'App Info → Display over other apps',
-        };
+      case 'storage':
       case 'battery':
       default:
         return {

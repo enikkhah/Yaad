@@ -253,6 +253,7 @@ function createDirectCalendarUser(customEmail?: string, customName?: string): Us
 }
 
 async function resolveFirebaseAuth(): Promise<Auth | null> {
+  if (isNativeMobileWebView()) return null;
   if (cachedAuthInstance) return cachedAuthInstance;
   if (getApps().length > 0) {
     cachedAuthInstance = getAuth(getApp());
@@ -334,6 +335,7 @@ async function tryNativeCapacitorGoogleAuth(): Promise<{
   expiresIn?: number;
   user: User;
 } | null> {
+  if (isNativeMobileWebView()) return null;
   if (typeof window === 'undefined') return null;
   try {
     const googleAuthPlugin =
@@ -443,6 +445,7 @@ async function requestGisAccessToken(
 }
 
 export async function refreshGoogleAccessToken(): Promise<string | null> {
+  if (isNativeMobileWebView()) return null;
   try {
     const googleAuthPlugin =
       typeof window !== 'undefined'
@@ -480,6 +483,12 @@ export const initGoogleAuth = (
   onSuccess?: (user: User, token: string) => void,
   onSignedOut?: () => void
 ) => {
+  if (isNativeMobileWebView()) {
+    cachedAccessToken = null;
+    cachedTokenExpiry = 0;
+    if (onSignedOut) onSignedOut();
+    return () => {};
+  }
   let unsubscribeFn: (() => void) | null = null;
   let isCancelled = false;
 
@@ -548,6 +557,9 @@ export const initGoogleAuth = (
 export const signInWithGoogle = async (options?: {
   openCalendar?: boolean;
 }): Promise<{ user: User; accessToken: string }> => {
+  if (isNativeMobileWebView()) {
+    throw new Error('Google sign-in is disabled in the native Android release.');
+  }
   isSigningIn = true;
   const shouldOpenCalendar = options?.openCalendar !== false;
 
@@ -654,6 +666,7 @@ export const signOutGoogle = async () => {
     localStorage.removeItem(GOOGLE_TOKEN_EXPIRY_KEY);
     localStorage.removeItem(GOOGLE_CALENDAR_CONNECTED_KEY);
   } catch {}
+  if (isNativeMobileWebView()) return;
   try {
     const googleAuthPlugin =
       typeof window !== 'undefined'
@@ -670,6 +683,7 @@ export const signOutGoogle = async () => {
 };
 
 export const getCachedToken = () => {
+  if (isNativeMobileWebView()) return null;
   if (cachedAccessToken) return cachedAccessToken;
   try {
     if (typeof window !== 'undefined') {
@@ -740,6 +754,7 @@ async function fetchGoogleApiWithAuth(
  * Sync Reminder to Google Calendar as an event
  */
 export async function syncReminderToCalendar(reminder: Reminder, token: string): Promise<string> {
+  if (isNativeMobileWebView()) return '';
   if (!token || token === GOOGLE_CALENDAR_DIRECT_TOKEN) {
     return openGoogleCalendarEventUrl(reminder);
   }
@@ -798,6 +813,7 @@ export async function syncToGoogleTasks(
   item: { title: string; description?: string; dueTimestamp?: number },
   token: string
 ): Promise<string> {
+  if (isNativeMobileWebView()) return '';
   const taskPayload: { title: string; notes?: string; due?: string } = {
     title: item.title,
     notes: item.description,

@@ -9,6 +9,7 @@ import {
   AutoBackupSnapshot,
 } from '../utils/backupStorage';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
+import { isNativeAndroidApp } from '../utils/nativePermissions';
 
 interface InstallModalProps {
   isOpen: boolean;
@@ -72,8 +73,9 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   };
 
   const handleInstallClick = async () => {
-    // Request folder access & notification permission during installation as required
-    await handleGrantFolderPermission(false);
+    if (!isNativeAndroidApp()) {
+      await handleGrantFolderPermission(false);
+    }
 
     if (deferredPrompt) {
       try {
@@ -140,7 +142,8 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
         {/* Body */}
         <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-          {/* Folder Access Permission on Install (پوشه YAAD) */}
+          {/* Folder Access Permission on Install (پوشه YAAD - Web/PWA only) */}
+          {!isNativeAndroidApp() && (
           <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 text-xs font-black text-emerald-300">
@@ -187,6 +190,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
               </span>
             </button>
           </div>
+          )}
 
           {/* If 1-click install prompt is supported & ready */}
           {deferredPrompt ? (

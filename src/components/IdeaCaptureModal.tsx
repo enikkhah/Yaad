@@ -55,6 +55,7 @@ import { syncToGoogleTasks } from '../utils/googleSync';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { AppLanguage } from '../utils/i18n';
 import {
+  isNativeAndroidApp,
   openAndroidSettings,
   ensureNativeAndroidCameraPermission,
   markPermissionGranted,
@@ -486,6 +487,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
 
   // 0. VOICE TYPING FOR TITLE (تبدیل گفتار به متن برای عنوان ایده)
   const toggleTitleVoiceTyping = async (forcedLang?: 'fa' | 'en') => {
+    if (isNativeAndroidApp()) return;
     setVoiceErrorMsg(null);
     if (isTitleVoiceTyping) {
       shouldKeepTitleListeningRef.current = false;
@@ -626,6 +628,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
 
   // 1. VOICE TYPING (Speech-to-text for Persian / English)
   const toggleVoiceTyping = async (forcedLang?: 'fa' | 'en') => {
+    if (isNativeAndroidApp()) return;
     setVoiceErrorMsg(null);
     if (isVoiceTyping) {
       shouldKeepContentListeningRef.current = false;
@@ -1390,7 +1393,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       videoRecordUrl: finalVideoUrl,
       photoDataUrl: photoDataUrl || undefined,
       drawingDataUrl: drawingDataUrl || undefined,
-      googleSynced: syncWithGoogle && !!googleToken,
+      googleSynced: !isNativeAndroidApp() && syncWithGoogle && !!googleToken,
       linkedReminderId: enableReminder ? editingIdea?.linkedReminderId : undefined,
       reminderDueTimestamp: enableReminder ? dueTs : undefined,
       reminderPriority: enableReminder ? priority : undefined,
@@ -1408,8 +1411,8 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
       onSaveIdea(ideaPayload, reminderPayload);
     }
 
-    // Sync with Google Tasks if enabled
-    if (syncWithGoogle && googleToken) {
+    // Sync with Google Tasks if enabled (Web/PWA only)
+    if (!isNativeAndroidApp() && syncWithGoogle && googleToken) {
       try {
         await syncToGoogleTasks(
           { title: `${isEn ? '[Idea]' : '[ایده]'} ${finalTitle}`, description: content },
@@ -1496,18 +1499,22 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 placeholder={isEn ? 'e.g. Marketing campaign, Redesign idea...' : 'مثلاً: ایده راه‌اندازی کمپین بازاریابی، طراحی مجدد...'}
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                className={`w-full ${isEn ? 'pr-13 pl-4' : 'pl-13 pr-4'} py-3.5 rounded-2xl bg-stone-950 border-2 border-indigo-400/70 focus:border-amber-400 ring-2 ring-indigo-500/15 focus:ring-amber-400/25 text-white placeholder-stone-400 text-base sm:text-lg font-extrabold outline-none transition-all shadow-inner`}
+                className={`w-full ${
+                  isNativeAndroidApp() ? 'px-4' : isEn ? 'pr-13 pl-4' : 'pl-13 pr-4'
+                } py-3.5 rounded-2xl bg-stone-950 border-2 border-indigo-400/70 focus:border-amber-400 ring-2 ring-indigo-500/15 focus:ring-amber-400/25 text-white placeholder-stone-400 text-base sm:text-lg font-extrabold outline-none transition-all shadow-inner`}
               />
-              <button
-                type="button"
-                onClick={() => toggleTitleVoiceTyping()}
-                className={`absolute ${isEn ? 'right-2' : 'left-2'} w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer ` + (isTitleVoiceTyping ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-500/30' : 'bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-300 hover:text-white border border-indigo-400/40')}
-                title={isTitleVoiceTyping ? (isEn ? 'Stop voice typing' : 'توقف ضبط گفتار عنوان') : (isEn ? 'Voice input' : 'تایپ صوتی عنوان ایده')}
-              >
-                {isTitleVoiceTyping ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-              </button>
+              {!isNativeAndroidApp() && (
+                <button
+                  type="button"
+                  onClick={() => toggleTitleVoiceTyping()}
+                  className={`absolute ${isEn ? 'right-2' : 'left-2'} w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer ` + (isTitleVoiceTyping ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-500/30' : 'bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-300 hover:text-white border border-indigo-400/40')}
+                  title={isTitleVoiceTyping ? (isEn ? 'Stop voice typing' : 'توقف ضبط گفتار عنوان') : (isEn ? 'Voice input' : 'تایپ صوتی عنوان ایده')}
+                >
+                  {isTitleVoiceTyping ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                </button>
+              )}
             </div>
-            {voiceErrorMsg && (
+            {!isNativeAndroidApp() && voiceErrorMsg && (
               <div className="p-2 rounded-xl bg-indigo-500/15 border border-indigo-500/40 text-indigo-300 text-xs flex items-center gap-1.5 animate-in fade-in">
                 <AlertCircle className="w-3.5 h-3.5 shrink-0 text-indigo-400" />
                 <span>{voiceErrorMsg}</span>
@@ -1636,36 +1643,42 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 <span className="text-xs text-stone-400">
                   {isEn ? 'Idea & notes description:' : 'توضیحات ایده و افکار:'}
                 </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => toggleVoiceTyping()}
-                    className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
-                      isVoiceTyping
-                        ? 'bg-rose-500 text-white animate-pulse'
-                        : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
-                    }`}
-                  >
-                    {isVoiceTyping ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-indigo-400" />}
-                    <span>
-                      {isVoiceTyping ? (
-                        contentInterimTranscript ? (
-                          <span className="text-indigo-200 font-medium">«{contentInterimTranscript}»</span>
+                {!isNativeAndroidApp() && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleVoiceTyping()}
+                      className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
+                        isVoiceTyping
+                          ? 'bg-rose-500 text-white animate-pulse'
+                          : 'bg-stone-800 hover:bg-stone-700 text-stone-300'
+                      }`}
+                    >
+                      {isVoiceTyping ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5 text-indigo-400" />}
+                      <span>
+                        {isVoiceTyping ? (
+                          contentInterimTranscript ? (
+                            <span className="text-indigo-200 font-medium">«{contentInterimTranscript}»</span>
+                          ) : (
+                            isEn ? 'Waiting (stops in 5s)' : 'منتظر صوت (خاموشی در ۵ ثانیه)'
+                          )
                         ) : (
-                          isEn ? 'Waiting (stops in 5s)' : 'منتظر صوت (خاموشی در ۵ ثانیه)'
-                        )
-                      ) : (
-                        isEn ? 'Voice Typing' : 'شروع تایپ صوتی'
-                      )}
-                    </span>
-                  </button>
-                </div>
+                          isEn ? 'Voice Typing' : 'شروع تایپ صوتی'
+                        )}
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
               <textarea
                 rows={5}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
-                placeholder={isEn ? 'Write your thoughts, goals, or details here, or tap voice typing...' : 'افکار، اهداف یا جزئیات ایده‌تان را اینجا بنویسید یا دکمه تایپ صوتی را لمس کنید...'}
+                placeholder={
+                  isNativeAndroidApp()
+                    ? (isEn ? 'Write your thoughts, goals, or details here...' : 'افکار، اهداف یا جزئیات ایده‌تان را اینجا بنویسید...')
+                    : (isEn ? 'Write your thoughts, goals, or details here, or tap voice typing...' : 'افکار، اهداف یا جزئیات ایده‌تان را اینجا بنویسید یا دکمه تایپ صوتی را لمس کنید...')
+                }
                 className="w-full px-3.5 py-2.5 rounded-xl bg-stone-950 border border-stone-800 text-stone-100 text-sm focus:border-indigo-500 outline-none leading-relaxed"
               />
             </div>
@@ -2792,8 +2805,8 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
             </AnimatePresence>
           </div>
 
-          {/* Google Sync Option */}
-          {googleToken && (
+          {/* Google Sync Option (Web/PWA only) */}
+          {!isNativeAndroidApp() && googleToken && (
             <label className="flex items-center gap-2 pt-2 text-xs text-stone-300 cursor-pointer">
               <input
                 type="checkbox"

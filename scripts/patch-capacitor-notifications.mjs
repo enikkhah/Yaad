@@ -3207,20 +3207,21 @@ const patchedPermissionsBlock = `    private fun buildAllPermissionsJSON(): JSOb
             ) == android.content.pm.PackageManager.PERMISSION_GRANTED
         permissionsResultJSON.put("location", if (locGranted) "granted" else "denied")
 
-        // Strict storage check: on Android 11+ (API 30+), creating backup folder in shared storage requires All Files Access
-        val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            android.os.Environment.isExternalStorageManager()
+        val exactAlarmGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val am = context.getSystemService(Context.ALARM_SERVICE) as? android.app.AlarmManager
+            am?.canScheduleExactAlarms() == true
         } else {
-            androidx.core.content.ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.WRITE_EXTERNAL_STORAGE
-            ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
-                androidx.core.content.ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.READ_EXTERNAL_STORAGE
-                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+            true
         }
-        permissionsResultJSON.put("storage", if (storageGranted) "granted" else "denied")
+        permissionsResultJSON.put("exactAlarm", if (exactAlarmGranted) "granted" else "denied")
+
+        val fullScreenIntentGranted = if (Build.VERSION.SDK_INT >= 34) {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager
+            nm?.canUseFullScreenIntent() == true
+        } else {
+            true
+        }
+        permissionsResultJSON.put("fullScreenIntent", if (fullScreenIntentGranted) "granted" else "denied")
         return permissionsResultJSON
     }
 
@@ -3381,14 +3382,89 @@ const legacyPermissionsBlockV1 = `    private fun buildAllPermissionsJSON(): JSO
         }
     }`;
 
+const legacyPermissionsBlockV3 = `    private fun buildAllPermissionsJSON(): JSObject {
+        val permissionsResultJSON = JSObject()
+        val notifEnabled = manager.areNotificationsEnabled() && (
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        )
+        permissionsResultJSON.put("display", if (notifEnabled) "granted" else "denied")
+        val micGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        permissionsResultJSON.put("microphone", if (micGranted) "granted" else "denied")
+
+        val camGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.CAMERA
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        permissionsResultJSON.put("camera", if (camGranted) "granted" else "denied")
+
+        val locGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        permissionsResultJSON.put("location", if (locGranted) "granted" else "denied")
+
+        // Strict storage check: on Android 11+ (API 30+), creating backup folder in shared storage requires All Files Access
+        val storageGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.os.Environment.isExternalStorageManager()
+        } else {
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context,
+                Manifest.permission.WRITE_EXTERNAL_STORAGE
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                androidx.core.content.ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.READ_EXTERNAL_STORAGE
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        permissionsResultJSON.put("storage", if (storageGranted) "granted" else "denied")
+        return permissionsResultJSON
+    }
+
+    @PluginMethod
+    override fun checkPermissions(call: PluginCall) {
+        call.resolve(buildAllPermissionsJSON())
+    }
+
+    @PluginMethod
+    override fun requestPermissions(call: PluginCall) {
+        val requested = call.getArray("permissions")
+        if (requested != null && requested.length() > 0) {
+            val firstAlias = requested.optString(0, LOCAL_NOTIFICATIONS)
+            if (firstAlias == "microphone" || firstAlias == "camera" || firstAlias == "location") {
+                if (getPermissionState(firstAlias) == PermissionState.GRANTED) {
+                    call.resolve(buildAllPermissionsJSON())
+                } else {
+                    requestPermissionForAlias(firstAlias, call, "permissionsCallback")
+                }
+                return
+            }
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || getPermissionState(LOCAL_NOTIFICATIONS) == PermissionState.GRANTED) {
+            call.resolve(buildAllPermissionsJSON())
+        } else {
+            requestPermissionForAlias(LOCAL_NOTIFICATIONS, call, "permissionsCallback")
+        }
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
   'checkPermissions and requestPermissions for all app permissions',
   origPermissionsBlock,
   patchedPermissionsBlock,
-  '// Strict storage check: on Android 11+ (API 30+), creating backup folder in shared storage requires All Files Access',
-  [legacyPermissionsBlockV1, legacyPermissionsBlockV2]
+  'permissionsResultJSON.put("exactAlarm"',
+  [legacyPermissionsBlockV1, legacyPermissionsBlockV2, legacyPermissionsBlockV3]
 );
 
 const origPermCallback = `    @PermissionCallback
@@ -4654,9 +4730,6 @@ import android.os.CountDownTimer
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
-import android.provider.Settings
-import android.telecom.TelecomManager
-import android.telephony.TelephonyManager
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.TextUtils
@@ -4717,7 +4790,6 @@ class YaadAlarmPopupActivity : Activity() {
     private val uiHandler = Handler(Looper.getMainLooper())
     private var hasContentViewSet: Boolean = false
     private var isYieldingForPhoneCall: Boolean = false
-    private var isPhoneStateReceiverRegistered: Boolean = false
     private var audioModeListenerObj: Any? = null
     private var isMinimizedToFloatingBubble: Boolean = false
     private var floatingBubbleX: Int = -1
@@ -4726,21 +4798,6 @@ class YaadAlarmPopupActivity : Activity() {
 
     private val releaseScreenKeepAwakeRunnable = Runnable {
         expireScreenKeepAwakeWindowOnly()
-    }
-
-    private val phoneStateReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context?, intent: Intent?) {
-            val action = intent?.action ?: return
-            if (action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
-                val stateStr = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
-                val isCallActiveNow = stateStr == TelephonyManager.EXTRA_STATE_RINGING ||
-                    stateStr == TelephonyManager.EXTRA_STATE_OFFHOOK
-                lastBroadcastCallActive = isCallActiveNow
-                if (isCallActiveNow) {
-                    suspendAndYieldForIncomingCall()
-                }
-            }
-        }
     }
 
     private val activeCallWatchdogRunnable = object : Runnable {
@@ -5267,18 +5324,6 @@ class YaadAlarmPopupActivity : Activity() {
     }
 
     private fun registerCallInterceptionListeners() {
-        if (!isPhoneStateReceiverRegistered) {
-            try {
-                val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    registerReceiver(phoneStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-                } else {
-                    registerReceiver(phoneStateReceiver, filter)
-                }
-                isPhoneStateReceiverRegistered = true
-            } catch (e: Exception) {
-            }
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && audioModeListenerObj == null) {
             try {
                 val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -5305,13 +5350,6 @@ class YaadAlarmPopupActivity : Activity() {
 
     private fun unregisterCallInterceptionListeners() {
         uiHandler.removeCallbacks(activeCallWatchdogRunnable)
-        if (isPhoneStateReceiverRegistered) {
-            try {
-                unregisterReceiver(phoneStateReceiver)
-            } catch (e: Exception) {
-            }
-            isPhoneStateReceiverRegistered = false
-        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && audioModeListenerObj != null) {
             try {
                 val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -7335,10 +7373,6 @@ class YaadAlarmPopupActivity : Activity() {
         val palette = resolvePalette(effectiveTheme)
         val curDist = requestJson?.optJSONObject("extra")?.optInt("distance", 0) ?: 0
 
-        if (attachFloatingOverlayAndCloseActivity(palette, curDist, promptOverlayIfMissing = true)) {
-            return
-        }
-
         enterFloatingWindowMode()
         buildFloatingBubbleUI(palette, curDist)
     }
@@ -7348,69 +7382,6 @@ class YaadAlarmPopupActivity : Activity() {
         curDist: Int,
         promptOverlayIfMissing: Boolean
     ): Boolean {
-        val appCtx = applicationContext
-        if (canDrawSystemOverlays(appCtx)) {
-            val shown = showFloatingOverlayBubble(
-                context = appCtx,
-                notifId = notificationId,
-                srcJson = sourceJson,
-                isGeofence = isGeofencePopup,
-                isSub10m = isSub10mArrival,
-                geoItemId = geofenceItemId,
-                remId = reminderId,
-                persian = isPersian,
-                accentColor = palette.accentColor,
-                distanceMeters = curDist,
-                bundledCount = if (isGeofencePopup) 1 else activeBundledTimedReminders.size.coerceAtLeast(1)
-            )
-            if (shown) {
-                try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                        setShowWhenLocked(false)
-                        setTurnScreenOn(false)
-                    }
-                    @Suppress("DEPRECATION")
-                    window.clearFlags(
-                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                            WindowManager.LayoutParams.FLAG_DIM_BEHIND
-                    )
-                    window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
-                    window.setDimAmount(0f)
-                } catch (e: Exception) {
-                }
-                finish()
-                overridePendingTransition(0, 0)
-                return true
-            }
-        } else if (promptOverlayIfMissing) {
-            try {
-                val prefs = appCtx.getSharedPreferences(OVERLAY_PERM_PREFS, Context.MODE_PRIVATE)
-                val alreadyPrompted = prefs.getBoolean("overlay_prompted_once", false)
-                if (!alreadyPrompted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                    prefs.edit().putBoolean("overlay_prompted_once", true).apply()
-                    val msg = if (isPersian) {
-                        "برای دکمه شناور روی سایر برنامه‌ها و دسترسی به محیط زمینه، مجوز «نمایش روی برنامه‌ها» را فعال کنید"
-                    } else {
-                        "Enable 'Display over other apps' so the floating button stays above background apps"
-                    }
-                    Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show()
-                    val permIntent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:\$packageName")
-                    ).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    startActivity(permIntent)
-                }
-            } catch (e: Exception) {
-            }
-            // Close the foreground Activity so the background phone UI is immediately accessible cleanly
-            finish()
-            overridePendingTransition(0, 0)
-            return true
-        }
         return false
     }
 
@@ -8042,7 +8013,6 @@ class YaadAlarmPopupActivity : Activity() {
 
     companion object {
         private const val CALL_SUSPEND_PREFS = "YAAD_CALL_SUSPEND_PREFS"
-        private const val OVERLAY_PERM_PREFS = "YAAD_OVERLAY_PERM_PREFS"
         const val ACTION_ALARM_CLOCK_LAUNCH_POPUP = "com.capacitorjs.plugins.localnotifications.ALARM_CLOCK_LAUNCH_POPUP"
         const val SCREEN_ON_KEEP_AWAKE_MS = 60_000L          // 1 minute keep-awake when screen is ON (in Android launcher, other apps, or lockscreen)
         const val SCREEN_OFF_KEEP_AWAKE_MS = 21 * 60_000L   // 21 minutes keep-awake when screen is OFF
@@ -8099,7 +8069,7 @@ class YaadAlarmPopupActivity : Activity() {
         }
 
         fun canDrawSystemOverlays(context: Context): Boolean {
-            return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+            return false
         }
 
         fun hasActiveFloatingOverlay(geofenceOnly: Boolean = false): Boolean {
@@ -8200,182 +8170,7 @@ class YaadAlarmPopupActivity : Activity() {
             distanceMeters: Int,
             bundledCount: Int = 1
         ): Boolean {
-            val appCtx = context.applicationContext
-            if (!canDrawSystemOverlays(appCtx)) return false
-
-            overlayNotifId = notifId
-            overlaySourceJson = srcJson
-            overlayIsGeofence = isGeofence
-            overlayIsSub10m = isSub10m
-            overlayGeofenceItemId = geoItemId
-            overlayReminderId = remId
-            overlayIsPersian = persian
-            overlayAccentColor = accentColor
-            overlayDistanceMeters = distanceMeters
-            overlayBundledCount = bundledCount
-            isOverlayHiddenForForegroundApp = false
-            isMinimizedBubbleState = true
-            activeNotificationId = notifId
-
-            callMonitorHandler.post {
-                try {
-                    removeOverlayViewOnMain(appCtx)
-                    val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@post
-                    val totalW = dpStatic(appCtx, 78f)
-                    val totalH = dpStatic(appCtx, 82f)
-                    if (savedBubbleX < 0) savedBubbleX = dpStatic(appCtx, 16f)
-                    if (savedBubbleY < 0) savedBubbleY = dpStatic(appCtx, 110f)
-
-                    val root = FrameLayout(appCtx)
-                    root.layoutDirection = View.LAYOUT_DIRECTION_LTR
-                    root.clipChildren = false
-                    root.clipToPadding = false
-                    root.setBackgroundColor(Color.TRANSPARENT)
-
-                    val bubbleBtn = LinearLayout(appCtx)
-                    bubbleBtn.orientation = LinearLayout.VERTICAL
-                    bubbleBtn.gravity = Gravity.CENTER
-                    bubbleBtn.setPadding(
-                        dpStatic(appCtx, 6f),
-                        dpStatic(appCtx, 6f),
-                        dpStatic(appCtx, 6f),
-                        dpStatic(appCtx, 5f)
-                    )
-                    val bubbleBgColor = if (isGeofence) Color.parseColor("#042621") else Color.parseColor("#14172C")
-                    val bubbleBorderColor = if (isGeofence) Color.parseColor("#10B981") else accentColor
-                    bubbleBtn.background = makeRoundedStatic(appCtx, bubbleBgColor, bubbleBorderColor, 2.2f, 22f)
-                    bubbleBtn.elevation = dpStatic(appCtx, 12f).toFloat()
-                    val bubbleLp = FrameLayout.LayoutParams(dpStatic(appCtx, 70f), dpStatic(appCtx, 74f))
-                    bubbleLp.gravity = Gravity.TOP or Gravity.LEFT
-                    bubbleLp.setMargins(dpStatic(appCtx, 6f), dpStatic(appCtx, 6f), 0, 0)
-                    bubbleBtn.layoutParams = bubbleLp
-
-                    try {
-                        val iconView = ImageView(appCtx)
-                        val appDrawable = appCtx.packageManager.getApplicationIcon(appCtx.applicationInfo)
-                        iconView.setImageDrawable(appDrawable)
-                        iconView.scaleType = ImageView.ScaleType.FIT_CENTER
-                        iconView.layoutParams = LinearLayout.LayoutParams(dpStatic(appCtx, 34f), dpStatic(appCtx, 34f))
-                        bubbleBtn.addView(iconView)
-                    } catch (e: Exception) {
-                    }
-
-                    val badgeTv = TextView(appCtx)
-                    badgeTv.text = formatOverlayLabelStatic(isGeofence, distanceMeters, bundledCount, persian)
-                    badgeTv.gravity = Gravity.CENTER
-                    badgeTv.setTextColor(if (isGeofence) Color.parseColor("#A7F3D0") else Color.parseColor("#FDE68A"))
-                    badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
-                    badgeTv.setTypeface(Typeface.DEFAULT_BOLD)
-                    badgeTv.setSingleLine(true)
-                    badgeTv.ellipsize = TextUtils.TruncateAt.END
-                    val badgeLp = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT,
-                        ViewGroup.LayoutParams.WRAP_CONTENT
-                    )
-                    badgeLp.topMargin = dpStatic(appCtx, 3f)
-                    badgeTv.layoutParams = badgeLp
-                    bubbleBtn.addView(badgeTv)
-                    overlayBubbleDistanceTv = badgeTv
-
-                    val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                    } else {
-                        @Suppress("DEPRECATION")
-                        WindowManager.LayoutParams.TYPE_PHONE
-                    }
-                    val winLp = WindowManager.LayoutParams(
-                        totalW,
-                        totalH,
-                        overlayType,
-                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                        PixelFormat.TRANSLUCENT
-                    ).apply {
-                        gravity = Gravity.BOTTOM or Gravity.LEFT
-                        x = savedBubbleX
-                        y = savedBubbleY
-                    }
-
-                    var downRawX = 0f
-                    var downRawY = 0f
-                    var startWinX = 0
-                    var startWinY = 0
-                    var movedSignificantly = false
-                    val touchSlopPx = dpStatic(appCtx, 10f)
-
-                    bubbleBtn.setOnTouchListener { _, event ->
-                        when (event.actionMasked) {
-                            MotionEvent.ACTION_DOWN -> {
-                                downRawX = event.rawX
-                                downRawY = event.rawY
-                                startWinX = winLp.x
-                                startWinY = winLp.y
-                                movedSignificantly = false
-                                true
-                            }
-                            MotionEvent.ACTION_MOVE -> {
-                                val dx = (event.rawX - downRawX).toInt()
-                                val dy = (event.rawY - downRawY).toInt()
-                                if (kotlin.math.abs(dx) > touchSlopPx || kotlin.math.abs(dy) > touchSlopPx) {
-                                    movedSignificantly = true
-                                }
-                                if (movedSignificantly) {
-                                    try {
-                                        val dm = appCtx.resources.displayMetrics
-                                        val maxX = (dm.widthPixels - totalW).coerceAtLeast(0)
-                                        val maxY = (dm.heightPixels - dpStatic(appCtx, 120f)).coerceAtLeast(0)
-                                        savedBubbleX = (startWinX + dx).coerceIn(0, maxX)
-                                        savedBubbleY = (startWinY - dy).coerceIn(0, maxY)
-                                        winLp.x = savedBubbleX
-                                        winLp.y = savedBubbleY
-                                        wm.updateViewLayout(root, winLp)
-                                    } catch (e: Exception) {
-                                    }
-                                }
-                                true
-                            }
-                            MotionEvent.ACTION_UP -> {
-                                if (!movedSignificantly) {
-                                    expandFromFloatingOverlay(appCtx)
-                                }
-                                true
-                            }
-                            else -> false
-                        }
-                    }
-
-                    root.addView(bubbleBtn)
-
-                    val closeBadge = TextView(appCtx)
-                    closeBadge.text = "✕"
-                    closeBadge.gravity = Gravity.CENTER
-                    closeBadge.setTextColor(Color.WHITE)
-                    closeBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-                    closeBadge.setTypeface(Typeface.DEFAULT_BOLD)
-                    closeBadge.background = makeOvalStatic(
-                        appCtx,
-                        Color.parseColor("#E11D48"),
-                        bubbleBorderColor,
-                        1.8f
-                    )
-                    closeBadge.elevation = dpStatic(appCtx, 16f).toFloat()
-                    val closeLp = FrameLayout.LayoutParams(dpStatic(appCtx, 22f), dpStatic(appCtx, 22f))
-                    closeLp.gravity = Gravity.TOP or Gravity.LEFT
-                    closeLp.setMargins(0, 0, 0, 0)
-                    closeBadge.layoutParams = closeLp
-                    closeBadge.setOnClickListener {
-                        closeFromFloatingOverlay(appCtx)
-                    }
-                    root.addView(closeBadge)
-
-                    wm.addView(root, winLp)
-                    overlayBubbleRootView = root
-                    overlayBubbleLp = winLp
-                } catch (e: Exception) {
-                }
-            }
-            return true
+            return false
         }
 
         fun hideFloatingOverlayBubble(context: Context? = null, clearState: Boolean = true) {
@@ -8563,49 +8358,8 @@ class YaadAlarmPopupActivity : Activity() {
             return PendingIntent.getActivity(context, requestCode, intent, flags)
         }
 
-        /**
-         * When SYSTEM_ALERT_WINDOW ("Display over other apps") is granted, briefly attaches a 1x1 transparent
-         * overlay window before calling startActivity() so Android 10–15 WindowProcessController.hasVisibleWindow()
-         * evaluates to true and allows instant Activity launch over Android Home / other apps.
-         */
         private fun attachTemporaryOverlayBridgeWindowIfPermitted(context: Context) {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
-            try {
-                if (!Settings.canDrawOverlays(context)) return
-                val appCtx = context.applicationContext
-                callMonitorHandler.post {
-                    try {
-                        val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@post
-                        val bridgeView = View(appCtx).apply { alpha = 0.01f }
-                        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                        } else {
-                            @Suppress("DEPRECATION")
-                            WindowManager.LayoutParams.TYPE_PHONE
-                        }
-                        val lp = WindowManager.LayoutParams(
-                            1,
-                            1,
-                            overlayType,
-                            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-                            PixelFormat.TRANSLUCENT
-                        ).apply {
-                            gravity = Gravity.TOP or Gravity.START
-                        }
-                        wm.addView(bridgeView, lp)
-                        callMonitorHandler.postDelayed({
-                            try {
-                                wm.removeView(bridgeView)
-                            } catch (e: Exception) {
-                            }
-                        }, 650L)
-                    } catch (e: Exception) {
-                    }
-                }
-            } catch (e: Exception) {
-            }
+            // Disabled: SYSTEM_ALERT_WINDOW permission removed for Play/Bazaar/Myket compliance
         }
 
         fun launchFromAlarmBroadcast(context: Context, broadcastIntent: Intent) {
@@ -8747,38 +8501,6 @@ class YaadAlarmPopupActivity : Activity() {
                     }
                 }
             } catch (e: Exception) {
-            }
-
-            if (!active && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                try {
-                    val telecom = context.getSystemService(Context.TELECOM_SERVICE) as? TelecomManager
-                    if (telecom != null && telecom.isInCall) {
-                        active = true
-                    }
-                } catch (se: SecurityException) {
-                } catch (e: Exception) {
-                }
-            }
-
-            if (!active) {
-                try {
-                    val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
-                    if (tm != null) {
-                        @Suppress("DEPRECATION")
-                        val callState = tm.callState
-                        if (
-                            callState == TelephonyManager.CALL_STATE_RINGING ||
-                            callState == TelephonyManager.CALL_STATE_OFFHOOK
-                        ) {
-                            active = true
-                        }
-                        if (callState == TelephonyManager.CALL_STATE_IDLE) {
-                            lastBroadcastCallActive = false
-                        }
-                    }
-                } catch (se: SecurityException) {
-                } catch (e: Exception) {
-                }
             }
 
             val finalRes = active || lastBroadcastCallActive
@@ -9554,16 +9276,6 @@ class YaadGeofenceService : Service(), LocationListener {
     private val screenStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val action = intent?.action ?: return
-            if (action == "android.intent.action.PHONE_STATE") {
-                val stateStr = intent.getStringExtra("state")
-                val inCall = stateStr == "RINGING" || stateStr == "OFFHOOK"
-                YaadAlarmPopupActivity.lastBroadcastCallActive = inCall
-                if (inCall) {
-                    pauseSonarForPhoneCall(applicationContext)
-                    YaadAlarmPopupActivity.yieldActivePopupForPhoneCall(applicationContext)
-                }
-                return
-            }
             if (action == Intent.ACTION_SCREEN_OFF) {
                 isInScreenOffSession = true
                 mainHandler.postDelayed({
@@ -9651,7 +9363,6 @@ class YaadGeofenceService : Service(), LocationListener {
                 addAction(Intent.ACTION_SCREEN_OFF)
                 addAction(Intent.ACTION_SCREEN_ON)
                 addAction(Intent.ACTION_USER_PRESENT)
-                addAction("android.intent.action.PHONE_STATE")
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 registerReceiver(screenStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
@@ -11768,54 +11479,6 @@ class YaadGeofenceService : Service(), LocationListener {
                 val appCtx = context.applicationContext
                 if (YaadAlarmPopupActivity.hasActiveFloatingOverlay(geofenceOnly = true)) {
                     YaadAlarmPopupActivity.setFloatingOverlayHiddenForInApp(appCtx, false)
-                } else if (
-                    activeGeofenceNotificationId != Int.MIN_VALUE &&
-                    activeGeofenceItemId.isNotEmpty() &&
-                    isGeofenceItemMinimized(appCtx, activeGeofenceItemId) &&
-                    YaadAlarmPopupActivity.canDrawSystemOverlays(appCtx) &&
-                    !isScreenOffOrLockedStatic(appCtx)
-                ) {
-                    val isVisualOnly = activeGeofenceEventType == "visual_banner"
-                    val (notifTitle, notifBody) = buildStatusBarTitleAndBody(
-                        title = activeGeofenceTitle,
-                        statusPhrase = activeGeofenceDescription,
-                        distance = liveSonarDistanceMeters,
-                        radius = activeGeofenceRadius,
-                        isEn = activeGeofenceIsEn,
-                        visualOnlyBanner = isVisualOnly,
-                        visualBannerText = activeGeofenceCustomMessage
-                    )
-                    val extraJson = JSObject().apply {
-                        put("geofence", true)
-                        put("geofenceItemId", activeGeofenceItemId)
-                        put("sub10m", activeGeofenceEventType == "arrived_under_10m")
-                        put("distance", liveSonarDistanceMeters)
-                        put("radius", activeGeofenceRadius)
-                        put("latitude", activeGeofenceLat)
-                        put("longitude", activeGeofenceLon)
-                        put("bearingDeg", activeGeofenceBearingDeg.toDouble())
-                        put("sonarMode", activeGeofenceSonarMode)
-                        put("language", if (activeGeofenceIsEn) "en" else "fa")
-                        put("theme", if (activeGeofenceEventType == "arrived_under_10m") "geofence-sub10m" else "geofence-radar")
-                    }
-                    val srcJsonStr = JSObject().apply {
-                        put("id", activeGeofenceNotificationId)
-                        put("title", notifTitle)
-                        put("body", notifBody)
-                        put("extra", extraJson)
-                    }.toString()
-                    YaadAlarmPopupActivity.showFloatingOverlayBubble(
-                        context = appCtx,
-                        notifId = activeGeofenceNotificationId,
-                        srcJson = srcJsonStr,
-                        isGeofence = true,
-                        isSub10m = activeGeofenceEventType == "arrived_under_10m",
-                        geoItemId = activeGeofenceItemId,
-                        remId = "",
-                        persian = !activeGeofenceIsEn,
-                        accentColor = Color.parseColor("#10B981"),
-                        distanceMeters = liveSonarDistanceMeters
-                    )
                 }
                 if (shouldRun(appCtx) && hasLocationPermission(appCtx)) {
                     val intent = Intent(appCtx, YaadGeofenceService::class.java).apply {
@@ -13346,16 +13009,51 @@ class YaadGeofenceService : Service(), LocationListener {
         }
 
         @android.webkit.JavascriptInterface
-        fun hasOverlayPermission(): Boolean {
-            return YaadAlarmPopupActivity.canDrawSystemOverlays(appContext)
+        fun hasExactAlarmPermission(): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+            return try {
+                val am = appContext.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
+                am?.canScheduleExactAlarms() == true
+            } catch (e: Exception) {
+                false
+            }
         }
 
         @android.webkit.JavascriptInterface
-        fun openOverlaySettings() {
+        fun openExactAlarmSettings() {
             try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                     val intent = Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                        Uri.fromParts("package", appContext.packageName, null)
+                    ).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    return
+                }
+            } catch (e: Exception) {
+            }
+            openBackgroundLocationSettings()
+        }
+
+        @android.webkit.JavascriptInterface
+        fun hasFullScreenIntentPermission(): Boolean {
+            if (Build.VERSION.SDK_INT < 34) return true
+            return try {
+                val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                nm?.canUseFullScreenIntent() == true
+            } catch (e: Exception) {
+                false
+            }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openFullScreenIntentSettings() {
+            try {
+                if (Build.VERSION.SDK_INT >= 34) {
+                    val intent = Intent(
+                        "android.settings.MANAGE_APP_USE_FULL_SCREEN_INTENT",
                         Uri.fromParts("package", appContext.packageName, null)
                     ).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -13437,16 +13135,10 @@ if (fs.existsSync(manifestPath)) {
       `    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>\n</manifest>`
     );
   }
-  if (!manifestContent.includes('android.permission.SYSTEM_ALERT_WINDOW')) {
-    manifestContent = manifestContent.replace(
-      '</manifest>',
-      `    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>\n</manifest>`
-    );
-  }
   if (!manifestContent.includes('android.permission.WAKE_LOCK')) {
     manifestContent = manifestContent.replace(
       '</manifest>',
-      `    <uses-permission android:name="android.permission.WAKE_LOCK"/>\n    <uses-permission android:name="android.permission.DISABLE_KEYGUARD"/>\n</manifest>`
+      `    <uses-permission android:name="android.permission.WAKE_LOCK"/>\n</manifest>`
     );
   }
   if (!manifestContent.includes('android.permission.FOREGROUND_SERVICE')) {
@@ -13455,10 +13147,19 @@ if (fs.existsSync(manifestPath)) {
       `    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION"/>\n    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>\n</manifest>`
     );
   }
-  if (!manifestContent.includes('android.permission.READ_PHONE_STATE')) {
+  const disallowedPluginPerms = [
+    'android.permission.SYSTEM_ALERT_WINDOW',
+    'android.permission.READ_PHONE_STATE',
+    'android.permission.DISABLE_KEYGUARD',
+    'android.permission.MANAGE_EXTERNAL_STORAGE',
+    'android.permission.READ_MEDIA_IMAGES',
+    'android.permission.READ_EXTERNAL_STORAGE',
+    'android.permission.WRITE_EXTERNAL_STORAGE',
+  ];
+  for (const perm of disallowedPluginPerms) {
     manifestContent = manifestContent.replace(
-      '</manifest>',
-      `    <uses-permission android:name="android.permission.READ_PHONE_STATE"/>\n</manifest>`
+      new RegExp(`\\s*<uses-permission[^>]*android:name="${perm.replace(/\./g, '\\.')}"[^>]*\\/?>`, 'g'),
+      ''
     );
   }
   fs.writeFileSync(manifestPath, manifestContent, 'utf8');

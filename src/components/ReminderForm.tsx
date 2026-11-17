@@ -26,7 +26,7 @@ import {
 } from '../utils/recurrence';
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
 import { CameraCaptureModal } from './CameraCaptureModal';
-import { requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
+import { isNativeAndroidApp, requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 import { 
@@ -401,6 +401,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   };
 
   const startVoiceListening = async (forcedLang?: 'fa' | 'en') => {
+    if (isNativeAndroidApp()) return;
     setVoiceErrorMsg(null);
     setSpeechTranscript('');
     lastFinalTranscriptRef.current = '';
@@ -549,6 +550,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   };
 
   const toggleListening = () => {
+    if (isNativeAndroidApp()) return;
     if (isListening) {
       stopVoiceListening();
     } else {
@@ -739,9 +741,9 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               hasTriggered: false,
             }
           : (initialData?.geofence ? { ...initialData.geofence, enabled: false } : undefined),
-        sourceApp: isListening ? 'voice' : 'manual',
+        sourceApp: !isNativeAndroidApp() && isListening ? 'voice' : 'manual',
       },
-      syncWithGoogle
+      !isNativeAndroidApp() && syncWithGoogle
     );
 
     onClose();
@@ -837,29 +839,33 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                     if (validationError) setValidationError(null);
                   }}
                   placeholder={isEn ? 'e.g. Project delivery, Doctor appointment, Buy groceries...' : 'مثال: تحویل پروژه، تماس با پزشک، خرید نان...'}
-                  className={`w-full bg-stone-950 border-2 rounded-2xl ${isEn ? 'pl-4 pr-14' : 'pr-4 pl-14'} py-3.5 text-white placeholder-stone-400 focus:outline-none transition-all text-base sm:text-lg font-extrabold shadow-inner ${
+                  className={`w-full bg-stone-950 border-2 rounded-2xl ${
+                    isNativeAndroidApp() ? 'px-4' : isEn ? 'pl-4 pr-14' : 'pr-4 pl-14'
+                  } py-3.5 text-white placeholder-stone-400 focus:outline-none transition-all text-base sm:text-lg font-extrabold shadow-inner ${
                     isListening
                       ? 'border-amber-400 ring-2 ring-amber-400/30 shadow-lg shadow-amber-500/15'
                       : 'border-indigo-400/70 focus:border-amber-400 ring-2 ring-indigo-500/15 focus:ring-amber-400/25'
                   }`}
                 />
 
-                {/* Microphone Button Placed Directly Beside Title Input */}
-                <button
-                  type="button"
-                  onClick={toggleListening}
-                  className={`absolute ${isEn ? 'right-2' : 'left-2'} top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
-                    isListening
-                      ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/50 scale-105 animate-pulse'
-                      : 'bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-300 hover:text-white border border-indigo-400/40'
-                  }`}
-                  title={isListening ? (isEn ? 'Stop voice typing' : 'توقف تایپ صوتی') : (isEn ? 'Start voice typing' : 'شروع تایپ صوتی (تبدیل گفتار به متن)')}
-                >
-                  <Mic className="w-5 h-5" />
-                </button>
+                {/* Microphone Button Placed Directly Beside Title Input (Web/PWA only; hidden on Android WebView where Web SpeechRecognition does not work) */}
+                {!isNativeAndroidApp() && (
+                  <button
+                    type="button"
+                    onClick={toggleListening}
+                    className={`absolute ${isEn ? 'right-2' : 'left-2'} top-1/2 -translate-y-1/2 w-10 h-10 rounded-xl flex items-center justify-center transition-all cursor-pointer ${
+                      isListening
+                        ? 'bg-indigo-500 text-white shadow-lg shadow-indigo-500/50 scale-105 animate-pulse'
+                        : 'bg-indigo-500/20 hover:bg-indigo-500/35 text-indigo-300 hover:text-white border border-indigo-400/40'
+                    }`}
+                    title={isListening ? (isEn ? 'Stop voice typing' : 'توقف تایپ صوتی') : (isEn ? 'Start voice typing' : 'شروع تایپ صوتی (تبدیل گفتار به متن)')}
+                  >
+                    <Mic className="w-5 h-5" />
+                  </button>
+                )}
               </div>
 
-              {voiceErrorMsg && (
+              {!isNativeAndroidApp() && voiceErrorMsg && (
                 <div className="mt-2 p-2.5 rounded-xl bg-indigo-500/15 border border-indigo-500/40 text-indigo-300 text-xs flex items-center justify-between gap-2 animate-in fade-in">
                   <div className="flex items-center gap-2 min-w-0">
                     <AlertCircle className="w-4 h-4 shrink-0 text-indigo-400" />
@@ -1758,8 +1764,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               )}
             </div>
 
-            {/* Google Sync Option */}
-            {googleToken && (
+            {/* Google Sync Option (Web/PWA only) */}
+            {!isNativeAndroidApp() && googleToken && (
               <div className="pt-2 border-t border-stone-800">
                 <label className="flex items-center justify-between p-3 rounded-xl bg-stone-950/60 border border-stone-800/80 cursor-pointer hover:border-sky-500/50">
                   <div className="flex items-center gap-2.5">

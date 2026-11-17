@@ -6,6 +6,7 @@
 
 import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
+import { Share } from '@capacitor/share';
 import { Reminder, IdeaNote, SavedLocation, Occasion, AppSettings } from '../types';
 
 export const AUTO_BACKUP_STORAGE_KEY = 'yaad_auto_backup_vault_v1';
@@ -13,6 +14,10 @@ export const LOCAL_BACKUP_FOLDER_NAME = 'YAAD';
 export const LOCAL_BACKUP_FILE_NAME = 'yaad_backup.json';
 export const FOLDER_PERMISSION_GRANTED_KEY = 'yaad_folder_permission_granted_v2';
 export const LAST_LOCAL_BACKUP_KEY = 'yaad_last_local_backup_timestamp';
+export const LAST_MANUAL_BACKUP_KEY = 'yaad_last_manual_backup_timestamp_v1';
+export const BACKUP_PROMPT_DISMISSED_AT_KEY = 'yaad_backup_prompt_dismissed_at_v1';
+export const BACKUP_FIRST_DATA_SEEN_KEY = 'yaad_backup_first_data_seen_at_v1';
+const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 const DB_NAME = 'yaad_persistent_vault';
 const DB_VERSION = 2;
@@ -233,6 +238,27 @@ export async function requestLocalFolderPermission(
   restoredSnapshot?: AutoBackupSnapshot | null;
 }> {
   const effectiveFolderName = LOCAL_BACKUP_FOLDER_NAME;
+
+  if (Capacitor.isNativePlatform()) {
+    try {
+      await Filesystem.mkdir({
+        path: LOCAL_BACKUP_FOLDER_NAME,
+        directory: Directory.Data,
+        recursive: true,
+      }).catch(() => {});
+      localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
+    } catch {
+      // ignore
+    }
+    const restoredSnapshot = await retrieveFromLocalYaadFolder();
+    return {
+      granted: true,
+      nativePickerOpened: false,
+      folderName: effectiveFolderName,
+      restoredSnapshot,
+    };
+  }
+
   let restoredFromPickedFolder: AutoBackupSnapshot | null = null;
   let nativePickerOpened = false;
 
@@ -246,7 +272,7 @@ export async function requestLocalFolderPermission(
 
   const isMobileOrAndroid =
     typeof navigator !== 'undefined' &&
-    (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || Capacitor.isNativePlatform());
+    /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
   // 1. On desktop browsers (outside iframe & non-Android), invoke showDirectoryPicker FIRST before any await
   if (
@@ -293,75 +319,23 @@ export async function requestLocalFolderPermission(
     // ignore OPFS errors
   }
 
-  // 3. Request Android storage permission & create physical "YAAD" folder via @capacitor/filesystem
-  try {
-    if (Capacitor.isNativePlatform() || (window as any).Capacitor?.Plugins?.Filesystem) {
-      await Promise.race([
-        Filesystem.requestPermissions(),
-        new Promise((resolve) => setTimeout(resolve, 3500)),
-      ]).catch(() => {});
-
-      const targetDirs = [
-        Directory.External,
-        Directory.Documents,
-        Directory.ExternalStorage,
-        Directory.Data,
-      ];
-
-      for (const dir of targetDirs) {
-        await Filesystem.mkdir({
-          path: LOCAL_BACKUP_FOLDER_NAME,
-          directory: dir,
-          recursive: true,
-        }).catch(() => {});
-      }
-    }
-  } catch {
-    // ignore
-  }
-
   if (!restoredFromPickedFolder) {
     restoredFromPickedFolder = await retrieveFromLocalYaadFolder();
   }
 
   let isStorageActuallyGranted = false;
-  if (Capacitor.isNativePlatform()) {
-    try {
-      const { LocalNotifications } = await import('@capacitor/local-notifications');
-      const perms = (await LocalNotifications.checkPermissions()) as any;
-      if (perms && typeof perms.storage === 'string') {
-        isStorageActuallyGranted = perms.storage === 'granted';
+  try {
+    const handle = await getDirectoryHandleFromDB();
+    if (handle) {
+      if (typeof handle.queryPermission === 'function') {
+        const permState = await handle.queryPermission({ mode: 'readwrite' });
+        isStorageActuallyGranted = permState === 'granted';
       } else {
-        await Filesystem.writeFile({
-          path: `${LOCAL_BACKUP_FOLDER_NAME}/.yaad_perm_probe`,
-          data: 'ok',
-          directory: Directory.ExternalStorage,
-          encoding: Encoding.UTF8,
-          recursive: true,
-        });
-        await Filesystem.deleteFile({
-          path: `${LOCAL_BACKUP_FOLDER_NAME}/.yaad_perm_probe`,
-          directory: Directory.ExternalStorage,
-        }).catch(() => {});
         isStorageActuallyGranted = true;
       }
-    } catch {
-      isStorageActuallyGranted = false;
     }
-  } else {
-    try {
-      const handle = await getDirectoryHandleFromDB();
-      if (handle) {
-        if (typeof handle.queryPermission === 'function') {
-          const permState = await handle.queryPermission({ mode: 'readwrite' });
-          isStorageActuallyGranted = permState === 'granted';
-        } else {
-          isStorageActuallyGranted = true;
-        }
-      }
-    } catch {
-      isStorageActuallyGranted = false;
-    }
+  } catch {
+    isStorageActuallyGranted = false;
   }
 
   try {
@@ -385,45 +359,7 @@ export async function requestLocalFolderPermission(
 export async function checkLocalFolderPermissionStatus(): Promise<boolean> {
   try {
     if (Capacitor.isNativePlatform()) {
-      try {
-        const { LocalNotifications } = await import('@capacitor/local-notifications');
-        const perms = (await LocalNotifications.checkPermissions()) as any;
-        if (perms && typeof perms.storage === 'string') {
-          const isGranted = perms.storage === 'granted';
-          try {
-            if (isGranted) {
-              localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
-            } else {
-              localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
-            }
-          } catch {}
-          return isGranted;
-        }
-      } catch {
-        // Fallback to probe below
-      }
-      try {
-        await Filesystem.writeFile({
-          path: `${LOCAL_BACKUP_FOLDER_NAME}/.yaad_perm_probe`,
-          data: 'ok',
-          directory: Directory.ExternalStorage,
-          encoding: Encoding.UTF8,
-          recursive: true,
-        });
-        await Filesystem.deleteFile({
-          path: `${LOCAL_BACKUP_FOLDER_NAME}/.yaad_perm_probe`,
-          directory: Directory.ExternalStorage,
-        }).catch(() => {});
-        try {
-          localStorage.setItem(FOLDER_PERMISSION_GRANTED_KEY, 'true');
-        } catch {}
-        return true;
-      } catch {
-        try {
-          localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
-        } catch {}
-        return false;
-      }
+      return true;
     }
 
     const handle = await getDirectoryHandleFromDB();
@@ -669,29 +605,28 @@ export async function performAutoBackup(
     };
 
     // 0. CRITICAL NON-DESTRUCTIVE DISK GUARD:
-    // Before overwriting YAAD/yaad_backup.json (or localStorage/IndexedDB), check if an existing backup file on disk
-    // already contains reminders/occasions/ideas/locations that were not yet loaded into memory (e.g. before storage permission was granted).
-    const dirHandle = await getDirectoryHandleFromDB();
+    // Before overwriting private backup vault (or localStorage/IndexedDB), check if an existing backup file
+    // already contains reminders/occasions/ideas/locations not yet loaded into memory.
+    const isNative = Capacitor.isNativePlatform();
+    const dirHandle = isNative ? null : await getDirectoryHandleFromDB();
     if (!forceReplace) {
       let existingDiskSnapshot: AutoBackupSnapshot | null = null;
-      try {
-        const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
-        for (const dir of [Directory.ExternalStorage, Directory.External, Directory.Documents]) {
+      if (isNative) {
+        try {
           const existing = await Filesystem.readFile({
-            path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
-            directory: dir,
+            path: `${LOCAL_BACKUP_FOLDER_NAME}/${LOCAL_BACKUP_FILE_NAME}`,
+            directory: Directory.Data,
             encoding: Encoding.UTF8,
           }).catch(() => null);
           if (existing?.data) {
             const parsed = safeParseJsonFromReadFileData(existing.data);
             if (isValidSnapshot(parsed) && getSnapshotItemCount(parsed) > 0) {
               existingDiskSnapshot = parsed;
-              break;
             }
           }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
       }
 
       if (!existingDiskSnapshot && dirHandle) {
@@ -740,38 +675,30 @@ export async function performAutoBackup(
       });
     }
 
-    // 3. Save to Device Folder 'YAAD/yaad_backup.json' (FileSystemDirectoryHandle if granted)
-    if (dirHandle) {
-      await writeToDirectoryHandle(dirHandle, payload);
-    }
-
-    // 4. Save to Native Capacitor Filesystem 'YAAD/yaad_backup.json' in root storage if available
-    try {
-      const cleanSubName = LOCAL_BACKUP_FOLDER_NAME;
-      const jsonData = JSON.stringify(payload, null, 2);
-
-      const writeDirs = [
-        Directory.ExternalStorage,
-        Directory.External,
-        Directory.Documents,
-        Directory.Data,
-      ];
-      for (const dir of writeDirs) {
+    if (isNative) {
+      // 3 (Native). App-private Directory.Data crash recovery vault ONLY (no shared external storage)
+      try {
+        const jsonData = JSON.stringify(payload, null, 2);
         await Filesystem.writeFile({
-          path: `${cleanSubName}/${LOCAL_BACKUP_FILE_NAME}`,
+          path: `${LOCAL_BACKUP_FOLDER_NAME}/${LOCAL_BACKUP_FILE_NAME}`,
           data: jsonData,
-          directory: dir,
+          directory: Directory.Data,
           encoding: Encoding.UTF8,
           recursive: true,
         }).catch(() => {});
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
-    }
+    } else {
+      // 3 (Web/PWA). Save to Device Folder 'YAAD/yaad_backup.json' (FileSystemDirectoryHandle if granted)
+      if (dirHandle) {
+        await writeToDirectoryHandle(dirHandle, payload);
+      }
 
-    // 5. Save to OPFS 'YAAD/yaad_backup.json' & physical 'YAAD' folder
-    await writeToOpfsYaadFolder(payload);
-    await writeToServerAndCacheYaadFolder(payload);
+      // 4 (Web/PWA). Save to OPFS 'YAAD/yaad_backup.json' & physical 'YAAD' folder
+      await writeToOpfsYaadFolder(payload);
+      await writeToServerAndCacheYaadFolder(payload);
+    }
 
     return true;
   } catch (error) {
@@ -781,36 +708,33 @@ export async function performAutoBackup(
 }
 
 /**
- * Retrieves the best/latest backup from the Local 'YAAD' folder in root storage across all local storage layers.
+ * Retrieves the best/latest backup across local storage layers.
+ * On native Android, strictly reads app-private Directory.Data + IndexedDB + localStorage (no external storage).
  */
 export async function retrieveFromLocalYaadFolder(): Promise<AutoBackupSnapshot | null> {
   const candidates: { snap: AutoBackupSnapshot; isPhysicalDisk: boolean }[] = [];
+  const isNative = Capacitor.isNativePlatform();
 
-  // 1. User-granted Device Folder Handle ('YAAD/yaad_backup.json')
-  try {
-    const dirHandle = await getDirectoryHandleFromDB();
-    if (dirHandle) {
-      const fromHandle = await readFromDirectoryHandle(dirHandle);
-      if (fromHandle) candidates.push({ snap: fromHandle, isPhysicalDisk: true });
-    }
-  } catch {
-    // ignore
-  }
-
-  // 2. Native Android Capacitor Filesystem (strictly inside YAAD folder)
-  if (Capacitor.isNativePlatform() || (typeof window !== 'undefined' && (window as any).Capacitor?.Plugins?.Filesystem)) {
+  if (!isNative) {
+    // 1. User-granted Device Folder Handle ('YAAD/yaad_backup.json') on Desktop Web
     try {
-      const searchDirs = [
-        Directory.ExternalStorage,
-        Directory.External,
-        Directory.Documents,
-        Directory.Data,
-      ];
+      const dirHandle = await getDirectoryHandleFromDB();
+      if (dirHandle) {
+        const fromHandle = await readFromDirectoryHandle(dirHandle);
+        if (fromHandle) candidates.push({ snap: fromHandle, isPhysicalDisk: true });
+      }
+    } catch {
+      // ignore
+    }
+  } else {
+    // 2. Native Android Capacitor Filesystem (strictly app-private Directory.Data)
+    try {
+      const searchDirs = [Directory.Data];
 
       const folderPathsToTry = [LOCAL_BACKUP_FOLDER_NAME];
 
       for (const dir of searchDirs) {
-        const isExternalDisk = dir !== Directory.Data;
+        const isExternalDisk = false;
         for (const folderPath of folderPathsToTry) {
           try {
             // A) Fast direct readFile for standard backup file first
@@ -878,20 +802,21 @@ export async function retrieveFromLocalYaadFolder(): Promise<AutoBackupSnapshot 
     }
   }
 
-  // 3. OPFS 'YAAD/yaad_backup.json'
-  try {
-    const fromOpfs = await readFromOpfsYaadFolder();
-    if (fromOpfs) candidates.push({ snap: fromOpfs, isPhysicalDisk: false });
-  } catch {
-    // ignore
-  }
+  // 3. OPFS 'YAAD/yaad_backup.json' & Web Server/Cache (Web/PWA only)
+  if (!isNative) {
+    try {
+      const fromOpfs = await readFromOpfsYaadFolder();
+      if (fromOpfs) candidates.push({ snap: fromOpfs, isPhysicalDisk: false });
+    } catch {
+      // ignore
+    }
 
-  // 4. Physical 'YAAD/yaad_backup.json' & Cache Storage
-  try {
-    const fromServerOrCache = await readFromServerOrCacheYaadFolder();
-    if (fromServerOrCache) candidates.push({ snap: fromServerOrCache, isPhysicalDisk: false });
-  } catch {
-    // ignore
+    try {
+      const fromServerOrCache = await readFromServerOrCacheYaadFolder();
+      if (fromServerOrCache) candidates.push({ snap: fromServerOrCache, isPhysicalDisk: false });
+    } catch {
+      // ignore
+    }
   }
 
   // 5. IndexedDB Vault
@@ -981,3 +906,155 @@ export async function retrieveLatestBackupWithPriority(): Promise<{
   }
   return { snapshot: null, source: null };
 }
+
+export function markManualBackupCompleted(now: number = Date.now()): void {
+  try {
+    localStorage.setItem(LAST_MANUAL_BACKUP_KEY, String(now));
+    localStorage.removeItem(BACKUP_PROMPT_DISMISSED_AT_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export function snoozePeriodicBackupPrompt(now: number = Date.now()): void {
+  try {
+    localStorage.setItem(BACKUP_PROMPT_DISMISSED_AT_KEY, String(now));
+  } catch {
+    // ignore
+  }
+}
+
+export function shouldShowPeriodicBackupPrompt(totalActiveItems: number, now: number = Date.now()): boolean {
+  if (typeof window === 'undefined' || totalActiveItems <= 0) return false;
+  try {
+    let firstSeenAt = parseInt(localStorage.getItem(BACKUP_FIRST_DATA_SEEN_KEY) || '0', 10);
+    if (!firstSeenAt || isNaN(firstSeenAt)) {
+      firstSeenAt = now;
+      localStorage.setItem(BACKUP_FIRST_DATA_SEEN_KEY, String(now));
+      return false;
+    }
+
+    const lastManualAt = parseInt(localStorage.getItem(LAST_MANUAL_BACKUP_KEY) || '0', 10);
+    const dismissedAt = parseInt(localStorage.getItem(BACKUP_PROMPT_DISMISSED_AT_KEY) || '0', 10);
+    const baseline = Math.max(firstSeenAt, isNaN(lastManualAt) ? 0 : lastManualAt);
+    const snoozeUntil = isNaN(dismissedAt) ? 0 : dismissedAt;
+
+    return now - baseline >= THIRTY_DAYS_MS && now - snoozeUntil >= THIRTY_DAYS_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Manual Export:
+ * - On Native Android: writes a temporary JSON file in Directory.Cache and opens the system Share sheet via @capacitor/share.
+ * - On Web/PWA: triggers a clean JSON file download.
+ */
+export async function exportBackupToFile(
+  snapshot: {
+    reminders: Reminder[];
+    ideas: IdeaNote[];
+    savedLocations: SavedLocation[];
+    occasions: Occasion[];
+    settings?: AppSettings;
+  },
+  language: 'fa' | 'en' = 'fa'
+): Promise<{ ok: boolean; fileName: string; method: 'share' | 'download'; error?: string }> {
+  const now = Date.now();
+  const dateStamp = new Date(now).toISOString().slice(0, 10);
+  const fileName = `yaad_backup_${dateStamp}.json`;
+
+  const payload: AutoBackupSnapshot = {
+    version: 3,
+    updatedAt: now,
+    folder: LOCAL_BACKUP_FOLDER_NAME,
+    source: 'local_folder',
+    reminders: snapshot.reminders || [],
+    ideas: snapshot.ideas || [],
+    savedLocations: snapshot.savedLocations || [],
+    occasions: snapshot.occasions || [],
+    settings: snapshot.settings,
+  };
+
+  const jsonStr = JSON.stringify(payload, null, 2);
+
+  if (Capacitor.isNativePlatform()) {
+    try {
+      await Filesystem.writeFile({
+        path: fileName,
+        data: jsonStr,
+        directory: Directory.Cache,
+        encoding: Encoding.UTF8,
+        recursive: true,
+      });
+      const uriRes = await Filesystem.getUri({
+        path: fileName,
+        directory: Directory.Cache,
+      });
+      await Share.share({
+        title: language === 'en' ? 'YAAD Backup File' : 'فایل پشتیبان یاد',
+        text:
+          language === 'en'
+            ? 'YAAD JSON backup file'
+            : 'فایل پشتیبان اطلاعات اپلیکیشن یاد (YAAD)',
+        files: [uriRes.uri],
+        dialogTitle:
+          language === 'en'
+            ? 'Save or Share YAAD Backup'
+            : 'ذخیره یا اشتراک‌گذاری فایل پشتیبان یاد',
+      });
+      markManualBackupCompleted(now);
+      return { ok: true, fileName, method: 'share' };
+    } catch (err: any) {
+      return {
+        ok: false,
+        fileName,
+        method: 'share',
+        error: err?.message || (language === 'en' ? 'Share cancelled or failed.' : 'ارسال یا ذخیره فایل انجام نشد.'),
+      };
+    }
+  }
+
+  try {
+    const blob = new Blob([jsonStr], { type: 'application/json;charset=utf-8' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = fileName;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    setTimeout(() => {
+      try {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(objectUrl);
+      } catch {
+        // ignore
+      }
+    }, 500);
+
+    markManualBackupCompleted(now);
+    return { ok: true, fileName, method: 'download' };
+  } catch (err: any) {
+    return {
+      ok: false,
+      fileName,
+      method: 'download',
+      error: err?.message || (language === 'en' ? 'Backup download failed.' : 'دانلود فایل پشتیبان انجام نشد.'),
+    };
+  }
+}
+
+/**
+ * Manual Import: reads and validates a JSON backup file chosen via <input type="file">.
+ */
+export async function importBackupFromFile(file: File): Promise<AutoBackupSnapshot | null> {
+  const rawText = await file.text();
+  const parsed = safeParseJsonFromReadFileData(rawText);
+  if (!isValidSnapshot(parsed)) {
+    return null;
+  }
+  markManualBackupCompleted(Date.now());
+  return parsed;
+}
+
