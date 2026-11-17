@@ -10883,23 +10883,6 @@ class YaadGeofenceService : Service(), LocationListener {
         return deg.toFloat()
     }
 
-    private fun buildStatusBarTitleAndBody(
-        title: String,
-        statusPhrase: String,
-        distance: Int,
-        radius: Int,
-        isEn: Boolean,
-        visualOnlyBanner: Boolean = false,
-        visualBannerText: String = ""
-    ): Pair<String, String> {
-        val distText = if (isEn) "\${distance}m" else "\${toPersianDigits(distance.toString())} متر"
-        val radText = if (isEn) "Radius: \${radius}m" else "شعاع حصار: \${toPersianDigits(radius.toString())} متر"
-        val phrase = if (visualOnlyBanner && visualBannerText.isNotEmpty()) visualBannerText else statusPhrase
-        val notifTitle = "\$title  •  \$distText"
-        val notifBody = if (phrase.isNotEmpty()) "\$phrase  |  \$radText" else radText
-        return Pair(notifTitle, notifBody)
-    }
-
     private fun updateActiveStatusBarNotificationDistance(newDistance: Int) {
         val notifId = activeGeofenceNotificationId
         if (notifId == Int.MIN_VALUE || activeGeofenceItemId.isEmpty()) return
@@ -12082,6 +12065,23 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             }
             return sb.toString()
+        }
+
+        private fun buildStatusBarTitleAndBody(
+            title: String,
+            statusPhrase: String,
+            distance: Int,
+            radius: Int,
+            isEn: Boolean,
+            visualOnlyBanner: Boolean = false,
+            visualBannerText: String = ""
+        ): Pair<String, String> {
+            val distText = if (isEn) "\${distance}m" else "\${toPersianDigitsStatic(distance.toString())} متر"
+            val radText = if (isEn) "Radius: \${radius}m" else "شعاع حصار: \${toPersianDigitsStatic(radius.toString())} متر"
+            val phrase = if (visualOnlyBanner && visualBannerText.isNotEmpty()) visualBannerText else statusPhrase
+            val notifTitle = "\$title  •  \$distText"
+            val notifBody = if (phrase.isNotEmpty()) "\$phrase  |  \$radText" else radText
+            return Pair(notifTitle, notifBody)
         }
 
         fun setGeofenceAudioMuteState(context: Context, muted: Boolean): Boolean {
@@ -13732,6 +13732,104 @@ function validateKotlinFiles(dir) {
           }
           if (!declaredLower.has(id)) {
             throw new Error(`[KotlinValidator] Undeclared identifier '${id}' in ${file} (around normalized line ${lineIdx + 1})`);
+          }
+        }
+      }
+    }
+
+    // Verify companion objects do not call instance-only methods directly, and cross-class Class.method() calls exist on companion objects
+    const fileLines = txt.split('\n');
+    let clsDepth = 0;
+    let compStart = -1;
+    let compEnd = -1;
+    let compDepth = -1;
+    const instFuns = new Set();
+    const compFuns = new Set();
+    for (let li = 0; li < fileLines.length; li++) {
+      const stripped = fileLines[li].replace(/"([^"\\]|\\.)*"/g, '""').replace(/\/\/.*$/, '').trim();
+      if (compStart === -1 && /\bcompanion\s+object\b/.test(stripped)) {
+        compStart = li;
+        compDepth = clsDepth;
+      }
+      const o = (stripped.match(/\{/g) || []).length;
+      const c = (stripped.match(/\}/g) || []).length;
+      if (compStart === -1 && clsDepth === 1) {
+        const mf = stripped.match(/^(?:override\s+|private\s+|internal\s+|public\s+|protected\s+|suspend\s+)*fun\s+([A-Za-z0-9_]+)\s*\(/);
+        if (mf) instFuns.add(mf[1]);
+      }
+      if (compStart !== -1 && compEnd === -1 && clsDepth === compDepth + 1) {
+        const mf = stripped.match(/^(?:private\s+|internal\s+|public\s+|protected\s+|suspend\s+|@JvmStatic\s+)*fun\s+([A-Za-z0-9_]+)\s*\(/);
+        if (mf) compFuns.add(mf[1]);
+      }
+      clsDepth += o - c;
+      if (compStart !== -1 && compEnd === -1 && clsDepth <= compDepth) {
+        compEnd = li;
+      }
+    }
+    if (compStart !== -1) {
+      const endBound = compEnd === -1 ? fileLines.length - 1 : compEnd;
+      for (let li = compStart; li <= endBound; li++) {
+        const cleaned = fileLines[li].replace(/"([^"\\]|\\.)*"/g, '""').replace(/\/\/.*$/, '');
+        for (const fn of instFuns) {
+          if (compFuns.has(fn)) continue;
+          const callRe = new RegExp(`(?<![.\\w])${fn}\\s*\\(`);
+          if (callRe.test(cleaned)) {
+            throw new Error(
+              `[KotlinValidator] Companion object in ${file} line ${li + 1} calls instance-only fun '${fn}()'`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  // Verify cross-file ClassName.method() calls target declared companion/object functions
+  const classStaticMembers = {};
+  for (const file of files) {
+    const txt = fs.readFileSync(path.join(dir, file), 'utf8');
+    const fLines = txt.split('\n');
+    let clsName = null;
+    let isObj = false;
+    let inComp = false;
+    let d = 0;
+    let cd = -1;
+    for (let li = 0; li < fLines.length; li++) {
+      const t = fLines[li].replace(/"([^"\\]|\\.)*"/g, '""').replace(/\/\/.*$/, '').trim();
+      const cm = t.match(/^(?:open\s+|abstract\s+|data\s+)?(class|object)\s+([A-Z][A-Za-z0-9_]*)/);
+      if (cm && d === 0) {
+        clsName = cm[2];
+        isObj = cm[1] === 'object';
+        classStaticMembers[clsName] = classStaticMembers[clsName] || new Set();
+      }
+      if (/\bcompanion\s+object\b/.test(t)) {
+        inComp = true;
+        cd = d;
+      }
+      const o = (t.match(/\{/g) || []).length;
+      const c = (t.match(/\}/g) || []).length;
+      if (clsName) {
+        const fm = t.match(/^(?:@[\w.]+\s+)*(?:override\s+|private\s+|internal\s+|public\s+|protected\s+|suspend\s+|@JvmStatic\s+)*fun\s+([A-Za-z0-9_]+)\s*\(/);
+        if (fm && ((isObj && d === 1) || (!isObj && inComp && d === cd + 1))) {
+          classStaticMembers[clsName].add(fm[1]);
+        }
+      }
+      d += o - c;
+      if (inComp && d <= cd) inComp = false;
+    }
+  }
+  for (const file of files) {
+    const txt = fs.readFileSync(path.join(dir, file), 'utf8');
+    const fLines = txt.split('\n');
+    for (let li = 0; li < fLines.length; li++) {
+      const cleaned = fLines[li].replace(/"([^"\\]|\\.)*"/g, '""').replace(/\/\/.*$/, '');
+      for (const [cls, members] of Object.entries(classStaticMembers)) {
+        const re = new RegExp(`\\b${cls}\\.([a-z][A-Za-z0-9_]*)\\s*\\(`, 'g');
+        let m;
+        while ((m = re.exec(cleaned)) !== null) {
+          if (!members.has(m[1])) {
+            throw new Error(
+              `[KotlinValidator] Missing companion/object method '${cls}.${m[1]}()' referenced in ${file}:${li + 1}`
+            );
           }
         }
       }
