@@ -1564,14 +1564,27 @@ export default function App() {
     window.addEventListener('yaad:open-pro-paywall', handleOpenProPaywallEvent);
 
     // Reconcile 40-day Trial & Store Pro purchases on startup and foreground resume
+    // Includes a 4s safety timeout so entitlementReady becomes true even if store/network hangs.
+    const entitlementFallbackTimer = window.setTimeout(() => {
+      setProEntitlement((prev) =>
+        prev.entitlementReady ? prev : { ...prev, entitlementReady: true }
+      );
+    }, 4000);
+
     const syncEntitlementNow = () => {
       reconcileProEntitlement({
         language: settingsRef.current?.language === 'en' ? 'en' : 'fa',
       })
         .then((nextState) => {
+          window.clearTimeout(entitlementFallbackTimer);
           setProEntitlement(nextState);
         })
-        .catch(() => {});
+        .catch(() => {
+          window.clearTimeout(entitlementFallbackTimer);
+          setProEntitlement((prev) =>
+            prev.entitlementReady ? prev : { ...prev, entitlementReady: true }
+          );
+        });
     };
     syncEntitlementNow();
 
@@ -1589,6 +1602,7 @@ export default function App() {
     } catch {}
 
     return () => {
+      window.clearTimeout(entitlementFallbackTimer);
       unsubscribe();
       cleanupNotificationListeners();
       navigator.serviceWorker?.removeEventListener('message', handleSwMessage);
@@ -1603,9 +1617,10 @@ export default function App() {
   }, [applyRestoredBackupIfNeeded, openProPaywall]);
 
   // Non-destructive Geofence deactivation when Pro trial expires and user has no paid Pro plan:
-  // Preserves all saved coordinates, radius, triggerOn, and customMessage while setting enabled: false.
+  // Waits until `entitlementReady` is true (first reconcileProEntitlement completed or 4s timeout)
+  // so paid buyers' active geofences are never disabled during startup before store verification finishes.
   useEffect(() => {
-    if (proEntitlement.hasProAccess) return;
+    if (!proEntitlement.entitlementReady || proEntitlement.hasProAccess) return;
 
     if (isGeofenceActiveRef.current) {
       isGeofenceActiveRef.current = false;
@@ -1662,7 +1677,7 @@ export default function App() {
         settingsRef.current.language || 'fa'
       );
     }
-  }, [proEntitlement.hasProAccess]);
+  }, [proEntitlement.entitlementReady, proEntitlement.hasProAccess]);
 
   // Save to localStorage
   useEffect(() => {
@@ -4457,7 +4472,11 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <Crown className="w-4 h-4 text-amber-300 shrink-0" />
                     <span>
-                      {proEntitlement.hasPaidPro
+                      {!proEntitlement.entitlementReady
+                        ? isEn
+                          ? 'YAAD Pro (Checking...)'
+                          : 'نسخه Pro (در حال بررسی...)'
+                        : proEntitlement.hasPaidPro
                         ? isEn
                           ? 'YAAD Pro (Active)'
                           : 'نسخه حرفه‌ای یاد (فعال)'
@@ -4494,8 +4513,8 @@ export default function App() {
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
                     <p>
                       {isEn
-                        ? 'Your reminders, occasions, ideas, and places are stored privately on your device (auto-backup in app-private storage does not survive uninstall—export JSON regularly to keep a permanent copy). GPS runs adaptively only when Geofence radar is active. Coordinates are sent to OpenStreetMap Nominatim only on address lookup, optional feedback is sent only if you submit it, and store billing/reviews are handled via Bazaar/Myket.'
-                        : 'داده‌های شما در فضای خصوصی دستگاه ذخیره می‌شوند (بک‌آپ خودکار داخلی با حذف نصب اپ پاک می‌شود؛ برای نگهداری دائمی از خروجی JSON استفاده کنید). رادار GPS فقط هنگام فعال بودن به‌صورت کم‌مصرف کار می‌کند. مختصات فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد کاملاً اختیاری است و پرداخت/امتیازدهی در محیط امن بازار یا مایکت انجام می‌گیرد.'}
+                        ? 'Your reminders, occasions, ideas, and places are stored privately on your device. JSON backup export & import is free forever (auto-backup in app-private storage does not survive uninstall). GPS runs adaptively only when Geofence radar is active. Coordinates are sent to OpenStreetMap Nominatim only on address lookup, optional feedback is sent only if you submit it, store billing/reviews run via Bazaar/Myket, and the 730-user Launch Offer uses anonymous Firebase Auth and a one-way SHA-256 recovery code hash without any personal data.'
+                        : 'داده‌های شما در فضای خصوصی دستگاه ذخیره می‌شوند و خروجی/بازیابی فایل پشتیبان (JSON) برای همه کاربران همیشه رایگان است (بک‌آپ خودکار داخلی با حذف نصب اپ پاک می‌شود). رادار GPS فقط هنگام فعال بودن به‌صورت کم‌مصرف کار می‌کند. مختصات فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد کاملاً اختیاری است، پرداخت/امتیازدهی در محیط امن بازار یا مایکت انجام می‌گیرد و هدیه لانچ (۷۳۰ نفر اول) صرفاً از شمارنده ناشناس Firebase و هش یک‌طرفه SHA-256 کد بازیابی استفاده می‌کند.'}
                     </p>
                     <a
                       href="/privacy.html"
@@ -4943,11 +4962,11 @@ export default function App() {
                   <p className="text-[11px] text-stone-300 leading-relaxed mt-0.5">
                     {proEntitlement.trial.isTrialActive
                       ? isEn
-                        ? 'All Pro features are unlocked. Upgrade anytime to keep occasions, geofences, sketches, photos, backups, and themes active.'
+                        ? 'All Pro features are unlocked. Upgrade anytime to keep occasions, geofences, sketches, photos, and themes active.'
                         : 'همه امکانات پیشرفته برای شما فعال است. برای ادامه استفاده بدون وقفه پس از روز ۴۰، نسخه Pro را ببینید.'
                       : isEn
-                      ? 'Unlimited reminders & full-screen alarms stay free forever, and all your saved data is safe. Upgrade to unlock Pro creation & editing.'
-                      : 'یادآورهای نامحدود و زنگ تمام‌صفحه همچنان رایگان است و همه اطلاعات قبلی شما حفظ شده است. برای باز کردن ساخت/ویرایش امکانات پیشرفته ارتقا دهید.'}
+                      ? 'Unlimited reminders, full-screen alarms & JSON backups stay free forever, and all your saved data is safe. Upgrade to unlock Pro creation & editing.'
+                      : 'یادآورهای نامحدود، زنگ تمام‌صفحه و پشتیبان‌گیری (JSON) همچنان رایگان است و همه اطلاعات قبلی شما حفظ شده است. برای باز کردن ساخت/ویرایش امکانات پیشرفته ارتقا دهید.'}
                   </p>
                 </div>
               </div>
@@ -4998,10 +5017,6 @@ export default function App() {
               <button
                 type="button"
                 onClick={async () => {
-                  if (!proEntitlement.hasProAccess) {
-                    openProPaywall('backup');
-                    return;
-                  }
                   const res = await exportBackupToFile(
                     { reminders, ideas, savedLocations, occasions, settings },
                     settings.language
@@ -5020,7 +5035,6 @@ export default function App() {
                 className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow-sm active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
               >
                 <span>{isEn ? 'Export Backup' : 'خروجی گرفتن'}</span>
-                <ProBadge locked={!proEntitlement.hasProAccess} />
               </button>
               <button
                 type="button"
@@ -5736,6 +5750,7 @@ export default function App() {
         onScheduleTestAlarm={handleScheduleTestAlarm}
         proEntitlement={proEntitlement}
         onOpenProPaywall={(feat) => openProPaywall(feat)}
+        onEntitlementUpdated={(next) => setProEntitlement(next)}
       />
 
       {/* PRO PAYWALL & STORE PURCHASE MODAL */}

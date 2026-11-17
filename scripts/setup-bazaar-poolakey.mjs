@@ -368,18 +368,26 @@ class BazaarBillingPlugin : Plugin() {
                         for (item in activePurchases) {
                             purchasesArr.put(buildPurchaseResult(item, "PURCHASED"))
                         }
+                        val revokedArr = JSArray()
+                        for (info in purchasedList) {
+                            if (requestedSkus.contains(info.productId) && info.purchaseState != PurchaseState.PURCHASED) {
+                                revokedArr.put(info.productId)
+                            }
+                        }
 
                         val primary = activePurchases.firstOrNull()
                         if (primary != null) {
                             val result = buildPurchaseResult(primary, "PURCHASED")
                             result.put("isProOwned", true)
                             result.put("purchases", purchasesArr)
+                            result.put("revokedProductIds", revokedArr)
                             call.resolve(result)
                         } else {
                             val result = JSObject()
                             result.put("isProOwned", false)
                             result.put("status", "NOT_PURCHASED")
                             result.put("purchases", JSArray())
+                            result.put("revokedProductIds", revokedArr)
                             call.resolve(result)
                         }
                     }
@@ -390,6 +398,48 @@ class BazaarBillingPlugin : Plugin() {
                             Exception(throwable)
                         )
                     }
+                }
+            },
+            onError = { message, code, throwable ->
+                call.reject(message, code, throwable?.let { Exception(it) })
+            }
+        )
+    }
+
+    @PluginMethod
+    fun consumePurchase(call: PluginCall) {
+        val purchaseToken = call.getString("purchaseToken")?.trim()
+        if (purchaseToken.isNullOrEmpty()) {
+            call.reject("شناسه توکن خرید (purchaseToken) مشخص نشده است.", "MISSING_TOKEN")
+            return
+        }
+
+        val rsaPublicKey = call.getString("rsaPublicKey")?.trim()
+        ensureConnected(
+            rsaPublicKey = rsaPublicKey,
+            onReady = { activePayment ->
+                try {
+                    activePayment.consumeProduct(purchaseToken) {
+                        consumeSucceed {
+                            val res = JSObject()
+                            res.put("consumed", true)
+                            res.put("purchaseToken", purchaseToken)
+                            call.resolve(res)
+                        }
+                        consumeFailed { throwable ->
+                            call.reject(
+                                "خطا در مصرف توکن خرید در کافه‌بازار: \${throwable.localizedMessage ?: "خطای نامشخص"}",
+                                "CONSUME_FAILED",
+                                Exception(throwable)
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    call.reject(
+                        "خطا در فراخوانی consumeProduct کافه‌بازار: \${e.localizedMessage ?: "خطای نامشخص"}",
+                        "CONSUME_FAILED",
+                        e
+                    )
                 }
             },
             onError = { message, code, throwable ->

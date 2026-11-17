@@ -45,7 +45,11 @@ import { APP_VERSION } from '../utils/version';
 import { toPersianDigits, formatJalaliFull } from '../utils/jalali';
 import { openReviewDialogDirectly } from '../utils/reviewFlow';
 import { ProBadge } from './ProBadge';
-import { ProEntitlementState, ProFeatureId } from '../utils/proEntitlement';
+import {
+  ProEntitlementState,
+  ProFeatureId,
+  recoverLaunchOfferGiftByCode,
+} from '../utils/proEntitlement';
 import { getBillingProvider, isPurchaseStateValid } from '../utils/billingProvider';
 import { 
   setGeofenceTrackingEnabled
@@ -111,6 +115,7 @@ interface SettingsModalProps {
   onScheduleTestAlarm?: () => Promise<boolean | void> | void;
   proEntitlement?: ProEntitlementState;
   onOpenProPaywall?: (feature?: ProFeatureId) => void;
+  onEntitlementUpdated?: (next: ProEntitlementState) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -135,6 +140,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onScheduleTestAlarm,
   proEntitlement,
   onOpenProPaywall,
+  onEntitlementUpdated,
 }) => {
   const hasProAccess = proEntitlement ? proEntitlement.hasProAccess : true;
   const currentLanguage = settings?.language || 'fa';
@@ -149,6 +155,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [isSchedulingTestAlarm, setIsSchedulingTestAlarm] = useState(false);
   const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isBackupBusy, setIsBackupBusy] = useState(false);
+  const [importedRecoveryCode, setImportedRecoveryCode] = useState<string | null>(null);
+  const [isRecoveringFromBackup, setIsRecoveringFromBackup] = useState(false);
   const importBackupInputRef = useRef<HTMLInputElement | null>(null);
 
   // Gift Pro to a friend state (for verified paid Pro users only)
@@ -602,7 +610,11 @@ https://myket.ir/app/com.yaad.reminder`;
                   </div>
                   <div className="min-w-0">
                     <span className="text-xs sm:text-sm font-black text-white block truncate">
-                      {proEntitlement.hasPaidPro
+                      {!proEntitlement.entitlementReady
+                        ? isFa
+                          ? 'نسخه یاد (در حال بررسی...)'
+                          : 'YAAD Status (Checking...)'
+                        : proEntitlement.hasPaidPro
                         ? isFa
                           ? 'نسخه حرفه‌ای یاد (فعال)'
                           : 'YAAD Pro (Active)'
@@ -615,7 +627,11 @@ https://myket.ir/app/com.yaad.reminder`;
                         : 'YAAD Free Tier'}
                     </span>
                     <span className="text-[11px] text-stone-400 block truncate">
-                      {proEntitlement.hasPaidPro
+                      {!proEntitlement.entitlementReady
+                        ? isFa
+                          ? 'در حال بررسی وضعیت اشتراک...'
+                          : 'Checking subscription status...'
+                        : proEntitlement.hasPaidPro
                         ? proEntitlement.reason === 'paid_lifetime'
                           ? isFa
                             ? 'اشتراک دائمی بدون محدودیت زمانی'
@@ -628,8 +644,8 @@ https://myket.ir/app/com.yaad.reminder`;
                           ? 'همه امکانات پیشرفته برای شما باز است'
                           : 'All Pro features are currently unlocked'
                         : isFa
-                        ? 'یادآور و زنگ تمام‌صفحه رایگان • ارتقا به Pro'
-                        : 'Reminders & full-screen alarms free • Upgrade to Pro'}
+                        ? 'یادآور، زنگ تمام‌صفحه و بک‌آپ JSON رایگان • ارتقا به Pro'
+                        : 'Reminders, full-screen alarms & JSON backup free • Upgrade to Pro'}
                     </span>
                   </div>
                 </div>
@@ -1894,10 +1910,6 @@ https://myket.ir/app/com.yaad.reminder`;
                       type="button"
                       disabled={isBackupBusy}
                       onClick={async () => {
-                        if (!hasProAccess) {
-                          onOpenProPaywall?.('backup');
-                          return;
-                        }
                         setIsBackupBusy(true);
                         setBackupFeedback(null);
                         try {
@@ -1926,24 +1938,18 @@ https://myket.ir/app/com.yaad.reminder`;
                     >
                       <Download className="w-4 h-4 shrink-0" />
                       <span>{isFa ? 'خروجی گرفتن (JSON)' : 'Export Backup'}</span>
-                      <ProBadge locked={!hasProAccess} />
                     </button>
 
                     <button
                       type="button"
                       disabled={isBackupBusy}
                       onClick={() => {
-                        if (!hasProAccess) {
-                          onOpenProPaywall?.('backup');
-                          return;
-                        }
                         importBackupInputRef.current?.click();
                       }}
                       className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
                     >
                       <Upload className="w-4 h-4 shrink-0" />
                       <span>{isFa ? 'وارد کردن بک‌آپ' : 'Import Backup'}</span>
-                      <ProBadge locked={!hasProAccess} />
                     </button>
 
                     <input
@@ -1957,6 +1963,7 @@ https://myket.ir/app/com.yaad.reminder`;
                         if (!file) return;
                         setIsBackupBusy(true);
                         setBackupFeedback(null);
+                        setImportedRecoveryCode(null);
                         try {
                           const snap = await importBackupFromFile(file);
                           if (!snap) {
@@ -1979,6 +1986,13 @@ https://myket.ir/app/com.yaad.reminder`;
                               },
                               'merge'
                             );
+                          }
+                          if (
+                            snap.launchGiftRecoveryCode &&
+                            typeof snap.launchGiftRecoveryCode === 'string' &&
+                            !proEntitlement?.hasPaidPro
+                          ) {
+                            setImportedRecoveryCode(snap.launchGiftRecoveryCode.trim());
                           }
                           const restoredCount = getSnapshotItemCount(snap);
                           setBackupFeedback({
@@ -2003,6 +2017,68 @@ https://myket.ir/app/com.yaad.reminder`;
                       }`}
                     >
                       {backupFeedback.text}
+                    </div>
+                  )}
+
+                  {importedRecoveryCode && !proEntitlement?.hasPaidPro && (
+                    <div className="p-3 rounded-xl bg-amber-500/15 border border-amber-400/45 space-y-2 animate-in fade-in">
+                      <p className="text-[11px] text-amber-200 font-bold leading-relaxed">
+                        {isFa
+                          ? `کد بازیابی هدیه جشنواره لانچ (${importedRecoveryCode}) در فایل پشتیبان یافت شد. آیا می‌خواهید هدیه نسخه Pro خود را اکنون فعال و بازیابی کنید؟`
+                          : `Launch Offer recovery code (${importedRecoveryCode}) was found in this backup. Would you like to restore your Pro gift now?`}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          disabled={isRecoveringFromBackup}
+                          onClick={async () => {
+                            setIsRecoveringFromBackup(true);
+                            try {
+                              const res = await recoverLaunchOfferGiftByCode(
+                                importedRecoveryCode,
+                                currentLanguage
+                              );
+                              onEntitlementUpdated?.(res.state);
+                              if (res.recovered) {
+                                setImportedRecoveryCode(null);
+                                setBackupFeedback({
+                                  type: 'success',
+                                  text: isFa
+                                    ? `هدیه جشنواره لانچ با موفقیت بازیابی شد! کد بازیابی جدید شما: ${res.recoveryCode || ''}`
+                                    : `Launch gift restored! Your new recovery code: ${res.recoveryCode || ''}`,
+                                });
+                              } else {
+                                setBackupFeedback({
+                                  type: 'error',
+                                  text:
+                                    res.errorMessage ||
+                                    (isFa
+                                      ? 'بازیابی هدیه از کد داخل بک‌آپ انجام نشد.'
+                                      : 'Could not recover gift from backup code.'),
+                                });
+                              }
+                            } finally {
+                              setIsRecoveringFromBackup(false);
+                            }
+                          }}
+                          className="min-h-[38px] px-3.5 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs transition-all cursor-pointer disabled:opacity-60"
+                        >
+                          {isRecoveringFromBackup
+                            ? isFa
+                              ? 'در حال بازیابی هدیه...'
+                              : 'Restoring Gift...'
+                            : isFa
+                            ? 'بازیابی هدیه لانچ'
+                            : 'Restore Launch Gift'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setImportedRecoveryCode(null)}
+                          className="min-h-[38px] px-3 py-1.5 rounded-xl bg-stone-800 hover:bg-stone-700 text-stone-300 font-bold text-xs transition-colors cursor-pointer"
+                        >
+                          {isFa ? 'بستن' : 'Dismiss'}
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -2299,8 +2375,8 @@ https://myket.ir/app/com.yaad.reminder`;
                   </div>
                   <p>
                     {isFa
-                      ? 'داده‌های شما به‌صورت محلی در فضای خصوصی دستگاه ذخیره می‌شوند و دسترسی به ریشه حافظه حذف شده است. بک‌آپ خودکار داخلی پس از حذف نصب برنامه پاک می‌شود؛ برای نگهداری دائمی حتماً از «خروجی گرفتن (JSON)» استفاده کنید. مختصات GPS فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، بازخورد پشتیبانی کاملاً اختیاری است و پرداخت/امتیاز درگاه رسمی کافه‌بازار یا مایکت را دارد.'
-                      : 'Your reminders, occasions, ideas, and places are stored privately on your device (auto-backup in app-private storage does not survive uninstall; export a JSON backup regularly). Geofence GPS is adaptive and non-continuous. Coordinates go to OpenStreetMap Nominatim only on address lookup, feedback submission is strictly optional, and store purchases/ratings run through Cafe Bazaar or Myket.'}
+                      ? 'داده‌های شما به‌صورت محلی در فضای خصوصی دستگاه ذخیره می‌شوند و دسترسی به ریشه حافظه حذف شده است. خروجی گرفتن و بازیابی فایل پشتیبان (JSON) برای همه کاربران همیشه رایگان است (بک‌آپ خودکار داخلی با حذف نصب اپ پاک می‌شود). مختصات GPS فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد اختیاری است، پرداخت درون‌برنامه‌ای در محیط امن کافه‌بازار یا مایکت انجام می‌گیرد و برای هدیه جشنواره لانچ (۷۳۰ نفر اول) صرفاً یک شمارنده ناشناس (Firebase Anonymous Auth) و هش یک‌طرفه SHA-256 کد بازیابی بدون هیچ اطلاعات هویتی به کار می‌رود.'
+                      : 'Your reminders, occasions, ideas, and places are stored privately on your device. JSON backup export & import is free forever (auto-backup in app-private storage does not survive uninstall). Coordinates go to OpenStreetMap Nominatim only on address lookup, feedback submission is optional, store purchases run through Cafe Bazaar or Myket, and the 730-user Launch Offer uses anonymous Firebase Auth and a one-way SHA-256 recovery code hash without any personal data.'}
                   </p>
                   <p className="text-[10.5px] text-stone-400">
                     {isFa

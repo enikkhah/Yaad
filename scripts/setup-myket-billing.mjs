@@ -433,11 +433,16 @@ class MyketBillingPlugin : Plugin() {
 
                                     val activePurchases = mutableListOf<Purchase>()
                                     val purchasesArr = JSArray()
+                                    val revokedArr = JSArray()
                                     for (sku in requestedSkus) {
                                         val purchase = inventory.getPurchase(sku)
-                                        if (purchase != null && purchase.purchaseState == 0) {
-                                            activePurchases.add(purchase)
-                                            purchasesArr.put(buildPurchaseResult(purchase, "PURCHASED"))
+                                        if (purchase != null) {
+                                            if (purchase.purchaseState == 0) {
+                                                activePurchases.add(purchase)
+                                                purchasesArr.put(buildPurchaseResult(purchase, "PURCHASED"))
+                                            } else {
+                                                revokedArr.put(sku)
+                                            }
                                         }
                                     }
 
@@ -446,12 +451,14 @@ class MyketBillingPlugin : Plugin() {
                                         val result = buildPurchaseResult(primary, "PURCHASED")
                                         result.put("isProOwned", true)
                                         result.put("purchases", purchasesArr)
+                                        result.put("revokedProductIds", revokedArr)
                                         call.resolve(result)
                                     } else {
                                         val result = JSObject()
                                         result.put("isProOwned", false)
                                         result.put("status", "NOT_PURCHASED")
                                         result.put("purchases", JSArray())
+                                        result.put("revokedProductIds", revokedArr)
                                         call.resolve(result)
                                     }
                                 } finally {
@@ -461,6 +468,92 @@ class MyketBillingPlugin : Plugin() {
                         )
                     } catch (e: Exception) {
                         call.reject("خطا در استعلام سوابق خرید از مایکت", "QUERY_FAILED", e)
+                        onDone()
+                    }
+                },
+                onError = { message, code, throwable ->
+                    call.reject(message, code, throwable?.let { Exception(it) })
+                    onDone()
+                }
+            )
+        }
+    }
+
+    @PluginMethod
+    fun consumePurchase(call: PluginCall) {
+        val purchaseToken = call.getString("purchaseToken")?.trim() ?: ""
+        val productId = call.getString("productId")?.trim() ?: ""
+        if (purchaseToken.isEmpty() && productId.isEmpty()) {
+            call.reject("شناسه محصول یا توکن خرید برای مصرف مشخص نشده است.", "MISSING_TOKEN")
+            return
+        }
+
+        val rsaPublicKey = call.getString("rsaPublicKey")?.trim()
+        val querySkus = if (productId.isNotEmpty()) listOf(productId) else emptyList()
+        enqueueOperation { onDone ->
+            ensureReady(
+                rsaPublicKey = rsaPublicKey,
+                onReady = { helper ->
+                    try {
+                        helper.queryInventoryAsync(
+                            false,
+                            querySkus,
+                            IabHelper.QueryInventoryFinishedListener { queryResult, inventory ->
+                                if (queryResult == null || queryResult.isFailure || inventory == null) {
+                                    call.reject(
+                                        "خطا در یافتن خرید برای مصرف در مایکت: \${queryResult?.message ?: "خطای نامشخص"}",
+                                        "CONSUME_QUERY_FAILED"
+                                    )
+                                    onDone()
+                                    return@QueryInventoryFinishedListener
+                                }
+
+                                val targetPurchase: Purchase? =
+                                    (if (productId.isNotEmpty()) inventory.getPurchase(productId) else null)
+                                        ?: inventory.allPurchases?.firstOrNull { p ->
+                                            (purchaseToken.isNotEmpty() && p.token == purchaseToken) ||
+                                                (productId.isNotEmpty() && p.sku == productId)
+                                        }
+
+                                if (targetPurchase == null) {
+                                    val res = JSObject()
+                                    res.put("consumed", true)
+                                    res.put("alreadyConsumed", true)
+                                    call.resolve(res)
+                                    onDone()
+                                    return@QueryInventoryFinishedListener
+                                }
+
+                                try {
+                                    helper.consumeAsync(
+                                        targetPurchase,
+                                        IabHelper.OnConsumeFinishedListener { _, consumeRes ->
+                                            try {
+                                                if (consumeRes != null && consumeRes.isSuccess) {
+                                                    val res = JSObject()
+                                                    res.put("consumed", true)
+                                                    res.put("purchaseToken", targetPurchase.token ?: purchaseToken)
+                                                    res.put("productId", targetPurchase.sku ?: productId)
+                                                    call.resolve(res)
+                                                } else {
+                                                    call.reject(
+                                                        "مصرف خرید در مایکت انجام نشد: \${consumeRes?.message ?: "خطای نامشخص"}",
+                                                        "CONSUME_FAILED"
+                                                    )
+                                                }
+                                            } finally {
+                                                onDone()
+                                            }
+                                        }
+                                    )
+                                } catch (e: Exception) {
+                                    call.reject("خطا در اجرای consumeAsync مایکت", "CONSUME_FAILED", e)
+                                    onDone()
+                                }
+                            }
+                        )
+                    } catch (e: Exception) {
+                        call.reject("خطا در استعلام خرید جهت مصرف در مایکت", "CONSUME_FAILED", e)
                         onDone()
                     }
                 },

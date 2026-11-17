@@ -8,6 +8,7 @@ import { Capacitor } from '@capacitor/core';
 import { Filesystem, Directory, Encoding } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import { Reminder, IdeaNote, SavedLocation, Occasion, AppSettings } from '../types';
+import { getSavedLaunchRecoveryCodeSync } from './launchOffer';
 
 export const AUTO_BACKUP_STORAGE_KEY = 'yaad_auto_backup_vault_v1';
 export const LOCAL_BACKUP_FOLDER_NAME = 'YAAD';
@@ -36,6 +37,7 @@ export interface AutoBackupSnapshot {
   savedLocations: SavedLocation[];
   occasions: Occasion[];
   settings?: AppSettings;
+  launchGiftRecoveryCode?: string;
 }
 
 function isValidSnapshot(data: any): data is AutoBackupSnapshot {
@@ -592,6 +594,7 @@ export async function performAutoBackup(
     const localFolder = LOCAL_BACKUP_FOLDER_NAME;
     const forceReplace = Boolean(options?.forceReplace);
 
+    const savedRecoveryCode = getSavedLaunchRecoveryCodeSync() || undefined;
     let payload: AutoBackupSnapshot = {
       version: 3,
       updatedAt: now,
@@ -602,6 +605,7 @@ export async function performAutoBackup(
       savedLocations: snapshot.savedLocations || [],
       occasions: snapshot.occasions || [],
       settings: snapshot.settings,
+      ...(savedRecoveryCode ? { launchGiftRecoveryCode: savedRecoveryCode } : {}),
     };
 
     // 0. CRITICAL NON-DESTRUCTIVE DISK GUARD:
@@ -964,6 +968,7 @@ export async function exportBackupToFile(
   const dateStamp = new Date(now).toISOString().slice(0, 10);
   const fileName = `yaad_backup_${dateStamp}.json`;
 
+  const savedRecoveryCode = getSavedLaunchRecoveryCodeSync() || undefined;
   const payload: AutoBackupSnapshot = {
     version: 3,
     updatedAt: now,
@@ -974,6 +979,7 @@ export async function exportBackupToFile(
     savedLocations: snapshot.savedLocations || [],
     occasions: snapshot.occasions || [],
     settings: snapshot.settings,
+    ...(savedRecoveryCode ? { launchGiftRecoveryCode: savedRecoveryCode } : {}),
   };
 
   const jsonStr = JSON.stringify(payload, null, 2);

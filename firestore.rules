@@ -15,6 +15,10 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isValidSha256Hex(hash) {
+      return hash is string && hash.size() == 64 && hash.matches('^[a-f0-9]{64}$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -24,7 +28,7 @@ service cloud.firestore {
     }
 
     function expectedBatchForNumber(n) {
-      return n <= 365 ? 1 : (n <= 730 ? 2 : 0);
+      return n >= 1 && n <= 365 ? 1 : (n >= 366 && n <= 730 ? 2 : 0);
     }
 
     // Pillar 2: Validation Blueprints
@@ -33,7 +37,7 @@ service cloud.firestore {
         data.keys().hasOnly(['count', 'lastUid', 'updatedAt']) &&
         data.count is int &&
         data.count >= 1 &&
-        data.count <= 10000000 &&
+        data.count <= 730 &&
         data.lastUid is string &&
         data.lastUid.size() >= 1 &&
         data.lastUid.size() <= 128 &&
@@ -44,7 +48,7 @@ service cloud.firestore {
 
     function isValidLaunchOfferClaim(data, uid) {
       return data.keys().hasAll(['uid', 'userNumber', 'batch', 'claimedAt']) &&
-        data.keys().hasOnly(['uid', 'userNumber', 'batch', 'claimedAt']) &&
+        data.keys().hasOnly(['uid', 'userNumber', 'batch', 'claimedAt', 'recoveredFromHash']) &&
         data.uid is string &&
         data.uid.size() >= 1 &&
         data.uid.size() <= 128 &&
@@ -53,16 +57,54 @@ service cloud.firestore {
         data.uid == request.auth.uid &&
         data.userNumber is int &&
         data.userNumber >= 1 &&
-        data.userNumber <= 10000000 &&
+        data.userNumber <= 730 &&
         data.batch is int &&
-        (data.batch == 0 || data.batch == 1 || data.batch == 2) &&
+        (data.batch == 1 || data.batch == 2) &&
         data.batch == expectedBatchForNumber(data.userNumber) &&
-        data.claimedAt == request.time;
+        data.claimedAt == request.time &&
+        (!('recoveredFromHash' in data) || isValidSha256Hex(data.recoveredFromHash));
+    }
+
+    function isValidLaunchOfferRecovery(data) {
+      return data.keys().hasAll(['uid', 'userNumber', 'batch', 'createdAt']) &&
+        data.keys().hasOnly(['uid', 'userNumber', 'batch', 'createdAt']) &&
+        data.uid is string &&
+        data.uid.size() >= 1 &&
+        data.uid.size() <= 128 &&
+        data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.uid == request.auth.uid &&
+        data.userNumber is int &&
+        data.userNumber >= 1 &&
+        data.userNumber <= 730 &&
+        data.batch is int &&
+        (data.batch == 1 || data.batch == 2) &&
+        data.batch == expectedBatchForNumber(data.userNumber) &&
+        data.createdAt == request.time;
+    }
+
+    function isAtomicCounterClaim(data) {
+      return !('recoveredFromHash' in data) &&
+        existsAfter(/databases/$(database)/documents/launch_offer/counter) &&
+        getAfter(/databases/$(database)/documents/launch_offer/counter).data.lastUid == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/launch_offer/counter).data.count == data.userNumber &&
+        (!exists(/databases/$(database)/documents/launch_offer/counter)
+          ? data.userNumber == 1
+          : (get(/databases/$(database)/documents/launch_offer/counter).data.count < 730 &&
+             data.userNumber == get(/databases/$(database)/documents/launch_offer/counter).data.count + 1));
+    }
+
+    function isAtomicRecoveryClaim(data) {
+      return ('recoveredFromHash' in data) &&
+        isValidSha256Hex(data.recoveredFromHash) &&
+        exists(/databases/$(database)/documents/launch_recovery/$(data.recoveredFromHash)) &&
+        !existsAfter(/databases/$(database)/documents/launch_recovery/$(data.recoveredFromHash)) &&
+        get(/databases/$(database)/documents/launch_recovery/$(data.recoveredFromHash)).data.userNumber == data.userNumber &&
+        get(/databases/$(database)/documents/launch_recovery/$(data.recoveredFromHash)).data.batch == data.batch;
     }
 
     // Singleton counter document: /launch_offer/counter
-    // Can ONLY be created (with count == 1) or incremented by +1 in the exact same
-    // atomic transaction that creates /launch_claims/{request.auth.uid} for the first time.
+    // Strictly capped at 730. Can ONLY be created (with count == 1) or incremented by +1
+    // while existing().count < 730 in the exact same atomic transaction that creates /launch_claims/{request.auth.uid}.
     match /launch_offer/{docId} {
       allow get: if isSignedIn() && docId == 'counter';
       allow list: if false;
@@ -73,23 +115,27 @@ service cloud.firestore {
         incoming().count == 1 &&
         !exists(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
         existsAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
-        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.userNumber == 1;
+        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.userNumber == 1 &&
+        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.batch == 1;
 
       allow update: if isSignedIn() &&
         docId == 'counter' &&
         isValidLaunchOfferCounter(incoming()) &&
         incoming().diff(existing()).affectedKeys().hasOnly(['count', 'lastUid', 'updatedAt']) &&
+        existing().count < 730 &&
         incoming().count == existing().count + 1 &&
         !exists(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
         existsAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
-        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.userNumber == incoming().count;
+        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.userNumber == incoming().count &&
+        (getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.batch == 1 ||
+         getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.batch == 2);
 
       allow delete: if false;
     }
 
-    // Per-UID immutable claim document: /launch_claims/{uid}
-    // Each authenticated UID can create their own claim document at most ONCE,
-    // and only in the same atomic transaction that increments /launch_offer/counter.
+    // Per-UID claim document: /launch_claims/{uid}
+    // Created either once via atomic counter increment (1..730, batch 1 or 2)
+    // OR created/updated via atomic consumption of a valid one-time /launch_recovery/{hash} document.
     match /launch_claims/{uid} {
       allow get: if isSignedIn() && isValidId(uid) && request.auth.uid == uid;
       allow list: if false;
@@ -98,11 +144,46 @@ service cloud.firestore {
         isValidId(uid) &&
         request.auth.uid == uid &&
         isValidLaunchOfferClaim(incoming(), uid) &&
-        existsAfter(/databases/$(database)/documents/launch_offer/counter) &&
-        getAfter(/databases/$(database)/documents/launch_offer/counter).data.lastUid == request.auth.uid &&
-        getAfter(/databases/$(database)/documents/launch_offer/counter).data.count == incoming().userNumber;
+        (isAtomicCounterClaim(incoming()) || isAtomicRecoveryClaim(incoming()));
 
-      allow update, delete: if false;
+      allow update: if isSignedIn() &&
+        isValidId(uid) &&
+        request.auth.uid == uid &&
+        isValidLaunchOfferClaim(incoming(), uid) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['userNumber', 'batch', 'claimedAt', 'recoveredFromHash']) &&
+        incoming().uid == existing().uid &&
+        isAtomicRecoveryClaim(incoming());
+
+      allow delete: if false;
+    }
+
+    // One-time recovery document: /launch_recovery/{hash}
+    // Document ID is the lowercase SHA-256 hex digest of the user's 12-char recovery code.
+    // Listing is strictly forbidden (allow list: if false).
+    // Creation requires the caller to hold a matching /launch_claims/{uid} document.
+    // Deletion is allowed only when consumed in an atomic recovery transaction (or rotated by its owner).
+    match /launch_recovery/{hash} {
+      allow get: if isSignedIn() && isValidSha256Hex(hash);
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+        isValidSha256Hex(hash) &&
+        isValidLaunchOfferRecovery(incoming()) &&
+        existsAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
+        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.uid == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.userNumber == incoming().userNumber &&
+        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.batch == incoming().batch;
+
+      allow update: if false;
+
+      allow delete: if isSignedIn() &&
+        isValidSha256Hex(hash) &&
+        (existing().uid == request.auth.uid ||
+         (existsAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
+          ('recoveredFromHash' in getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data) &&
+          getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.recoveredFromHash == hash &&
+          getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.userNumber == existing().userNumber &&
+          getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.batch == existing().batch));
     }
   }
 }

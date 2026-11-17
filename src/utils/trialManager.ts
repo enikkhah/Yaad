@@ -301,8 +301,8 @@ export async function scheduleTrialMilestoneNotifications(
         at: new Date(trialStatus.trialStartedAt + 37 * DAY_MS),
         title: isFa ? '۳ روز پایانی دوره رایگان امکانات Pro' : '3 days left in your YAAD Pro trial',
         body: isFa
-          ? 'فقط ۳ روز تا پایان دسترسی رایگان به حصار مکانی، مناسبت‌ها، عکس، دست‌خط، بک‌آپ و تم‌ها باقی مانده است.'
-          : 'Only 3 days left before Pro features lock. All your saved data remains safe.',
+          ? 'فقط ۳ روز تا پایان دسترسی رایگان به حصار مکانی، مناسبت‌ها، مکان‌ها، عکس، دست‌خط و تم‌ها باقی مانده است.'
+          : 'Only 3 days left before Pro features lock. All your saved data and JSON backup remain free and safe.',
       },
       {
         id: TRIAL_NOTIFICATION_IDS.DAY_40,
@@ -310,8 +310,8 @@ export async function scheduleTrialMilestoneNotifications(
         at: new Date(trialStatus.trialStartedAt + 40 * DAY_MS),
         title: isFa ? 'پایان دوره ۴۰ روزه امکانات Pro یاد' : 'Your 40-day YAAD Pro trial has ended',
         body: isFa
-          ? 'یادآورهای نامحدود و زنگ تمام‌صفحه همچنان رایگان است. برای فعال‌سازی دوباره امکانات پیشرفته، نسخه Pro را فعال کنید.'
-          : 'Unlimited reminders & full-screen alarms stay free forever. Upgrade to Pro anytime.',
+          ? 'یادآورهای نامحدود، زنگ تمام‌صفحه و پشتیبان‌گیری (JSON) همچنان رایگان است. برای فعال‌سازی دوباره امکانات پیشرفته، نسخه Pro را فعال کنید.'
+          : 'Unlimited reminders, full-screen alarms & JSON backup stay free forever. Upgrade to Pro anytime.',
       },
     ];
 

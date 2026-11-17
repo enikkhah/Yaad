@@ -122,6 +122,19 @@ jobs:
                   f.write(f"v_name={raw_name}\n")
           PY
 
+      - name: Verify Privacy Policy Synchronization (public/privacy.html vs docs/privacy.html)
+        run: |
+          if [ ! -f "public/privacy.html" ] || [ ! -f "docs/privacy.html" ]; then
+            echo "::error::Both public/privacy.html and docs/privacy.html must exist."
+            exit 1
+          fi
+          if ! cmp -s public/privacy.html docs/privacy.html; then
+            echo "::error::public/privacy.html and docs/privacy.html are out of sync! Run 'node scripts/sync-privacy.mjs' and commit both files."
+            diff -u public/privacy.html docs/privacy.html || true
+            exit 1
+          fi
+          echo "✅ public/privacy.html and docs/privacy.html are identical."
+
       - name: Run TypeScript & Build Verification Lint
         run: npm run lint
 
@@ -616,19 +629,39 @@ jobs:
             RSA_STATUS="کلید RSA تنظیم نشده (پرداخت غیرفعال در UI)"
           fi
 
+          FINAL_VNAME="${MANIFEST_VNAME:-$V_NAME}"
+          FINAL_VCODE="${MANIFEST_VCODE:-$V_CODE}"
+
+          # Render store/RELEASE_INFO-${STORE_TARGET}.md from store/listing-fa.md template
+          if [ -f "store/listing-fa.md" ]; then
+            sed -e "s/{{VERSION_NAME}}/${FINAL_VNAME}/g" \
+                -e "s/{{VERSION_CODE}}/${FINAL_VCODE}/g" \
+                -e "s/{{STORE_TARGET}}/${STORE_TARGET}/g" \
+                store/listing-fa.md > "store/RELEASE_INFO-${STORE_TARGET}.md"
+          fi
+
           {
             echo "### ✅ ساخت نسخه انتشار یاد — فروشگاه \`${STORE_TARGET}\`"
             echo ""
             echo "- **فروشگاه هدف (VITE_STORE):** \`${STORE_TARGET}\` • **وضعیت کلید RSA:** ${RSA_STATUS}"
             echo "- **نام برنامه در مانیفست (Launcher):** \`${APP_LABEL}\`"
-            echo "- **نام نسخه اعمال‌شده در کل اپ و اندروید:** \`${MANIFEST_VNAME:-$V_NAME}\`"
-            echo "- **کد نسخه (versionCode در مانیفست):** \`${MANIFEST_VCODE:-$V_CODE}\`"
+            echo "- **نام نسخه اعمال‌شده در کل اپ و اندروید:** \`${FINAL_VNAME}\`"
+            echo "- **کد نسخه (versionCode در مانیفست):** \`${FINAL_VCODE}\`"
             echo "- **targetSdk:** \`${TARGET_SDK}\` • **minSdk:** \`${MIN_SDK}\`"
             echo ""
             echo "| نوع خروجی | نام آرتیفکت | وضعیت | لینک دانلود مستقیم |"
             echo "| :--- | :--- | :--- | :--- |"
             echo "| **AAB (${STORE_TARGET})** | \`Yaad-Release-AAB-${STORE_TARGET}\` | ✅ آماده (\`#${AAB_ID}\`) | [دانلود AAB (${STORE_TARGET})](${AAB_URL}) |"
             echo "| **APK (${STORE_TARGET})** | \`Yaad-Release-APK-${STORE_TARGET}\` | ✅ آماده (\`#${APK_ID}\`) | [دانلود APK (${STORE_TARGET})](${APK_URL}) |"
+            echo ""
+            echo "#### 📋 متن آماده یادداشت انتشار (Release Notes) برای پنل \`${STORE_TARGET}\`"
+            echo "\`\`\`text"
+            echo "نسخه ${FINAL_VNAME} (کد نسخه ${FINAL_VCODE}):"
+            echo "• ۴۰ روز دسترسی هدیه به تمام امکانات حرفه‌ای (Pro) از اولین اجرا + جشنواره لانچ برای ۷۳۰ نصب اول با کد بازیابی ۱۲ کاراکتری"
+            echo "• رایگان شدن همیشگی «خروجی گرفتن و بازیابی فایل پشتیبان (JSON)» برای همه کاربران"
+            echo "• پشتیبانی از تمدید اشتراک یک‌ساله و محافظت هوشمند از وضعیت خرید کاربران در برابر قطعی موقت شبکه"
+            echo "• بهبود دقت آلارم‌های پس‌زمینه، اعلان تمام‌صفحه روی صفحه قفل و پایش کم‌مصرف حصار مکانی (Geofence)"
+            echo "\`\`\`"
             echo ""
             echo "#### فهرست مجوزهای مانیفست نهایی (${STORE_TARGET})"
             echo "${PERMS_LIST}"

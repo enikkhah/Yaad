@@ -8,8 +8,8 @@ import {
 
 export interface SkuPriceDetail {
   sku: string;
-  title: string;
-  price: string;
+  title?: string;
+  price?: string;
   description?: string;
 }
 
@@ -17,28 +17,32 @@ export interface StorePurchaseRecord {
   productId: string;
   orderId: string;
   purchaseToken: string;
-  purchaseTime: number; // ms since epoch
-  purchaseState: 'PURCHASED' | 'CANCELED' | 'REFUNDED' | string;
-  payload?: string;
-  packageName?: string;
-  dataSignature?: string;
-  status?: 'PURCHASED' | 'ALREADY_OWNED' | string;
-}
-
-export interface OwnershipQueryResult {
-  isProOwned: boolean;
-  purchases: StorePurchaseRecord[];
-  offlineOrUnavailable?: boolean;
-  errorCode?: string;
-  errorMessage?: string;
+  payload: string;
+  packageName: string;
+  purchaseTime: number;
+  purchaseState: 'PURCHASED' | 'REFUNDED' | 'CANCELED' | 'UNSPECIFIED';
+  dataSignature: string;
 }
 
 export interface PurchaseResult {
   success: boolean;
   cancelled?: boolean;
   alreadyOwned?: boolean;
-  purchase?: StorePurchaseRecord;
+  offlineOrUnavailable?: boolean;
   errorCode?: string;
+  errorMessage?: string;
+  purchase?: StorePurchaseRecord;
+}
+
+export interface QueryPurchasesResult {
+  offlineOrUnavailable: boolean;
+  errorMessage?: string;
+  purchases: StorePurchaseRecord[];
+  revokedProductIds?: string[];
+}
+
+export interface ConsumePurchaseResult {
+  consumed: boolean;
   errorMessage?: string;
 }
 
@@ -46,256 +50,401 @@ export interface BillingProvider {
   readonly store: StoreTarget;
   isAvailable(): boolean;
   querySkuDetails(skus: string[]): Promise<SkuPriceDetail[]>;
-  queryPurchases(skus: string[]): Promise<OwnershipQueryResult>;
   purchaseProduct(sku: string, payload?: string): Promise<PurchaseResult>;
+  queryPurchases(skus: string[]): Promise<QueryPurchasesResult>;
+  consumePurchase(purchaseToken: string, productId?: string): Promise<ConsumePurchaseResult>;
   disconnect(): Promise<void>;
 }
 
-interface NativeBillingPlugin {
+interface NativeBillingPluginBridge {
   querySkuDetails(options: {
     productIds: string[];
     rsaPublicKey: string;
   }): Promise<{ skuDetails?: SkuPriceDetail[] }>;
-  checkProOwnership(options: {
-    productIds: string[];
-    productId?: string;
-    rsaPublicKey: string;
-  }): Promise<{
-    isProOwned?: boolean;
-    status?: string;
-    purchases?: StorePurchaseRecord[];
-    productId?: string;
-    orderId?: string;
-    purchaseToken?: string;
-    purchaseTime?: number;
-    purchaseState?: string;
-    payload?: string;
-    packageName?: string;
-    dataSignature?: string;
-  }>;
   purchasePro(options: {
     productId: string;
     rsaPublicKey: string;
     payload?: string;
-  }): Promise<StorePurchaseRecord>;
+  }): Promise<any>;
+  checkProOwnership(options: {
+    productId?: string;
+    productIds?: string[];
+    rsaPublicKey: string;
+  }): Promise<{
+    isProOwned?: boolean;
+    status?: string;
+    purchases?: any[];
+    revokedProductIds?: string[];
+    productId?: string;
+    orderId?: string;
+    purchaseToken?: string;
+    payload?: string;
+    packageName?: string;
+    purchaseTime?: number;
+    purchaseState?: string;
+    dataSignature?: string;
+  }>;
+  consumePurchase(options: {
+    purchaseToken: string;
+    productId?: string;
+    rsaPublicKey: string;
+  }): Promise<{
+    consumed?: boolean;
+    alreadyConsumed?: boolean;
+    purchaseToken?: string;
+    productId?: string;
+  }>;
   disconnect(): Promise<void>;
 }
 
-const BazaarBillingNative = registerPlugin<NativeBillingPlugin>('BazaarBilling');
-const MyketBillingNative = registerPlugin<NativeBillingPlugin>('MyketBilling');
+const BazaarBillingNative = registerPlugin<NativeBillingPluginBridge>('BazaarBilling');
+const MyketBillingNative = registerPlugin<NativeBillingPluginBridge>('MyketBilling');
 
-function normalizePurchases(
-  rawList: StorePurchaseRecord[] | undefined,
-  singleFallback?: Partial<StorePurchaseRecord>
-): StorePurchaseRecord[] {
-  const result: StorePurchaseRecord[] = [];
-  if (Array.isArray(rawList)) {
-    for (const item of rawList) {
-      if (item && item.productId && isPurchaseStateValid(item.purchaseState)) {
-        result.push({
-          ...item,
-          purchaseTime: normalizePurchaseTimeMs(item.purchaseTime),
-        });
-      }
-    }
-  }
-  if (
-    result.length === 0 &&
-    singleFallback &&
-    singleFallback.productId &&
-    isPurchaseStateValid(singleFallback.purchaseState)
-  ) {
-    result.push({
-      productId: singleFallback.productId,
-      orderId: singleFallback.orderId || '',
-      purchaseToken: singleFallback.purchaseToken || '',
-      purchaseTime: normalizePurchaseTimeMs(singleFallback.purchaseTime),
-      purchaseState: singleFallback.purchaseState || 'PURCHASED',
-      payload: singleFallback.payload,
-      packageName: singleFallback.packageName,
-      dataSignature: singleFallback.dataSignature,
-      status: singleFallback.status,
-    });
-  }
-  return result;
+const BILLING_CALL_TIMEOUT_MS = 12000;
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('BILLING_TIMEOUT'));
+    }, timeoutMs);
+    promise
+      .then((val) => {
+        clearTimeout(timer);
+        resolve(val);
+      })
+      .catch((err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+  });
 }
 
-export function normalizePurchaseTimeMs(rawTime: unknown): number {
-  const num = typeof rawTime === 'number' ? rawTime : Number(rawTime);
-  if (!Number.isFinite(num) || num <= 0) return Date.now();
-  // Poolakey / IAB may occasionally report seconds if < 1e12; normalize to ms
-  return num < 1e12 ? num * 1000 : num;
+function normalizePurchaseState(raw: unknown): StorePurchaseRecord['purchaseState'] {
+  if (raw === 0 || raw === '0' || raw === 'PURCHASED') return 'PURCHASED';
+  if (raw === 1 || raw === '1' || raw === 'CANCELED' || raw === 'CANCELLED') return 'CANCELED';
+  if (raw === 2 || raw === '2' || raw === 'REFUNDED') return 'REFUNDED';
+  const upper = String(raw || '').toUpperCase();
+  if (upper.includes('PURCHASED')) return 'PURCHASED';
+  if (upper.includes('REFUND')) return 'REFUNDED';
+  if (upper.includes('CANCEL')) return 'CANCELED';
+  return 'UNSPECIFIED';
 }
 
 export function isPurchaseStateValid(state: unknown): boolean {
-  if (state === 0 || state === '0') return true;
-  if (typeof state === 'string') {
-    const upper = state.trim().toUpperCase();
-    return upper === 'PURCHASED';
-  }
-  return false;
+  return normalizePurchaseState(state) === 'PURCHASED';
 }
 
-function createAndroidStoreProvider(
-  store: 'bazaar' | 'myket',
-  plugin: NativeBillingPlugin
-): BillingProvider {
+function normalizePurchaseRecord(raw: any, fallbackSku?: string): StorePurchaseRecord | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const productId = String(raw.productId || raw.sku || fallbackSku || '').trim();
+  if (!productId) return null;
+  const purchaseState = normalizePurchaseState(raw.purchaseState);
+  let purchaseTime = Number(raw.purchaseTime || 0);
+  if (!Number.isFinite(purchaseTime) || purchaseTime <= 0) {
+    purchaseTime = Date.now();
+  } else if (purchaseTime < 10_000_000_000) {
+    // Convert seconds to ms if store returned epoch seconds
+    purchaseTime = purchaseTime * 1000;
+  }
+
   return {
-    store,
-    isAvailable(): boolean {
-      try {
-        return Capacitor.isNativePlatform() && isBillingConfigured(store);
-      } catch {
-        return false;
-      }
-    },
-    async querySkuDetails(skus: string[]): Promise<SkuPriceDetail[]> {
-      if (!this.isAvailable() || skus.length === 0) return [];
-      const rsaPublicKey = getActiveStoreRsaPublicKey(store);
-      if (!rsaPublicKey) return [];
-      try {
-        const res = await plugin.querySkuDetails({
-          productIds: skus,
-          rsaPublicKey,
-        });
-        return Array.isArray(res?.skuDetails) ? res.skuDetails : [];
-      } catch {
-        return [];
-      }
-    },
-    async queryPurchases(skus: string[]): Promise<OwnershipQueryResult> {
-      if (!Capacitor.isNativePlatform()) {
-        return { isProOwned: false, purchases: [], offlineOrUnavailable: true };
-      }
-      const rsaPublicKey = getActiveStoreRsaPublicKey(store);
-      if (!rsaPublicKey) {
-        return {
-          isProOwned: false,
-          purchases: [],
-          offlineOrUnavailable: true,
-          errorCode: 'MISSING_RSA_KEY',
-        };
-      }
-      try {
-        const res = await plugin.checkProOwnership({
-          productIds: skus,
-          productId: skus[0],
-          rsaPublicKey,
-        });
-        const validPurchases = normalizePurchases(res?.purchases, res);
-        return {
-          isProOwned: Boolean(res?.isProOwned && validPurchases.length > 0),
-          purchases: validPurchases,
-          offlineOrUnavailable: false,
-        };
-      } catch (err: any) {
-        const code = String(err?.code || '');
-        const msg = String(err?.message || err || '');
-        return {
-          isProOwned: false,
-          purchases: [],
-          offlineOrUnavailable: true,
-          errorCode: code || 'QUERY_FAILED',
-          errorMessage: msg,
-        };
-      }
-    },
-    async purchaseProduct(sku: string, payload: string = ''): Promise<PurchaseResult> {
-      if (!Capacitor.isNativePlatform()) {
-        return {
-          success: false,
-          errorCode: 'UNSUPPORTED_PLATFORM',
-          errorMessage: 'پرداخت درون‌برنامه‌ای فقط در نسخه اندروید فعال است.',
-        };
-      }
-      const rsaPublicKey = getActiveStoreRsaPublicKey(store);
-      if (!rsaPublicKey) {
-        return {
-          success: false,
-          errorCode: 'MISSING_RSA_KEY',
-          errorMessage: 'پیکربندی کلید امضای پرداخت فروشگاه در این بیلد کامل نیست.',
-        };
-      }
-      try {
-        const record = await plugin.purchasePro({
-          productId: sku,
-          rsaPublicKey,
-          payload,
-        });
-        if (!record || !isPurchaseStateValid(record.purchaseState)) {
-          return {
-            success: false,
-            errorCode: 'PURCHASE_INVALID_STATE',
-            errorMessage: 'تراکنش در وضعیت معتبر نیست (ممکن است لغو یا بازپرداخت شده باشد).',
-          };
-        }
-        return {
-          success: true,
-          alreadyOwned: record.status === 'ALREADY_OWNED',
-          purchase: {
-            ...record,
-            purchaseTime: normalizePurchaseTimeMs(record.purchaseTime),
-          },
-        };
-      } catch (err: any) {
-        const code = String(err?.code || '');
-        const message = String(err?.message || '');
-        const cancelled =
-          code === 'PURCHASE_CANCELLED' ||
-          message.includes('انصراف') ||
-          message.toLowerCase().includes('cancel');
-        return {
-          success: false,
-          cancelled,
-          errorCode: code || (cancelled ? 'PURCHASE_CANCELLED' : 'PURCHASE_FAILED'),
-          errorMessage:
-            message ||
-            (cancelled
-              ? 'پرداخت توسط کاربر لغو شد.'
-              : 'برقراری ارتباط با درگاه پرداخت فروشگاه انجام نشد.'),
-        };
-      }
-    },
-    async disconnect(): Promise<void> {
-      if (!Capacitor.isNativePlatform()) return;
-      try {
-        await plugin.disconnect();
-      } catch {
-        // ignore
-      }
-    },
+    productId,
+    orderId: String(raw.orderId || ''),
+    purchaseToken: String(raw.purchaseToken || raw.token || ''),
+    payload: String(raw.payload || raw.developerPayload || ''),
+    packageName: String(raw.packageName || ''),
+    purchaseTime,
+    purchaseState,
+    dataSignature: String(raw.dataSignature || raw.signature || ''),
   };
 }
 
-export const BazaarBillingProvider: BillingProvider = createAndroidStoreProvider(
-  'bazaar',
-  BazaarBillingNative
-);
+class NativeStoreBillingProvider implements BillingProvider {
+  readonly store: StoreTarget;
+  private readonly plugin: NativeBillingPluginBridge;
+  private readonly getRsaKey: () => string;
 
-export const MyketBillingProvider: BillingProvider = createAndroidStoreProvider(
-  'myket',
-  MyketBillingNative
-);
+  constructor(
+    store: 'bazaar' | 'myket',
+    plugin: NativeBillingPluginBridge,
+    getRsaKey: () => string
+  ) {
+    this.store = store;
+    this.plugin = plugin;
+    this.getRsaKey = getRsaKey;
+  }
 
-export const NullBillingProvider: BillingProvider = {
-  store: 'none',
-  isAvailable: () => false,
-  querySkuDetails: async () => [],
-  queryPurchases: async () => ({
-    isProOwned: false,
-    purchases: [],
-    offlineOrUnavailable: true,
-  }),
-  purchaseProduct: async () => ({
-    success: false,
-    errorCode: 'STORE_DISABLED',
-    errorMessage: 'پرداخت درون‌برنامه‌ای در این نسخه غیرفعال است.',
-  }),
-  disconnect: async () => {},
-};
+  isAvailable(): boolean {
+    try {
+      return Capacitor.isNativePlatform() && isBillingConfigured(this.store);
+    } catch {
+      return false;
+    }
+  }
 
-export function getBillingProvider(store: StoreTarget = getStoreTarget()): BillingProvider {
-  if (store === 'bazaar') return BazaarBillingProvider;
-  if (store === 'myket') return MyketBillingProvider;
-  return NullBillingProvider;
+  async querySkuDetails(skus: string[]): Promise<SkuPriceDetail[]> {
+    if (!this.isAvailable() || skus.length === 0) return [];
+    const rsaPublicKey = this.getRsaKey();
+    if (!rsaPublicKey) return [];
+    try {
+      const res = await withTimeout(
+        this.plugin.querySkuDetails({ productIds: skus, rsaPublicKey }),
+        BILLING_CALL_TIMEOUT_MS
+      );
+      if (Array.isArray(res?.skuDetails)) {
+        return res.skuDetails.filter((d) => d && typeof d.sku === 'string');
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  }
+
+  async purchaseProduct(sku: string, payload: string = ''): Promise<PurchaseResult> {
+    if (!this.isAvailable()) {
+      return {
+        success: false,
+        offlineOrUnavailable: true,
+        errorCode: 'BILLING_UNAVAILABLE',
+        errorMessage: 'درگاه پرداخت در این نسخه فعال نیست.',
+      };
+    }
+    const rsaPublicKey = this.getRsaKey();
+    if (!rsaPublicKey) {
+      return {
+        success: false,
+        offlineOrUnavailable: true,
+        errorCode: 'MISSING_RSA_KEY',
+        errorMessage: 'کلید عمومی پرداخت تنظیم نشده است.',
+      };
+    }
+
+    try {
+      // No timeout on interactive purchase flow because the user may take time in the store dialog
+      const raw = await this.plugin.purchasePro({
+        productId: sku,
+        rsaPublicKey,
+        payload,
+      });
+
+      const record = normalizePurchaseRecord(raw, sku);
+      if (!record || !isPurchaseStateValid(record.purchaseState)) {
+        return {
+          success: false,
+          errorCode: 'INVALID_PURCHASE_STATE',
+          errorMessage: 'وضعیت خرید معتبر نیست (لغو یا بازپرداخت شده است).',
+        };
+      }
+
+      return {
+        success: true,
+        alreadyOwned: raw?.status === 'ALREADY_OWNED',
+        purchase: record,
+      };
+    } catch (err: any) {
+      const code = String(err?.code || '');
+      const msg = String(err?.message || '');
+      const combined = `${code} ${msg}`.toUpperCase();
+
+      if (combined.includes('CANCEL')) {
+        return {
+          success: false,
+          cancelled: true,
+          errorCode: 'PURCHASE_CANCELLED',
+          errorMessage: 'فرآیند خرید لغو شد.',
+        };
+      }
+
+      if (combined.includes('ALREADY_OWNED') || combined.includes('ITEM_ALREADY_OWNED')) {
+        const check = await this.queryPurchases([sku]);
+        const found = check.purchases.find((p) => p.productId === sku);
+        if (found && isPurchaseStateValid(found.purchaseState)) {
+          return {
+            success: true,
+            alreadyOwned: true,
+            purchase: found,
+          };
+        }
+        return {
+          success: false,
+          alreadyOwned: true,
+          errorCode: 'ALREADY_OWNED',
+          errorMessage: msg || 'این محصول قبلاً خریداری شده است.',
+        };
+      }
+
+      return {
+        success: false,
+        offlineOrUnavailable:
+          combined.includes('CONNECTION') ||
+          combined.includes('DISCONNECTED') ||
+          combined.includes('NOT_FOUND') ||
+          combined.includes('TIMEOUT'),
+        errorCode: code || 'PURCHASE_FAILED',
+        errorMessage: msg || 'خطا در ارتباط با فروشگاه.',
+      };
+    }
+  }
+
+  async queryPurchases(skus: string[]): Promise<QueryPurchasesResult> {
+    if (!this.isAvailable()) {
+      return { offlineOrUnavailable: true, purchases: [] };
+    }
+    const rsaPublicKey = this.getRsaKey();
+    if (!rsaPublicKey) {
+      return { offlineOrUnavailable: true, purchases: [] };
+    }
+
+    try {
+      const raw = await withTimeout(
+        this.plugin.checkProOwnership({
+          productId: skus[0] || '',
+          productIds: skus,
+          rsaPublicKey,
+        }),
+        BILLING_CALL_TIMEOUT_MS
+      );
+
+      const list: StorePurchaseRecord[] = [];
+      if (Array.isArray(raw?.purchases)) {
+        for (const item of raw.purchases) {
+          const rec = normalizePurchaseRecord(item);
+          if (rec && isPurchaseStateValid(rec.purchaseState)) {
+            list.push(rec);
+          }
+        }
+      } else if (raw?.isProOwned) {
+        const single = normalizePurchaseRecord(raw, skus[0]);
+        if (single && isPurchaseStateValid(single.purchaseState)) {
+          list.push(single);
+        }
+      }
+
+      const revokedProductIds = Array.isArray(raw?.revokedProductIds)
+        ? raw.revokedProductIds.map((id) => String(id || '').trim()).filter(Boolean)
+        : [];
+
+      return {
+        offlineOrUnavailable: false,
+        purchases: list,
+        revokedProductIds,
+      };
+    } catch (err: any) {
+      return {
+        offlineOrUnavailable: true,
+        errorMessage: String(err?.message || 'عدم دسترسی موقت به سرویس فروشگاه'),
+        purchases: [],
+      };
+    }
+  }
+
+  async consumePurchase(purchaseToken: string, productId?: string): Promise<ConsumePurchaseResult> {
+    if (!this.isAvailable()) {
+      return {
+        consumed: false,
+        errorMessage: 'درگاه پرداخت در این نسخه فعال نیست.',
+      };
+    }
+    const rsaPublicKey = this.getRsaKey();
+    if (!rsaPublicKey) {
+      return {
+        consumed: false,
+        errorMessage: 'کلید عمومی پرداخت تنظیم نشده است.',
+      };
+    }
+    const cleanToken = String(purchaseToken || '').trim();
+    const cleanProductId = String(productId || '').trim();
+    if (!cleanToken && !cleanProductId) {
+      return {
+        consumed: false,
+        errorMessage: 'توکن خرید برای مصرف یافت نشد.',
+      };
+    }
+
+    try {
+      const res = await withTimeout(
+        this.plugin.consumePurchase({
+          purchaseToken: cleanToken,
+          productId: cleanProductId || undefined,
+          rsaPublicKey,
+        }),
+        BILLING_CALL_TIMEOUT_MS
+      );
+      return {
+        consumed: Boolean(res?.consumed),
+      };
+    } catch (err: any) {
+      return {
+        consumed: false,
+        errorMessage: String(err?.message || 'خطا در مصرف خرید قبلی جهت تمدید'),
+      };
+    }
+  }
+
+  async disconnect(): Promise<void> {
+    if (!this.isAvailable()) return;
+    try {
+      await this.plugin.disconnect();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+class NoopBillingProvider implements BillingProvider {
+  readonly store: StoreTarget = 'none';
+
+  isAvailable(): boolean {
+    return false;
+  }
+
+  async querySkuDetails(): Promise<SkuPriceDetail[]> {
+    return [];
+  }
+
+  async purchaseProduct(): Promise<PurchaseResult> {
+    return {
+      success: false,
+      offlineOrUnavailable: true,
+      errorCode: 'WEB_OR_UNCONFIGURED',
+      errorMessage: 'پرداخت درون‌برنامه‌ای فقط در نسخه اندروید کافه‌بازار یا مایکت فعال است.',
+    };
+  }
+
+  async queryPurchases(): Promise<QueryPurchasesResult> {
+    return { offlineOrUnavailable: true, purchases: [] };
+  }
+
+  async consumePurchase(): Promise<ConsumePurchaseResult> {
+    return { consumed: false };
+  }
+
+  async disconnect(): Promise<void> {}
+}
+
+let cachedProvider: BillingProvider | null = null;
+
+export function getBillingProvider(forceStore?: StoreTarget): BillingProvider {
+  const target = forceStore ?? getStoreTarget();
+  if (cachedProvider && cachedProvider.store === target) {
+    return cachedProvider;
+  }
+
+  if (target === 'bazaar') {
+    cachedProvider = new NativeStoreBillingProvider(
+      'bazaar',
+      BazaarBillingNative,
+      () => getActiveStoreRsaPublicKey('bazaar')
+    );
+  } else if (target === 'myket') {
+    cachedProvider = new NativeStoreBillingProvider(
+      'myket',
+      MyketBillingNative,
+      () => getActiveStoreRsaPublicKey('myket')
+    );
+  } else {
+    cachedProvider = new NoopBillingProvider();
+  }
+
+  return cachedProvider;
 }
