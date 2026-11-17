@@ -5,6 +5,7 @@ import {
   getStoreTarget,
   isBillingConfigured,
   PRO_ONE_YEAR_DURATION_MS,
+  PRO_SKU_IDS,
   ProPlanId,
   resolvePlanFromSku,
   StoreTarget,
@@ -16,6 +17,13 @@ import {
   SkuPriceDetail,
   StorePurchaseRecord,
 } from './billingProvider';
+import {
+  LaunchOfferAssignment,
+  LaunchOfferStatus,
+  markLaunchOfferGiftClaimed,
+  readLocalLaunchOfferSync,
+  syncLaunchOfferAssignment,
+} from './launchOffer';
 import {
   DAY_MS,
   getFastTrialStatusSync,
@@ -50,6 +58,9 @@ export interface CachedProEntitlement {
   expiresAt: number | null; // null = lifetime
   purchaseState: string;
   verifiedAt: number;
+  isLaunchOfferGrant?: boolean;
+  launchBatch?: 1 | 2;
+  launchUserNumber?: number;
 }
 
 export interface ProEntitlementState {
@@ -62,6 +73,8 @@ export interface ProEntitlementState {
   activePurchase: CachedProEntitlement | null;
   paidRemainingDays: number | null;
   lastSyncedAt: number | null;
+  launchOffer: LaunchOfferAssignment | null;
+  launchOfferStatus: LaunchOfferStatus;
 }
 
 const ENTITLEMENT_STORAGE_KEY = 'yaad_pro_entitlement_v1';
@@ -179,6 +192,36 @@ export function convertPurchaseRecordToEntitlement(
   };
 }
 
+function buildLaunchOfferEntitlement(
+  assignment: LaunchOfferAssignment,
+  store: StoreTarget
+): CachedProEntitlement | null {
+  if (assignment.batch !== 1 && assignment.batch !== 2) return null;
+  const isLifetime = assignment.batch === 1;
+  const planId: ProPlanId = isLifetime ? 'lifetime' : '1y';
+  const productId = isLifetime
+    ? PRO_SKU_IDS.LIFETIME_BATCH_1
+    : PRO_SKU_IDS.ONE_YEAR_BATCH_2;
+  const purchaseTime = assignment.assignedAt || Date.now();
+  const expiresAt = isLifetime ? null : purchaseTime + PRO_ONE_YEAR_DURATION_MS;
+
+  return {
+    version: 1,
+    store,
+    planId,
+    productId,
+    orderId: `LAUNCH_BATCH_${assignment.batch}_USER_${assignment.userNumber}`,
+    purchaseToken: `FIREBASE_UID_${assignment.uid}`,
+    purchaseTime,
+    expiresAt,
+    purchaseState: 'PURCHASED',
+    verifiedAt: Date.now(),
+    isLaunchOfferGrant: true,
+    launchBatch: assignment.batch,
+    launchUserNumber: assignment.userNumber,
+  };
+}
+
 function isEntitlementCurrentlyValid(ent: CachedProEntitlement | null, effectiveNow: number): boolean {
   if (!ent) return false;
   if (!isPurchaseStateValid(ent.purchaseState)) return false;
@@ -201,7 +244,9 @@ function pickBestValidEntitlement(
 export function buildEntitlementState(
   trial: TrialStatus,
   cached: CachedProEntitlement | null,
-  lastSyncedAt: number | null = null
+  lastSyncedAt: number | null = null,
+  launchOffer: LaunchOfferAssignment | null = null,
+  launchOfferStatus: LaunchOfferStatus = 'pending_network'
 ): ProEntitlementState {
   const store = getStoreTarget();
   const billingConfigured = isBillingConfigured(store);
@@ -223,6 +268,8 @@ export function buildEntitlementState(
       activePurchase: validPaid,
       paidRemainingDays,
       lastSyncedAt,
+      launchOffer,
+      launchOfferStatus,
     };
   }
 
@@ -236,6 +283,8 @@ export function buildEntitlementState(
     activePurchase: null,
     paidRemainingDays: null,
     lastSyncedAt,
+    launchOffer,
+    launchOfferStatus,
   };
 }
 
@@ -245,13 +294,22 @@ export function buildEntitlementState(
 export function getFastProEntitlementSync(): ProEntitlementState {
   const trial = getFastTrialStatusSync();
   const cached = readLocalEntitlement();
-  return buildEntitlementState(trial, cached, null);
+  const localOffer = readLocalLaunchOfferSync();
+  return buildEntitlementState(
+    trial,
+    cached,
+    null,
+    localOffer,
+    localOffer ? 'assigned' : 'pending_network'
+  );
 }
 
 /**
- * Reconciles trial timer, local & native entitlement caches, and live store purchases on startup/resume.
+ * Reconciles trial timer, local & native entitlement caches, 365-user Launch Offer batch,
+ * and live store purchases on startup/resume.
  * - Offline / store unreachable: keeps cached verified entitlement.
- * - Online & store responds cleanly without any valid purchase: clears revoked/refunded cache.
+ * - Online & store responds cleanly without any valid purchase: clears revoked/refunded store cache
+ *   while preserving valid claimed 100%-discount Launch Offer grants.
  * - Schedules Day 30 / 37 / 40 notifications if not yet paid.
  */
 export async function reconcileProEntitlement(
@@ -261,7 +319,10 @@ export async function reconcileProEntitlement(
     skipStoreQuery?: boolean;
   } = {}
 ): Promise<ProEntitlementState> {
-  const trial = await initAndReconcileTrialState();
+  const [trial, launchRes] = await Promise.all([
+    initAndReconcileTrialState(),
+    syncLaunchOfferAssignment(),
+  ]);
   const store = getStoreTarget();
   const provider = getBillingProvider(store);
 
@@ -270,6 +331,10 @@ export async function reconcileProEntitlement(
   const preQueryCandidates = [localCached, nativeCached].filter(
     (c): c is CachedProEntitlement => Boolean(c)
   );
+  if (launchRes.assignment?.claimedGift) {
+    const giftEnt = buildLaunchOfferEntitlement(launchRes.assignment, store);
+    if (giftEnt) preQueryCandidates.push(giftEnt);
+  }
   let activeCached = pickBestValidEntitlement(preQueryCandidates, trial.effectiveNow);
   let syncedAt: number | null = null;
 
@@ -287,8 +352,15 @@ export async function reconcileProEntitlement(
         activeCached = storeWinner;
         writeLocalEntitlement(storeWinner);
         await writeNativeEntitlement(storeWinner);
+      } else if (
+        activeCached?.isLaunchOfferGrant &&
+        isEntitlementCurrentlyValid(activeCached, trial.effectiveNow)
+      ) {
+        // Preserve verified 100%-free Launch Offer batch grant
+        writeLocalEntitlement(activeCached);
+        await writeNativeEntitlement(activeCached);
       } else {
-        // Store explicitly returned an empty/refunded purchase list -> revoke cached paid entitlement
+        // Store explicitly returned an empty/refunded purchase list -> revoke cached store entitlement
         activeCached = null;
         writeLocalEntitlement(null);
         await writeNativeEntitlement(null);
@@ -303,13 +375,62 @@ export async function reconcileProEntitlement(
     await writeNativeEntitlement(activeCached);
   }
 
-  const finalState = buildEntitlementState(trial, activeCached, syncedAt);
+  const finalState = buildEntitlementState(
+    trial,
+    activeCached,
+    syncedAt,
+    launchRes.assignment,
+    launchRes.status
+  );
   await scheduleTrialMilestoneNotifications(
     finalState.trial,
     finalState.hasPaidPro,
     options.language || 'fa'
   );
   return finalState;
+}
+
+/**
+ * Claims the 100%-free Launch Offer gift when the installation belongs to Batch 1 (users 1..365 -> Lifetime)
+ * or Batch 2 (users 366..730 -> 1-Year).
+ */
+export async function activateLaunchOfferGift(
+  language: 'fa' | 'en' = 'fa'
+): Promise<{
+  activated: boolean;
+  errorMessage?: string;
+  state: ProEntitlementState;
+}> {
+  const launchRes = await syncLaunchOfferAssignment();
+  const assignment = launchRes.assignment;
+  if (!assignment || (assignment.batch !== 1 && assignment.batch !== 2)) {
+    const state = await reconcileProEntitlement({ language, skipStoreQuery: true });
+    return {
+      activated: false,
+      errorMessage:
+        language === 'fa'
+          ? 'ظرفیت هدیه ۱۰۰٪ رایگان دسته‌های ۳۶۵ نفری تکمیل شده یا ارتباط با سرور برقرار نشد.'
+          : 'The 365-user free launch batch is not available for this installation.',
+      state,
+    };
+  }
+
+  const claimedAssignment = (await markLaunchOfferGiftClaimed()) || {
+    ...assignment,
+    claimedGift: true,
+  };
+  const store = getStoreTarget();
+  const giftEnt = buildLaunchOfferEntitlement(claimedAssignment, store);
+  if (giftEnt) {
+    writeLocalEntitlement(giftEnt);
+    await writeNativeEntitlement(giftEnt);
+  }
+
+  const state = await reconcileProEntitlement({ language, skipStoreQuery: true });
+  return {
+    activated: Boolean(giftEnt && state.hasPaidPro),
+    state,
+  };
 }
 
 /**
@@ -366,8 +487,11 @@ export async function restoreProPurchases(
   }
 
   const skus = getAllKnownProSkus(extraSkus);
-  const queryRes = await provider.queryPurchases(skus);
-  const trial = await initAndReconcileTrialState();
+  const [queryRes, trial, launchRes] = await Promise.all([
+    provider.queryPurchases(skus),
+    initAndReconcileTrialState(),
+    syncLaunchOfferAssignment(),
+  ]);
 
   if (queryRes.offlineOrUnavailable) {
     const state = await reconcileProEntitlement({ extraSkus, language, skipStoreQuery: true });
@@ -382,6 +506,10 @@ export async function restoreProPurchases(
   const converted = queryRes.purchases
     .map((p) => convertPurchaseRecordToEntitlement(p, store, Date.now()))
     .filter((e): e is CachedProEntitlement => Boolean(e));
+  if (launchRes.assignment?.claimedGift) {
+    const giftEnt = buildLaunchOfferEntitlement(launchRes.assignment, store);
+    if (giftEnt) converted.push(giftEnt);
+  }
   const winner = pickBestValidEntitlement(converted, trial.effectiveNow);
 
   if (winner) {
@@ -392,7 +520,13 @@ export async function restoreProPurchases(
     await writeNativeEntitlement(null);
   }
 
-  const state = buildEntitlementState(trial, winner, Date.now());
+  const state = buildEntitlementState(
+    trial,
+    winner,
+    Date.now(),
+    launchRes.assignment,
+    launchRes.status
+  );
   await scheduleTrialMilestoneNotifications(state.trial, state.hasPaidPro, language);
 
   return {

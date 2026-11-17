@@ -1,0 +1,71 @@
+{
+  "entities": {
+    "LaunchOfferCounter": {
+      "title": "LaunchOfferCounter",
+      "description": "Global atomic counter tracking total installations assigned to 365-user launch offer batches.",
+      "type": "object",
+      "properties": {
+        "count": {
+          "type": "number",
+          "description": "Monotonically increasing integer count of assigned installations."
+        },
+        "lastUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the user who performed the latest atomic +1 increment.",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the latest counter increment."
+        }
+      },
+      "required": ["count", "lastUid", "updatedAt"]
+    },
+    "LaunchOfferClaim": {
+      "title": "LaunchOfferClaim",
+      "description": "Per-installation immutable record ensuring each anonymous UID increments the launch counter at most once.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the claimant (must match document ID).",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "userNumber": {
+          "type": "number",
+          "description": "Sequential 1-based installation number assigned from LaunchOfferCounter."
+        },
+        "batch": {
+          "type": "number",
+          "description": "Assigned launch batch: 1 (users 1..365, 100% off Lifetime), 2 (users 366..730, 100% off 1-Year), or 0 (users >730, regular price).",
+          "enum": [0, 1, 2]
+        },
+        "claimedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the installation claimed its batch slot."
+        }
+      },
+      "required": ["uid", "userNumber", "batch", "claimedAt"]
+    }
+  },
+  "firestore": {
+    "/launch_offer/{docId}": {
+      "schema": {
+        "$ref": "#/entities/LaunchOfferCounter"
+      },
+      "description": "Singleton counter document (/launch_offer/counter) incremented by +1 in an atomic transaction alongside /launch_claims/{uid}."
+    },
+    "/launch_claims/{uid}": {
+      "schema": {
+        "$ref": "#/entities/LaunchOfferClaim"
+      },
+      "description": "One-time claim document per Firebase Auth UID preventing duplicate increments."
+    }
+  }
+}

@@ -62,6 +62,7 @@ import {
 } from '../utils/nativePermissions';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 import { saveMediaBlob, usePersistentMediaUrl } from '../utils/mediaStorage';
+import { ProBadge } from './ProBadge';
 
 const JALALI_YEARS_GRID = Array.from({ length: 1425 - 1404 + 1 }, (_, i) => 1404 + i);
 const GREGORIAN_YEARS_GRID = Array.from({ length: 2046 - 2025 + 1 }, (_, i) => 2025 + i);
@@ -86,6 +87,8 @@ interface IdeaCaptureModalProps {
   googleToken: string | null;
   language?: AppLanguage;
   defaultOpenReminderMenu?: boolean;
+  hasProAccess?: boolean;
+  onRequirePro?: (feature: 'photo' | 'sketch') => void;
 }
 
 export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
@@ -97,6 +100,8 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
   googleToken,
   language = 'fa',
   defaultOpenReminderMenu = false,
+  hasProAccess = true,
+  onRequirePro,
 }) => {
   const isEn = language === 'en';
   const [title, setTitle] = useState('');
@@ -1602,14 +1607,21 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('photo')}
-                className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
+                onClick={() => {
+                  if (!hasProAccess && !photoDataUrl) {
+                    onRequirePro?.('photo');
+                    return;
+                  }
+                  setActiveTab('photo');
+                }}
+                className={`flex-1 flex items-center justify-center gap-1 py-2.5 rounded-lg transition-all cursor-pointer ${
                   activeTab === 'photo' ? 'bg-indigo-500 text-white' : 'text-stone-400 hover:text-white hover:bg-stone-900'
                 }`}
                 title={isEn ? 'Take Photo (Rear Camera)' : 'عکس‌برداری (دوربین پشتی)'}
                 aria-label={isEn ? 'Take Photo (Rear Camera)' : 'عکس‌برداری (دوربین پشتی)'}
               >
                 <Camera className="w-5 h-5" />
+                <ProBadge locked={!hasProAccess} />
               </button>
               <button
                 type="button"
@@ -1624,14 +1636,21 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('sketch')}
-                className={`flex-1 flex items-center justify-center py-2.5 rounded-lg transition-all cursor-pointer ${
+                onClick={() => {
+                  if (!hasProAccess && !editingIdea?.drawingDataUrl) {
+                    onRequirePro?.('sketch');
+                    return;
+                  }
+                  setActiveTab('sketch');
+                }}
+                className={`flex-1 flex items-center justify-center gap-1 py-2.5 rounded-lg transition-all cursor-pointer ${
                   activeTab === 'sketch' ? 'bg-indigo-500 text-white' : 'text-stone-400 hover:text-white hover:bg-stone-900'
                 }`}
                 title={isEn ? 'Sketch' : 'رسم با قلم'}
                 aria-label={isEn ? 'Sketch' : 'رسم با قلم'}
               >
                 <PenTool className="w-5 h-5" />
+                <ProBadge locked={!hasProAccess} />
               </button>
             </div>
           </div>
@@ -1794,7 +1813,13 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                 {!isPhotoCameraActive ? (
                   <button
                     type="button"
-                    onClick={() => startRearPhotoCamera(false)}
+                    onClick={() => {
+                      if (!hasProAccess) {
+                        onRequirePro?.('photo');
+                        return;
+                      }
+                      startRearPhotoCamera(false);
+                    }}
                     className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white font-bold text-xs shadow-md transition-all cursor-pointer"
                   >
                     <Camera className="w-4 h-4" />
@@ -1803,6 +1828,7 @@ export const IdeaCaptureModal: React.FC<IdeaCaptureModalProps> = ({
                         ? (isEn ? 'Retake Photo (Rear Camera)' : 'ثبت مجدد عکس با دوربین پشتی')
                         : (isEn ? 'Open Rear Camera' : 'باز کردن دوربین پشتی')}
                     </span>
+                    <ProBadge locked={!hasProAccess} />
                   </button>
                 ) : (
                   <>

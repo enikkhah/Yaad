@@ -100,6 +100,15 @@ import { getT, formatSavedLocationTitle } from './utils/i18n';
 import { APP_VERSION } from './utils/version';
 import { triggerReviewFlow } from './utils/reviewFlow';
 import { TwoStageFeedbackModal } from './components/TwoStageFeedbackModal';
+import { ProBadge } from './components/ProBadge';
+import { ProPaywallModal } from './components/ProPaywallModal';
+import {
+  getFastProEntitlementSync,
+  ProEntitlementState,
+  ProFeatureId,
+  reconcileProEntitlement,
+} from './utils/proEntitlement';
+import { dismissTrialBanner } from './utils/trialManager';
 import { 
   Plus, 
   Search, 
@@ -117,7 +126,8 @@ import {
   ShieldCheck,
   Info,
   Mail,
-  ExternalLink
+  ExternalLink,
+  Crown
 } from 'lucide-react';
 
 const REMINDERS_STORAGE_KEY = 'fa_reminder_app_data_v2';
@@ -355,6 +365,23 @@ export default function App() {
     activeSavedLocations.length +
     activeOccasions.length;
   const [showPeriodicBackupBanner, setShowPeriodicBackupBanner] = useState(false);
+
+  // Pro Entitlement & 40-Day Free Trial State
+  const [proEntitlement, setProEntitlement] = useState<ProEntitlementState>(() =>
+    getFastProEntitlementSync()
+  );
+  const proEntitlementRef = useRef<ProEntitlementState>(proEntitlement);
+  useEffect(() => {
+    proEntitlementRef.current = proEntitlement;
+  }, [proEntitlement]);
+  const [isProPaywallOpen, setIsProPaywallOpen] = useState(false);
+  const [paywallBlockedFeature, setPaywallBlockedFeature] = useState<ProFeatureId | null>(null);
+  const [trialBannerDismissedInSession, setTrialBannerDismissedInSession] = useState(false);
+
+  const openProPaywall = useCallback((feature?: ProFeatureId) => {
+    setPaywallBlockedFeature(feature || null);
+    setIsProPaywallOpen(true);
+  }, []);
 
   useEffect(() => {
     setShowPeriodicBackupBanner(shouldShowPeriodicBackupPrompt(totalActiveDataCount));
@@ -1531,15 +1558,111 @@ export default function App() {
       setIsAppInstalled(true);
     }
 
+    const handleOpenProPaywallEvent = () => {
+      openProPaywall();
+    };
+    window.addEventListener('yaad:open-pro-paywall', handleOpenProPaywallEvent);
+
+    // Reconcile 40-day Trial & Store Pro purchases on startup and foreground resume
+    const syncEntitlementNow = () => {
+      reconcileProEntitlement({
+        language: settingsRef.current?.language === 'en' ? 'en' : 'fa',
+      })
+        .then((nextState) => {
+          setProEntitlement(nextState);
+        })
+        .catch(() => {});
+    };
+    syncEntitlementNow();
+
+    let proAppResumeListener: { remove: () => Promise<void> } | null = null;
+    try {
+      CapacitorApp.addListener('appStateChange', ({ isActive }) => {
+        if (isActive) {
+          syncEntitlementNow();
+        }
+      })
+        .then((handle) => {
+          proAppResumeListener = handle;
+        })
+        .catch(() => {});
+    } catch {}
+
     return () => {
       unsubscribe();
       cleanupNotificationListeners();
       navigator.serviceWorker?.removeEventListener('message', handleSwMessage);
       window.removeEventListener('yaad:edit-geofence-radius', handleEditGeofenceRadiusEvent);
+      window.removeEventListener('yaad:open-pro-paywall', handleOpenProPaywallEvent);
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
+      if (proAppResumeListener) {
+        proAppResumeListener.remove().catch(() => {});
+      }
     };
-  }, [applyRestoredBackupIfNeeded]);
+  }, [applyRestoredBackupIfNeeded, openProPaywall]);
+
+  // Non-destructive Geofence deactivation when Pro trial expires and user has no paid Pro plan:
+  // Preserves all saved coordinates, radius, triggerOn, and customMessage while setting enabled: false.
+  useEffect(() => {
+    if (proEntitlement.hasProAccess) return;
+
+    if (isGeofenceActiveRef.current) {
+      isGeofenceActiveRef.current = false;
+      setIsGeofenceActive(false);
+      setGeofenceTrackingEnabled(false);
+      stopSubmarineSonarLoop();
+      setGeofenceMinimizedState(undefined, false, false);
+      setActiveGeofenceAlerts([]);
+    }
+
+    let locationsChanged = false;
+    const nextLocations = savedLocationsRef.current.map((loc) => {
+      if (loc.geofence?.enabled) {
+        locationsChanged = true;
+        return {
+          ...loc,
+          geofence: {
+            ...loc.geofence,
+            enabled: false,
+          },
+        };
+      }
+      return loc;
+    });
+    if (locationsChanged) {
+      savedLocationsRef.current = nextLocations;
+      setSavedLocations(nextLocations);
+    }
+
+    let remindersChanged = false;
+    const nextReminders = remindersRef.current.map((rem) => {
+      if (rem.geofence?.enabled) {
+        remindersChanged = true;
+        return {
+          ...rem,
+          geofence: {
+            ...rem.geofence,
+            enabled: false,
+          },
+        };
+      }
+      return rem;
+    });
+    if (remindersChanged) {
+      remindersRef.current = nextReminders;
+      setReminders(nextReminders);
+    }
+
+    if (locationsChanged || remindersChanged) {
+      syncGeofencesWithNativeAndroid(
+        false,
+        nextReminders,
+        nextLocations,
+        settingsRef.current.language || 'fa'
+      );
+    }
+  }, [proEntitlement.hasProAccess]);
 
   // Save to localStorage
   useEffect(() => {
@@ -2768,6 +2891,10 @@ export default function App() {
 
   const handleToggleGeofenceService = (newState?: boolean) => {
     const nextVal = typeof newState === 'boolean' ? newState : !isGeofenceActiveRef.current;
+    if (nextVal && !proEntitlementRef.current.hasProAccess) {
+      openProPaywall('geofence');
+      return;
+    }
     isGeofenceActiveRef.current = nextVal;
     setIsGeofenceActive(nextVal);
     setGeofenceTrackingEnabled(nextVal);
@@ -2796,6 +2923,10 @@ export default function App() {
   };
 
   const handleToggleLocationCheckpoint = (locationId: string) => {
+    if (!proEntitlementRef.current.hasProAccess) {
+      openProPaywall('geofence');
+      return;
+    }
     resetGeofenceProximityState(locationId);
     const nextLocations = savedLocationsRef.current.map((loc) => {
       if (loc.id !== locationId) return loc;
@@ -2833,6 +2964,10 @@ export default function App() {
     locationId: string,
     updates: { radius?: number; triggerOn?: 'enter' | 'exit' }
   ) => {
+    if (!proEntitlementRef.current.hasProAccess) {
+      openProPaywall('geofence');
+      return;
+    }
     resetGeofenceProximityState(locationId);
     const nextLocations = savedLocationsRef.current.map((loc) => {
       if (loc.id !== locationId || !loc.geofence) return loc;
@@ -3232,6 +3367,10 @@ export default function App() {
     newLocData: Omit<SavedLocation, 'id' | 'createdAt'>,
     alsoCreateReminder?: boolean
   ) => {
+    if (!proEntitlementRef.current.hasProAccess) {
+      openProPaywall('locations');
+      return;
+    }
     if (newLocData.geofence?.enabled) {
       resetGeofenceProximityState(editingLocation?.id);
       isGeofenceActiveRef.current = true;
@@ -3379,6 +3518,10 @@ export default function App() {
     newOccData: Omit<Occasion, 'id' | 'createdAt'>,
     alsoCreateReminder?: boolean
   ) => {
+    if (!proEntitlementRef.current.hasProAccess) {
+      openProPaywall('occasions');
+      return;
+    }
     setDefaultOccasionType(newOccData.type);
     setSelectedOccasionTypeFilter((prev) => (prev === 'all' ? prev : newOccData.type));
 
@@ -4302,6 +4445,34 @@ export default function App() {
                   </span>
                 </div>
 
+                {/* 1.5 YAAD Pro Status / Upgrade Entry */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsLogoMenuOpen(false);
+                    openProPaywall();
+                  }}
+                  className="w-full px-3 py-2 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 text-amber-300 text-xs font-black flex items-center justify-between transition-all cursor-pointer"
+                >
+                  <div className="flex items-center gap-2">
+                    <Crown className="w-4 h-4 text-amber-300 shrink-0" />
+                    <span>
+                      {proEntitlement.hasPaidPro
+                        ? isEn
+                          ? 'YAAD Pro (Active)'
+                          : 'نسخه حرفه‌ای یاد (فعال)'
+                        : proEntitlement.trial.isTrialActive
+                        ? isEn
+                          ? `YAAD Pro (${proEntitlement.trial.remainingDays}d trial)`
+                          : `نسخه Pro (${toPersianDigits(proEntitlement.trial.remainingDays)} روز هدیه)`
+                        : isEn
+                        ? 'Upgrade to YAAD Pro'
+                        : 'ارتقا به نسخه حرفه‌ای (Pro)'}
+                    </span>
+                  </div>
+                  <span className="text-[10px] font-bold">←</span>
+                </button>
+
                 {/* 2. Privacy Policy Link */}
                 <button
                   type="button"
@@ -4747,6 +4918,61 @@ export default function App() {
       {/* Main Container - Maximum Width coverage across screen with ample padding for bottom nav and FAB */}
       <main className="flex-1 w-full px-3 sm:px-6 py-4 sm:py-6 space-y-6 pb-36 sm:pb-44">
 
+        {/* Soft 40-Day Trial Countdown / Expiry Banner */}
+        {!proEntitlement.hasPaidPro &&
+          proEntitlement.trial.shouldShowSoftBanner &&
+          !trialBannerDismissedInSession && (
+            <div
+              dir={isEn ? 'ltr' : 'rtl'}
+              className="p-3.5 rounded-2xl bg-gradient-to-r from-amber-950/55 via-stone-900/95 to-indigo-950/55 border border-amber-500/40 shadow-md flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-in fade-in"
+            >
+              <div className="flex items-start gap-2.5 min-w-0">
+                <div className="p-2 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-300 shrink-0">
+                  <Crown className="w-4 h-4" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs sm:text-sm font-black text-white">
+                    {proEntitlement.trial.isTrialActive
+                      ? isEn
+                        ? `${proEntitlement.trial.remainingDays} day(s) left in your 40-day YAAD Pro trial`
+                        : `${toPersianDigits(proEntitlement.trial.remainingDays)} روز تا پایان دوره ۴۰ روزه رایگان امکانات Pro`
+                      : isEn
+                      ? 'Your 40-day YAAD Pro trial has ended'
+                      : 'دوره ۴۰ روزه هدیه امکانات Pro به پایان رسیده است'}
+                  </p>
+                  <p className="text-[11px] text-stone-300 leading-relaxed mt-0.5">
+                    {proEntitlement.trial.isTrialActive
+                      ? isEn
+                        ? 'All Pro features are unlocked. Upgrade anytime to keep occasions, geofences, sketches, photos, backups, and themes active.'
+                        : 'همه امکانات پیشرفته برای شما فعال است. برای ادامه استفاده بدون وقفه پس از روز ۴۰، نسخه Pro را ببینید.'
+                      : isEn
+                      ? 'Unlimited reminders & full-screen alarms stay free forever, and all your saved data is safe. Upgrade to unlock Pro creation & editing.'
+                      : 'یادآورهای نامحدود و زنگ تمام‌صفحه همچنان رایگان است و همه اطلاعات قبلی شما حفظ شده است. برای باز کردن ساخت/ویرایش امکانات پیشرفته ارتقا دهید.'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                <button
+                  type="button"
+                  onClick={() => openProPaywall()}
+                  className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 text-xs font-black shadow-sm active:scale-95 transition-all cursor-pointer"
+                >
+                  {isEn ? 'View YAAD Pro' : 'مشاهده نسخه Pro'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    dismissTrialBanner();
+                    setTrialBannerDismissedInSession(true);
+                  }}
+                  className="px-3 py-2 rounded-xl bg-stone-800/90 hover:bg-stone-700 text-stone-300 text-xs font-bold transition-colors cursor-pointer"
+                >
+                  {isEn ? 'Later' : 'بعداً'}
+                </button>
+              </div>
+            </div>
+          )}
+
         {/* Gentle 30-day Manual Backup Prompt */}
         {showPeriodicBackupBanner && (
           <div
@@ -4772,6 +4998,10 @@ export default function App() {
               <button
                 type="button"
                 onClick={async () => {
+                  if (!proEntitlement.hasProAccess) {
+                    openProPaywall('backup');
+                    return;
+                  }
                   const res = await exportBackupToFile(
                     { reminders, ideas, savedLocations, occasions, settings },
                     settings.language
@@ -4787,9 +5017,10 @@ export default function App() {
                     );
                   }
                 }}
-                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow-sm active:scale-95 transition-all cursor-pointer"
+                className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black shadow-sm active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
               >
-                {isEn ? 'Export Backup' : 'خروجی گرفتن'}
+                <span>{isEn ? 'Export Backup' : 'خروجی گرفتن'}</span>
+                <ProBadge locked={!proEntitlement.hasProAccess} />
               </button>
               <button
                 type="button"
@@ -4957,6 +5188,7 @@ export default function App() {
                     }`}>
                       {isEn ? 'Activate Geofence' : 'فعال‌سازی حصار مکانی'}
                     </span>
+                    <ProBadge locked={!proEntitlement.hasProAccess} />
                     <div
                       dir="ltr"
                       className={`w-14 h-8 rounded-full border-2 p-1 flex items-center transition-all duration-200 shadow-inner shrink-0 ${
@@ -4976,13 +5208,21 @@ export default function App() {
                 <div className="flex items-center gap-2 self-stretch sm:self-auto">
                   <button
                     type="button"
-                    onClick={() => setIsLocationModalOpen(true)}
+                    onClick={() => {
+                      if (!proEntitlement.hasProAccess) {
+                        openProPaywall('locations');
+                        return;
+                      }
+                      setEditingLocation(null);
+                      setIsLocationModalOpen(true);
+                    }}
                     className="btn-brand-submit flex-1 sm:flex-initial flex items-center gap-2 px-4 py-2.5 rounded-xl bg-[#FF8C00] hover:bg-[#FF9E1F] text-white font-black text-xs shadow-md shadow-[#FF8C00]/25 transition-all justify-center cursor-pointer active:scale-95"
                   >
                     <Plus className="w-4 h-4 text-white stroke-[3]" />
                     <span className="text-white font-black">
                       {isEn ? 'Save New Location' : 'ثبت مکان جدید'}
                     </span>
+                    <ProBadge locked={!proEntitlement.hasProAccess} />
                   </button>
                 </div>
               </div>
@@ -5052,6 +5292,10 @@ export default function App() {
                         location={loc}
                         onDelete={handleDeleteLocation}
                         onEdit={(item) => {
+                          if (!proEntitlement.hasProAccess) {
+                            openProPaywall('locations');
+                            return;
+                          }
                           setEditingLocation(item);
                           setIsLocationModalOpen(true);
                         }}
@@ -5070,6 +5314,8 @@ export default function App() {
                         userPosition={currentUserPosition}
                         onToggleCheckpoint={handleToggleLocationCheckpoint}
                         onUpdateGeofence={handleUpdateLocationGeofence}
+                        hasProAccess={proEntitlement.hasProAccess}
+                        onRequirePro={(feat) => openProPaywall(feat)}
                       />
                     ))}
                 </div>
@@ -5092,11 +5338,19 @@ export default function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setIsLocationModalOpen(true)}
+                  onClick={() => {
+                    if (!proEntitlement.hasProAccess) {
+                      openProPaywall('locations');
+                      return;
+                    }
+                    setEditingLocation(null);
+                    setIsLocationModalOpen(true);
+                  }}
                   className="btn-brand-submit min-h-[48px] inline-flex items-center justify-center gap-2 px-6 py-3 rounded-2xl bg-[#FF8C00] hover:bg-[#FF9E1F] text-white font-black text-xs sm:text-sm transition-all duration-200 shadow-lg shadow-[#FF8C00]/25 active:scale-95 cursor-pointer mx-auto"
                 >
                   <Plus className="w-4 h-4 text-white stroke-[3]" />
                   <span>{isEn ? 'Save First Location' : 'ثبت اولین مکان'}</span>
+                  <ProBadge locked={!proEntitlement.hasProAccess} />
                 </button>
               </div>
             )}
@@ -5116,6 +5370,10 @@ export default function App() {
               }
             }}
             onAddNew={(typeFromTab) => {
+              if (!proEntitlement.hasProAccess) {
+                openProPaywall('occasions');
+                return;
+              }
               if (typeFromTab) {
                 setDefaultOccasionType(typeFromTab);
               }
@@ -5123,6 +5381,10 @@ export default function App() {
               setIsOccasionModalOpen(true);
             }}
             onEdit={(occ) => {
+              if (!proEntitlement.hasProAccess) {
+                openProPaywall('occasions');
+                return;
+              }
               setDefaultOccasionType(occ.type);
               setEditingOccasion(occ);
               setIsOccasionModalOpen(true);
@@ -5131,6 +5393,8 @@ export default function App() {
             onCreateReminder={handleCreateReminderFromOccasion}
             language={settings.language}
             globalSearchQuery={searchQuery}
+            hasProAccess={proEntitlement.hasProAccess}
+            onRequirePro={() => openProPaywall('occasions')}
           />
         )}
 
@@ -5193,17 +5457,24 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setIsCreateChoiceOpen(false);
+                    if (!proEntitlement.hasProAccess) {
+                      openProPaywall('occasions');
+                      return;
+                    }
                     setEditingOccasion(null);
                     setIsOccasionModalOpen(true);
                   }}
-                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-2"
+                  className="w-full min-h-[48px] flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-2"
                 >
-                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
-                    <Cake className="w-4.5 h-4.5" />
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                      <Cake className="w-4.5 h-4.5" />
+                    </div>
+                    <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                      {isEn ? 'Add Occasion' : 'ثبت مناسبت'}
+                    </span>
                   </div>
-                  <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
-                    {isEn ? 'Add Occasion' : 'ثبت مناسبت'}
-                  </span>
+                  <ProBadge locked={!proEntitlement.hasProAccess} />
                 </button>
 
                 {/* Option 3: Idea */}
@@ -5228,16 +5499,24 @@ export default function App() {
                   type="button"
                   onClick={() => {
                     setIsCreateChoiceOpen(false);
+                    if (!proEntitlement.hasProAccess) {
+                      openProPaywall('locations');
+                      return;
+                    }
+                    setEditingLocation(null);
                     setIsLocationModalOpen(true);
                   }}
-                  className="w-full min-h-[48px] flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-4"
+                  className="w-full min-h-[48px] flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl hover:bg-stone-800 text-stone-200 hover:text-indigo-400 transition-all duration-200 cursor-pointer group active:scale-95 border border-transparent hover:border-stone-700/60 animate-fab-item-4"
                 >
-                  <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
-                    <MapPin className="w-4.5 h-4.5" />
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform duration-200">
+                      <MapPin className="w-4.5 h-4.5" />
+                    </div>
+                    <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
+                      {isEn ? 'Save Place' : 'ثبت مکان'}
+                    </span>
                   </div>
-                  <span className="text-sm font-bold text-stone-200 group-hover:text-indigo-300">
-                    {isEn ? 'Save Place' : 'ثبت مکان'}
-                  </span>
+                  <ProBadge locked={!proEntitlement.hasProAccess} />
                 </button>
               </motion.div>
             )}
@@ -5383,6 +5662,8 @@ export default function App() {
         savedLocations={activeSavedLocations}
         language={settings.language}
         focusGeofenceRadius={focusGeofenceRadius}
+        hasProAccess={proEntitlement.hasProAccess}
+        onRequirePro={(feat) => openProPaywall(feat)}
       />
 
       {/* IDEA CAPTURE MODAL */}
@@ -5398,6 +5679,8 @@ export default function App() {
         editingIdea={editingIdea}
         language={settings.language}
         defaultOpenReminderMenu={openIdeaReminderMenuByDefault}
+        hasProAccess={proEntitlement.hasProAccess}
+        onRequirePro={(feat) => openProPaywall(feat)}
       />
 
       {/* LOCATION CAPTURE MODAL */}
@@ -5412,6 +5695,8 @@ export default function App() {
         editingLocation={editingLocation}
         language={settings.language}
         focusGeofenceRadius={focusGeofenceRadius}
+        hasProAccess={proEntitlement.hasProAccess}
+        onRequirePro={(feat) => openProPaywall(feat)}
       />
 
       {/* OCCASION CREATION & EDIT MODAL (مناسبت جدید) */}
@@ -5449,6 +5734,21 @@ export default function App() {
         onPermanentDeleteItem={handlePermanentDeleteItem}
         onEmptyRecycleBin={handleEmptyRecycleBin}
         onScheduleTestAlarm={handleScheduleTestAlarm}
+        proEntitlement={proEntitlement}
+        onOpenProPaywall={(feat) => openProPaywall(feat)}
+      />
+
+      {/* PRO PAYWALL & STORE PURCHASE MODAL */}
+      <ProPaywallModal
+        isOpen={isProPaywallOpen}
+        onClose={() => {
+          setIsProPaywallOpen(false);
+          setPaywallBlockedFeature(null);
+        }}
+        language={settings.language === 'en' ? 'en' : 'fa'}
+        entitlement={proEntitlement}
+        blockedFeature={paywallBlockedFeature}
+        onEntitlementUpdated={(next) => setProEntitlement(next)}
       />
 
       {/* INSTALL MODAL */}

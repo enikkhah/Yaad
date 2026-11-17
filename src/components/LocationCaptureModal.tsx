@@ -30,6 +30,7 @@ import {
 } from '../utils/geofenceManager';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
+import { ProBadge } from './ProBadge';
 
 interface LocationCaptureModalProps {
   isOpen: boolean;
@@ -39,6 +40,8 @@ interface LocationCaptureModalProps {
   editingLocation?: SavedLocation | null;
   language?: AppLanguage;
   focusGeofenceRadius?: boolean;
+  hasProAccess?: boolean;
+  onRequirePro?: (feature: 'geofence' | 'photo') => void;
 }
 
 export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
@@ -49,6 +52,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   editingLocation,
   language = 'fa',
   focusGeofenceRadius = false,
+  hasProAccess = true,
+  onRequirePro,
 }) => {
   const isEn = language === 'en';
   const [title, setTitle] = useState('');
@@ -673,6 +678,10 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   aria-checked={enableGeofence}
                   onClick={() => {
                     const willEnable = !enableGeofence;
+                    if (willEnable && !hasProAccess) {
+                      onRequirePro?.('geofence');
+                      return;
+                    }
                     setEnableGeofence(willEnable);
                     if (willEnable) {
                       checkDeviceGpsEnabled().then((gpsOn) => {
@@ -688,6 +697,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   className="flex items-center gap-2.5 px-3 py-2 rounded-2xl bg-stone-900/80 border border-stone-700/80 hover:border-emerald-400/60 shrink-0 cursor-pointer group focus:outline-none transition-all"
                   title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار مکانی') : (isEn ? 'Enable Geofence' : 'فعال‌سازی حصار مکانی')}
                 >
+                  <ProBadge locked={!hasProAccess} />
                   <span className={`text-xs sm:text-sm font-black transition-colors ${
                     enableGeofence ? 'text-emerald-300' : 'text-stone-200 group-hover:text-white'
                   }`}>
@@ -900,11 +910,18 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                   <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
                     <button
                       type="button"
-                      onClick={() => setIsCameraOpen(true)}
+                      onClick={() => {
+                        if (!hasProAccess) {
+                          onRequirePro?.('photo');
+                          return;
+                        }
+                        setIsCameraOpen(true);
+                      }}
                       className="px-3 py-1.5 rounded-xl bg-stone-900/90 text-white text-xs font-bold flex items-center gap-1.5 border border-white/20 hover:bg-black cursor-pointer"
                     >
                       <Camera className="w-3.5 h-3.5 text-indigo-400" />
                       <span>{isEn ? 'Retake' : 'عکس مجدد'}</span>
+                      <ProBadge locked={!hasProAccess} />
                     </button>
                     <button
                       type="button"
@@ -920,25 +937,43 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 <div className="grid grid-cols-2 gap-2.5">
                   <button
                     type="button"
-                    onClick={() => setIsCameraOpen(true)}
+                    onClick={() => {
+                      if (!hasProAccess) {
+                        onRequirePro?.('photo');
+                        return;
+                      }
+                      setIsCameraOpen(true);
+                    }}
                     className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-stone-950 border border-dashed border-stone-800 hover:border-emerald-500/50 hover:bg-emerald-500/5 text-stone-300 hover:text-emerald-300 transition-all cursor-pointer group"
                   >
                     <div className="w-10 h-10 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center group-hover:scale-110 transition-transform">
                       <Camera className="w-5 h-5" />
                     </div>
-                    <span className="text-xs font-bold">{isEn ? 'Take Photo' : 'عکاسی با دوربین زنده'}</span>
+                    <span className="text-xs font-bold flex items-center gap-1.5">
+                      <span>{isEn ? 'Take Photo' : 'عکاسی با دوربین زنده'}</span>
+                      <ProBadge locked={!hasProAccess} />
+                    </span>
                     <span className="text-[10px] text-stone-500">{isEn ? 'Open device camera' : 'باز کردن دوربین گوشی'}</span>
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
+                    onClick={() => {
+                      if (!hasProAccess) {
+                        onRequirePro?.('photo');
+                        return;
+                      }
+                      fileInputRef.current?.click();
+                    }}
                     className="flex flex-col items-center justify-center gap-2 p-4 rounded-2xl bg-stone-950 border border-dashed border-stone-800 hover:border-stone-700 hover:bg-stone-900/50 text-stone-300 hover:text-white transition-all cursor-pointer group"
                   >
                     <div className="w-10 h-10 rounded-full bg-stone-800 text-stone-400 flex items-center justify-center group-hover:scale-110 transition-transform">
                       <Upload className="w-5 h-5" />
                     </div>
-                    <span className="text-xs font-bold">{isEn ? 'Pick from Gallery' : 'انتخاب از گالری'}</span>
+                    <span className="text-xs font-bold flex items-center gap-1.5">
+                      <span>{isEn ? 'Pick from Gallery' : 'انتخاب از گالری'}</span>
+                      <ProBadge locked={!hasProAccess} />
+                    </span>
                     <span className="text-[10px] text-stone-500">{isEn ? 'Upload existing photo' : 'آپلود عکس موجود'}</span>
                   </button>
 

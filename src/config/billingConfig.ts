@@ -1,9 +1,16 @@
 export type StoreTarget = 'bazaar' | 'myket' | 'none';
 export type ProPlanId = '1y' | 'lifetime';
+export type LaunchOfferBatch = 0 | 1 | 2;
+
+export const LAUNCH_BATCH_SIZE = 365;
+export const LAUNCH_BATCH_1_MAX = 365; // Users 1..365 -> 100% off Lifetime
+export const LAUNCH_BATCH_2_MAX = 730; // Users 366..730 -> 100% off 1-Year
 
 export const PRO_SKU_IDS = {
   ONE_YEAR: 'yaad_pro_1y',
   LIFETIME: 'yaad_pro_lifetime',
+  LIFETIME_BATCH_1: 'yaad_pro_lifetime_batch1',
+  ONE_YEAR_BATCH_2: 'yaad_pro_1y_batch2',
 } as const;
 
 export const PRO_ONE_YEAR_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
@@ -11,6 +18,8 @@ export const PRO_ONE_YEAR_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
 export interface ProPlanConfig {
   id: ProPlanId;
   sku: string;
+  batchDiscountSku?: string;
+  eligibleLaunchBatch?: 1 | 2;
   durationDays: number | null; // null = lifetime
   fallbackPriceToman: number;
   titleFa: string;
@@ -25,6 +34,8 @@ export const PRO_PLANS: ProPlanConfig[] = [
   {
     id: 'lifetime',
     sku: PRO_SKU_IDS.LIFETIME,
+    batchDiscountSku: PRO_SKU_IDS.LIFETIME_BATCH_1,
+    eligibleLaunchBatch: 1,
     durationDays: null,
     fallbackPriceToman: 299000,
     titleFa: 'نسخه Pro دائمی',
@@ -37,6 +48,8 @@ export const PRO_PLANS: ProPlanConfig[] = [
   {
     id: '1y',
     sku: PRO_SKU_IDS.ONE_YEAR,
+    batchDiscountSku: PRO_SKU_IDS.ONE_YEAR_BATCH_2,
+    eligibleLaunchBatch: 2,
     durationDays: 365,
     fallbackPriceToman: 99000,
     titleFa: 'نسخه Pro یک‌ساله',
@@ -91,6 +104,8 @@ export function getAllKnownProSkus(extraSkus: string[] = []): string[] {
   const set = new Set<string>([
     PRO_SKU_IDS.LIFETIME,
     PRO_SKU_IDS.ONE_YEAR,
+    PRO_SKU_IDS.LIFETIME_BATCH_1,
+    PRO_SKU_IDS.ONE_YEAR_BATCH_2,
     ...extraSkus.filter((s) => typeof s === 'string' && s.trim().length > 0),
   ]);
   return Array.from(set);
@@ -98,10 +113,18 @@ export function getAllKnownProSkus(extraSkus: string[] = []): string[] {
 
 export function resolvePlanFromSku(sku: string): ProPlanConfig | null {
   const clean = sku.trim();
-  if (clean === PRO_SKU_IDS.LIFETIME || clean.includes('lifetime')) {
+  if (
+    clean === PRO_SKU_IDS.LIFETIME ||
+    clean === PRO_SKU_IDS.LIFETIME_BATCH_1 ||
+    clean.includes('lifetime')
+  ) {
     return PRO_PLANS.find((p) => p.id === 'lifetime') || PRO_PLANS[0];
   }
-  if (clean === PRO_SKU_IDS.ONE_YEAR || clean.includes('1y')) {
+  if (
+    clean === PRO_SKU_IDS.ONE_YEAR ||
+    clean === PRO_SKU_IDS.ONE_YEAR_BATCH_2 ||
+    clean.includes('1y')
+  ) {
     return PRO_PLANS.find((p) => p.id === '1y') || PRO_PLANS[1];
   }
   return null;

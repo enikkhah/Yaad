@@ -1,0 +1,108 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 1: Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened primitive helpers
+    function isSignedIn() {
+      return request.auth != null && request.auth.uid != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function expectedBatchForNumber(n) {
+      return n <= 365 ? 1 : (n <= 730 ? 2 : 0);
+    }
+
+    // Pillar 2: Validation Blueprints
+    function isValidLaunchOfferCounter(data) {
+      return data.keys().hasAll(['count', 'lastUid', 'updatedAt']) &&
+        data.keys().hasOnly(['count', 'lastUid', 'updatedAt']) &&
+        data.count is int &&
+        data.count >= 1 &&
+        data.count <= 10000000 &&
+        data.lastUid is string &&
+        data.lastUid.size() >= 1 &&
+        data.lastUid.size() <= 128 &&
+        data.lastUid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.lastUid == request.auth.uid &&
+        data.updatedAt == request.time;
+    }
+
+    function isValidLaunchOfferClaim(data, uid) {
+      return data.keys().hasAll(['uid', 'userNumber', 'batch', 'claimedAt']) &&
+        data.keys().hasOnly(['uid', 'userNumber', 'batch', 'claimedAt']) &&
+        data.uid is string &&
+        data.uid.size() >= 1 &&
+        data.uid.size() <= 128 &&
+        data.uid.matches('^[a-zA-Z0-9_\\-]+$') &&
+        data.uid == uid &&
+        data.uid == request.auth.uid &&
+        data.userNumber is int &&
+        data.userNumber >= 1 &&
+        data.userNumber <= 10000000 &&
+        data.batch is int &&
+        (data.batch == 0 || data.batch == 1 || data.batch == 2) &&
+        data.batch == expectedBatchForNumber(data.userNumber) &&
+        data.claimedAt == request.time;
+    }
+
+    // Singleton counter document: /launch_offer/counter
+    // Can ONLY be created (with count == 1) or incremented by +1 in the exact same
+    // atomic transaction that creates /launch_claims/{request.auth.uid} for the first time.
+    match /launch_offer/{docId} {
+      allow get: if isSignedIn() && docId == 'counter';
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+        docId == 'counter' &&
+        isValidLaunchOfferCounter(incoming()) &&
+        incoming().count == 1 &&
+        !exists(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
+        existsAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
+        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.userNumber == 1;
+
+      allow update: if isSignedIn() &&
+        docId == 'counter' &&
+        isValidLaunchOfferCounter(incoming()) &&
+        incoming().diff(existing()).affectedKeys().hasOnly(['count', 'lastUid', 'updatedAt']) &&
+        incoming().count == existing().count + 1 &&
+        !exists(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
+        existsAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)) &&
+        getAfter(/databases/$(database)/documents/launch_claims/$(request.auth.uid)).data.userNumber == incoming().count;
+
+      allow delete: if false;
+    }
+
+    // Per-UID immutable claim document: /launch_claims/{uid}
+    // Each authenticated UID can create their own claim document at most ONCE,
+    // and only in the same atomic transaction that increments /launch_offer/counter.
+    match /launch_claims/{uid} {
+      allow get: if isSignedIn() && isValidId(uid) && request.auth.uid == uid;
+      allow list: if false;
+
+      allow create: if isSignedIn() &&
+        isValidId(uid) &&
+        request.auth.uid == uid &&
+        isValidLaunchOfferClaim(incoming(), uid) &&
+        existsAfter(/databases/$(database)/documents/launch_offer/counter) &&
+        getAfter(/databases/$(database)/documents/launch_offer/counter).data.lastUid == request.auth.uid &&
+        getAfter(/databases/$(database)/documents/launch_offer/counter).data.count == incoming().userNumber;
+
+      allow update, delete: if false;
+    }
+  }
+}

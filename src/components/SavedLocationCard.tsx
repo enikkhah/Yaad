@@ -20,6 +20,7 @@ import { SavedLocation } from '../types';
 import { formatJalaliFull, toPersianDigits } from '../utils/jalali';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { calculateHaversineDistance } from '../utils/geofenceManager';
+import { ProBadge } from './ProBadge';
 
 interface SavedLocationCardProps {
   location: SavedLocation;
@@ -31,6 +32,8 @@ interface SavedLocationCardProps {
   userPosition?: { latitude: number; longitude: number } | null;
   onToggleCheckpoint?: (locationId: string) => void;
   onUpdateGeofence?: (locationId: string, updates: { radius?: number; triggerOn?: 'enter' | 'exit' }) => void;
+  hasProAccess?: boolean;
+  onRequirePro?: (feature: 'locations' | 'geofence') => void;
 }
 
 export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
@@ -43,6 +46,8 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
   userPosition = null,
   onToggleCheckpoint,
   onUpdateGeofence,
+  hasProAccess = true,
+  onRequirePro,
 }) => {
   const isEn = language === 'en';
   const [copied, setCopied] = useState(false);
@@ -117,11 +122,18 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
             {onEdit && (
               <button
                 type="button"
-                onClick={() => onEdit(location)}
-                className="p-2 rounded-xl text-stone-400 hover:text-indigo-400 hover:bg-stone-800 transition-colors cursor-pointer"
+                onClick={() => {
+                  if (!hasProAccess && onRequirePro) {
+                    onRequirePro('locations');
+                    return;
+                  }
+                  onEdit(location);
+                }}
+                className="p-2 rounded-xl text-stone-400 hover:text-indigo-400 hover:bg-stone-800 transition-colors cursor-pointer flex items-center gap-1"
                 title={isEn ? 'Edit place' : 'ویرایش مکان'}
               >
                 <Pencil className="w-4 h-4" />
+                <ProBadge locked={!hasProAccess} />
               </button>
             )}
             <button
@@ -215,7 +227,13 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
               {onToggleCheckpoint && (
                 <button
                   type="button"
-                  onClick={() => onToggleCheckpoint(location.id)}
+                  onClick={() => {
+                    if (!hasProAccess && onRequirePro) {
+                      onRequirePro('geofence');
+                      return;
+                    }
+                    onToggleCheckpoint(location.id);
+                  }}
                   className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border transition-colors cursor-pointer flex items-center gap-1 ${
                     isCheckpointActive
                       ? 'bg-stone-800 hover:bg-stone-700 text-stone-300 border-stone-700'
@@ -232,6 +250,7 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                     <>
                       <Play className="w-2.5 h-2.5 text-emerald-400" />
                       <span>{isEn ? 'Activate' : 'فعال‌سازی'}</span>
+                      <ProBadge locked={!hasProAccess} />
                     </>
                   )}
                 </button>
@@ -244,6 +263,10 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                 type="button"
                 onClick={() => {
                   if (!onUpdateGeofence) return;
+                  if (!hasProAccess && onRequirePro) {
+                    onRequirePro('geofence');
+                    return;
+                  }
                   if (editingGeofenceField === 'radius') {
                     setEditingGeofenceField(null);
                   } else {
@@ -275,6 +298,10 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
                 type="button"
                 onClick={() => {
                   if (!onUpdateGeofence) return;
+                  if (!hasProAccess && onRequirePro) {
+                    onRequirePro('geofence');
+                    return;
+                  }
                   setEditingGeofenceField((prev) => (prev === 'triggerOn' ? null : 'triggerOn'));
                 }}
                 className={`p-1.5 rounded-lg border flex items-center justify-between gap-1 text-start transition-colors ${
@@ -428,11 +455,18 @@ export const SavedLocationCard: React.FC<SavedLocationCardProps> = ({
           onEdit && (
             <button
               type="button"
-              onClick={() => onEdit(location)}
+              onClick={() => {
+                if (!hasProAccess && onRequirePro) {
+                  onRequirePro('geofence');
+                  return;
+                }
+                onEdit(location);
+              }}
               className="w-full min-h-[46px] py-2.5 px-3.5 rounded-2xl border-2 border-dashed border-emerald-500/40 bg-emerald-950/20 hover:bg-emerald-950/40 hover:border-emerald-400/70 text-emerald-200 text-xs sm:text-sm font-black flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm"
             >
               <Radio className="w-4 h-4 text-emerald-400" />
               <span>{isEn ? '+ Geofence' : '+ حصار مکانی'}</span>
+              <ProBadge locked={!hasProAccess} />
             </button>
           )
         )}

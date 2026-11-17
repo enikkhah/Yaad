@@ -55,6 +55,7 @@ import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 import { radiusToLogSliderPosition, logSliderPositionToRadius } from '../utils/geofenceManager';
+import { ProBadge } from './ProBadge';
 
 interface ReminderFormProps {
   isOpen: boolean;
@@ -66,6 +67,8 @@ interface ReminderFormProps {
   language?: AppLanguage;
   defaultEnableGeofence?: boolean;
   focusGeofenceRadius?: boolean;
+  hasProAccess?: boolean;
+  onRequirePro?: (feature: 'photo' | 'geofence') => void;
 }
 
 
@@ -96,6 +99,8 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   language = 'fa',
   defaultEnableGeofence = false,
   focusGeofenceRadius = false,
+  hasProAccess = true,
+  onRequirePro,
 }) => {
   const isEn = language === 'en';
   const [title, setTitle] = useState('');
@@ -1738,20 +1743,34 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => setIsCameraOpen(true)}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-indigo-500/50 text-stone-300 text-xs font-medium transition-colors"
+                    onClick={() => {
+                      if (!hasProAccess) {
+                        onRequirePro?.('photo');
+                        return;
+                      }
+                      setIsCameraOpen(true);
+                    }}
+                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-indigo-500/50 text-stone-300 text-xs font-medium transition-colors cursor-pointer"
                   >
                     <Camera className="w-4 h-4 text-indigo-400" />
                     <span>{isEn ? 'Take Photo' : 'گرفتن عکس با دوربین'}</span>
+                    <ProBadge locked={!hasProAccess} />
                   </button>
 
                   <button
                     type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-indigo-500/50 text-stone-300 text-xs font-medium transition-colors"
+                    onClick={() => {
+                      if (!hasProAccess) {
+                        onRequirePro?.('photo');
+                        return;
+                      }
+                      fileInputRef.current?.click();
+                    }}
+                    className="flex-1 flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-stone-950 border border-stone-800 hover:border-indigo-500/50 text-stone-300 text-xs font-medium transition-colors cursor-pointer"
                   >
                     <Upload className="w-4 h-4 text-cyan-400" />
                     <span>{isEn ? 'Upload File' : 'آپلود فایل عکس'}</span>
+                    <ProBadge locked={!hasProAccess} />
                   </button>
                   <input
                     ref={fileInputRef}
@@ -1818,6 +1837,10 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   aria-checked={enableGeofence}
                   onClick={(e) => {
                     const willEnable = !enableGeofence;
+                    if (willEnable && !hasProAccess) {
+                      onRequirePro?.('geofence');
+                      return;
+                    }
                     setEnableGeofence(willEnable);
                     if (willEnable) {
                       if (typeof window !== 'undefined') {
@@ -1832,6 +1855,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                   className="flex items-center gap-2 shrink-0 cursor-pointer group focus:outline-none"
                   title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار مکانی') : (isEn ? 'Enable Geofence' : 'فعال کردن حصار مکانی')}
                 >
+                  <ProBadge locked={!hasProAccess} />
                   <span className={`text-xs font-black transition-colors ${
                     enableGeofence ? 'text-emerald-300' : 'text-stone-200 group-hover:text-white'
                   }`}>

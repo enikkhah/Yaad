@@ -24,6 +24,7 @@ import {
 } from '../utils/occasionUtils';
 import { toPersianDigits } from '../utils/jalali';
 import { AppLanguage } from '../utils/i18n';
+import { ProBadge } from './ProBadge';
 
 interface OccasionCardProps {
   occasion: Occasion;
@@ -31,6 +32,7 @@ interface OccasionCardProps {
   onDelete: (id: string) => void;
   onCreateReminder?: (occasion: Occasion) => void;
   language?: AppLanguage;
+  hasProAccess?: boolean;
 }
 
 export const OccasionCard: React.FC<OccasionCardProps> = ({
@@ -39,6 +41,7 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
   onDelete,
   onCreateReminder,
   language = 'fa',
+  hasProAccess = true,
 }) => {
   const isEn = language === 'en';
   const meta = getOccasionTypeMeta(occasion.type);
@@ -120,10 +123,11 @@ export const OccasionCard: React.FC<OccasionCardProps> = ({
             <button
               type="button"
               onClick={() => onEdit(occasion)}
-              className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition-colors cursor-pointer"
+              className="p-1.5 rounded-lg text-stone-400 hover:text-white hover:bg-stone-800 transition-colors cursor-pointer flex items-center gap-1"
               title={isEn ? 'Edit' : 'ویرایش'}
             >
               <Pencil className="w-3.5 h-3.5" />
+              <ProBadge locked={!hasProAccess} />
             </button>
             <button
               type="button"

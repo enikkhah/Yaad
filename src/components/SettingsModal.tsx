@@ -35,12 +35,15 @@ import {
   Upload,
   BellRing,
   AlertTriangle,
-  BatteryCharging
+  BatteryCharging,
+  Crown
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION } from '../utils/version';
 import { toPersianDigits, formatJalaliFull } from '../utils/jalali';
 import { openReviewDialogDirectly } from '../utils/reviewFlow';
+import { ProBadge } from './ProBadge';
+import { ProEntitlementState, ProFeatureId } from '../utils/proEntitlement';
 import { 
   setGeofenceTrackingEnabled
 } from '../utils/geofenceManager';
@@ -103,6 +106,8 @@ interface SettingsModalProps {
   onPermanentDeleteItem?: (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => void;
   onEmptyRecycleBin?: () => void;
   onScheduleTestAlarm?: () => Promise<boolean | void> | void;
+  proEntitlement?: ProEntitlementState;
+  onOpenProPaywall?: (feature?: ProFeatureId) => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -125,7 +130,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onPermanentDeleteItem,
   onEmptyRecycleBin,
   onScheduleTestAlarm,
+  proEntitlement,
+  onOpenProPaywall,
 }) => {
+  const hasProAccess = proEntitlement ? proEntitlement.hasProAccess : true;
   const currentLanguage = settings?.language || 'fa';
   const isFa = currentLanguage === 'fa';
   const t = getT(currentLanguage);
@@ -465,6 +473,64 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         <div className="flex-1 overflow-y-auto px-2.5 py-4 sm:p-5 space-y-3.5">
 
           {/* ========================================================= */}
+          {/* YAAD PRO STATUS & PAYWALL CARD */}
+          {/* ========================================================= */}
+          {proEntitlement && onOpenProPaywall && (
+            <div className="p-3 sm:p-3.5 rounded-2xl border border-amber-500/35 bg-gradient-to-br from-amber-500/10 via-stone-900/90 to-indigo-500/10 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0">
+                  <Crown className="w-4.5 h-4.5" />
+                </div>
+                <div className="min-w-0">
+                  <span className="text-xs sm:text-sm font-black text-white block truncate">
+                    {proEntitlement.hasPaidPro
+                      ? isFa
+                        ? 'نسخه حرفه‌ای یاد (فعال)'
+                        : 'YAAD Pro (Active)'
+                      : proEntitlement.trial.isTrialActive
+                      ? isFa
+                        ? `هدیه ۴۰ روزه Pro (${toPersianDigits(proEntitlement.trial.remainingDays)} روز مانده)`
+                        : `40-Day Pro Trial (${proEntitlement.trial.remainingDays}d left)`
+                      : isFa
+                      ? 'نسخه رایگان یاد'
+                      : 'YAAD Free Tier'}
+                  </span>
+                  <span className="text-[11px] text-stone-400 block truncate">
+                    {proEntitlement.hasPaidPro
+                      ? proEntitlement.reason === 'paid_lifetime'
+                        ? isFa
+                          ? 'اشتراک دائمی بدون محدودیت زمانی'
+                          : 'Lifetime access unlocked'
+                        : isFa
+                        ? `${toPersianDigits(proEntitlement.paidRemainingDays ?? 0)} روز از اشتراک ۱ ساله باقی مانده`
+                        : `${proEntitlement.paidRemainingDays ?? 0} days left in 1-Year plan`
+                      : proEntitlement.trial.isTrialActive
+                      ? isFa
+                        ? 'همه امکانات پیشرفته برای شما باز است'
+                        : 'All Pro features are currently unlocked'
+                      : isFa
+                      ? 'یادآور و زنگ تمام‌صفحه رایگان • ارتقا به Pro'
+                      : 'Reminders & full-screen alarms free • Upgrade to Pro'}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onOpenProPaywall()}
+                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs shrink-0 transition-all active:scale-95 cursor-pointer"
+              >
+                {proEntitlement.hasPaidPro
+                  ? isFa
+                    ? 'مشاهده وضعیت'
+                    : 'View Status'
+                  : isFa
+                  ? 'ارتقا به Pro'
+                  : 'Upgrade'}
+              </button>
+            </div>
+          )}
+
+          {/* ========================================================= */}
           {/* TOP LANGUAGE SWITCHER (کلید کشویی مینیمال در صدر صفحه تنظیمات) */}
           {/* ========================================================= */}
           <div className="p-2.5 sm:p-3 rounded-2xl border border-stone-800/80 bg-stone-900/70 backdrop-blur-md flex items-center justify-between gap-3 shadow-xs">
@@ -573,11 +639,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
                     {themes.map((themeItem) => {
                       const isSelected = settings.theme === themeItem.id;
+                      const isThemeLocked = !hasProAccess && themeItem.id !== 'midnight_blue_silver';
                       return (
                         <button
                           key={themeItem.id}
                           type="button"
-                          onClick={() => onUpdateSettings({ theme: themeItem.id })}
+                          onClick={() => {
+                            if (isThemeLocked) {
+                              onOpenProPaywall?.('themes');
+                              return;
+                            }
+                            onUpdateSettings({ theme: themeItem.id });
+                          }}
                           className={`h-8 px-2 rounded-xl border text-center transition-all duration-150 flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 ${
                             isSelected
                               ? 'border-indigo-400 bg-indigo-500/20 text-indigo-300 font-bold shadow-xs ring-1 ring-indigo-400/40'
@@ -586,6 +659,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         >
                           <span className={`w-2.5 h-2.5 rounded-full border shrink-0 ${themeItem.preview}`} />
                           <span className="text-[11px] font-medium truncate">{themeItem.name}</span>
+                          <ProBadge locked={isThemeLocked} />
                         </button>
                       );
                     })}
@@ -1676,6 +1750,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       type="button"
                       disabled={isBackupBusy}
                       onClick={async () => {
+                        if (!hasProAccess) {
+                          onOpenProPaywall?.('backup');
+                          return;
+                        }
                         setIsBackupBusy(true);
                         setBackupFeedback(null);
                         try {
@@ -1704,16 +1782,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     >
                       <Download className="w-4 h-4 shrink-0" />
                       <span>{isFa ? 'خروجی گرفتن (JSON)' : 'Export Backup'}</span>
+                      <ProBadge locked={!hasProAccess} />
                     </button>
 
                     <button
                       type="button"
                       disabled={isBackupBusy}
-                      onClick={() => importBackupInputRef.current?.click()}
+                      onClick={() => {
+                        if (!hasProAccess) {
+                          onOpenProPaywall?.('backup');
+                          return;
+                        }
+                        importBackupInputRef.current?.click();
+                      }}
                       className="min-h-[44px] px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
                     >
                       <Upload className="w-4 h-4 shrink-0" />
                       <span>{isFa ? 'وارد کردن بک‌آپ' : 'Import Backup'}</span>
+                      <ProBadge locked={!hasProAccess} />
                     </button>
 
                     <input

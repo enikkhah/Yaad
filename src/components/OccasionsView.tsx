@@ -17,6 +17,7 @@ import { OccasionCard } from './OccasionCard';
 import { OCCASION_TYPES, getOccasionTypeMeta, calculateNextOccasionOccurrence } from '../utils/occasionUtils';
 import { toPersianDigits, matchesOccasionSearch } from '../utils/jalali';
 import { AppLanguage } from '../utils/i18n';
+import { ProBadge } from './ProBadge';
 
 interface OccasionsViewProps {
   occasions: Occasion[];
@@ -28,6 +29,8 @@ interface OccasionsViewProps {
   globalSearchQuery?: string;
   selectedTypeFilter?: OccasionType | 'all';
   onSelectTypeFilter?: (type: OccasionType | 'all') => void;
+  hasProAccess?: boolean;
+  onRequirePro?: () => void;
 }
 
 export const OccasionsView: React.FC<OccasionsViewProps> = ({
@@ -40,6 +43,8 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
   globalSearchQuery = '',
   selectedTypeFilter: controlledTypeFilter,
   onSelectTypeFilter,
+  hasProAccess = true,
+  onRequirePro,
 }) => {
   const isEn = language === 'en';
   const [searchQuery, setSearchQuery] = useState('');
@@ -99,6 +104,10 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
   const todayCount = filteredOccasions.filter((o) => calculateNextOccasionOccurrence(o).isToday).length;
 
   const handleAddClick = () => {
+    if (!hasProAccess && onRequirePro) {
+      onRequirePro();
+      return;
+    }
     onAddNew(selectedTypeFilter !== 'all' ? selectedTypeFilter : undefined);
   };
 
@@ -166,6 +175,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
         >
           <Plus className="w-4 h-4 stroke-[3]" />
           <span className="font-black">{addButtonLabel}</span>
+          <ProBadge locked={!hasProAccess} />
         </button>
       </div>
 
@@ -258,6 +268,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
               onDelete={onDelete}
               onCreateReminder={onCreateReminder}
               language={language}
+              hasProAccess={hasProAccess}
             />
           ))}
         </div>
@@ -303,6 +314,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
           >
             <Plus className="w-4 h-4 stroke-[3]" />
             <span>{addButtonLabel}</span>
+            <ProBadge locked={!hasProAccess} />
           </button>
         </div>
       )}
