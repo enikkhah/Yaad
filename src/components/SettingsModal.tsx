@@ -36,14 +36,17 @@ import {
   BellRing,
   AlertTriangle,
   BatteryCharging,
-  Crown
+  Crown,
+  Gift
 } from 'lucide-react';
+import { Share } from '@capacitor/share';
 import { getT } from '../utils/i18n';
 import { APP_VERSION } from '../utils/version';
 import { toPersianDigits, formatJalaliFull } from '../utils/jalali';
 import { openReviewDialogDirectly } from '../utils/reviewFlow';
 import { ProBadge } from './ProBadge';
 import { ProEntitlementState, ProFeatureId } from '../utils/proEntitlement';
+import { getBillingProvider, isPurchaseStateValid } from '../utils/billingProvider';
 import { 
   setGeofenceTrackingEnabled
 } from '../utils/geofenceManager';
@@ -147,6 +150,121 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isBackupBusy, setIsBackupBusy] = useState(false);
   const importBackupInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Gift Pro to a friend state (for verified paid Pro users only)
+  const [verifiedGiftSku, setVerifiedGiftSku] = useState<'yaad_pro_lifetime' | 'yaad_pro_1y' | null>(null);
+  const [giftToastMessage, setGiftToastMessage] = useState<string | null>(null);
+  const giftToastTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!proEntitlement?.hasPaidPro) {
+      setVerifiedGiftSku(null);
+      return;
+    }
+
+    // 1. Resolve from cached verified activePurchase
+    const cachedProductId = proEntitlement.activePurchase?.productId || '';
+    if (cachedProductId === 'yaad_pro_lifetime' || cachedProductId.includes('lifetime') || proEntitlement.reason === 'paid_lifetime') {
+      setVerifiedGiftSku('yaad_pro_lifetime');
+    } else if (cachedProductId === 'yaad_pro_1y' || cachedProductId.includes('1y') || proEntitlement.reason === 'paid_1y') {
+      setVerifiedGiftSku('yaad_pro_1y');
+    }
+
+    // 2. Also verify against live store purchases list when modal opens
+    if (!isOpen) return;
+    const provider = getBillingProvider(proEntitlement.store);
+    if (!provider.isAvailable()) return;
+
+    let active = true;
+    provider
+      .queryPurchases(['yaad_pro_lifetime', 'yaad_pro_1y'])
+      .then((res) => {
+        if (!active || res.offlineOrUnavailable || !Array.isArray(res.purchases)) return;
+        const validPurchases = res.purchases.filter((p) => isPurchaseStateValid(p.purchaseState));
+        if (validPurchases.some((p) => p.productId === 'yaad_pro_lifetime')) {
+          setVerifiedGiftSku('yaad_pro_lifetime');
+        } else if (validPurchases.some((p) => p.productId === 'yaad_pro_1y')) {
+          setVerifiedGiftSku('yaad_pro_1y');
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      active = false;
+    };
+  }, [isOpen, proEntitlement]);
+
+  useEffect(() => {
+    return () => {
+      if (giftToastTimeoutRef.current) {
+        window.clearTimeout(giftToastTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const showGiftCopiedToast = (msg: string) => {
+    setGiftToastMessage(msg);
+    if (giftToastTimeoutRef.current) {
+      window.clearTimeout(giftToastTimeoutRef.current);
+    }
+    giftToastTimeoutRef.current = window.setTimeout(() => {
+      setGiftToastMessage(null);
+    }, 4000);
+  };
+
+  const handleShareProGift = async () => {
+    if (!proEntitlement?.hasPaidPro || !verifiedGiftSku) return;
+
+    const isLifetime = verifiedGiftSku === 'yaad_pro_lifetime';
+    const planLabel = isLifetime ? 'اشتراک دائمی' : 'اشتراک یک‌ساله';
+    const giftCode = isLifetime ? 'YAAD-LIFE-GIFT' : 'YAAD-1Y-GIFT';
+
+    const giftText = `سلام! من برای کارهام از اپلیکیشن «یاد» استفاده می‌کنم. چون ${planLabel} این برنامه رو دارم، یک کد هدیه بهم داده تا یکی از دوستام هم بتونه نسخه حرفه‌ایش رو کاملاً رایگان فعال کنه.
+اگر به کارت میاد می‌تونی از لینک‌های زیر نصبش کنی و این کد رو داخل برنامه بزنی: ${giftCode}
+لینک کافه‌بازار:
+https://cafebazaar.ir/app/com.yaad.reminder
+لینک مایکت:
+https://myket.ir/app/com.yaad.reminder`;
+
+    const copyFallback = async () => {
+      try {
+        if (navigator?.clipboard?.writeText) {
+          await navigator.clipboard.writeText(giftText);
+        } else {
+          const textArea = document.createElement('textarea');
+          textArea.value = giftText;
+          textArea.style.position = 'fixed';
+          textArea.style.opacity = '0';
+          document.body.appendChild(textArea);
+          textArea.select();
+          document.execCommand('copy');
+          document.body.removeChild(textArea);
+        }
+        showGiftCopiedToast('متن هدیه کپی شد. حالا می‌تونید برای دوستتون بفرستید.');
+      } catch {
+        showGiftCopiedToast('متن هدیه کپی شد. حالا می‌تونید برای دوستتون بفرستید.');
+      }
+    };
+
+    try {
+      const canShareRes = await Share.canShare().catch(() => ({ value: false }));
+      if (canShareRes?.value) {
+        await Share.share({
+          title: 'هدیه نسخه Pro به یک دوست',
+          text: giftText,
+          dialogTitle: 'هدیه نسخه Pro به یک دوست',
+        });
+        return;
+      }
+      await copyFallback();
+    } catch (err: any) {
+      const errMsg = String(err?.message || err || '').toLowerCase();
+      if (errMsg.includes('cancel') || errMsg.includes('abort') || errMsg.includes('dismiss')) {
+        return;
+      }
+      await copyFallback();
+    }
+  };
 
   // Recycle Bin state
   const [isConfirmingEmptyBin, setIsConfirmingEmptyBin] = useState<boolean>(false);
@@ -476,57 +594,83 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           {/* YAAD PRO STATUS & PAYWALL CARD */}
           {/* ========================================================= */}
           {proEntitlement && onOpenProPaywall && (
-            <div className="p-3 sm:p-3.5 rounded-2xl border border-amber-500/35 bg-gradient-to-br from-amber-500/10 via-stone-900/90 to-indigo-500/10 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0">
-                  <Crown className="w-4.5 h-4.5" />
-                </div>
-                <div className="min-w-0">
-                  <span className="text-xs sm:text-sm font-black text-white block truncate">
-                    {proEntitlement.hasPaidPro
-                      ? isFa
-                        ? 'نسخه حرفه‌ای یاد (فعال)'
-                        : 'YAAD Pro (Active)'
-                      : proEntitlement.trial.isTrialActive
-                      ? isFa
-                        ? `هدیه ۴۰ روزه Pro (${toPersianDigits(proEntitlement.trial.remainingDays)} روز مانده)`
-                        : `40-Day Pro Trial (${proEntitlement.trial.remainingDays}d left)`
-                      : isFa
-                      ? 'نسخه رایگان یاد'
-                      : 'YAAD Free Tier'}
-                  </span>
-                  <span className="text-[11px] text-stone-400 block truncate">
-                    {proEntitlement.hasPaidPro
-                      ? proEntitlement.reason === 'paid_lifetime'
+            <div className="p-3 sm:p-3.5 rounded-2xl border border-amber-500/35 bg-gradient-to-br from-amber-500/10 via-stone-900/90 to-indigo-500/10 space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-300 flex items-center justify-center shrink-0">
+                    <Crown className="w-4.5 h-4.5" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-xs sm:text-sm font-black text-white block truncate">
+                      {proEntitlement.hasPaidPro
                         ? isFa
-                          ? 'اشتراک دائمی بدون محدودیت زمانی'
-                          : 'Lifetime access unlocked'
+                          ? 'نسخه حرفه‌ای یاد (فعال)'
+                          : 'YAAD Pro (Active)'
+                        : proEntitlement.trial.isTrialActive
+                        ? isFa
+                          ? `هدیه ۴۰ روزه Pro (${toPersianDigits(proEntitlement.trial.remainingDays)} روز مانده)`
+                          : `40-Day Pro Trial (${proEntitlement.trial.remainingDays}d left)`
                         : isFa
-                        ? `${toPersianDigits(proEntitlement.paidRemainingDays ?? 0)} روز از اشتراک ۱ ساله باقی مانده`
-                        : `${proEntitlement.paidRemainingDays ?? 0} days left in 1-Year plan`
-                      : proEntitlement.trial.isTrialActive
-                      ? isFa
-                        ? 'همه امکانات پیشرفته برای شما باز است'
-                        : 'All Pro features are currently unlocked'
-                      : isFa
-                      ? 'یادآور و زنگ تمام‌صفحه رایگان • ارتقا به Pro'
-                      : 'Reminders & full-screen alarms free • Upgrade to Pro'}
-                  </span>
+                        ? 'نسخه رایگان یاد'
+                        : 'YAAD Free Tier'}
+                    </span>
+                    <span className="text-[11px] text-stone-400 block truncate">
+                      {proEntitlement.hasPaidPro
+                        ? proEntitlement.reason === 'paid_lifetime'
+                          ? isFa
+                            ? 'اشتراک دائمی بدون محدودیت زمانی'
+                            : 'Lifetime access unlocked'
+                          : isFa
+                          ? `${toPersianDigits(proEntitlement.paidRemainingDays ?? 0)} روز از اشتراک ۱ ساله باقی مانده`
+                          : `${proEntitlement.paidRemainingDays ?? 0} days left in 1-Year plan`
+                        : proEntitlement.trial.isTrialActive
+                        ? isFa
+                          ? 'همه امکانات پیشرفته برای شما باز است'
+                          : 'All Pro features are currently unlocked'
+                        : isFa
+                        ? 'یادآور و زنگ تمام‌صفحه رایگان • ارتقا به Pro'
+                        : 'Reminders & full-screen alarms free • Upgrade to Pro'}
+                    </span>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => onOpenProPaywall()}
+                  className="min-h-[40px] px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs shrink-0 transition-all active:scale-95 cursor-pointer"
+                >
+                  {proEntitlement.hasPaidPro
+                    ? isFa
+                      ? 'مشاهده وضعیت'
+                      : 'View Status'
+                    : isFa
+                    ? 'ارتقا به Pro'
+                    : 'Upgrade'}
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => onOpenProPaywall()}
-                className="min-h-[40px] px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs shrink-0 transition-all active:scale-95 cursor-pointer"
-              >
-                {proEntitlement.hasPaidPro
-                  ? isFa
-                    ? 'مشاهده وضعیت'
-                    : 'View Status'
-                  : isFa
-                  ? 'ارتقا به Pro'
-                  : 'Upgrade'}
-              </button>
+
+              {/* دکمه هدیه نسخه Pro به یک دوست — فقط برای کاربران دارای اشتراک تاییدشده Pro */}
+              {proEntitlement.hasPaidPro && verifiedGiftSku && (
+                <div className="pt-2 border-t border-amber-500/20 space-y-2">
+                  <button
+                    type="button"
+                    onClick={handleShareProGift}
+                    className="w-full min-h-[44px] px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500/20 via-amber-500/20 to-indigo-500/20 hover:from-emerald-500/30 hover:via-amber-500/30 hover:to-indigo-500/30 border border-amber-400/45 text-amber-200 font-black text-xs sm:text-sm flex items-center justify-center gap-2 shadow-sm transition-all active:scale-95 cursor-pointer"
+                  >
+                    <span className="text-base leading-none" aria-hidden="true">🎁</span>
+                    <Gift className="w-4 h-4 text-amber-300 shrink-0" />
+                    <span>هدیه نسخه Pro به یک دوست</span>
+                  </button>
+
+                  {giftToastMessage && (
+                    <div
+                      role="status"
+                      className="px-3 py-2 rounded-xl bg-emerald-500/15 border border-emerald-500/40 text-emerald-200 text-xs font-bold text-center animate-in fade-in"
+                    >
+                      {giftToastMessage}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
