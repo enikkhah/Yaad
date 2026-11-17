@@ -646,6 +646,23 @@ export function setupNotificationListeners(
           return;
         }
 
+        // Dedicated handling for 40-day trial reminder notifications
+        if (extraObj.openPro === true) {
+          if (typeof notifId === 'number') {
+            LocalNotifications.cancel({ notifications: [{ id: notifId }] }).catch(() => {});
+            LocalNotifications.removeDeliveredNotifications({
+              notifications: [{ id: notifId, title: '', body: '' }],
+            }).catch(() => {});
+          }
+          if (actionId === 'tap' || !actionId) {
+            window.dispatchEvent(new CustomEvent('yaad:open-pro-paywall', {
+              detail: { milestoneDay: extraObj.trialMilestoneDay },
+            }));
+            if (onOpen) onOpen('');
+          }
+          return;
+        }
+
         // Handle notifications without reminderId (e.g. 60s test notification)
         if (!reminderId) {
           if (

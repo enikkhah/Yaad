@@ -108,6 +108,7 @@ if (fs.existsSync(oldMainActivityJava)) {
 
 const pluginKtContent = `package com.yaad.reminder
 
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -119,6 +120,7 @@ import ir.cafebazaar.poolakey.Payment
 import ir.cafebazaar.poolakey.config.PaymentConfiguration
 import ir.cafebazaar.poolakey.config.SecurityCheck
 import ir.cafebazaar.poolakey.entity.PurchaseInfo
+import ir.cafebazaar.poolakey.entity.PurchaseState
 import ir.cafebazaar.poolakey.request.PurchaseRequest
 
 @CapacitorPlugin(name = "BazaarBilling")
@@ -128,11 +130,39 @@ class BazaarBillingPlugin : Plugin() {
     private var paymentConnection: Connection? = null
     private var currentRsaKey: String? = null
 
+    private fun extractRequestedSkus(call: PluginCall): List<String> {
+        val list = mutableListOf<String>()
+        val arr = call.getArray("productIds")
+        if (arr != null) {
+            for (i in 0 until arr.length()) {
+                val sku = arr.optString(i, "").trim()
+                if (sku.isNotEmpty() && !list.contains(sku)) {
+                    list.add(sku)
+                }
+            }
+        }
+        val single = call.getString("productId")?.trim()
+        if (!single.isNullOrEmpty() && !list.contains(single)) {
+            list.add(single)
+        }
+        return list
+    }
+
     private fun ensureConnected(
         rsaPublicKey: String?,
         onReady: (Payment) -> Unit,
-        onError: (String, Throwable?) -> Unit
+        onError: (String, String, Throwable?) -> Unit
     ) {
+        val cleanKey = rsaPublicKey?.trim()
+        if (cleanKey.isNullOrEmpty()) {
+            onError(
+                "کلید امضای پرداخت کافه‌بازار (RSA) در این بیلد تنظیم نشده است.",
+                "MISSING_RSA_KEY",
+                null
+            )
+            return
+        }
+
         val currentPayment = payment
         val currentConnection = paymentConnection
 
@@ -140,7 +170,7 @@ class BazaarBillingPlugin : Plugin() {
             currentPayment != null &&
             currentConnection != null &&
             currentConnection.getState() == ConnectionState.Connected &&
-            currentRsaKey == rsaPublicKey
+            currentRsaKey == cleanKey
         ) {
             onReady(currentPayment)
             return
@@ -151,16 +181,11 @@ class BazaarBillingPlugin : Plugin() {
         } catch (_: Exception) {
         }
 
-        val securityCheck = if (!rsaPublicKey.isNullOrBlank()) {
-            SecurityCheck.Enable(rsaPublicKey = rsaPublicKey.trim())
-        } else {
-            SecurityCheck.Disable
-        }
-
+        val securityCheck = SecurityCheck.Enable(rsaPublicKey = cleanKey)
         val paymentConfig = PaymentConfiguration(localSecurityCheck = securityCheck)
         val newPayment = Payment(context = context, config = paymentConfig)
         payment = newPayment
-        currentRsaKey = rsaPublicKey
+        currentRsaKey = cleanKey
 
         paymentConnection = newPayment.connect {
             connectionSucceed {
@@ -169,6 +194,7 @@ class BazaarBillingPlugin : Plugin() {
             connectionFailed { throwable ->
                 onError(
                     "ارتباط با سرویس پرداخت کافه‌بازار برقرار نشد. مطمئن شوید برنامه کافه‌بازار روی گوشی نصب است و وارد حساب کاربری خود شده‌اید.",
+                    "CONNECTION_FAILED",
                     throwable
                 )
             }
@@ -178,9 +204,52 @@ class BazaarBillingPlugin : Plugin() {
         }
     }
 
+    @PluginMethod
+    fun querySkuDetails(call: PluginCall) {
+        val skuIds = extractRequestedSkus(call)
+        if (skuIds.isEmpty()) {
+            val emptyRes = JSObject()
+            emptyRes.put("skuDetails", JSArray())
+            call.resolve(emptyRes)
+            return
+        }
+
+        val rsaPublicKey = call.getString("rsaPublicKey")?.trim()
+        ensureConnected(
+            rsaPublicKey = rsaPublicKey,
+            onReady = { activePayment ->
+                activePayment.getInAppSkuDetails(skuIds = skuIds) {
+                    getSkuDetailsSucceed { details ->
+                        val items = JSArray()
+                        for (detail in details) {
+                            val obj = JSObject()
+                            obj.put("sku", detail.sku)
+                            obj.put("title", detail.title)
+                            obj.put("price", detail.price)
+                            obj.put("description", detail.description)
+                            items.put(obj)
+                        }
+                        val res = JSObject()
+                        res.put("skuDetails", items)
+                        call.resolve(res)
+                    }
+                    getSkuDetailsFailed { throwable ->
+                        call.reject(
+                            "خطا در دریافت قیمت محصولات از کافه‌بازار: \${throwable.localizedMessage ?: "خطای نامشخص"}",
+                            "SKU_QUERY_FAILED",
+                            Exception(throwable)
+                        )
+                    }
+                }
+            },
+            onError = { message, code, throwable ->
+                call.reject(message, code, throwable?.let { Exception(it) })
+            }
+        )
+    }
+
     /**
-     * باز کردن مستقیم پنجره پرداخت و ورود کد تخفیف کافه‌بازار (برای خرید یک‌باره و غیرمصرفی نسخه Pro)
-     * نکته: برای محصولات غیرمصرفی (Non-Consumable) متد consumeProduct فراخوانی نمی‌شود تا مالکیت دائمی بماند.
+     * باز کردن پنجره پرداخت و ورود کد تخفیف کافه‌بازار (محصولات غیرمصرفی سالانه/دائمی Pro)
      */
     @PluginMethod
     fun purchasePro(call: PluginCall) {
@@ -215,7 +284,7 @@ class BazaarBillingPlugin : Plugin() {
                         request = purchaseRequest
                     ) {
                         purchaseFlowBegan {
-                            // پنجره کافه‌بازار (شامل قیمت، انتخاب درگاه و بخش ورود کد تخفیف) باز شد
+                            // پنجره کافه‌بازار باز شد
                         }
                         failedToBeginFlow { throwable ->
                             call.reject(
@@ -225,7 +294,14 @@ class BazaarBillingPlugin : Plugin() {
                             )
                         }
                         purchaseSucceed { purchaseInfo ->
-                            call.resolve(buildPurchaseResult(purchaseInfo, "PURCHASED"))
+                            if (purchaseInfo.purchaseState == PurchaseState.PURCHASED) {
+                                call.resolve(buildPurchaseResult(purchaseInfo, "PURCHASED"))
+                            } else {
+                                call.reject(
+                                    "تراکنش خرید در وضعیت معتبر قرار ندارد (ممکن است لغو یا بازپرداخت شده باشد).",
+                                    "PURCHASE_INVALID_STATE"
+                                )
+                            }
                         }
                         purchaseCanceled {
                             call.reject(
@@ -234,10 +310,11 @@ class BazaarBillingPlugin : Plugin() {
                             )
                         }
                         purchaseFailed { throwable ->
-                            // اگر کاربر قبلاً این محصول غیرمصرفی را خریده باشد، مالکیت را استعلام می‌کنیم
                             activePayment.getPurchasedProducts {
                                 querySucceed { purchasedList ->
-                                    val existing = purchasedList.firstOrNull { it.productId == productId }
+                                    val existing = purchasedList.firstOrNull {
+                                        it.productId == productId && it.purchaseState == PurchaseState.PURCHASED
+                                    }
                                     if (existing != null) {
                                         call.resolve(buildPurchaseResult(existing, "ALREADY_OWNED"))
                                     } else {
@@ -260,20 +337,20 @@ class BazaarBillingPlugin : Plugin() {
                     }
                 }
             },
-            onError = { message, throwable ->
-                call.reject(message, "CONNECTION_FAILED", throwable?.let { Exception(it) })
+            onError = { message, code, throwable ->
+                call.reject(message, code, throwable?.let { Exception(it) })
             }
         )
     }
 
     /**
-     * بررسی و بازیابی خرید نسخه Pro از کافه‌بازار (در زمان اجرای اپ یا نصب مجدد روی گوشی جدید)
+     * بررسی و بازیابی سوابق خرید از کافه‌بازار (با پشتیبانی از چند SKU و فیلتر کردن موارد مستردشده)
      */
     @PluginMethod
     fun checkProOwnership(call: PluginCall) {
-        val productId = call.getString("productId")?.trim()
-        if (productId.isNullOrEmpty()) {
-            call.reject("شناسه محصول (productId) مشخص نشده است.")
+        val requestedSkus = extractRequestedSkus(call)
+        if (requestedSkus.isEmpty()) {
+            call.reject("شناسه محصول (productIds) مشخص نشده است.")
             return
         }
 
@@ -284,15 +361,25 @@ class BazaarBillingPlugin : Plugin() {
             onReady = { activePayment ->
                 activePayment.getPurchasedProducts {
                     querySucceed { purchasedList ->
-                        val ownedProduct = purchasedList.firstOrNull { it.productId == productId }
-                        if (ownedProduct != null) {
-                            val result = buildPurchaseResult(ownedProduct, "PURCHASED")
+                        val activePurchases = purchasedList.filter {
+                            requestedSkus.contains(it.productId) && it.purchaseState == PurchaseState.PURCHASED
+                        }
+                        val purchasesArr = JSArray()
+                        for (item in activePurchases) {
+                            purchasesArr.put(buildPurchaseResult(item, "PURCHASED"))
+                        }
+
+                        val primary = activePurchases.firstOrNull()
+                        if (primary != null) {
+                            val result = buildPurchaseResult(primary, "PURCHASED")
                             result.put("isProOwned", true)
+                            result.put("purchases", purchasesArr)
                             call.resolve(result)
                         } else {
                             val result = JSObject()
                             result.put("isProOwned", false)
                             result.put("status", "NOT_PURCHASED")
+                            result.put("purchases", JSArray())
                             call.resolve(result)
                         }
                     }
@@ -305,8 +392,8 @@ class BazaarBillingPlugin : Plugin() {
                     }
                 }
             },
-            onError = { message, throwable ->
-                call.reject(message, "CONNECTION_FAILED", throwable?.let { Exception(it) })
+            onError = { message, code, throwable ->
+                call.reject(message, code, throwable?.let { Exception(it) })
             }
         )
     }

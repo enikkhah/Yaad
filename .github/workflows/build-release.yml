@@ -22,6 +22,10 @@ env:
 jobs:
   build:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        store: [bazaar, myket]
 
     steps:
       - name: Checkout
@@ -121,11 +125,19 @@ jobs:
       - name: Run TypeScript & Build Verification Lint
         run: npm run lint
 
-      - name: Build web app with synced version
+      - name: Build web app with synced version & store target
         env:
           VITE_APP_VERSION: ${{ steps.versioning.outputs.v_name }}
+          VITE_STORE: ${{ matrix.store }}
           VITE_BAZAAR_RSA_PUBLIC_KEY: ${{ secrets.BAZAAR_RSA_PUBLIC_KEY || '' }}
+          VITE_MYKET_RSA_PUBLIC_KEY: ${{ secrets.MYKET_RSA_PUBLIC_KEY || '' }}
           VITE_BAZAAR_PRO_PRODUCT_ID: ${{ secrets.BAZAAR_PRO_PRODUCT_ID || 'yaad_pro_lifetime' }}
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY || '' }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN || '' }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID || '' }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET || '' }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID || '' }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID || '' }}
         run: npm run build
 
       - name: Remove old Android folder
@@ -219,7 +231,12 @@ jobs:
           PY
 
       - name: Setup Cafe Bazaar Poolakey Billing Plugin
+        if: matrix.store == 'bazaar'
         run: node scripts/setup-bazaar-poolakey.mjs
+
+      - name: Setup Myket IAB Billing Plugin
+        if: matrix.store == 'myket'
+        run: node scripts/setup-myket-billing.mjs
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -418,11 +435,14 @@ jobs:
           STORE_PASSWORD: ${{ secrets.YAAD_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.YAAD_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.YAAD_KEY_PASSWORD }}
+          STORE_TARGET: ${{ matrix.store }}
+          V_CODE: ${{ steps.versioning.outputs.v_code }}
+          V_NAME: ${{ steps.versioning.outputs.v_name }}
         run: |
           # Run release AAB + APK build using verified Gradle distribution with automatic retry on transient network timeouts
           BUILD_OK=0
           for attempt in 1 2 3; do
-            echo "Running Gradle bundleRelease assembleRelease (attempt $attempt/3)..."
+            echo "Running Gradle bundleRelease assembleRelease for ${STORE_TARGET} (attempt $attempt/3)..."
             if ./gradlew bundleRelease assembleRelease --no-daemon; then
               BUILD_OK=1
               break
@@ -446,40 +466,43 @@ jobs:
             echo "::error::Release APK file was not generated!"
             exit 1
           fi
-          cp "$AAB_FILE" "../dist-release/aab/Yaad-v${{ steps.versioning.outputs.v_name }}-b${{ steps.versioning.outputs.v_code }}-release.aab"
-          cp "$APK_FILE" "../dist-release/apk/Yaad-v${{ steps.versioning.outputs.v_name }}-b${{ steps.versioning.outputs.v_code }}-release.apk"
+          cp "$AAB_FILE" "../dist-release/aab/Yaad-v${V_NAME}-b${V_CODE}-${STORE_TARGET}-release.aab"
+          cp "$APK_FILE" "../dist-release/apk/Yaad-v${V_NAME}-b${V_CODE}-${STORE_TARGET}-release.apk"
           ls -lh ../dist-release/aab ../dist-release/apk
 
-      - name: Upload Release AAB (For Cafe Bazaar & Myket)
+      - name: Upload Release AAB (${{ matrix.store }})
         id: upload_aab
         uses: actions/upload-artifact@v6
         with:
-          name: Yaad-Release-AAB
+          name: Yaad-Release-AAB-${{ matrix.store }}
           path: dist-release/aab/*.aab
           if-no-files-found: error
           overwrite: true
 
-      - name: Upload Release APK
+      - name: Upload Release APK (${{ matrix.store }})
         id: upload_apk
         uses: actions/upload-artifact@v6
         with:
-          name: Yaad-Release-APK
+          name: Yaad-Release-APK-${{ matrix.store }}
           path: dist-release/apk/*.apk
           if-no-files-found: error
           overwrite: true
 
-      - name: Retry Upload Release APK (if needed)
+      - name: Retry Upload Release APK (${{ matrix.store }})
         id: retry_apk
         if: steps.upload_apk.outputs.artifact-id == ''
         uses: actions/upload-artifact@v6
         with:
-          name: Yaad-Release-APK
+          name: Yaad-Release-APK-${{ matrix.store }}
           path: dist-release/apk/*.apk
           if-no-files-found: error
           overwrite: true
 
       - name: Inspect Built Manifest & Publish Build Summary
         env:
+          STORE_TARGET: ${{ matrix.store }}
+          HAS_BAZAAR_RSA: ${{ secrets.BAZAAR_RSA_PUBLIC_KEY != '' }}
+          HAS_MYKET_RSA: ${{ secrets.MYKET_RSA_PUBLIC_KEY != '' }}
           AAB_ID: ${{ steps.upload_aab.outputs.artifact-id }}
           AAB_URL: ${{ steps.upload_aab.outputs.artifact-url }}
           APK_ID: ${{ steps.upload_apk.outputs.artifact-id || steps.retry_apk.outputs.artifact-id }}
@@ -572,7 +595,7 @@ jobs:
           print(f"MANIFEST_VNAME={v_name}")
           print("PERMS_START")
           for p in sorted(set(perms)):
-              print(f"- `{p}`")
+              print(f"- \`{p}\`")
           print("PERMS_END")
           PY
           )
@@ -585,9 +608,17 @@ jobs:
           APP_LABEL=$(echo "$MANIFEST_REPORT" | sed -n 's/^APP_LABEL=//p' | head -n 1)
           PERMS_LIST=$(echo "$MANIFEST_REPORT" | awk '/^PERMS_START$/{flag=1;next}/^PERMS_END$/{flag=0}flag')
 
+          RSA_STATUS="موجود"
+          if [ "$STORE_TARGET" = "bazaar" ] && [ "$HAS_BAZAAR_RSA" != "true" ]; then
+            RSA_STATUS="کلید RSA تنظیم نشده (پرداخت غیرفعال در UI)"
+          elif [ "$STORE_TARGET" = "myket" ] && [ "$HAS_MYKET_RSA" != "true" ]; then
+            RSA_STATUS="کلید RSA تنظیم نشده (پرداخت غیرفعال در UI)"
+          fi
+
           {
-            echo "### ✅ ساخت نسخه‌های انتشار یاد (AAB و APK) با موفقیت انجام شد"
+            echo "### ✅ ساخت نسخه انتشار یاد — فروشگاه \`${STORE_TARGET}\`"
             echo ""
+            echo "- **فروشگاه هدف (VITE_STORE):** \`${STORE_TARGET}\` • **وضعیت کلید RSA:** ${RSA_STATUS}"
             echo "- **نام برنامه در مانیفست (Launcher):** \`${APP_LABEL}\`"
             echo "- **نام نسخه اعمال‌شده در کل اپ و اندروید:** \`${MANIFEST_VNAME:-$V_NAME}\`"
             echo "- **کد نسخه (versionCode در مانیفست):** \`${MANIFEST_VCODE:-$V_CODE}\`"
@@ -595,9 +626,9 @@ jobs:
             echo ""
             echo "| نوع خروجی | نام آرتیفکت | وضعیت | لینک دانلود مستقیم |"
             echo "| :--- | :--- | :--- | :--- |"
-            echo "| **AAB (کافه‌بازار و مایکت)** | \`Yaad-Release-AAB\` | ✅ آماده (\`#${AAB_ID}\`) | [دانلود Yaad-Release-AAB](${AAB_URL}) |"
-            echo "| **APK (نصب مستقیم)** | \`Yaad-Release-APK\` | ✅ آماده (\`#${APK_ID}\`) | [دانلود Yaad-Release-APK](${APK_URL}) |"
+            echo "| **AAB (${STORE_TARGET})** | \`Yaad-Release-AAB-${STORE_TARGET}\` | ✅ آماده (\`#${AAB_ID}\`) | [دانلود AAB (${STORE_TARGET})](${AAB_URL}) |"
+            echo "| **APK (${STORE_TARGET})** | \`Yaad-Release-APK-${STORE_TARGET}\` | ✅ آماده (\`#${APK_ID}\`) | [دانلود APK (${STORE_TARGET})](${APK_URL}) |"
             echo ""
-            echo "#### فهرست مجوزهای مانیفست نهایی"
+            echo "#### فهرست مجوزهای مانیفست نهایی (${STORE_TARGET})"
             echo "${PERMS_LIST}"
           } >> "$GITHUB_STEP_SUMMARY"

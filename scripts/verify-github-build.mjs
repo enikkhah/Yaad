@@ -122,6 +122,7 @@ for (const file of workflowFiles) {
 for (const scriptRel of [
   'scripts/generate-transparent-icons.mjs',
   'scripts/setup-bazaar-poolakey.mjs',
+  'scripts/setup-myket-billing.mjs',
   'scripts/patch-capacitor-notifications.mjs',
   'scripts/sync-privacy.mjs',
 ]) {
