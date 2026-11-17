@@ -28,7 +28,8 @@ import {
   Lightbulb,
   ExternalLink,
   FolderOpen,
-  Mail
+  Mail,
+  Layers
 } from 'lucide-react';
 import { getT } from '../utils/i18n';
 import { APP_VERSION } from '../utils/version';
@@ -47,6 +48,7 @@ import {
   requestAllNativePermissions,
   checkAllPermissionsStatus,
   hasBackgroundLocationPermission,
+  hasOverlayPermission,
   openAndroidSettings,
   NativePermissionsStatus
 } from '../utils/nativePermissions';
@@ -134,6 +136,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     location: false,
     backgroundLocation: false,
     storage: false,
+    overlay: false,
   });
   const [isRequestingAllPerms, setIsRequestingAllPerms] = useState(false);
 
@@ -228,7 +231,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     }
   }, [isOpen]);
 
-  const handleRequestPerm = async (type: 'notifications' | 'microphone' | 'camera' | 'location' | 'storage') => {
+  const handleRequestPerm = async (type: 'notifications' | 'microphone' | 'camera' | 'location' | 'storage' | 'overlay') => {
+    if (type === 'overlay') {
+      openAndroidSettings('overlay');
+      const updated = await checkAllPermissionsStatus();
+      setNativePerms({ ...updated, overlay: hasOverlayPermission() });
+      return;
+    }
     let granted = false;
     if (type === 'notifications') {
       granted = await requestNotificationPermission();
@@ -815,9 +824,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                     {isFa ? '۳. مدیریت دسترسی‌ها' : '3. App Permissions'}
                   </h4>
                   <p className="text-[11px] text-stone-400 truncate">
-                    {isFa
-                      ? `${toPersianDigits(Object.values(nativePerms).filter(Boolean).length)} از ۵ دسترسی تایید شده است`
-                      : `${Object.values(nativePerms).filter(Boolean).length} of 5 permissions granted`}
+                    {(() => {
+                      const hasNative = isNativeAndroidApp();
+                      const totalCount = hasNative ? 6 : 5;
+                      const grantedCount = [
+                        nativePerms.notifications,
+                        nativePerms.microphone,
+                        nativePerms.camera,
+                        nativePerms.location,
+                        nativePerms.storage,
+                        ...(hasNative ? [Boolean(nativePerms.overlay)] : []),
+                      ].filter(Boolean).length;
+                      return isFa
+                        ? `${toPersianDigits(grantedCount)} از ${toPersianDigits(totalCount)} دسترسی تایید شده است`
+                        : `${grantedCount} of ${totalCount} permissions granted`;
+                    })()}
                   </p>
                 </div>
               </div>
@@ -829,7 +850,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             {openSections.permissions && (
               <div className="p-3 sm:p-4 space-y-3 animate-in fade-in">
                 {/* 3.1 وضعیت دسترسی‌ها توی یه ردیف فشرده (COMPACT PERMISSIONS ROW) */}
-                <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
+                <div className={`grid gap-1.5 sm:gap-2 ${isNativeAndroidApp() ? 'grid-cols-3 sm:grid-cols-6' : 'grid-cols-5'}`}>
                   {/* 1. Notifications */}
                   <button
                     type="button"
@@ -1001,6 +1022,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                       {nativePerms.storage ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
                     </span>
                   </button>
+
+                  {/* 6. Display Over Other Apps (Floating Window) — Native Android */}
+                  {isNativeAndroidApp() && (
+                    <button
+                      type="button"
+                      onClick={() => handleRequestPerm('overlay')}
+                      style={
+                        nativePerms.overlay
+                          ? {
+                              background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
+                              borderColor: '#6ee7b7',
+                              color: '#ffffff',
+                            }
+                          : undefined
+                      }
+                      className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                        nativePerms.overlay
+                          ? 'perm-card-granted shadow-md shadow-emerald-900/40'
+                          : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
+                      }`}
+                      title={isFa ? 'نمایش روی سایر برنامه‌ها (پنجره شناور)' : 'Display over other apps'}
+                    >
+                      <div className="relative mb-1">
+                        <Layers className={`w-4 h-4 ${nativePerms.overlay ? 'text-white' : 'text-stone-400'}`} />
+                        <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.overlay ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
+                      </div>
+                      <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.overlay ? 'text-white' : 'text-stone-200'}`}>
+                        {isFa ? 'پنجره شناور' : 'Floating'}
+                      </span>
+                      <span className={`text-[9px] font-black ${nativePerms.overlay ? 'text-white' : 'text-indigo-400'}`}>
+                        {nativePerms.overlay ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
+                      </span>
+                    </button>
+                  )}
                 </div>
 
                 {showStoragePermNotice && !nativePerms.storage && (

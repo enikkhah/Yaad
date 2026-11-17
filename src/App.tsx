@@ -674,6 +674,7 @@ export default function App() {
     activeAlarmRemindersRef.current = activeAlarmReminders;
   }, [activeAlarmReminders]);
   const activeAlarmReminder = activeAlarmReminders[0] || null;
+  const [isAlarmModalMinimized, setIsAlarmModalMinimized] = useState(false);
   const sortAlarmBundle = useCallback((list: Reminder[]): Reminder[] => {
     const prioWeight = (r: Reminder) => {
       if (typeof r.priorityLevel === 'number') return r.priorityLevel;
@@ -746,6 +747,7 @@ export default function App() {
   );
   const [activeGeofenceAlerts, setActiveGeofenceAlerts] = useState<GeofenceAlertData[]>([]);
   const activeGeofenceAlert = activeGeofenceAlerts[0] || null;
+  const [isGeofenceModalMinimized, setIsGeofenceModalMinimized] = useState(false);
   const setActiveGeofenceAlert = useCallback(
     (
       updater:
@@ -845,8 +847,11 @@ export default function App() {
   );
 
   const closeTopModal = useCallback((): boolean => {
-    // If an alarm or geofence alert is actively ringing on screen, block accidental Back/Escape dismissal until user clicks action button
-    if (activeAlarmReminder || activeGeofenceAlert) {
+    // Only block accidental Back/Escape dismissal when an EXPANDED full-screen alert is actively open;
+    // when minimized into a floating bubble, allow full background navigation and Back handling.
+    const hasExpandedAlarm = Boolean(activeAlarmReminder && !isAlarmModalMinimized);
+    const hasExpandedGeofence = Boolean(activeGeofenceAlert && !isGeofenceModalMinimized);
+    if (hasExpandedAlarm || hasExpandedGeofence) {
       return true;
     }
     if (viewingImageUrl) { setViewingImageUrl(null); return true; }
@@ -871,7 +876,8 @@ export default function App() {
     viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
     isLocationModalOpen, isIdeaModalOpen,
     isOccasionModalOpen, isFormOpen, isSettingsOpen, isStatsOpen,
-    activeAlarmReminder, activeGeofenceAlert, activeMainTab
+    activeAlarmReminder, activeGeofenceAlert,
+    isAlarmModalMinimized, isGeofenceModalMinimized, activeMainTab
   ]);
 
   const closeTopModalRef = useRef(closeTopModal);
@@ -5166,6 +5172,7 @@ export default function App() {
           setEditingReminder(rem);
           setIsFormOpen(true);
         }}
+        onMinimizedChange={setIsAlarmModalMinimized}
       />
 
       {/* DEDICATED IN-APP GEOFENCE ALERT MODAL (SINGLE & MULTI-CARD PRIORITY STACK) */}
@@ -5174,6 +5181,7 @@ export default function App() {
         alerts={activeGeofenceAlerts}
         userPosition={currentUserPosition}
         language={settings.language}
+        onMinimizedChange={setIsGeofenceModalMinimized}
         onGotIt={(targetId, locTitle) => {
           const idToStop = targetId || activeGeofenceAlert?.targetId;
           const titleToShow = locTitle || activeGeofenceAlert?.locationTitle || '';

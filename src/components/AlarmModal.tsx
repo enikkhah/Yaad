@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Reminder, AppSettings, AppTheme } from '../types';
 import { formatJalaliFull, formatJalaliTime, toPersianDigits } from '../utils/jalali';
@@ -40,6 +40,7 @@ interface AlarmModalProps {
   onPostpone: (id: string, minutes: number) => void;
   onPostponeAll?: (ids: string[], minutes: number) => void;
   onEdit?: (reminder: Reminder) => void;
+  onMinimizedChange?: (minimized: boolean) => void;
 }
 
 interface CardThemePalette {
@@ -189,11 +190,15 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
   onPostpone,
   onPostponeAll,
   onEdit,
+  onMinimizedChange,
 }) => {
   const isEn = settings?.language === 'en';
   const [secondsLeft, setSecondsLeft] = useState<number>(60);
   const [isAudioMuted, setIsAudioMuted] = useState<boolean>(false);
   const [isMinimized, setIsMinimized] = useState<boolean>(false);
+  const dragBoundsRef = useRef<HTMLDivElement | null>(null);
+  const wasDraggedRef = useRef<boolean>(false);
+  const dragResetTimerRef = useRef<number | null>(null);
 
   const bundledReminders = React.useMemo(() => {
     if (reminders && reminders.length > 0) {
@@ -282,6 +287,18 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     settings?.language,
     settings?.ttsVoiceRate,
   ]);
+
+  useEffect(() => {
+    onMinimizedChange?.(Boolean(activePrimary) && isMinimized);
+  }, [isMinimized, activePrimary, onMinimizedChange]);
+
+  useEffect(() => {
+    return () => {
+      if (dragResetTimerRef.current) {
+        window.clearTimeout(dragResetTimerRef.current);
+      }
+    };
+  }, []);
 
   const isGeofenceAlarm = Boolean(activePrimary?.geofence?.enabled) && !isBundledMode;
   const basePalette = getAlarmCardPalette(settings?.theme);
@@ -388,42 +405,63 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
     : '';
 
   return (
-    <AnimatePresence>
-      {activePrimary && isMinimized && (
-        <motion.div
-          key="alarm-minimized-floating-btn"
-          drag
-          dragMomentum={false}
-          initial={{ scale: 0.5, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          exit={{ scale: 0.5, opacity: 0 }}
-          whileTap={{ scale: 0.94 }}
-          transition={{ type: 'spring', damping: 22, stiffness: 340 }}
-          className="fixed bottom-24 right-4 z-[105] select-none touch-none"
-          dir="ltr"
-        >
-          <div className="relative">
-            {/* Top-Left Corner Close Badge (X) attached directly to the button border */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleDismiss();
-              }}
-              className="absolute -top-1 -left-1 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-[#FF8C00] text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
-              title={isEn ? 'Close completely' : 'بستن کامل'}
-              aria-label={isEn ? 'Close completely' : 'بستن کامل'}
-            >
-              <X className="w-3.5 h-3.5 stroke-[2.8]" />
-            </button>
+    <>
+      <div
+        ref={dragBoundsRef}
+        aria-hidden="true"
+        className="fixed inset-2 pointer-events-none"
+      />
+      <AnimatePresence>
+        {activePrimary && isMinimized && (
+          <motion.div
+            key="alarm-minimized-floating-btn"
+            drag
+            dragConstraints={dragBoundsRef}
+            dragElastic={0.05}
+            dragMomentum={false}
+            onDragStart={() => {
+              if (dragResetTimerRef.current) window.clearTimeout(dragResetTimerRef.current);
+              wasDraggedRef.current = true;
+            }}
+            onDragEnd={() => {
+              if (dragResetTimerRef.current) window.clearTimeout(dragResetTimerRef.current);
+              dragResetTimerRef.current = window.setTimeout(() => {
+                wasDraggedRef.current = false;
+              }, 140);
+            }}
+            initial={{ scale: 0.5, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.5, opacity: 0, pointerEvents: 'none' }}
+            whileTap={{ scale: 0.94 }}
+            transition={{ type: 'spring', damping: 22, stiffness: 340 }}
+            className="fixed bottom-24 right-4 z-[105] select-none touch-none"
+            dir="ltr"
+          >
+            <div className="relative">
+              {/* Top-Left Corner Close Badge (X) attached directly to the button border */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDismiss();
+                }}
+                className="absolute -top-1 -left-1 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-[#FF8C00] text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
+                title={isEn ? 'Close completely' : 'بستن کامل'}
+                aria-label={isEn ? 'Close completely' : 'بستن کامل'}
+              >
+                <X className="w-3.5 h-3.5 stroke-[2.8]" />
+              </button>
 
-            {/* Draggable / Tappable Floating Button Body */}
-            <button
-              type="button"
-              onClick={handleRestoreMinimized}
-              className="w-[74px] h-[78px] rounded-[24px] border-2 border-[#FF8C00] bg-gradient-to-b from-[#1F2442]/95 via-[#14172C]/95 to-[#0C0E1C]/95 backdrop-blur-md shadow-[0_10px_28px_rgba(0,0,0,0.75),0_0_20px_rgba(255,140,0,0.4)] flex flex-col items-center justify-between py-2 px-1.5 cursor-pointer hover:border-amber-400 transition-colors"
-              title={isEn ? 'Tap to reopen full-screen alert' : 'برای باز کردن اعلان تمام‌صفحه ضربه بزنید'}
-            >
+              {/* Draggable / Tappable Floating Button Body */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (wasDraggedRef.current) return;
+                  handleRestoreMinimized();
+                }}
+                className="w-[74px] h-[78px] rounded-[24px] border-2 border-[#FF8C00] bg-gradient-to-b from-[#1F2442]/95 via-[#14172C]/95 to-[#0C0E1C]/95 backdrop-blur-md shadow-[0_10px_28px_rgba(0,0,0,0.75),0_0_20px_rgba(255,140,0,0.4)] flex flex-col items-center justify-between py-2 px-1.5 cursor-pointer hover:border-amber-400 transition-colors"
+                title={isEn ? 'Tap to reopen full-screen alert' : 'برای باز کردن اعلان تمام‌صفحه ضربه بزنید'}
+              >
               <div className="relative flex items-center justify-center">
                 <span className="absolute -inset-1 rounded-full bg-[#FF8C00]/25 animate-ping" />
                 <img
@@ -456,7 +494,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
           key="alarm-fullscreen-modal"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          exit={{ opacity: 0, pointerEvents: 'none' }}
           transition={{ duration: 0.22 }}
           className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-md flex items-center justify-center p-4 sm:p-6 select-none"
           dir={isEn ? 'ltr' : 'rtl'}
@@ -856,6 +894,7 @@ export const AlarmModal: React.FC<AlarmModalProps> = ({
         </motion.div>
       )}
     </AnimatePresence>
+    </>
   );
 };
 

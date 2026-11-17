@@ -10,7 +10,8 @@ import {
   X, 
   CheckCircle2, 
   Smartphone,
-  FolderOpen
+  FolderOpen,
+  Layers
 } from 'lucide-react';
 import { AndroidPermissionType, openAndroidSettings } from '../utils/nativePermissions';
 
@@ -110,6 +111,17 @@ export const AndroidPermissionModal: React.FC<AndroidPermissionModalProps> = ({
           descEn: 'Required for taking photos and attaching images to reminders and locations.',
           sectionNameFa: 'بخش مجوزهای برنامه در اندروید',
           sectionNameEn: 'Android App Permissions Section',
+        };
+      case 'overlay':
+        return {
+          icon: Layers,
+          color: 'text-emerald-400 bg-emerald-500/15 border-emerald-500/40',
+          titleFa: 'نمایش روی سایر برنامه‌ها (پنجره شناور)',
+          titleEn: 'Display Over Other Apps (Floating Window)',
+          descFa: 'برای اینکه هنگام مینیمایز کردن اعلان یادآور به دکمه شناور، دسترسی کامل به صفحه اصلی و سایر برنامه‌های گوشی داشته باشید، لطفاً اجازه «نمایش روی برنامه‌های دیگر» را برای یاد فعال کنید.',
+          descEn: 'To access your home screen and other apps freely while an alert is minimized as a floating button, please enable "Display over other apps" for YAAD.',
+          sectionNameFa: 'تنظیمات برنامه ← نمایش روی سایر برنامه‌ها (Display over other apps)',
+          sectionNameEn: 'App Info → Display over other apps',
         };
       case 'battery':
       default:

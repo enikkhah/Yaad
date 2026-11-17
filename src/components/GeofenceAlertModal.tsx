@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { CheckCircle2, Clock, Edit2, Minus, Navigation, Volume2, VolumeX, X } from 'lucide-react';
 import { LivePolarRadar } from './LivePolarRadar';
@@ -51,6 +51,7 @@ interface GeofenceAlertModalProps {
   onAutoTurnOffVisual?: (alert: GeofenceAlertData) => void;
   onEditRadius: (alert: GeofenceAlertData) => void;
   onStartDirections?: (alert: GeofenceAlertData) => void;
+  onMinimizedChange?: (minimized: boolean) => void;
 }
 
 export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
@@ -63,6 +64,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
   onAutoTurnOffVisual,
   onEditRadius,
   onStartDirections,
+  onMinimizedChange,
 }) => {
   const isEn = language === 'en';
   const [liveUserPos, setLiveUserPos] = useState<{ latitude: number; longitude: number } | null>(
@@ -74,6 +76,9 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     const firstId = alerts?.[0]?.targetId || alert?.targetId;
     return getGeofenceMinimizedState(firstId);
   });
+  const dragBoundsRef = useRef<HTMLDivElement | null>(null);
+  const wasDraggedRef = useRef<boolean>(false);
+  const dragResetTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (userPosition) {
@@ -203,6 +208,18 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
       document.removeEventListener('visibilitychange', syncMinimizedFromBridge);
     };
   }, [topPriorityAlert?.targetId]);
+
+  useEffect(() => {
+    onMinimizedChange?.(sortedAlerts.length > 0 && isMinimized);
+  }, [isMinimized, sortedAlerts.length, onMinimizedChange]);
+
+  useEffect(() => {
+    return () => {
+      if (dragResetTimerRef.current) {
+        window.clearTimeout(dragResetTimerRef.current);
+      }
+    };
+  }, []);
 
   // 3) 30-Second Auto-Turn-Off Timer for In-App Full-Screen Visual Alert (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 30_000`)
   const activeVisualPhaseKey = topPriorityAlert
@@ -415,42 +432,63 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
       : 'enter';
 
   return (
-    <AnimatePresence>
-      {isMinimized ? (
-        <motion.div
-          key="geofence-minimized-floating-btn"
-          drag
-          dragMomentum={false}
-          initial={{ scale: 0.5, opacity: 0 }}
-          animate={{ scale: 1, opacity: 1 }}
-          exit={{ scale: 0.5, opacity: 0 }}
-          whileTap={{ scale: 0.94 }}
-          transition={{ type: 'spring', damping: 22, stiffness: 340 }}
-          className="fixed bottom-24 left-4 z-[115] select-none touch-none"
-          dir="ltr"
-        >
-          <div className="relative">
-            {/* Top-Left Corner Close Badge (X) attached directly to the button border */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                handleCloseAllCompletely();
-              }}
-              className="absolute -top-1 -left-1 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-emerald-400 text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
-              title={isEn ? 'Close completely' : 'بستن کامل'}
-              aria-label={isEn ? 'Close completely' : 'بستن کامل'}
-            >
-              <X className="w-3.5 h-3.5 stroke-[2.8]" />
-            </button>
+    <>
+      <div
+        ref={dragBoundsRef}
+        aria-hidden="true"
+        className="fixed inset-2 pointer-events-none"
+      />
+      <AnimatePresence>
+        {isMinimized ? (
+          <motion.div
+            key="geofence-minimized-floating-btn"
+            drag
+            dragConstraints={dragBoundsRef}
+            dragElastic={0.05}
+            dragMomentum={false}
+            onDragStart={() => {
+              if (dragResetTimerRef.current) window.clearTimeout(dragResetTimerRef.current);
+              wasDraggedRef.current = true;
+            }}
+            onDragEnd={() => {
+              if (dragResetTimerRef.current) window.clearTimeout(dragResetTimerRef.current);
+              dragResetTimerRef.current = window.setTimeout(() => {
+                wasDraggedRef.current = false;
+              }, 140);
+            }}
+            initial={{ scale: 0.5, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.5, opacity: 0, pointerEvents: 'none' }}
+            whileTap={{ scale: 0.94 }}
+            transition={{ type: 'spring', damping: 22, stiffness: 340 }}
+            className="fixed bottom-24 left-4 z-[115] select-none touch-none"
+            dir="ltr"
+          >
+            <div className="relative">
+              {/* Top-Left Corner Close Badge (X) attached directly to the button border */}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleCloseAllCompletely();
+                }}
+                className="absolute -top-1 -left-1 z-20 w-6 h-6 rounded-full bg-rose-600 hover:bg-rose-500 border-2 border-emerald-400 text-white flex items-center justify-center shadow-lg cursor-pointer active:scale-90"
+                title={isEn ? 'Close completely' : 'بستن کامل'}
+                aria-label={isEn ? 'Close completely' : 'بستن کامل'}
+              >
+                <X className="w-3.5 h-3.5 stroke-[2.8]" />
+              </button>
 
-            {/* Draggable / Tappable Floating Button Body */}
-            <button
-              type="button"
-              onClick={handleRestoreMinimizedModal}
-              className="w-[74px] h-[78px] rounded-[24px] border-2 border-emerald-400 bg-gradient-to-b from-[#063B33]/95 via-[#042621]/95 to-[#021512]/95 backdrop-blur-md shadow-[0_10px_28px_rgba(0,0,0,0.75),0_0_20px_rgba(16,185,129,0.4)] flex flex-col items-center justify-between py-2 px-1.5 cursor-pointer hover:border-emerald-300 transition-colors"
-              title={isEn ? 'Tap to reopen full-screen alert' : 'برای باز کردن اعلان تمام‌صفحه ضربه بزنید'}
-            >
+              {/* Draggable / Tappable Floating Button Body */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (wasDraggedRef.current) return;
+                  handleRestoreMinimizedModal();
+                }}
+                className="w-[74px] h-[78px] rounded-[24px] border-2 border-emerald-400 bg-gradient-to-b from-[#063B33]/95 via-[#042621]/95 to-[#021512]/95 backdrop-blur-md shadow-[0_10px_28px_rgba(0,0,0,0.75),0_0_20px_rgba(16,185,129,0.4)] flex flex-col items-center justify-between py-2 px-1.5 cursor-pointer hover:border-emerald-300 transition-colors"
+                title={isEn ? 'Tap to reopen full-screen alert' : 'برای باز کردن اعلان تمام‌صفحه ضربه بزنید'}
+              >
               <div className="relative flex items-center justify-center">
                 <span className="absolute -inset-1 rounded-full bg-emerald-400/25 animate-ping" />
                 <img
@@ -484,7 +522,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
           key="geofence-fullscreen-modal"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
+          exit={{ opacity: 0, pointerEvents: 'none' }}
           transition={{ duration: 0.15 }}
           className="fixed inset-0 z-[110] bg-black/85 backdrop-blur-md flex items-center justify-center px-1.5 py-2 sm:p-4 select-none overflow-y-auto"
           dir={isEn ? 'ltr' : 'rtl'}
@@ -818,5 +856,6 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
       </motion.div>
       )}
     </AnimatePresence>
+    </>
   );
 };

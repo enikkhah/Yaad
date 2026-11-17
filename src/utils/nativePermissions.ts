@@ -19,6 +19,7 @@ export interface NativePermissionsStatus {
   location: boolean;
   backgroundLocation?: boolean;
   storage?: boolean;
+  overlay?: boolean;
 }
 
 export const PERM_NOTIF_GRANTED_KEY = 'yaad_perm_notif_granted';
@@ -241,6 +242,7 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     location: false,
     backgroundLocation: false,
     storage: false,
+    overlay: false,
   };
 
   if (typeof window === 'undefined') return result;
@@ -451,6 +453,7 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
   }
 
   result.backgroundLocation = result.location ? hasBackgroundLocationPermission() : false;
+  result.overlay = hasOverlayPermission();
 
   return result;
 }
@@ -474,6 +477,7 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
     location: locationGranted,
     backgroundLocation: locationGranted ? hasBackgroundLocationPermission() : false,
     storage: Boolean(checked.storage || folderRes.granted),
+    overlay: hasOverlayPermission(),
   };
 }
 
@@ -487,6 +491,7 @@ export type AndroidPermissionType =
   | 'battery'
   | 'storage'
   | 'all_files'
+  | 'overlay'
   | 'app_details';
 
 /**
@@ -521,6 +526,23 @@ export function hasBackgroundLocationPermission(): boolean {
     // ignore
   }
   return true;
+}
+
+/**
+ * Checks if Android "Display over other apps" (SYSTEM_ALERT_WINDOW) is granted.
+ * Returns true on web/PWA environments.
+ */
+export function hasOverlayPermission(): boolean {
+  if (typeof window === 'undefined') return true;
+  try {
+    const bridge = (window as any).YaadGeofenceBridge;
+    if (bridge && typeof bridge.hasOverlayPermission === 'function') {
+      return Boolean(bridge.hasOverlayPermission());
+    }
+  } catch {
+    // ignore
+  }
+  return !isNativeAndroidApp();
 }
 
 /**
@@ -612,6 +634,18 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
     }
   }
 
+  if (section === 'overlay') {
+    try {
+      const bridge = (window as any).YaadGeofenceBridge;
+      if (bridge && typeof bridge.openOverlaySettings === 'function') {
+        bridge.openOverlaySettings();
+        return;
+      }
+    } catch {
+      // Fallback to intent URL below
+    }
+  }
+
   const pkg = 'com.yaad.reminder';
   let intentUrl = `intent:#Intent;action=android.settings.APPLICATION_DETAILS_SETTINGS;data=package:${pkg};end`;
 
@@ -628,6 +662,9 @@ export function openAndroidSettings(section: AndroidPermissionType = 'app_detail
     case 'battery':
       // Directs to Android Battery Optimization settings
       intentUrl = `intent:#Intent;action=android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS;end`;
+      break;
+    case 'overlay':
+      intentUrl = `intent:#Intent;action=android.settings.action.MANAGE_OVERLAY_PERMISSION;data=package:${pkg};end`;
       break;
     case 'storage':
     case 'all_files':

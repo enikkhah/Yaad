@@ -4474,6 +4474,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.CountDownTimer
@@ -4497,8 +4498,10 @@ import android.view.Window
 import android.view.WindowManager
 import android.view.animation.AccelerateDecelerateInterpolator
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.app.NotificationManagerCompat
 import com.getcapacitor.CapConfig
 import com.getcapacitor.JSObject
@@ -4547,7 +4550,6 @@ class YaadAlarmPopupActivity : Activity() {
     private var floatingBubbleX: Int = -1
     private var floatingBubbleY: Int = -1
     private var floatingBubbleDistanceTv: TextView? = null
-    private var lastBubbleRefloatTimeMs: Long = 0L
 
     private val releaseScreenKeepAwakeRunnable = Runnable {
         expireScreenKeepAwakeWindowOnly()
@@ -5089,46 +5091,6 @@ class YaadAlarmPopupActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
-        if (
-            isMinimizedToFloatingBubble &&
-            !isFinishing &&
-            !isDestroyed &&
-            !isYieldingForPhoneCall &&
-            !LocalNotificationsPlugin.isAppInForeground(this)
-        ) {
-            val now = System.currentTimeMillis()
-            if (now - lastBubbleRefloatTimeMs >= 1_500L) {
-                lastBubbleRefloatTimeMs = now
-                uiHandler.postDelayed({
-                    try {
-                        if (
-                            isMinimizedToFloatingBubble &&
-                            !isFinishing &&
-                            !isDestroyed &&
-                            !isYieldingForPhoneCall &&
-                            !LocalNotificationsPlugin.isAppInForeground(this)
-                        ) {
-                            val refloatIntent = Intent(this, YaadAlarmPopupActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                                    Intent.FLAG_ACTIVITY_SINGLE_TOP or
-                                    Intent.FLAG_ACTIVITY_NO_ANIMATION or
-                                    Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
-                                putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
-                                if (sourceJson != null) {
-                                    putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
-                                }
-                                putExtra("yaad_keep_minimized_bubble", true)
-                                putExtra("yaad_wake_screen_once", false)
-                            }
-                            attachTemporaryOverlayBridgeWindowIfPermitted(applicationContext)
-                            startActivity(refloatIntent)
-                            overridePendingTransition(0, 0)
-                        }
-                    } catch (e: Exception) {
-                    }
-                }, 320L)
-            }
-        }
     }
 
     private fun registerCallInterceptionListeners() {
@@ -5591,6 +5553,8 @@ class YaadAlarmPopupActivity : Activity() {
         if (forceExpand) {
             isMinimizedToFloatingBubble = false
             isMinimizedBubbleState = false
+            isOverlayHiddenForForegroundApp = false
+            hideFloatingOverlayBubble(this)
             if (isGeofencePopup) {
                 try {
                     YaadGeofenceService.setGeofenceItemMinimizedState(this, geofenceItemId, false, notifyWebView = true)
@@ -5606,8 +5570,17 @@ class YaadAlarmPopupActivity : Activity() {
         }
 
         if (isMinimizedToFloatingBubble && !forceExpand) {
+            val effectiveThemeMin = if (isGeofencePopup) {
+                if (isSub10mArrival) "geofence-sub10m" else "geofence-radar"
+            } else {
+                themeName
+            }
+            val minPalette = resolvePalette(effectiveThemeMin)
+            if (attachFloatingOverlayAndCloseActivity(minPalette, initialDistance, promptOverlayIfMissing = false)) {
+                return
+            }
             enterFloatingWindowMode()
-            buildFloatingBubbleUI(palette, initialDistance)
+            buildFloatingBubbleUI(minPalette, initialDistance)
             hasContentViewSet = true
             return
         }
@@ -7168,6 +7141,7 @@ class YaadAlarmPopupActivity : Activity() {
 
     private fun performMinimizeToFloatingButton() {
         stopPulseAnimators()
+        releaseScreenWakeLock()
         if (isGeofencePopup) {
             try {
                 YaadGeofenceService.setGeofenceAudioMuteState(this, true)
@@ -7179,6 +7153,7 @@ class YaadAlarmPopupActivity : Activity() {
         }
         isMinimizedToFloatingBubble = true
         isMinimizedBubbleState = true
+        isOverlayHiddenForForegroundApp = false
         val effectiveTheme = if (isGeofencePopup) {
             if (isSub10mArrival) "geofence-sub10m" else "geofence-radar"
         } else {
@@ -7186,8 +7161,84 @@ class YaadAlarmPopupActivity : Activity() {
         }
         val palette = resolvePalette(effectiveTheme)
         val curDist = requestJson?.optJSONObject("extra")?.optInt("distance", 0) ?: 0
+
+        if (attachFloatingOverlayAndCloseActivity(palette, curDist, promptOverlayIfMissing = true)) {
+            return
+        }
+
         enterFloatingWindowMode()
         buildFloatingBubbleUI(palette, curDist)
+    }
+
+    private fun attachFloatingOverlayAndCloseActivity(
+        palette: ThemePalette,
+        curDist: Int,
+        promptOverlayIfMissing: Boolean
+    ): Boolean {
+        val appCtx = applicationContext
+        if (canDrawSystemOverlays(appCtx)) {
+            val shown = showFloatingOverlayBubble(
+                context = appCtx,
+                notifId = notificationId,
+                srcJson = sourceJson,
+                isGeofence = isGeofencePopup,
+                isSub10m = isSub10mArrival,
+                geoItemId = geofenceItemId,
+                remId = reminderId,
+                persian = isPersian,
+                accentColor = palette.accentColor,
+                distanceMeters = curDist,
+                bundledCount = if (isGeofencePopup) 1 else activeBundledTimedReminders.size.coerceAtLeast(1)
+            )
+            if (shown) {
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                        setShowWhenLocked(false)
+                        setTurnScreenOn(false)
+                    }
+                    @Suppress("DEPRECATION")
+                    window.clearFlags(
+                        WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
+                            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
+                            WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                            WindowManager.LayoutParams.FLAG_DIM_BEHIND
+                    )
+                    window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+                    window.setDimAmount(0f)
+                } catch (e: Exception) {
+                }
+                finish()
+                overridePendingTransition(0, 0)
+                return true
+            }
+        } else if (promptOverlayIfMissing) {
+            try {
+                val prefs = appCtx.getSharedPreferences(OVERLAY_PERM_PREFS, Context.MODE_PRIVATE)
+                val alreadyPrompted = prefs.getBoolean("overlay_prompted_once", false)
+                if (!alreadyPrompted && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    prefs.edit().putBoolean("overlay_prompted_once", true).apply()
+                    val msg = if (isPersian) {
+                        "برای دکمه شناور روی سایر برنامه‌ها و دسترسی به محیط زمینه، مجوز «نمایش روی برنامه‌ها» را فعال کنید"
+                    } else {
+                        "Enable 'Display over other apps' so the floating button stays above background apps"
+                    }
+                    Toast.makeText(appCtx, msg, Toast.LENGTH_LONG).show()
+                    val permIntent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:\$packageName")
+                    ).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(permIntent)
+                }
+            } catch (e: Exception) {
+            }
+            // Close the foreground Activity so the background phone UI is immediately accessible cleanly
+            finish()
+            overridePendingTransition(0, 0)
+            return true
+        }
+        return false
     }
 
     private fun enterFloatingWindowMode() {
@@ -7802,11 +7853,14 @@ class YaadAlarmPopupActivity : Activity() {
         countDownTimer?.cancel()
         stopPulseAnimators()
         releaseScreenWakeLock()
+        val keepingFloatingOverlay = isMinimizedBubbleState && (overlayBubbleRootView != null || isOverlayHiddenForForegroundApp)
         if (activeInstance?.get() === this) {
             activeInstance = null
-            isMinimizedBubbleState = false
-            if (!isYieldingForPhoneCall) {
-                activeBundledTimedReminders.clear()
+            if (!keepingFloatingOverlay) {
+                isMinimizedBubbleState = false
+                if (!isYieldingForPhoneCall) {
+                    activeBundledTimedReminders.clear()
+                }
             }
         }
         super.onDestroy()
@@ -7814,6 +7868,7 @@ class YaadAlarmPopupActivity : Activity() {
 
     companion object {
         private const val CALL_SUSPEND_PREFS = "YAAD_CALL_SUSPEND_PREFS"
+        private const val OVERLAY_PERM_PREFS = "YAAD_OVERLAY_PERM_PREFS"
         const val ACTION_ALARM_CLOCK_LAUNCH_POPUP = "com.capacitorjs.plugins.localnotifications.ALARM_CLOCK_LAUNCH_POPUP"
         const val SCREEN_ON_KEEP_AWAKE_MS = 60_000L          // 1 minute keep-awake when screen is ON (in Android launcher, other apps, or lockscreen)
         const val SCREEN_OFF_KEEP_AWAKE_MS = 21 * 60_000L   // 21 minutes keep-awake when screen is OFF
@@ -7827,13 +7882,460 @@ class YaadAlarmPopupActivity : Activity() {
         @Volatile
         private var pendingAlarmClockNotifId: Int = Int.MIN_VALUE
 
+        @Volatile
+        private var overlayBubbleRootView: View? = null
+        @Volatile
+        private var overlayBubbleDistanceTv: TextView? = null
+        @Volatile
+        private var overlayBubbleLp: WindowManager.LayoutParams? = null
+        @Volatile
+        private var overlayNotifId: Int = Int.MIN_VALUE
+        @Volatile
+        private var overlaySourceJson: String? = null
+        @Volatile
+        private var overlayIsGeofence: Boolean = false
+        @Volatile
+        private var overlayIsSub10m: Boolean = false
+        @Volatile
+        private var overlayGeofenceItemId: String = ""
+        @Volatile
+        private var overlayReminderId: String = ""
+        @Volatile
+        private var overlayIsPersian: Boolean = true
+        @Volatile
+        private var overlayAccentColor: Int = Color.parseColor("#10B981")
+        @Volatile
+        private var overlayDistanceMeters: Int = 0
+        @Volatile
+        private var overlayBundledCount: Int = 1
+        @Volatile
+        private var savedBubbleX: Int = -1
+        @Volatile
+        private var savedBubbleY: Int = -1
+        @Volatile
+        private var isOverlayHiddenForForegroundApp: Boolean = false
+
         fun isShowingAnyPopup(): Boolean {
             val act = activeInstance?.get() ?: return false
             return !act.isFinishing && !act.isDestroyed
         }
 
         fun isMinimizedBubbleActive(): Boolean {
-            return isMinimizedBubbleState && isShowingAnyPopup()
+            return isMinimizedBubbleState && (isShowingAnyPopup() || overlayBubbleRootView != null || isOverlayHiddenForForegroundApp)
+        }
+
+        fun canDrawSystemOverlays(context: Context): Boolean {
+            return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(context)
+        }
+
+        fun hasActiveFloatingOverlay(geofenceOnly: Boolean = false): Boolean {
+            val hasOverlay = overlayBubbleRootView != null || isOverlayHiddenForForegroundApp
+            if (!hasOverlay) return false
+            return if (geofenceOnly) overlayIsGeofence else true
+        }
+
+        private fun dpStatic(context: Context, value: Float): Int {
+            return TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                value,
+                context.resources.displayMetrics
+            ).toInt()
+        }
+
+        private fun toPersianStatic(input: String): String {
+            val persian = charArrayOf('۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹')
+            val sb = StringBuilder(input.length)
+            for (ch in input) {
+                if (ch in '0'..'9') {
+                    sb.append(persian[ch - '0'])
+                } else {
+                    sb.append(ch)
+                }
+            }
+            return sb.toString()
+        }
+
+        private fun makeRoundedStatic(context: Context, bgColor: Int, borderColor: Int, strokeDp: Float, radiusDp: Float): GradientDrawable {
+            val gd = GradientDrawable()
+            gd.shape = GradientDrawable.RECTANGLE
+            gd.setColor(bgColor)
+            gd.cornerRadius = dpStatic(context, radiusDp).toFloat()
+            if (strokeDp > 0f) {
+                gd.setStroke(dpStatic(context, strokeDp), borderColor)
+            }
+            return gd
+        }
+
+        private fun makeOvalStatic(context: Context, bgColor: Int, borderColor: Int, strokeDp: Float): GradientDrawable {
+            val gd = GradientDrawable()
+            gd.shape = GradientDrawable.OVAL
+            gd.setColor(bgColor)
+            if (strokeDp > 0f) {
+                gd.setStroke(dpStatic(context, strokeDp), borderColor)
+            }
+            return gd
+        }
+
+        private fun formatOverlayLabelStatic(
+            isGeo: Boolean,
+            distMeters: Int,
+            bundledCount: Int,
+            persian: Boolean
+        ): String {
+            if (isGeo) {
+                val safeDist = distMeters.coerceAtLeast(0)
+                val distText = if (persian) toPersianStatic(safeDist.toString()) else safeDist.toString()
+                return if (persian) "\$distText متر" else "\$distText m"
+            }
+            if (bundledCount >= 2) {
+                val cntText = if (persian) toPersianStatic(bundledCount.toString()) else bundledCount.toString()
+                return if (persian) "\$cntText یادآور" else "\$cntText Alarms"
+            }
+            return if (persian) "یادآور" else "Alert"
+        }
+
+        private fun removeOverlayViewOnMain(appCtx: Context) {
+            val existing = overlayBubbleRootView
+            overlayBubbleRootView = null
+            overlayBubbleDistanceTv = null
+            overlayBubbleLp = null
+            if (existing != null) {
+                try {
+                    val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                    wm?.removeViewImmediate(existing)
+                } catch (e: Exception) {
+                    try {
+                        val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+                        wm?.removeView(existing)
+                    } catch (ignore: Exception) {
+                    }
+                }
+            }
+        }
+
+        fun showFloatingOverlayBubble(
+            context: Context,
+            notifId: Int,
+            srcJson: String?,
+            isGeofence: Boolean,
+            isSub10m: Boolean,
+            geoItemId: String,
+            remId: String,
+            persian: Boolean,
+            accentColor: Int,
+            distanceMeters: Int,
+            bundledCount: Int = 1
+        ): Boolean {
+            val appCtx = context.applicationContext
+            if (!canDrawSystemOverlays(appCtx)) return false
+
+            overlayNotifId = notifId
+            overlaySourceJson = srcJson
+            overlayIsGeofence = isGeofence
+            overlayIsSub10m = isSub10m
+            overlayGeofenceItemId = geoItemId
+            overlayReminderId = remId
+            overlayIsPersian = persian
+            overlayAccentColor = accentColor
+            overlayDistanceMeters = distanceMeters
+            overlayBundledCount = bundledCount
+            isOverlayHiddenForForegroundApp = false
+            isMinimizedBubbleState = true
+            activeNotificationId = notifId
+
+            callMonitorHandler.post {
+                try {
+                    removeOverlayViewOnMain(appCtx)
+                    val wm = appCtx.getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return@post
+                    val totalW = dpStatic(appCtx, 78f)
+                    val totalH = dpStatic(appCtx, 82f)
+                    if (savedBubbleX < 0) savedBubbleX = dpStatic(appCtx, 16f)
+                    if (savedBubbleY < 0) savedBubbleY = dpStatic(appCtx, 110f)
+
+                    val root = FrameLayout(appCtx)
+                    root.layoutDirection = View.LAYOUT_DIRECTION_LTR
+                    root.clipChildren = false
+                    root.clipToPadding = false
+                    root.setBackgroundColor(Color.TRANSPARENT)
+
+                    val bubbleBtn = LinearLayout(appCtx)
+                    bubbleBtn.orientation = LinearLayout.VERTICAL
+                    bubbleBtn.gravity = Gravity.CENTER
+                    bubbleBtn.setPadding(
+                        dpStatic(appCtx, 6f),
+                        dpStatic(appCtx, 6f),
+                        dpStatic(appCtx, 6f),
+                        dpStatic(appCtx, 5f)
+                    )
+                    val bubbleBgColor = if (isGeofence) Color.parseColor("#042621") else Color.parseColor("#14172C")
+                    val bubbleBorderColor = if (isGeofence) Color.parseColor("#10B981") else accentColor
+                    bubbleBtn.background = makeRoundedStatic(appCtx, bubbleBgColor, bubbleBorderColor, 2.2f, 22f)
+                    bubbleBtn.elevation = dpStatic(appCtx, 12f).toFloat()
+                    val bubbleLp = FrameLayout.LayoutParams(dpStatic(appCtx, 70f), dpStatic(appCtx, 74f))
+                    bubbleLp.gravity = Gravity.TOP or Gravity.LEFT
+                    bubbleLp.setMargins(dpStatic(appCtx, 6f), dpStatic(appCtx, 6f), 0, 0)
+                    bubbleBtn.layoutParams = bubbleLp
+
+                    try {
+                        val iconView = ImageView(appCtx)
+                        val appDrawable = appCtx.packageManager.getApplicationIcon(appCtx.applicationInfo)
+                        iconView.setImageDrawable(appDrawable)
+                        iconView.scaleType = ImageView.ScaleType.FIT_CENTER
+                        iconView.layoutParams = LinearLayout.LayoutParams(dpStatic(appCtx, 34f), dpStatic(appCtx, 34f))
+                        bubbleBtn.addView(iconView)
+                    } catch (e: Exception) {
+                    }
+
+                    val badgeTv = TextView(appCtx)
+                    badgeTv.text = formatOverlayLabelStatic(isGeofence, distanceMeters, bundledCount, persian)
+                    badgeTv.gravity = Gravity.CENTER
+                    badgeTv.setTextColor(if (isGeofence) Color.parseColor("#A7F3D0") else Color.parseColor("#FDE68A"))
+                    badgeTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 9.5f)
+                    badgeTv.setTypeface(Typeface.DEFAULT_BOLD)
+                    badgeTv.setSingleLine(true)
+                    badgeTv.ellipsize = TextUtils.TruncateAt.END
+                    val badgeLp = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                    badgeLp.topMargin = dpStatic(appCtx, 3f)
+                    badgeTv.layoutParams = badgeLp
+                    bubbleBtn.addView(badgeTv)
+                    overlayBubbleDistanceTv = badgeTv
+
+                    val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+                    } else {
+                        @Suppress("DEPRECATION")
+                        WindowManager.LayoutParams.TYPE_PHONE
+                    }
+                    val winLp = WindowManager.LayoutParams(
+                        totalW,
+                        totalH,
+                        overlayType,
+                        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        PixelFormat.TRANSLUCENT
+                    ).apply {
+                        gravity = Gravity.BOTTOM or Gravity.LEFT
+                        x = savedBubbleX
+                        y = savedBubbleY
+                    }
+
+                    var downRawX = 0f
+                    var downRawY = 0f
+                    var startWinX = 0
+                    var startWinY = 0
+                    var movedSignificantly = false
+                    val touchSlopPx = dpStatic(appCtx, 10f)
+
+                    bubbleBtn.setOnTouchListener { _, event ->
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> {
+                                downRawX = event.rawX
+                                downRawY = event.rawY
+                                startWinX = winLp.x
+                                startWinY = winLp.y
+                                movedSignificantly = false
+                                true
+                            }
+                            MotionEvent.ACTION_MOVE -> {
+                                val dx = (event.rawX - downRawX).toInt()
+                                val dy = (event.rawY - downRawY).toInt()
+                                if (kotlin.math.abs(dx) > touchSlopPx || kotlin.math.abs(dy) > touchSlopPx) {
+                                    movedSignificantly = true
+                                }
+                                if (movedSignificantly) {
+                                    try {
+                                        val dm = appCtx.resources.displayMetrics
+                                        val maxX = (dm.widthPixels - totalW).coerceAtLeast(0)
+                                        val maxY = (dm.heightPixels - dpStatic(appCtx, 120f)).coerceAtLeast(0)
+                                        savedBubbleX = (startWinX + dx).coerceIn(0, maxX)
+                                        savedBubbleY = (startWinY - dy).coerceIn(0, maxY)
+                                        winLp.x = savedBubbleX
+                                        winLp.y = savedBubbleY
+                                        wm.updateViewLayout(root, winLp)
+                                    } catch (e: Exception) {
+                                    }
+                                }
+                                true
+                            }
+                            MotionEvent.ACTION_UP -> {
+                                if (!movedSignificantly) {
+                                    expandFromFloatingOverlay(appCtx)
+                                }
+                                true
+                            }
+                            else -> false
+                        }
+                    }
+
+                    root.addView(bubbleBtn)
+
+                    val closeBadge = TextView(appCtx)
+                    closeBadge.text = "✕"
+                    closeBadge.gravity = Gravity.CENTER
+                    closeBadge.setTextColor(Color.WHITE)
+                    closeBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    closeBadge.setTypeface(Typeface.DEFAULT_BOLD)
+                    closeBadge.background = makeOvalStatic(
+                        appCtx,
+                        Color.parseColor("#E11D48"),
+                        bubbleBorderColor,
+                        1.8f
+                    )
+                    closeBadge.elevation = dpStatic(appCtx, 16f).toFloat()
+                    val closeLp = FrameLayout.LayoutParams(dpStatic(appCtx, 22f), dpStatic(appCtx, 22f))
+                    closeLp.gravity = Gravity.TOP or Gravity.LEFT
+                    closeLp.setMargins(0, 0, 0, 0)
+                    closeBadge.layoutParams = closeLp
+                    closeBadge.setOnClickListener {
+                        closeFromFloatingOverlay(appCtx)
+                    }
+                    root.addView(closeBadge)
+
+                    wm.addView(root, winLp)
+                    overlayBubbleRootView = root
+                    overlayBubbleLp = winLp
+                } catch (e: Exception) {
+                }
+            }
+            return true
+        }
+
+        fun hideFloatingOverlayBubble(context: Context? = null, clearState: Boolean = true) {
+            val appCtx = context?.applicationContext ?: callMonitorAppContext ?: return
+            if (clearState) {
+                isOverlayHiddenForForegroundApp = false
+                overlayNotifId = Int.MIN_VALUE
+                overlaySourceJson = null
+                overlayGeofenceItemId = ""
+                overlayReminderId = ""
+            }
+            callMonitorHandler.post {
+                removeOverlayViewOnMain(appCtx)
+            }
+        }
+
+        fun setFloatingOverlayHiddenForInApp(context: Context, hidden: Boolean) {
+            val appCtx = context.applicationContext
+            if (hidden) {
+                if (overlayBubbleRootView != null) {
+                    isOverlayHiddenForForegroundApp = true
+                    callMonitorHandler.post {
+                        removeOverlayViewOnMain(appCtx)
+                    }
+                }
+            } else {
+                restoreFloatingOverlayOnBackground(appCtx)
+            }
+        }
+
+        fun restoreFloatingOverlayOnBackground(context: Context) {
+            val appCtx = context.applicationContext
+            if (
+                isMinimizedBubbleState &&
+                isOverlayHiddenForForegroundApp &&
+                overlayBubbleRootView == null &&
+                overlayNotifId != Int.MIN_VALUE &&
+                canDrawSystemOverlays(appCtx)
+            ) {
+                if (overlayIsGeofence && !YaadGeofenceService.isGeofenceItemMinimized(appCtx, overlayGeofenceItemId)) {
+                    isMinimizedBubbleState = false
+                    isOverlayHiddenForForegroundApp = false
+                    return
+                }
+                showFloatingOverlayBubble(
+                    context = appCtx,
+                    notifId = overlayNotifId,
+                    srcJson = overlaySourceJson,
+                    isGeofence = overlayIsGeofence,
+                    isSub10m = overlayIsSub10m,
+                    geoItemId = overlayGeofenceItemId,
+                    remId = overlayReminderId,
+                    persian = overlayIsPersian,
+                    accentColor = overlayAccentColor,
+                    distanceMeters = overlayDistanceMeters,
+                    bundledCount = overlayBundledCount
+                )
+            }
+        }
+
+        private fun expandFromFloatingOverlay(context: Context) {
+            val appCtx = context.applicationContext
+            val targetNotifId = overlayNotifId
+            val targetSrcJson = overlaySourceJson
+            val wasGeo = overlayIsGeofence
+            val targetGeoId = overlayGeofenceItemId
+            isMinimizedBubbleState = false
+            isOverlayHiddenForForegroundApp = false
+            if (wasGeo) {
+                try {
+                    YaadGeofenceService.setGeofenceItemMinimizedState(appCtx, targetGeoId, false, notifyWebView = true)
+                } catch (e: Exception) {
+                }
+            }
+            if (targetNotifId != Int.MIN_VALUE) {
+                launch(
+                    appCtx,
+                    targetNotifId,
+                    targetSrcJson,
+                    wakeScreenOnce = false,
+                    forceExpandPopup = true
+                )
+            }
+            callMonitorHandler.postDelayed({
+                hideFloatingOverlayBubble(appCtx, clearState = true)
+            }, 250L)
+        }
+
+        private fun closeFromFloatingOverlay(context: Context) {
+            val appCtx = context.applicationContext
+            val wasGeo = overlayIsGeofence
+            val targetGeoId = overlayGeofenceItemId
+            val targetRemId = overlayReminderId
+            val targetNotifId = overlayNotifId
+            val targetSrcJson = overlaySourceJson
+            isMinimizedBubbleState = false
+            hideFloatingOverlayBubble(appCtx, clearState = true)
+            if (wasGeo) {
+                try {
+                    YaadGeofenceService.setGeofenceItemMinimizedState(appCtx, targetGeoId, false, notifyWebView = true)
+                    YaadGeofenceService.acknowledgeGeofenceItemForCycle(
+                        appCtx,
+                        targetGeoId,
+                        targetNotifId,
+                        notifyWebView = true,
+                        acknowledgeAllActive = true
+                    )
+                } catch (e: Exception) {
+                }
+            } else {
+                try {
+                    YaadGeofenceService.notifyTimedAlarmClosedOutsideApp(appCtx, targetRemId.ifEmpty { "*" })
+                    val idsToStop = ArrayList<Pair<Int, String?>>()
+                    if (activeBundledTimedReminders.isNotEmpty()) {
+                        for ((itemNotifId, itemJson) in activeBundledTimedReminders.entries.toList()) {
+                            idsToStop.add(Pair(itemNotifId, itemJson.toString()))
+                        }
+                        activeBundledTimedReminders.clear()
+                    } else if (targetNotifId != Int.MIN_VALUE) {
+                        idsToStop.add(Pair(targetNotifId, targetSrcJson))
+                    }
+                    for ((nId, sJson) in idsToStop) {
+                        val bIntent = Intent(appCtx, NotificationDismissReceiver::class.java).apply {
+                            putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, nId)
+                            putExtra(LocalNotificationManager.ACTION_INTENT_KEY, "stop")
+                            if (sJson != null) {
+                                putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sJson)
+                            }
+                        }
+                        appCtx.sendBroadcast(bIntent)
+                    }
+                } catch (e: Exception) {
+                }
+            }
         }
 
         fun isScreenCurrentlyInteractive(context: Context): Boolean {
@@ -8112,6 +8614,20 @@ class YaadAlarmPopupActivity : Activity() {
         }
 
         fun yieldActivePopupForPhoneCall(context: Context) {
+            val appCtx = context.applicationContext
+            if (overlayBubbleRootView != null || isOverlayHiddenForForegroundApp) {
+                val wasGeo = overlayIsGeofence
+                val nId = overlayNotifId
+                val sJson = overlaySourceJson
+                val gId = overlayGeofenceItemId
+                hideFloatingOverlayBubble(appCtx, clearState = true)
+                isMinimizedBubbleState = false
+                if (wasGeo) {
+                    suspendGeofencePopupForPhoneCall(appCtx, nId, sJson, gId)
+                } else if (nId != Int.MIN_VALUE) {
+                    suspendTimedReminderForPhoneCall(appCtx, nId, sJson, 60_000L, true)
+                }
+            }
             val act = activeInstance?.get() ?: return
             act.runOnUiThread {
                 try {
@@ -8442,6 +8958,20 @@ class YaadAlarmPopupActivity : Activity() {
             sonarMode: String = "enter",
             visualOnly: Boolean = false
         ) {
+            overlayDistanceMeters = distanceMeters
+            if (overlayBubbleRootView != null && overlayIsGeofence) {
+                callMonitorHandler.post {
+                    try {
+                        overlayBubbleDistanceTv?.text = formatOverlayLabelStatic(
+                            isGeo = true,
+                            distMeters = distanceMeters,
+                            bundledCount = 1,
+                            persian = overlayIsPersian
+                        )
+                    } catch (e: Exception) {
+                    }
+                }
+            }
             val act = activeInstance?.get() ?: return
             if (!act.isGeofencePopup) return
             act.runOnUiThread {
@@ -8495,6 +9025,13 @@ class YaadAlarmPopupActivity : Activity() {
 
         fun dismissIfMatching(notificationId: Int) {
             activeBundledTimedReminders.remove(notificationId)
+            if (
+                (overlayBubbleRootView != null || isOverlayHiddenForForegroundApp) &&
+                (notificationId == Int.MIN_VALUE || overlayNotifId == notificationId || activeBundledTimedReminders.isEmpty())
+            ) {
+                isMinimizedBubbleState = false
+                hideFloatingOverlayBubble(clearState = true)
+            }
             val act = activeInstance?.get() ?: return
             if (!act.isGeofencePopup && activeBundledTimedReminders.isNotEmpty()) {
                 act.runOnUiThread {
@@ -8533,7 +9070,8 @@ class YaadAlarmPopupActivity : Activity() {
             wakeScreenOnce: Boolean = true,
             resumeRemainingMs: Long = 60_000L,
             resumeAudioMuted: Boolean = false,
-            forceScreenOffDuration: Boolean = false
+            forceScreenOffDuration: Boolean = false,
+            forceExpandPopup: Boolean = false
         ) {
             if (isPhoneCallActiveOrRinging(context)) {
                 val isGeo = try {
@@ -8590,6 +9128,9 @@ class YaadAlarmPopupActivity : Activity() {
                 putExtra("yaad_keep_screen_on_duration_ms", keepScreenOnDurationMs)
                 putExtra("yaad_resume_remaining_ms", resumeRemainingMs)
                 putExtra("yaad_resume_audio_muted", resumeAudioMuted)
+                if (forceExpandPopup) {
+                    putExtra("yaad_force_expand_popup", true)
+                }
                 if (sourceJson != null) {
                     putExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY, sourceJson)
                 }
@@ -8765,6 +9306,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
+import android.graphics.Color
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
@@ -11006,6 +11548,8 @@ class YaadGeofenceService : Service(), LocationListener {
                 editor.apply()
                 if (minimized) {
                     setGeofenceAudioMuteState(context, true)
+                } else {
+                    YaadAlarmPopupActivity.hideFloatingOverlayBubble(context, clearState = true)
                 }
                 if (notifyWebView) {
                     val safeId = targetId.replace("'", "").replace("\\\\", "")
@@ -11048,6 +11592,9 @@ class YaadGeofenceService : Service(), LocationListener {
                     if (YaadAlarmPopupActivity.isShowingGeofencePopup()) {
                         YaadAlarmPopupActivity.dismissIfMatching(Int.MIN_VALUE)
                     }
+                    if (YaadAlarmPopupActivity.hasActiveFloatingOverlay(geofenceOnly = true)) {
+                        YaadAlarmPopupActivity.setFloatingOverlayHiddenForInApp(context, true)
+                    }
                     val curItemId = activeGeofenceItemId
                     val isMin = isGeofenceItemMinimized(context, curItemId)
                     val safeId = curItemId.replace("'", "").replace("\\\\", "")
@@ -11062,6 +11609,57 @@ class YaadGeofenceService : Service(), LocationListener {
         fun onAppBackgrounded(context: Context) {
             try {
                 val appCtx = context.applicationContext
+                if (YaadAlarmPopupActivity.hasActiveFloatingOverlay(geofenceOnly = true)) {
+                    YaadAlarmPopupActivity.setFloatingOverlayHiddenForInApp(appCtx, false)
+                } else if (
+                    activeGeofenceNotificationId != Int.MIN_VALUE &&
+                    activeGeofenceItemId.isNotEmpty() &&
+                    isGeofenceItemMinimized(appCtx, activeGeofenceItemId) &&
+                    YaadAlarmPopupActivity.canDrawSystemOverlays(appCtx) &&
+                    !isScreenOffOrLockedStatic(appCtx)
+                ) {
+                    val isVisualOnly = activeGeofenceEventType == "visual_banner"
+                    val (notifTitle, notifBody) = buildStatusBarTitleAndBody(
+                        title = activeGeofenceTitle,
+                        statusPhrase = activeGeofenceDescription,
+                        distance = liveSonarDistanceMeters,
+                        radius = activeGeofenceRadius,
+                        isEn = activeGeofenceIsEn,
+                        visualOnlyBanner = isVisualOnly,
+                        visualBannerText = activeGeofenceCustomMessage
+                    )
+                    val extraJson = JSObject().apply {
+                        put("geofence", true)
+                        put("geofenceItemId", activeGeofenceItemId)
+                        put("sub10m", activeGeofenceEventType == "arrived_under_10m")
+                        put("distance", liveSonarDistanceMeters)
+                        put("radius", activeGeofenceRadius)
+                        put("latitude", activeGeofenceLat)
+                        put("longitude", activeGeofenceLon)
+                        put("bearingDeg", activeGeofenceBearingDeg.toDouble())
+                        put("sonarMode", activeGeofenceSonarMode)
+                        put("language", if (activeGeofenceIsEn) "en" else "fa")
+                        put("theme", if (activeGeofenceEventType == "arrived_under_10m") "geofence-sub10m" else "geofence-radar")
+                    }
+                    val srcJsonStr = JSObject().apply {
+                        put("id", activeGeofenceNotificationId)
+                        put("title", notifTitle)
+                        put("body", notifBody)
+                        put("extra", extraJson)
+                    }.toString()
+                    YaadAlarmPopupActivity.showFloatingOverlayBubble(
+                        context = appCtx,
+                        notifId = activeGeofenceNotificationId,
+                        srcJson = srcJsonStr,
+                        isGeofence = true,
+                        isSub10m = activeGeofenceEventType == "arrived_under_10m",
+                        geoItemId = activeGeofenceItemId,
+                        remId = "",
+                        persian = !activeGeofenceIsEn,
+                        accentColor = Color.parseColor("#10B981"),
+                        distanceMeters = liveSonarDistanceMeters
+                    )
+                }
                 if (shouldRun(appCtx) && hasLocationPermission(appCtx)) {
                     val intent = Intent(appCtx, YaadGeofenceService::class.java).apply {
                         action = ACTION_APP_BACKGROUNDED_CHECK
@@ -12571,6 +13169,29 @@ class YaadGeofenceService : Service(), LocationListener {
             } catch (e: Exception) {
                 openDeviceLocationSettings(appContext)
             }
+        }
+
+        @android.webkit.JavascriptInterface
+        fun hasOverlayPermission(): Boolean {
+            return YaadAlarmPopupActivity.canDrawSystemOverlays(appContext)
+        }
+
+        @android.webkit.JavascriptInterface
+        fun openOverlaySettings() {
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val intent = Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.fromParts("package", appContext.packageName, null)
+                    ).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    appContext.startActivity(intent)
+                    return
+                }
+            } catch (e: Exception) {
+            }
+            openBackgroundLocationSettings()
         }
     }
 }
