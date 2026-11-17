@@ -4483,7 +4483,11 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
+import android.text.SpannableString
+import android.text.Spanned
 import android.text.TextUtils
+import android.text.style.ForegroundColorSpan
+import android.text.style.RelativeSizeSpan
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
@@ -5044,6 +5048,23 @@ class YaadAlarmPopupActivity : Activity() {
         }
     }
 
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && isGeofencePopup && !isMinimizedToFloatingBubble && !isFinishing && !isDestroyed) {
+            uiHandler.postDelayed({
+                try {
+                    if (!isFinishing && !isDestroyed && isGeofencePopup && !isMinimizedToFloatingBubble) {
+                        val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
+                        if (km?.isKeyguardLocked != true) {
+                            YaadGeofenceService.demoteActiveBannerToShadeNow(this, notificationId)
+                        }
+                    }
+                } catch (e: Exception) {
+                }
+            }, 220L)
+        }
+    }
+
     override fun onPause() {
         super.onPause()
         val now = System.currentTimeMillis()
@@ -5453,6 +5474,18 @@ class YaadAlarmPopupActivity : Activity() {
         val safeDist = distanceMeters.coerceAtLeast(0)
         val distText = if (isPersian) toPersianDigits(safeDist.toString()) else safeDist.toString()
         return if (isPersian) "\$distText متر" else "\$distText m"
+    }
+
+    private fun formatStyledDistanceLabel(distanceMeters: Int, sub10m: Boolean): CharSequence {
+        val safeDist = distanceMeters.coerceAtLeast(0)
+        val distText = if (isPersian) toPersianDigits(safeDist.toString()) else safeDist.toString()
+        val unitText = if (isPersian) " متر" else " m"
+        val fullText = "\$distText\$unitText"
+        val ss = SpannableString(fullText)
+        ss.setSpan(RelativeSizeSpan(1.32f), 0, distText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        ss.setSpan(ForegroundColorSpan(Color.parseColor("#FEF08A")), 0, distText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        ss.setSpan(ForegroundColorSpan(Color.parseColor("#6EE7B7")), distText.length, fullText.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        return ss
     }
 
     private fun formatRadiusLabel(radiusMeters: Int): String {
@@ -5908,23 +5941,24 @@ class YaadAlarmPopupActivity : Activity() {
             val titleRow = TextView(this)
             titleRow.text = itemTitle
             titleRow.setTextColor(Color.WHITE)
-            titleRow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+            titleRow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             titleRow.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
-            titleRow.maxLines = 1
+            titleRow.maxLines = 2
             titleRow.ellipsize = TextUtils.TruncateAt.END
+            titleRow.setPadding(0, 0, dp(8f), 0)
             titleRow.layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             headerRow.addView(titleRow)
 
             val distTv = TextView(this)
-            distTv.text = formatDistanceLabel(itemDist, false)
-            distTv.setTextColor(Color.parseColor("#A7F3D0"))
-            distTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            distTv.setTypeface(Typeface.DEFAULT_BOLD)
-            distTv.setPadding(dp(10f), dp(4f), dp(10f), dp(4f))
+            distTv.text = formatStyledDistanceLabel(itemDist, false)
+            distTv.setTextColor(Color.parseColor("#FEF08A"))
+            distTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            distTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
+            distTv.setPadding(dp(12f), dp(6f), dp(12f), dp(6f))
             distTv.background = makeRoundedDrawable(
-                Color.parseColor("#021815"),
-                palette.accentColor,
-                1.2f,
+                Color.parseColor("#03221D"),
+                Color.parseColor("#FBBF24"),
+                1.5f,
                 12f
             )
             if (isTopPriority) {
@@ -6165,15 +6199,15 @@ class YaadAlarmPopupActivity : Activity() {
         )
         content.addView(geoControlBar)
 
-        // 1. TOP SECTION: Location Name + Short Status Phrase (Compact)
+        // 1. TOP SECTION: Location Name + Short Status Phrase (Distinct Prominent Typography)
         val topTitleBox = LinearLayout(this)
         topTitleBox.orientation = LinearLayout.VERTICAL
         topTitleBox.gravity = Gravity.CENTER
-        topTitleBox.setPadding(dp(12f), dp(8f), dp(12f), dp(8f))
+        topTitleBox.setPadding(dp(12f), dp(10f), dp(12f), dp(10f))
         topTitleBox.background = makeRoundedDrawable(
-            Color.parseColor("#063830"),
+            Color.parseColor("#074239"),
             palette.accentColor,
-            1.4f,
+            1.8f,
             16f
         )
         topTitleBox.layoutParams = LinearLayout.LayoutParams(
@@ -6184,10 +6218,10 @@ class YaadAlarmPopupActivity : Activity() {
         val titleTv = TextView(this)
         titleTv.text = titleStr
         titleTv.gravity = Gravity.CENTER
-        titleTv.setTextColor(palette.titleColor)
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17.5f)
+        titleTv.setTextColor(Color.WHITE)
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
         titleTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
-        titleTv.maxLines = 1
+        titleTv.maxLines = 2
         titleTv.ellipsize = TextUtils.TruncateAt.END
         topTitleBox.addView(titleTv)
 
@@ -6205,7 +6239,7 @@ class YaadAlarmPopupActivity : Activity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             )
-            bodyParams.topMargin = dp(2f)
+            bodyParams.topMargin = dp(3f)
             bodyTv.layoutParams = bodyParams
             topTitleBox.addView(bodyTv)
         }
@@ -6230,8 +6264,9 @@ class YaadAlarmPopupActivity : Activity() {
             (extraObj?.optBoolean("visualOnly", false) == true)
 
         val screenW = resources.displayMetrics.widthPixels
-        val radarW = (screenW - dp(28f)).coerceAtLeast(dp(240f))
-        val radarH = radarW + dp(20f)
+        val maxRadarByH = (resources.displayMetrics.heightPixels * 0.36f).toInt()
+        val radarW = minOf(screenW - dp(32f), maxRadarByH).coerceAtLeast(dp(205f))
+        val radarH = radarW + dp(16f)
         val radarView = LivePolarRadarView(
             this,
             titleStr,
@@ -6258,15 +6293,15 @@ class YaadAlarmPopupActivity : Activity() {
 
         centerArea.addView(radarView)
 
-        // Compact Distance + Geofence Radius Box
+        // Prominent Distance + Geofence Radius Box
         val distanceCard = LinearLayout(this)
         distanceCard.orientation = LinearLayout.VERTICAL
         distanceCard.gravity = Gravity.CENTER
-        distanceCard.setPadding(dp(16f), dp(6f), dp(16f), dp(6f))
+        distanceCard.setPadding(dp(16f), dp(8f), dp(16f), dp(8f))
         distanceCard.background = makeRoundedDrawable(
-            Color.parseColor("#021815"),
-            palette.accentColor,
-            1.5f,
+            Color.parseColor("#03221D"),
+            Color.parseColor("#FBBF24"),
+            1.8f,
             16f
         )
         val distanceCardParams = LinearLayout.LayoutParams(
@@ -6277,10 +6312,10 @@ class YaadAlarmPopupActivity : Activity() {
         distanceCard.layoutParams = distanceCardParams
 
         val liveDistTv = TextView(this)
-        liveDistTv.text = formatDistanceLabel(initialDistance.coerceAtLeast(0), isSub10mArrival)
+        liveDistTv.text = formatStyledDistanceLabel(initialDistance.coerceAtLeast(0), isSub10mArrival)
         liveDistTv.gravity = Gravity.CENTER
-        liveDistTv.setTextColor(Color.parseColor("#6EE7B7"))
-        liveDistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+        liveDistTv.setTextColor(Color.parseColor("#FEF08A"))
+        liveDistTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
         liveDistTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
         distanceBadgeTextView = liveDistTv
         distanceCard.addView(liveDistTv)
@@ -8416,7 +8451,10 @@ class YaadAlarmPopupActivity : Activity() {
                             distanceMeters,
                             sub10m || act.isSub10mArrival
                         )
-                        act.distanceBadgeTextView?.text = formattedDist
+                        act.distanceBadgeTextView?.text = act.formatStyledDistanceLabel(
+                            distanceMeters,
+                            sub10m || act.isSub10mArrival
+                        )
                         act.floatingBubbleDistanceTv?.text = formattedDist
                         act.livePolarRadarView?.updateLiveState(
                             distanceMeters,
@@ -10656,7 +10694,7 @@ class YaadGeofenceService : Service(), LocationListener {
             return sourceJsonStr
         }
 
-        val builder = NotificationCompat.Builder(this, targetChannelId)
+        val alertBuilder = NotificationCompat.Builder(this, targetChannelId)
             .setSmallIcon(smallIconRes)
             .setContentTitle(headerTitle)
             .setContentText(notifBody)
@@ -10666,9 +10704,9 @@ class YaadGeofenceService : Service(), LocationListener {
             .setPriority(if (showFullScreen) NotificationCompat.PRIORITY_MAX else NotificationCompat.PRIORITY_LOW)
             .setCategory(if (showFullScreen) NotificationCompat.CATEGORY_ALARM else NotificationCompat.CATEGORY_STATUS)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .setOngoing(showFullScreen && !visualOnlyBanner)
+            .setOngoing(false)
             .setOnlyAlertOnce(!showFullScreen)
-            .setAutoCancel(false)
+            .setAutoCancel(true)
             .setGroup(GEOFENCE_MULTI_GROUP_KEY)
             .setDeleteIntent(snoozePi)
             .setContentIntent(fullScreenPi)
@@ -10689,15 +10727,82 @@ class YaadGeofenceService : Service(), LocationListener {
             )
 
         if (showFullScreen) {
-            builder.setVibrate(longArrayOf(0, 450, 180, 450))
-            builder.setFullScreenIntent(fullScreenPi, true)
+            alertBuilder.setVibrate(longArrayOf(0, 450, 180, 450))
+            alertBuilder.setFullScreenIntent(fullScreenPi, true)
         }
+
+        val shadeBuilder = NotificationCompat.Builder(this, shadeChannelId)
+            .setSmallIcon(smallIconRes)
+            .setContentTitle(headerTitle)
+            .setContentText(notifBody)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(notifBody).setBigContentTitle(headerTitle))
+            .setColor(if (visualOnlyBanner || isSub10m) 0xFF059669.toInt() else 0xFF04231F.toInt())
+            .setColorized(true)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setCategory(NotificationCompat.CATEGORY_STATUS)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(false)
+            .setOnlyAlertOnce(true)
+            .setAutoCancel(true)
+            .setGroup(GEOFENCE_MULTI_GROUP_KEY)
+            .setDeleteIntent(snoozePi)
+            .setContentIntent(fullScreenPi)
+            .addAction(
+                0,
+                if (isEn) "⏱ Not Now (5m)" else "⏱ الان نه (۵ دقیقه)",
+                snoozePi
+            )
+            .addAction(
+                0,
+                if (isEn) "⏹ Stop" else "⏹ توقف",
+                stopPi
+            )
+            .addAction(
+                0,
+                if (isEn) "🧭 Directions" else "🧭 مسیریابی",
+                directionsPi
+            )
 
         val nmCompat = NotificationManagerCompat.from(this)
         if (showFullScreen) {
             lastFullScreenNotificationPostMs = now
             lastLiveStatusBarUpdatePostMs = now
-            nmCompat.notify(notificationId, builder.build())
+            val alertNotif = alertBuilder.build()
+            val shadeNotif = shadeBuilder.build()
+            val appCtx = applicationContext
+
+            cancelPendingBannerTimers()
+            cachedShadeNotificationId = notificationId
+            cachedShadeNotification = shadeNotif
+
+            val isUnlockedAndInteractive = !wasScreenOff && !isDeviceKeyguardLocked()
+            if (isUnlockedAndInteractive) {
+                // Wait briefly so YaadAlarmPopupActivity.launch() opens cleanly first;
+                // if the full-screen card is showing, post quietly to shadeChannelId so NO floating banner covers its header!
+                val postCheckRunnable = Runnable {
+                    try {
+                        if (LocalNotificationsPlugin.isAppInForeground(appCtx) && !isScreenOffOrLockedStatic(appCtx)) {
+                            cancelAllGeofenceAlertNotifications(appCtx)
+                            return@Runnable
+                        }
+                        if (activeGeofenceNotificationId != notificationId) {
+                            return@Runnable
+                        }
+                        if (YaadAlarmPopupActivity.isShowingGeofencePopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) {
+                            nmCompat.notify(notificationId, shadeNotif)
+                        } else {
+                            nmCompat.notify(notificationId, alertNotif)
+                            scheduleGeofenceBannerDemote(appCtx, notificationId)
+                        }
+                    } catch (e: Exception) {
+                    }
+                }
+                delayedBannerPostRunnable = postCheckRunnable
+                bannerHandler.postDelayed(postCheckRunnable, 280L)
+            } else {
+                nmCompat.notify(notificationId, alertNotif)
+                scheduleGeofenceBannerDemote(appCtx, notificationId)
+            }
         }
 
         if (showFullScreen && multiCardsJson.isNotEmpty()) {
@@ -10738,6 +10843,7 @@ class YaadGeofenceService : Service(), LocationListener {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(periodicCheckRunnable)
+        cancelPendingBannerTimers()
         unregisterScreenStateReceiver()
         stopLocationUpdates()
         releaseServiceCpuWakeLock()
@@ -10797,7 +10903,67 @@ class YaadGeofenceService : Service(), LocationListener {
             }
         }
 
+        private val bannerHandler = Handler(Looper.getMainLooper())
+        private var delayedBannerPostRunnable: Runnable? = null
+        private var demoteBannerRunnable: Runnable? = null
+        @Volatile
+        private var cachedShadeNotificationId: Int = Int.MIN_VALUE
+        @Volatile
+        private var cachedShadeNotification: android.app.Notification? = null
+
+        fun cancelPendingBannerTimers() {
+            try {
+                delayedBannerPostRunnable?.let { bannerHandler.removeCallbacks(it) }
+            } catch (e: Exception) {
+            }
+            delayedBannerPostRunnable = null
+            try {
+                demoteBannerRunnable?.let { bannerHandler.removeCallbacks(it) }
+            } catch (e: Exception) {
+            }
+            demoteBannerRunnable = null
+        }
+
+        private fun scheduleGeofenceBannerDemote(context: Context, notifId: Int) {
+            try {
+                demoteBannerRunnable?.let { bannerHandler.removeCallbacks(it) }
+            } catch (e: Exception) {
+            }
+            val appCtx = context.applicationContext
+            val r = Runnable {
+                demoteActiveBannerToShadeNow(appCtx, notifId)
+            }
+            demoteBannerRunnable = r
+            bannerHandler.postDelayed(r, 3_000L)
+        }
+
+        fun demoteActiveBannerToShadeNow(context: Context, targetNotifId: Int = activeGeofenceNotificationId) {
+            try {
+                val appCtx = context.applicationContext
+                if (LocalNotificationsPlugin.isAppInForeground(appCtx) && !isScreenOffOrLockedStatic(appCtx)) {
+                    cancelAllGeofenceAlertNotifications(appCtx)
+                    return
+                }
+                val notifId = if (targetNotifId != Int.MIN_VALUE) targetNotifId else cachedShadeNotificationId
+                if (notifId == Int.MIN_VALUE) return
+                val shadeNotif = if (cachedShadeNotificationId == notifId) cachedShadeNotification else null
+                if (shadeNotif == null) return
+                try {
+                    demoteBannerRunnable?.let { bannerHandler.removeCallbacks(it) }
+                } catch (e: Exception) {
+                }
+                demoteBannerRunnable = null
+                val nmCompat = NotificationManagerCompat.from(appCtx)
+                nmCompat.cancel(notifId)
+                nmCompat.notify(notifId, shadeNotif)
+            } catch (e: Exception) {
+            }
+        }
+
         fun cancelAllGeofenceAlertNotifications(context: Context) {
+            cancelPendingBannerTimers()
+            cachedShadeNotificationId = Int.MIN_VALUE
+            cachedShadeNotification = null
             try {
                 val nmCompat = NotificationManagerCompat.from(context)
                 if (activeGeofenceNotificationId != Int.MIN_VALUE) {
@@ -11847,6 +12013,9 @@ class YaadGeofenceService : Service(), LocationListener {
         }
 
         fun stopGeofenceAudio(context: Context? = null, notificationIdToCancel: Int = Int.MIN_VALUE) {
+            cancelPendingBannerTimers()
+            cachedShadeNotificationId = Int.MIN_VALUE
+            cachedShadeNotification = null
             sonarLoopActive = false
             try {
                 sonarThread?.interrupt()

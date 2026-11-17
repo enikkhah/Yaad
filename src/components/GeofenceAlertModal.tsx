@@ -516,7 +516,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                 )}
 
               {/* 1. Header Box with Top-Left Close (X), Location Name + Status, and Top-Right Minimize (—) */}
-              <div className="w-[calc(100%-8px)] px-2.5 py-1.5 rounded-2xl bg-[#073B33]/90 border border-emerald-400/60 flex items-center justify-between gap-2" dir="ltr">
+              <div className="w-[calc(100%-8px)] px-3 py-2 rounded-2xl bg-[#074239]/95 border border-emerald-300/75 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] flex items-center justify-between gap-2" dir="ltr">
                 {/* Top-Left: Close Completely (X) */}
                 <button
                   type="button"
@@ -532,8 +532,8 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                 </button>
 
                 {/* Center: Location Name + Short Status Phrase */}
-                <div className="min-w-0 flex-1 text-center space-y-0.5" dir={isEn ? 'ltr' : 'rtl'}>
-                  <h2 className="text-base sm:text-lg font-black text-white tracking-tight leading-tight break-words">
+                <div className="min-w-0 flex-1 text-center space-y-1" dir={isEn ? 'ltr' : 'rtl'}>
+                  <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight leading-snug break-words drop-shadow-[0_1px_8px_rgba(52,211,153,0.4)]">
                     {primaryItem.locationTitle}
                   </h2>
                   <p className="text-xs sm:text-sm font-extrabold text-amber-300 leading-tight">
@@ -577,12 +577,12 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
               const distFormatted = formatDistanceText(primaryItem.initialDistance);
               const radiusFormatted = formatDistanceText(primaryItem.radius || 200);
               return (
-                <div className="w-[calc(100%-8px)] rounded-2xl border border-cyan-400/75 bg-[#052E28]/95 px-3 py-1 flex flex-col items-center justify-center gap-0.5 tabular-nums">
+                <div className="w-[calc(100%-8px)] rounded-2xl border border-amber-400/75 bg-[#03231E]/95 shadow-[0_0_20px_rgba(251,191,36,0.18)] px-3 py-1.5 flex flex-col items-center justify-center gap-0.5 tabular-nums">
                   <div className="flex items-baseline justify-center gap-1.5">
-                    <span className="text-xl sm:text-2xl font-black font-mono tracking-tight text-emerald-300 leading-none">
+                    <span className="text-3xl sm:text-4xl font-black font-mono tracking-tight text-amber-300 leading-none drop-shadow-[0_2px_10px_rgba(253,224,71,0.35)]">
                       {distFormatted.value}
                     </span>
-                    <span className="text-xs sm:text-sm font-black text-emerald-100">
+                    <span className="text-sm sm:text-base font-black text-emerald-200">
                       {distFormatted.unit}
                     </span>
                   </div>
@@ -721,9 +721,9 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                     {(() => {
                       const radiusFormatted = formatDistanceText(item.radius || 200);
                       return (
-                        <div className="flex items-center justify-between gap-3 bg-[#031D19]/90 rounded-xl px-3.5 py-2.5 border border-emerald-400/35">
+                        <div className="flex items-center justify-between gap-3 bg-[#031D19]/90 rounded-xl px-3.5 py-2.5 border border-emerald-400/45">
                           <div className="min-w-0 flex-1 text-start">
-                            <h3 className="text-base sm:text-lg font-black text-white truncate">
+                            <h3 className="text-lg sm:text-xl font-black text-white leading-snug break-words">
                               {item.locationTitle}
                             </h3>
                             <p className="text-xs font-extrabold text-amber-300 mt-0.5 truncate">
@@ -736,11 +736,11 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                             </p>
                           </div>
 
-                          <div className="shrink-0 text-end font-mono tabular-nums bg-[#052E28] px-3 py-1.5 rounded-xl border border-cyan-400/50">
-                            <div className="text-xl sm:text-2xl font-black text-emerald-300 leading-none">
+                          <div className="shrink-0 text-end font-mono tabular-nums bg-[#03231E] px-3.5 py-2 rounded-xl border border-amber-400/70">
+                            <div className="text-2xl sm:text-3xl font-black text-amber-300 leading-none">
                               {distFormatted.value}
                             </div>
-                            <div className="text-[10px] font-bold text-emerald-100 mt-0.5">
+                            <div className="text-xs font-extrabold text-emerald-200 mt-1">
                               {distFormatted.unit}
                             </div>
                           </div>
