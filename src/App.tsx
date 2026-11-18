@@ -1616,64 +1616,152 @@ export default function App() {
     };
   }, [applyRestoredBackupIfNeeded, openProPaywall]);
 
-  // Non-destructive Geofence deactivation when Pro trial expires and user has no paid Pro plan:
-  // Waits until `entitlementReady` is true (first reconcileProEntitlement completed or 4s timeout)
-  // so paid buyers' active geofences are never disabled during startup before store verification finishes.
+  const clockTamperedNotifiedRef = useRef(false);
   useEffect(() => {
-    if (!proEntitlement.entitlementReady || proEntitlement.hasProAccess) return;
+    if (!proEntitlement.entitlementReady) return;
+    if (
+      proEntitlement.trial.clockTampered &&
+      !proEntitlement.hasPaidPro &&
+      !clockTamperedNotifiedRef.current
+    ) {
+      clockTamperedNotifiedRef.current = true;
+      showSyncNotification(
+        settingsRef.current.language === 'en'
+          ? 'Device clock does not match real time'
+          : 'ساعت دستگاه با زمان واقعی همخوان نیست'
+      );
+    }
+  }, [proEntitlement.entitlementReady, proEntitlement.trial.clockTampered, proEntitlement.hasPaidPro]);
 
-    if (isGeofenceActiveRef.current) {
-      isGeofenceActiveRef.current = false;
-      setIsGeofenceActive(false);
-      setGeofenceTrackingEnabled(false);
-      stopSubmarineSonarLoop();
-      setGeofenceMinimizedState(undefined, false, false);
-      setActiveGeofenceAlerts([]);
+  // Non-destructive Geofence deactivation when Pro trial expires (marks `disabledByTrialExpiry: true`),
+  // and automatic re-activation of ONLY those geofences when Pro becomes active again (purchase, restore, or launch gift).
+  // Manually disabled geofences (`disabledByTrialExpiry` not true) remain untouched.
+  useEffect(() => {
+    if (!proEntitlement.entitlementReady) return;
+
+    if (!proEntitlement.hasProAccess) {
+      if (isGeofenceActiveRef.current) {
+        isGeofenceActiveRef.current = false;
+        setIsGeofenceActive(false);
+        setGeofenceTrackingEnabled(false);
+        stopSubmarineSonarLoop();
+        setGeofenceMinimizedState(undefined, false, false);
+        setActiveGeofenceAlerts([]);
+      }
+
+      let locationsChanged = false;
+      const nextLocations = savedLocationsRef.current.map((loc) => {
+        if (loc.geofence?.enabled) {
+          locationsChanged = true;
+          return {
+            ...loc,
+            geofence: {
+              ...loc.geofence,
+              enabled: false,
+              disabledByTrialExpiry: true,
+            },
+          };
+        }
+        return loc;
+      });
+      if (locationsChanged) {
+        savedLocationsRef.current = nextLocations;
+        setSavedLocations(nextLocations);
+      }
+
+      let remindersChanged = false;
+      const nextReminders = remindersRef.current.map((rem) => {
+        if (rem.geofence?.enabled) {
+          remindersChanged = true;
+          return {
+            ...rem,
+            geofence: {
+              ...rem.geofence,
+              enabled: false,
+              disabledByTrialExpiry: true,
+            },
+          };
+        }
+        return rem;
+      });
+      if (remindersChanged) {
+        remindersRef.current = nextReminders;
+        setReminders(nextReminders);
+      }
+
+      if (locationsChanged || remindersChanged) {
+        syncGeofencesWithNativeAndroid(
+          false,
+          nextReminders,
+          nextLocations,
+          settingsRef.current.language || 'fa'
+        );
+      }
+      return;
     }
 
-    let locationsChanged = false;
-    const nextLocations = savedLocationsRef.current.map((loc) => {
-      if (loc.geofence?.enabled) {
-        locationsChanged = true;
+    // Pro access is active: automatically re-enable ONLY geofences that were disabled by trial expiry
+    let locationsRestored = false;
+    let anyActiveAfterRestore = false;
+    const restoredLocations = savedLocationsRef.current.map((loc) => {
+      if (loc.geofence?.disabledByTrialExpiry) {
+        locationsRestored = true;
+        const shouldEnable = !loc.deletedAt;
+        if (shouldEnable) anyActiveAfterRestore = true;
         return {
           ...loc,
           geofence: {
             ...loc.geofence,
-            enabled: false,
+            enabled: shouldEnable ? true : loc.geofence.enabled,
+            disabledByTrialExpiry: false,
           },
         };
       }
+      if (!loc.deletedAt && loc.geofence?.enabled) {
+        anyActiveAfterRestore = true;
+      }
       return loc;
     });
-    if (locationsChanged) {
-      savedLocationsRef.current = nextLocations;
-      setSavedLocations(nextLocations);
+    if (locationsRestored) {
+      savedLocationsRef.current = restoredLocations;
+      setSavedLocations(restoredLocations);
     }
 
-    let remindersChanged = false;
-    const nextReminders = remindersRef.current.map((rem) => {
-      if (rem.geofence?.enabled) {
-        remindersChanged = true;
+    let remindersRestored = false;
+    const restoredReminders = remindersRef.current.map((rem) => {
+      if (rem.geofence?.disabledByTrialExpiry) {
+        remindersRestored = true;
+        const shouldEnable = !rem.deletedAt && rem.status !== 'completed';
+        if (shouldEnable) anyActiveAfterRestore = true;
         return {
           ...rem,
           geofence: {
             ...rem.geofence,
-            enabled: false,
+            enabled: shouldEnable ? true : rem.geofence.enabled,
+            disabledByTrialExpiry: false,
           },
         };
       }
+      if (!rem.deletedAt && rem.status !== 'completed' && rem.geofence?.enabled) {
+        anyActiveAfterRestore = true;
+      }
       return rem;
     });
-    if (remindersChanged) {
-      remindersRef.current = nextReminders;
-      setReminders(nextReminders);
+    if (remindersRestored) {
+      remindersRef.current = restoredReminders;
+      setReminders(restoredReminders);
     }
 
-    if (locationsChanged || remindersChanged) {
+    if (locationsRestored || remindersRestored) {
+      if (anyActiveAfterRestore) {
+        isGeofenceActiveRef.current = true;
+        setIsGeofenceActive(true);
+        setGeofenceTrackingEnabled(true);
+      }
       syncGeofencesWithNativeAndroid(
-        false,
-        nextReminders,
-        nextLocations,
+        anyActiveAfterRestore || isGeofenceActiveRef.current,
+        restoredReminders,
+        restoredLocations,
         settingsRef.current.language || 'fa'
       );
     }
@@ -2109,6 +2197,7 @@ export default function App() {
               geofence: {
                 ...loc.geofence,
                 enabled: false,
+                disabledByTrialExpiry: false,
                 lastTriggeredAt: undefined,
                 hasTriggered: false,
               },
@@ -2138,6 +2227,7 @@ export default function App() {
               geofence: {
                 ...rem.geofence,
                 enabled: false,
+                disabledByTrialExpiry: false,
                 lastTriggeredAt: undefined,
                 hasTriggered: false,
               },
@@ -2962,6 +3052,7 @@ export default function App() {
         geofence: {
           ...loc.geofence,
           enabled: willBeActive,
+          disabledByTrialExpiry: false,
           lastTriggeredAt: undefined,
           hasTriggered: false,
         },

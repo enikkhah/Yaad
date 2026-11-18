@@ -664,6 +664,14 @@ https://myket.ir/app/com.yaad.reminder`;
                 </button>
               </div>
 
+              {proEntitlement.trial.clockTampered && !proEntitlement.hasPaidPro && (
+                <div className="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/35 text-[11px] text-rose-200 leading-relaxed font-bold">
+                  {isFa
+                    ? '⚠️ ساعت دستگاه با زمان واقعی همخوان نیست (وضعیت: دست‌کاری یا عدم تطابق ساعت). لطفاً تاریخ و ساعت گوشی را روی حالت خودکار تنظیم کنید.'
+                    : '⚠️ Device clock does not match real time (Status: Clock Tampered). Please set your phone date & time to automatic.'}
+                </div>
+              )}
+
               {/* دکمه هدیه نسخه Pro به یک دوست — فقط برای کاربران دارای اشتراک تاییدشده Pro */}
               {proEntitlement.hasPaidPro && verifiedGiftSku && (
                 <div className="pt-2 border-t border-amber-500/20 space-y-2">

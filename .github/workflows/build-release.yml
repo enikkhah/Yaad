@@ -169,6 +169,32 @@ jobs:
           path = Path("android/app/src/main/AndroidManifest.xml")
           text = path.read_text(encoding="utf-8")
 
+          if 'xmlns:tools=' not in text:
+              text = text.replace(
+                  '<manifest ',
+                  '<manifest xmlns:tools="http://schemas.android.com/tools" ',
+                  1
+              )
+
+          forbidden_permissions = [
+              "android.permission.MANAGE_EXTERNAL_STORAGE",
+              "android.permission.READ_PHONE_STATE",
+              "android.permission.SYSTEM_ALERT_WINDOW",
+              "android.permission.DISABLE_KEYGUARD",
+              "android.permission.READ_EXTERNAL_STORAGE",
+              "android.permission.WRITE_EXTERNAL_STORAGE",
+              "android.permission.READ_MEDIA_IMAGES",
+              "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+          ]
+
+          for bad_perm in forbidden_permissions:
+              escaped = re.escape(bad_perm)
+              text = re.sub(
+                  rf'\s*<uses-permission[^>]*android:name="{escaped}"[^>]*\/?>',
+                  '',
+                  text
+              )
+
           # Replace any existing unattributed SCHEDULE_EXACT_ALARM with maxSdkVersion="32"
           text = re.sub(
               r'\s*<uses-permission[^>]*android:name="android\.permission\.SCHEDULE_EXACT_ALARM"[^>]*\/?>',
@@ -203,6 +229,13 @@ jobs:
                       f'<uses-permission android:name="{permission}"{extra_attrs} />\n\n    {marker}',
                       1
                   )
+
+          for bad_perm in forbidden_permissions:
+              text = text.replace(
+                  marker,
+                  f'<uses-permission android:name="{bad_perm}" tools:node="remove" />\n    {marker}',
+                  1
+              )
 
           if 'android:allowBackup="true"' in text:
               text = text.replace('android:allowBackup="true"', 'android:allowBackup="false"')
@@ -539,6 +572,7 @@ jobs:
 
           MANIFEST_REPORT=$(python3 - "$MERGED_MANIFEST" "$APK_PATH" "$AAPT2_BIN" <<'PY'
           from pathlib import Path
+          import re
           import subprocess
           import sys
           import xml.etree.ElementTree as ET
@@ -549,6 +583,7 @@ jobs:
 
           android_ns = "{http://schemas.android.com/apk/res/android}"
           perms = []
+          perm_max_sdk = {}
           target_sdk = "unknown"
           min_sdk = "unknown"
           v_code = "unknown"
@@ -587,20 +622,59 @@ jobs:
                       target_sdk = uses_sdk.attrib.get(f"{android_ns}targetSdkVersion", target_sdk)
                   if min_sdk == "unknown":
                       min_sdk = uses_sdk.attrib.get(f"{android_ns}minSdkVersion", min_sdk)
-              for el in root.findall("uses-permission"):
-                  name = el.attrib.get(f"{android_ns}name", "")
-                  max_sdk = el.attrib.get(f"{android_ns}maxSdkVersion", "")
-                  if name:
-                      perms.append(f"{name}" + (f" (maxSdkVersion={max_sdk})" if max_sdk else ""))
+              for tag_name in ("uses-permission", "uses-permission-sdk-23"):
+                  for el in root.findall(tag_name):
+                      name = el.attrib.get(f"{android_ns}name", "").strip()
+                      max_sdk = el.attrib.get(f"{android_ns}maxSdkVersion", "").strip()
+                      if name:
+                          if name in perm_max_sdk:
+                              # If another entry lacks maxSdkVersion, keep empty string so violation is caught
+                              if not max_sdk:
+                                  perm_max_sdk[name] = ""
+                          else:
+                              perm_max_sdk[name] = max_sdk
+                          perms.append(f"{name}" + (f" (maxSdkVersion={max_sdk})" if max_sdk else ""))
 
           if not perms and aapt2_bin and apk_path:
               try:
                   dump_perms = subprocess.check_output([aapt2_bin, "dump", "permissions", apk_path], text=True)
                   for line in dump_perms.splitlines():
                       if line.startswith("uses-permission:"):
-                          perms.append(line)
+                          m_name = re.search(r"name='([^']+)'", line)
+                          m_max = re.search(r"maxSdkVersion='?(\d+)'?", line)
+                          if m_name:
+                              p_name = m_name.group(1)
+                              p_max = m_max.group(1) if m_max else ""
+                              perm_max_sdk[p_name] = p_max
+                              perms.append(f"{p_name}" + (f" (maxSdkVersion={p_max})" if p_max else ""))
+                          else:
+                              perms.append(line)
               except Exception as exc:
                   print(f"aapt2 permissions warning: {exc}", file=sys.stderr)
+
+          forbidden_permissions = [
+              "android.permission.MANAGE_EXTERNAL_STORAGE",
+              "android.permission.READ_PHONE_STATE",
+              "android.permission.SYSTEM_ALERT_WINDOW",
+              "android.permission.DISABLE_KEYGUARD",
+              "android.permission.READ_EXTERNAL_STORAGE",
+              "android.permission.WRITE_EXTERNAL_STORAGE",
+              "android.permission.READ_MEDIA_IMAGES",
+              "android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+          ]
+
+          violations = []
+          for bad_perm in forbidden_permissions:
+              if bad_perm in perm_max_sdk or any(bad_perm in p for p in perms):
+                  violations.append(f"Forbidden permission present in merged manifest: {bad_perm}")
+
+          exact_alarm_perm = "android.permission.SCHEDULE_EXACT_ALARM"
+          if exact_alarm_perm not in perm_max_sdk:
+              violations.append("SCHEDULE_EXACT_ALARM is missing from merged manifest (must be present with maxSdkVersion=32).")
+          elif perm_max_sdk.get(exact_alarm_perm) != "32":
+              violations.append(
+                  f"SCHEDULE_EXACT_ALARM must have android:maxSdkVersion='32', but found maxSdkVersion='{perm_max_sdk.get(exact_alarm_perm) or 'none'}'."
+              )
 
           print(f"APP_LABEL={app_label}")
           print(f"TARGET_SDK={target_sdk}")
@@ -611,6 +685,10 @@ jobs:
           for p in sorted(set(perms)):
               print(f"- \`{p}\`")
           print("PERMS_END")
+          print("VIOLATIONS_START")
+          for v in violations:
+              print(v)
+          print("VIOLATIONS_END")
           PY
           )
 
@@ -621,6 +699,7 @@ jobs:
           MANIFEST_VNAME=$(echo "$MANIFEST_REPORT" | sed -n 's/^MANIFEST_VNAME=//p' | head -n 1)
           APP_LABEL=$(echo "$MANIFEST_REPORT" | sed -n 's/^APP_LABEL=//p' | head -n 1)
           PERMS_LIST=$(echo "$MANIFEST_REPORT" | awk '/^PERMS_START$/{flag=1;next}/^PERMS_END$/{flag=0}flag')
+          MANIFEST_VIOLATIONS=$(echo "$MANIFEST_REPORT" | awk '/^VIOLATIONS_START$/{flag=1;next}/^VIOLATIONS_END$/{flag=0}flag')
 
           RSA_STATUS="موجود"
           if [ "$STORE_TARGET" = "bazaar" ] && [ "$HAS_BAZAAR_RSA" != "true" ]; then
@@ -666,3 +745,19 @@ jobs:
             echo "#### فهرست مجوزهای مانیفست نهایی (${STORE_TARGET})"
             echo "${PERMS_LIST}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ -n "$MANIFEST_VIOLATIONS" ]; then
+            {
+              echo ""
+              echo "#### ❌ خطای اعتبارسنجی مجوزهای مانیفست (${STORE_TARGET})"
+              echo "\`\`\`text"
+              echo "${MANIFEST_VIOLATIONS}"
+              echo "\`\`\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            while IFS= read -r vline; do
+              if [ -n "$vline" ]; then
+                echo "::error::${vline}"
+              fi
+            done <<< "$MANIFEST_VIOLATIONS"
+            exit 1
+          fi

@@ -74,6 +74,7 @@ export interface LocationGeofenceConfig {
   address?: string;
   lastTriggeredAt?: number;
   hasTriggered?: boolean;
+  disabledByTrialExpiry?: boolean;
 }
 
 export interface LocationCheckpointConfig {
@@ -84,6 +85,7 @@ export interface LocationCheckpointConfig {
   playAudio?: boolean;
   lastTriggeredAt?: number;
   hasTriggered?: boolean;
+  disabledByTrialExpiry?: boolean;
 }
 
 export interface SavedLocation {

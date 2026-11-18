@@ -424,7 +424,72 @@ const legacyBuildFlagsV5 = `        val isSilentChannel = channelId == "yaad_cha
             }
         }`;
 
-const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
+const legacyBuildFlagsV6 = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent"
+        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        // Hide duplicate Android header timestamp because notification body already displays the reminder time
+        mBuilder.setShowWhen(false)
+        // Make notification subject (title) font distinctly larger and bolder than the rest of the notification text
+        try {
+            val rawTitle = localNotification.title ?: ""
+            if (rawTitle.isNotEmpty()) {
+                val styledTitle = android.text.SpannableString(rawTitle)
+                styledTitle.setSpan(
+                    android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                    0,
+                    rawTitle.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                styledTitle.setSpan(
+                    android.text.style.RelativeSizeSpan(1.22f),
+                    0,
+                    rawTitle.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                mBuilder.setContentTitle(styledTitle)
+                val rawBody = localNotification.body ?: ""
+                if (rawBody.isNotEmpty()) {
+                    val styledBody = android.text.SpannableString(rawBody)
+                    styledBody.setSpan(
+                        android.text.style.RelativeSizeSpan(0.92f),
+                        0,
+                        rawBody.length,
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                    mBuilder.setContentText(styledBody)
+                    mBuilder.setStyle(
+                        NotificationCompat.BigTextStyle()
+                            .setBigContentTitle(styledTitle)
+                            .bigText(styledBody)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+        }
+        // Do NOT call setSilent(true) so the notification remains pinned at the TOP of the dropdown shade (Alerting section) after 1 minute
+        if (isSilentChannel) {
+            mBuilder.setOnlyAlertOnce(true)
+            mBuilder.setDefaults(0)
+            mBuilder.setSound(null)
+        } else {
+            mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
+        }
+        if (localNotification.ongoing) {
+            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
+            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
+            mBuilder.setSortKey("0000_yaad_pinned")
+        }
+
+        // Only set SmallIcon using transparent ic_stat_notification drawable; NEVER set LargeIcon
+        // so there is only ONE transparent app logo and no second left logo with a white background
+        val notifIconResId = context.resources.getIdentifier("ic_stat_notification", "drawable", context.packageName)
+        if (notifIconResId != 0) {
+            mBuilder.setSmallIcon(notifIconResId)
+        } else {
+            mBuilder.setSmallIcon(localNotification.resolveSmallIcon(context, getDefaultSmallIcon(context)))
+        }
+        mBuilder.setLargeIcon(null as android.graphics.Bitmap?)`;
+
+const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent" || channelId == "yaad_channel_v3_trial_info"
         mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         // Hide duplicate Android header timestamp because notification body already displays the reminder time
         mBuilder.setShowWhen(false)
@@ -495,8 +560,8 @@ managerContent = applyPatchOrVerify(
   'buildNotification visibility, category, priority, single transparent app icon, distinct title font, and top-pinned silent channel handling',
   origBuildFlags,
   patchedBuildFlags,
-  'mBuilder.setLargeIcon(null as android.graphics.Bitmap?)',
-  [legacyBuildFlagsV4, legacyBuildFlagsV5]
+  'val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent" || channelId == "yaad_channel_v3_trial_info"',
+  [legacyBuildFlagsV6, legacyBuildFlagsV4, legacyBuildFlagsV5]
 );
 
 const origBuildNotif = `        createActionIntents(localNotification, mBuilder)
@@ -1131,7 +1196,7 @@ const origSetExactIfPossible = `        if (useExact) {
             }
         }`;
 
-const patchedSetExactIfPossible = `        if (useExact) {
+const legacySetExactIfPossibleV1 = `        if (useExact) {
             try {
                 val reqId = localNotification.id ?: 0
                 val showIntent = Intent(context, YaadAlarmPopupActivity::class.java).apply {
@@ -1156,13 +1221,43 @@ const patchedSetExactIfPossible = `        if (useExact) {
             alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pendingIntent)
         }`;
 
+const patchedSetExactIfPossible = `        val isPersistentAlarm = (localNotification.ongoing || !localNotification.autoCancel) &&
+            localNotification.channelId != "yaad_channel_v3_trial_info"
+        if (useExact && isPersistentAlarm) {
+            try {
+                val reqId = localNotification.id ?: 0
+                val showIntent = Intent(context, YaadAlarmPopupActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+                    putExtra(NOTIFICATION_INTENT_KEY, reqId)
+                    putExtra(NOTIFICATION_OBJ_INTENT_KEY, localNotification.source)
+                    putExtra("yaad_wake_screen_once", true)
+                }
+                var showFlags = PendingIntent.FLAG_UPDATE_CURRENT
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    showFlags = showFlags or PendingIntent.FLAG_IMMUTABLE
+                }
+                val showPi = PendingIntent.getActivity(context, reqId + 800000, showIntent, showFlags)
+                alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(trigger, showPi), pendingIntent)
+            } catch (e: Exception) {
+                alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pendingIntent)
+            }
+        } else if (useExact) {
+            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pendingIntent)
+        } else {
+            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pendingIntent)
+        }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
   'setExactIfPossible AlarmManager.setAlarmClock for <2s wake from Doze & Killed state',
   origSetExactIfPossible,
   patchedSetExactIfPossible,
-  'alarmManager.setAlarmClock(AlarmManager.AlarmClockInfo(trigger, showPi), pendingIntent)'
+  'val isPersistentAlarm = (localNotification.ongoing || !localNotification.autoCancel)',
+  [legacySetExactIfPossibleV1]
 );
 
 if (managerContent.includes('private const val DEFAULT_PRESS_ACTION = "tap"')) {

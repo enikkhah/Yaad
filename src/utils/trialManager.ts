@@ -11,6 +11,8 @@ const TRIAL_STORAGE_KEY = 'yaad_trial_state_v1';
 const TRIAL_BANNER_DISMISSED_KEY = 'yaad_trial_banner_dismissed_v1';
 const TRIAL_DATA_FILE_PATH = 'YAAD/yaad_trial_v1.json';
 
+export const TRIAL_INFO_CHANNEL_ID = 'yaad_channel_v3_trial_info';
+
 export const TRIAL_NOTIFICATION_IDS = {
   DAY_30: 750000030,
   DAY_37: 750000037,
@@ -325,6 +327,17 @@ export async function scheduleTrialMilestoneNotifications(
     }
 
     if (futureOnes.length > 0) {
+      await LocalNotifications.createChannel({
+        id: TRIAL_INFO_CHANNEL_ID,
+        name: isFa ? 'اطلاع‌رسانی دوره هدیه و اشتراک (آرام)' : 'Trial & Subscription Updates (Quiet)',
+        description: isFa
+          ? 'اعلان‌های آرام اطلاع‌رسانی وضعیت دوره ۴۰ روزه بدون صدای زنگ یا لرزش'
+          : 'Quiet informational notifications for your 40-day trial status',
+        importance: 2, // 2 = IMPORTANCE_LOW (quiet informational notification, no beep or heads-up alarm)
+        visibility: 1,
+        vibration: false,
+      }).catch(() => {});
+
       await LocalNotifications.cancel({ notifications: futureOnes.map((m) => ({ id: m.id })) }).catch(() => {});
       await LocalNotifications.schedule({
         notifications: futureOnes.map((m) => ({
@@ -335,7 +348,9 @@ export async function scheduleTrialMilestoneNotifications(
             at: m.at,
             allowWhileIdle: true,
           },
-          channelId: 'yaad_channel_v3_digital_beep',
+          channelId: TRIAL_INFO_CHANNEL_ID,
+          ongoing: false,
+          autoCancel: true,
           extra: {
             openPro: true,
             trialMilestoneDay: m.day,

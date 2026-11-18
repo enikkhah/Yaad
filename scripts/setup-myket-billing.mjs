@@ -489,7 +489,13 @@ class MyketBillingPlugin : Plugin() {
         }
 
         val rsaPublicKey = call.getString("rsaPublicKey")?.trim()
-        val querySkus = if (productId.isNotEmpty()) listOf(productId) else emptyList()
+        val candidateSkus = LinkedHashSet<String>().apply {
+            if (productId.isNotEmpty()) add(productId)
+            add("yaad_pro_1y")
+            add("yaad_pro_1y_batch2")
+            add("yaad_pro_lifetime")
+            add("yaad_pro_lifetime_batch1")
+        }.toList()
         enqueueOperation { onDone ->
             ensureReady(
                 rsaPublicKey = rsaPublicKey,
@@ -497,7 +503,7 @@ class MyketBillingPlugin : Plugin() {
                     try {
                         helper.queryInventoryAsync(
                             false,
-                            querySkus,
+                            candidateSkus,
                             IabHelper.QueryInventoryFinishedListener { queryResult, inventory ->
                                 if (queryResult == null || queryResult.isFailure || inventory == null) {
                                     call.reject(
@@ -508,12 +514,17 @@ class MyketBillingPlugin : Plugin() {
                                     return@QueryInventoryFinishedListener
                                 }
 
-                                val targetPurchase: Purchase? =
-                                    (if (productId.isNotEmpty()) inventory.getPurchase(productId) else null)
-                                        ?: inventory.allPurchases?.firstOrNull { p ->
-                                            (purchaseToken.isNotEmpty() && p.token == purchaseToken) ||
-                                                (productId.isNotEmpty() && p.sku == productId)
+                                var targetPurchase: Purchase? =
+                                    if (productId.isNotEmpty()) inventory.getPurchase(productId) else null
+                                if (targetPurchase == null) {
+                                    for (sku in candidateSkus) {
+                                        val p = inventory.getPurchase(sku)
+                                        if (p != null && (purchaseToken.isEmpty() || p.token == purchaseToken)) {
+                                            targetPurchase = p
+                                            break
                                         }
+                                    }
+                                }
 
                                 if (targetPurchase == null) {
                                     val res = JSObject()

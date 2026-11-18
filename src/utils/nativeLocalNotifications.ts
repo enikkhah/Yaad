@@ -5,6 +5,7 @@ import { formatJalaliTime } from './jalali';
 import { resolveAlarmSound, stopAlarmRinging } from './audio';
 
 export const NOTIFICATION_CHANNEL_ID = 'yaad_reminders_channel_v3';
+export const TRIAL_INFO_CHANNEL_ID = 'yaad_channel_v3_trial_info';
 export const NOTIFICATION_ACTION_TYPE_ID = 'YAAD_REMINDER_ACTIONS';
 
 let isChannelInitialized = false;
@@ -120,6 +121,16 @@ export async function initNotificationChannel(): Promise<void> {
       importance: 5,
       visibility: 1,
       vibration: true,
+    });
+
+    // 2c. Quiet informational channel for 40-day Trial milestones (Day 30, 37, 40) — no alarm beep, no vibration, low/default importance
+    await LocalNotifications.createChannel({
+      id: TRIAL_INFO_CHANNEL_ID,
+      name: 'اطلاع‌رسانی دوره هدیه و اشتراک (آرام)',
+      description: 'اعلان‌های آرام اطلاع‌رسانی وضعیت دوره ۴۰ روزه بدون صدای زنگ یا لرزش',
+      importance: 2, // 2 = IMPORTANCE_LOW (quiet informational notification, no beep or heads-up alarm)
+      visibility: 1,
+      vibration: false,
     });
 
     // 3. Channels for all 12 sound types (with and without vibration) so Android notification manager plays the exact selected melody & vibration state
