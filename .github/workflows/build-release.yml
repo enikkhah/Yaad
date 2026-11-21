@@ -487,10 +487,11 @@ jobs:
           V_NAME: ${{ steps.versioning.outputs.v_name }}
         run: |
           # Run release AAB + APK build using verified Gradle distribution with automatic retry on transient network timeouts
+          set -o pipefail
           BUILD_OK=0
           for attempt in 1 2 3; do
             echo "Running Gradle bundleRelease assembleRelease for ${STORE_TARGET} (attempt $attempt/3)..."
-            if ./gradlew bundleRelease assembleRelease --no-daemon; then
+            if ./gradlew bundleRelease assembleRelease --no-daemon 2>&1 | tee /tmp/gradle-build.log; then
               BUILD_OK=1
               break
             fi
@@ -498,6 +499,12 @@ jobs:
             sleep 5
           done
           if [ "$BUILD_OK" -ne 1 ]; then
+            ERR_LINES=$(grep -E '^e: |FAILURE:|Execution failed for task|\* What went wrong:' /tmp/gradle-build.log | head -n 10 || true)
+            if [ -n "$ERR_LINES" ]; then
+              while IFS= read -r eline; do
+                [ -n "$eline" ] && echo "::error::${eline}"
+              done <<< "$ERR_LINES"
+            fi
             echo "::error::Gradle release build failed after 3 attempts."
             exit 1
           fi

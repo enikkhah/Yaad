@@ -489,13 +489,13 @@ class MyketBillingPlugin : Plugin() {
         }
 
         val rsaPublicKey = call.getString("rsaPublicKey")?.trim()
-        val candidateSkus = LinkedHashSet<String>().apply {
+        val candidateSkus = mutableListOf<String>().apply {
             if (productId.isNotEmpty()) add(productId)
             add("yaad_pro_1y")
             add("yaad_pro_1y_batch2")
             add("yaad_pro_lifetime")
             add("yaad_pro_lifetime_batch1")
-        }.toList()
+        }.distinct()
         enqueueOperation { onDone ->
             ensureReady(
                 rsaPublicKey = rsaPublicKey,
@@ -514,19 +514,14 @@ class MyketBillingPlugin : Plugin() {
                                     return@QueryInventoryFinishedListener
                                 }
 
-                                var targetPurchase: Purchase? =
-                                    if (productId.isNotEmpty()) inventory.getPurchase(productId) else null
-                                if (targetPurchase == null) {
-                                    for (sku in candidateSkus) {
-                                        val p = inventory.getPurchase(sku)
-                                        if (p != null && (purchaseToken.isEmpty() || p.token == purchaseToken)) {
-                                            targetPurchase = p
-                                            break
-                                        }
-                                    }
-                                }
+                                val resolvedPurchase: Purchase? =
+                                    (if (productId.isNotEmpty()) inventory.getPurchase(productId) else null)
+                                        ?: candidateSkus
+                                            .asSequence()
+                                            .mapNotNull { sku -> inventory.getPurchase(sku) }
+                                            .firstOrNull { p -> purchaseToken.isEmpty() || p.token == purchaseToken }
 
-                                if (targetPurchase == null) {
+                                if (resolvedPurchase == null) {
                                     val res = JSObject()
                                     res.put("consumed", true)
                                     res.put("alreadyConsumed", true)
@@ -537,14 +532,15 @@ class MyketBillingPlugin : Plugin() {
 
                                 try {
                                     helper.consumeAsync(
-                                        targetPurchase,
-                                        IabHelper.OnConsumeFinishedListener { _, consumeRes ->
+                                        resolvedPurchase,
+                                        IabHelper.OnConsumeFinishedListener { consumedPurchase, consumeRes ->
                                             try {
                                                 if (consumeRes != null && consumeRes.isSuccess) {
+                                                    val finalPurchase = consumedPurchase ?: resolvedPurchase
                                                     val res = JSObject()
                                                     res.put("consumed", true)
-                                                    res.put("purchaseToken", targetPurchase.token ?: purchaseToken)
-                                                    res.put("productId", targetPurchase.sku ?: productId)
+                                                    res.put("purchaseToken", finalPurchase.token ?: purchaseToken)
+                                                    res.put("productId", finalPurchase.sku ?: productId)
                                                     call.resolve(res)
                                                 } else {
                                                     call.reject(
