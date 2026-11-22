@@ -117,16 +117,18 @@ export const TwoStageFeedbackModal: React.FC = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.2 }}
+          transition={{ duration: 0.16, ease: 'easeOut' }}
           onClick={handleDismiss}
-          className="fixed inset-0 z-[120] bg-black/75 backdrop-blur-md flex items-center justify-center p-4 select-none"
+          className="fixed inset-0 z-[120] bg-black/75 flex items-center justify-center p-4 select-none"
+          style={{ willChange: 'opacity' }}
           dir="rtl"
         >
           <motion.div
-            initial={{ scale: 0.93, y: 16, opacity: 0 }}
-            animate={{ scale: 1, y: 0, opacity: 1 }}
-            exit={{ scale: 0.93, y: 16, opacity: 0 }}
-            transition={{ type: 'spring', damping: 25, stiffness: 330 }}
+            initial={{ opacity: 0, y: 12, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.97 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{ willChange: 'transform, opacity' }}
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"

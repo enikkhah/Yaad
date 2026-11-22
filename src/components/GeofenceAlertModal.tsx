@@ -523,8 +523,9 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0, pointerEvents: 'none' }}
-          transition={{ duration: 0.15 }}
-          className="fixed inset-0 z-[110] bg-black/85 backdrop-blur-md flex items-center justify-center px-1.5 py-2 sm:p-4 select-none overflow-y-auto"
+          transition={{ duration: 0.16, ease: 'easeOut' }}
+          className="fixed inset-0 z-[110] bg-black/85 flex items-center justify-center px-1.5 py-2 sm:p-4 select-none overflow-y-auto"
+          style={{ willChange: 'opacity' }}
           dir={isEn ? 'ltr' : 'rtl'}
         >
           {!isMultiMode ? (
@@ -538,10 +539,11 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
                ===================================================================== */
             <motion.div
               key={primaryItem.id}
-              initial={{ scale: 0.94, y: 14, opacity: 0 }}
-              animate={{ scale: 1, y: 0, opacity: 1 }}
-              exit={{ scale: 0.94, y: 14, opacity: 0 }}
-              transition={{ type: 'spring', damping: 26, stiffness: 340 }}
+              initial={{ opacity: 0, y: 12, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.97 }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              style={{ willChange: 'transform, opacity' }}
               onClick={(e) => e.stopPropagation()}
               className="w-full max-w-md rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden px-1.5 py-2 sm:p-4 flex flex-col items-center text-center space-y-1.5"
             >
@@ -700,9 +702,11 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
              MULTI-GEOFENCE CONCISE STACKED CARDS (N >= 2 SIMULTANEOUS ALERTS)
              ===================================================================== */
           <motion.div
-            initial={{ scale: 0.95, y: 14, opacity: 0 }}
-            animate={{ scale: 1, y: 0, opacity: 1 }}
-            exit={{ scale: 0.95, y: 14, opacity: 0 }}
+            initial={{ opacity: 0, y: 12, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 10, scale: 0.97 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{ willChange: 'transform, opacity' }}
             onClick={(e) => e.stopPropagation()}
             className="w-full max-w-lg max-h-[92vh] flex flex-col rounded-3xl border-2 border-emerald-400/90 bg-gradient-to-b from-[#042621] via-[#031D19] to-[#021512] shadow-[0_0_50px_rgba(16,185,129,0.35)] overflow-hidden p-4 space-y-3"
           >

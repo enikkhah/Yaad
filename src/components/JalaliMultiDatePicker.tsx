@@ -6,15 +6,16 @@ import {
   getJalaliWeekdayIndex,
   getJalaliComponents,
   GREGORIAN_MONTHS,
+  GREGORIAN_MONTHS_SHORT,
   getDaysInGregorianMonth,
   getGregorianComponents,
   JALALI_WEEKDAYS_HEADER,
-  GREGORIAN_WEEKDAYS_MONDAY_FIRST,
-  getGregorianMondayWeekdayIndex,
+  GREGORIAN_WEEKDAYS_SUNDAY_FIRST,
+  getGregorianSundayWeekdayIndex,
   getCalendarDayHolidayInfo,
   getMonthOfficialHolidays,
 } from '../utils/jalali';
-import { ChevronRight, ChevronLeft, Calendar as CalendarIcon, X, RotateCcw } from 'lucide-react';
+import { ChevronRight, ChevronLeft, X, RotateCcw } from 'lucide-react';
 
 interface JalaliMultiDatePickerProps {
   selectedDates: string[]; // array of "YYYY/MM/DD"
@@ -42,15 +43,50 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
     baseMonth || (isEn ? currentGregorian.month : currentJalali.month)
   );
 
-  const daysInMonth = isEn
-    ? getDaysInGregorianMonth(viewYear, viewMonth)
-    : getDaysInJalaliMonth(viewYear, viewMonth);
+  const getDaysInMonth = (y: number, m: number) =>
+    isEn ? getDaysInGregorianMonth(y, m) : getDaysInJalaliMonth(y, m);
 
-  // In English: 0=Monday ... 5=Saturday, 6=Sunday
-  // In Persian: 0=Saturday (شنبه) ... 5=Thursday (پنج‌شنبه), 6=Friday (جمعه)
+  const daysInMonth = getDaysInMonth(viewYear, viewMonth);
+
+  // In English: Sunday-first (0=Sunday ... 6=Saturday)
+  // In Persian: Saturday-first (0=Saturday ... 6=Friday)
   const startWeekday = isEn
-    ? getGregorianMondayWeekdayIndex(viewYear, viewMonth, 1)
+    ? getGregorianSundayWeekdayIndex(viewYear, viewMonth, 1)
     : getJalaliWeekdayIndex(viewYear, viewMonth, 1);
+
+  const prevMonth = viewMonth === 1 ? 12 : viewMonth - 1;
+  const prevMonthYear = viewMonth === 1 ? viewYear - 1 : viewYear;
+  const daysInPrevMonth = getDaysInMonth(prevMonthYear, prevMonth);
+
+  const nextMonth = viewMonth === 12 ? 1 : viewMonth + 1;
+  const nextMonthYear = viewMonth === 12 ? viewYear + 1 : viewYear;
+
+  const cells: Array<{ year: number; month: number; day: number; isCurrentMonth: boolean }> = [];
+  for (let i = startWeekday - 1; i >= 0; i--) {
+    cells.push({
+      year: prevMonthYear,
+      month: prevMonth,
+      day: daysInPrevMonth - i,
+      isCurrentMonth: false,
+    });
+  }
+  for (let d = 1; d <= daysInMonth; d++) {
+    cells.push({
+      year: viewYear,
+      month: viewMonth,
+      day: d,
+      isCurrentMonth: true,
+    });
+  }
+  const trailingCount = 42 - cells.length;
+  for (let d = 1; d <= trailingCount; d++) {
+    cells.push({
+      year: nextMonthYear,
+      month: nextMonth,
+      day: d,
+      isCurrentMonth: false,
+    });
+  }
 
   const monthHolidays = getMonthOfficialHolidays(viewYear, viewMonth, language);
 
@@ -79,10 +115,14 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
     return `${y}/${mm}/${dd}`;
   };
 
-  const toggleDay = (day: number) => {
-    const dateStr = formatDateStr(viewYear, viewMonth, day);
+  const toggleDate = (y: number, m: number, d: number, isCurrentMonth: boolean) => {
+    if (!isCurrentMonth) {
+      setViewYear(y);
+      setViewMonth(m);
+    }
+    const dateStr = formatDateStr(y, m, d);
     if (selectedDates.includes(dateStr)) {
-      onChange(selectedDates.filter((d) => d !== dateStr));
+      onChange(selectedDates.filter((item) => item !== dateStr));
     } else {
       onChange([...selectedDates, dateStr].sort());
     }
@@ -129,145 +169,134 @@ export const JalaliMultiDatePicker: React.FC<JalaliMultiDatePickerProps> = ({
   };
 
   return (
-    <div className="bg-stone-950/95 border border-stone-800 rounded-2xl p-3 sm:p-4 space-y-3" dir={isEn ? 'ltr' : 'rtl'}>
-      {/* Calendar Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <CalendarIcon className="w-4 h-4 text-indigo-400" />
-          <span className="font-extrabold text-sm text-stone-200">
-            {isEn
-              ? `${GREGORIAN_MONTHS[viewMonth - 1]} ${viewYear}`
-              : `${PERSIAN_MONTHS[viewMonth - 1]} ${toPersianDigits(viewYear)}`}
-          </span>
-        </div>
+    <div className="bg-stone-950/90 border border-stone-800 rounded-2xl p-3 sm:p-4 space-y-3" dir={isEn ? 'ltr' : 'rtl'}>
+      {/* Calendar Header: < Month Year > */}
+      <div className="flex items-center justify-between pt-0.5 px-1">
+        <button
+          type="button"
+          onClick={handlePrevMonth}
+          className="w-9 h-9 rounded-full flex items-center justify-center text-stone-200 hover:bg-stone-800 hover:text-white transition-all cursor-pointer active:scale-90"
+          title={isEn ? 'Previous month' : 'ماه قبل'}
+        >
+          {isEn ? <ChevronLeft className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+        </button>
 
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handlePrevMonth}
-            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-indigo-400 border border-stone-800 transition-colors cursor-pointer"
-            title={isEn ? 'Previous month' : 'ماه قبل'}
-          >
-            {isEn ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-          </button>
-          <button
-            type="button"
-            onClick={handleNextMonth}
-            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 text-stone-300 hover:text-indigo-400 border border-stone-800 transition-colors cursor-pointer"
-            title={isEn ? 'Next month' : 'ماه بعد'}
-          >
-            {isEn ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-          </button>
-        </div>
+        <span className="font-black text-sm sm:text-base text-stone-100">
+          {isEn
+            ? `${GREGORIAN_MONTHS[viewMonth - 1]} ${viewYear}`
+            : `${PERSIAN_MONTHS[viewMonth - 1]} ${toPersianDigits(viewYear)}`}
+        </span>
+
+        <button
+          type="button"
+          onClick={handleNextMonth}
+          className="w-9 h-9 rounded-full flex items-center justify-center text-stone-200 hover:bg-stone-800 hover:text-white transition-all cursor-pointer active:scale-90"
+          title={isEn ? 'Next month' : 'ماه بعد'}
+        >
+          {isEn ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+        </button>
       </div>
 
-      {/* Row 1: Weekday headers (Saturday-first in FA, Monday-first in EN) */}
-      <div className="grid grid-cols-7 gap-1 text-center border-b border-stone-800 pb-2 pt-0.5">
-        {(isEn ? GREGORIAN_WEEKDAYS_MONDAY_FIRST : JALALI_WEEKDAYS_HEADER).map((w) => (
+      {/* Weekday headers (Sunday-first in EN, Saturday-first in FA) */}
+      <div className="grid grid-cols-7 text-center pb-1">
+        {(isEn ? GREGORIAN_WEEKDAYS_SUNDAY_FIRST : JALALI_WEEKDAYS_HEADER).map((w) => (
           <div
             key={w.index}
-            className={`py-1 rounded-lg text-[11px] sm:text-xs font-extrabold ${
+            className={`py-1 text-[10px] sm:text-[11px] font-bold tracking-wider ${
               w.isWeekend
-                ? 'text-rose-400 bg-rose-500/10 border border-rose-500/25'
-                : 'text-stone-300 bg-stone-900/70 border border-stone-800/70'
+                ? isEn
+                  ? 'text-indigo-400'
+                  : 'text-rose-400'
+                : 'text-stone-400'
             }`}
             title={w.full}
           >
-            {w.label}
+            {w.short}
           </div>
         ))}
       </div>
 
-      {/* Days Grid */}
-      <div className="grid grid-cols-7 gap-1">
-        {/* Leading empty slots */}
-        {Array.from({ length: startWeekday }).map((_, i) => (
-          <div key={`empty-${i}`} className="h-8 sm:h-9 rounded-xl bg-stone-900/20 border border-stone-900/40" />
-        ))}
-
-        {/* Days of current month */}
-        {Array.from({ length: daysInMonth }).map((_, i) => {
-          const day = i + 1;
-          const dateStr = formatDateStr(viewYear, viewMonth, day);
+      {/* 42-Cell Continuous Circular Day Grid */}
+      <div className="grid grid-cols-7 gap-y-1 text-center">
+        {cells.map((cell) => {
+          const dateStr = formatDateStr(cell.year, cell.month, cell.day);
           const isSelected = selectedDates.includes(dateStr);
           const isToday = isEn
-            ? viewYear === currentGregorian.year &&
-              viewMonth === currentGregorian.month &&
-              day === currentGregorian.day
-            : viewYear === currentJalali.year &&
-              viewMonth === currentJalali.month &&
-              day === currentJalali.day;
+            ? cell.year === currentGregorian.year &&
+              cell.month === currentGregorian.month &&
+              cell.day === currentGregorian.day
+            : cell.year === currentJalali.year &&
+              cell.month === currentJalali.month &&
+              cell.day === currentJalali.day;
 
-          const holidayInfo = getCalendarDayHolidayInfo(viewYear, viewMonth, day, language);
+          const holidayInfo = getCalendarDayHolidayInfo(cell.year, cell.month, cell.day, language);
+
+          let cellColorClass = '';
+          if (isSelected) {
+            cellColorClass = 'bg-indigo-600 text-white font-black shadow-md';
+          } else if (!cell.isCurrentMonth) {
+            if (holidayInfo.isWeekend) {
+              cellColorClass = isEn ? 'text-indigo-400/40' : 'text-rose-400/40';
+            } else {
+              cellColorClass = 'text-stone-500/55';
+            }
+          } else if (isToday) {
+            cellColorClass = 'ring-1.5 ring-indigo-400/80 text-indigo-300 font-black hover:bg-stone-800/80';
+          } else if (holidayInfo.isOfficialHoliday) {
+            cellColorClass = 'text-rose-400 font-black hover:bg-stone-800/80';
+          } else if (holidayInfo.isWeekend) {
+            cellColorClass = isEn
+              ? 'text-indigo-400 font-semibold hover:bg-stone-800/80'
+              : 'text-rose-400 font-semibold hover:bg-stone-800/80';
+          } else {
+            cellColorClass = 'text-stone-100 font-medium hover:bg-stone-800/80';
+          }
 
           return (
-            <button
-              key={day}
-              type="button"
-              onClick={() => toggleDay(day)}
-              title={
-                holidayInfo.occasionTitle
-                  ? `${isEn ? 'Official Holiday:' : 'تعطیل رسمی:'} ${holidayInfo.occasionTitle}`
-                  : holidayInfo.isWeekend
-                  ? (isEn ? 'Weekend' : 'تعطیل آخر هفته')
-                  : undefined
-              }
-              className={`h-8 sm:h-9 rounded-xl flex flex-col items-center justify-center font-mono font-bold text-xs sm:text-sm transition-all relative active:scale-95 cursor-pointer border ${
-                isSelected
-                  ? 'bg-indigo-600 border-indigo-400 text-white font-black shadow-md shadow-indigo-600/30 ring-2 ring-indigo-400'
-                  : isToday
-                  ? 'border-indigo-400/80 text-indigo-300 bg-indigo-500/15 hover:bg-indigo-500/25'
-                  : holidayInfo.isOfficialHoliday
-                  ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 hover:bg-rose-500/30 font-black'
-                  : holidayInfo.isWeekend
-                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20'
-                  : 'bg-stone-900/80 border-stone-800/80 text-stone-300 hover:bg-stone-800 hover:text-white'
-              }`}
-            >
-              <span>{isEn ? day : toPersianDigits(day)}</span>
-              {holidayInfo.isOfficialHoliday && !isSelected && (
-                <span className="w-1 h-1 rounded-full bg-rose-400 mt-0.5" />
-              )}
-              {isSelected && (
-                <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-white" />
-              )}
-            </button>
+            <div key={`${cell.year}-${cell.month}-${cell.day}`} className="flex items-center justify-center py-0.5">
+              <button
+                type="button"
+                onClick={() => toggleDate(cell.year, cell.month, cell.day, cell.isCurrentMonth)}
+                title={
+                  holidayInfo.occasionTitle
+                    ? `${isEn ? 'Official Holiday:' : 'تعطیل رسمی:'} ${holidayInfo.occasionTitle}`
+                    : holidayInfo.isWeekend
+                    ? isEn
+                      ? 'Weekend'
+                      : 'تعطیل آخر هفته'
+                    : undefined
+                }
+                className={`w-9 h-9 sm:w-10 sm:h-10 rounded-full flex flex-col items-center justify-center text-xs sm:text-sm transition-all relative active:scale-90 cursor-pointer ${cellColorClass}`}
+              >
+                <span className="leading-none">{isEn ? cell.day : toPersianDigits(cell.day)}</span>
+                {holidayInfo.isOfficialHoliday && cell.isCurrentMonth && !isSelected && (
+                  <span className="w-1 h-1 rounded-full bg-rose-400 mt-0.5" />
+                )}
+              </button>
+            </div>
           );
         })}
       </div>
 
-      {/* Official Occasion Holidays Legend & Monthly List */}
-      <div className="pt-1.5 border-t border-stone-800/80 space-y-1.5">
-        <div className="flex items-center justify-between flex-wrap gap-2 text-[10px] text-stone-400">
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1 text-rose-400 font-bold">
-              <span className="w-2 h-2 rounded-sm bg-rose-500/30 border border-rose-500/60" />
-              {isEn ? 'Weekend (Sat & Sun)' : 'تعطیل آخر هفته (پنج‌شنبه و جمعه)'}
-            </span>
-            <span className="inline-flex items-center gap-1 text-rose-300 font-bold">
-              <span className="w-2 h-2 rounded-full bg-rose-400" />
-              {isEn ? 'Official Holiday' : 'تعطیل رسمی مناسبتی'}
-            </span>
-          </div>
-        </div>
-
-        {monthHolidays.length > 0 && (
-          <div className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/25 text-[11px] text-rose-200 leading-relaxed">
+      {/* Official Occasion Holidays Monthly List */}
+      {monthHolidays.length > 0 && (
+        <div className="pt-2 border-t border-stone-800/80">
+          <div className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-200 leading-relaxed">
             <span className="font-black text-rose-300">
-              {isEn ? 'Official Holidays this month: ' : 'تعطیلات مناسبتی این ماه: '}
+              {isEn ? 'Official Holidays: ' : 'تعطیلات رسمی این ماه: '}
             </span>
             <span>
               {monthHolidays
                 .map((h) =>
                   isEn
-                    ? `${GREGORIAN_MONTHS[viewMonth - 1]} ${h.day} (${h.title})`
+                    ? `${GREGORIAN_MONTHS_SHORT[viewMonth - 1]} ${h.day} (${h.title})`
                     : `${toPersianDigits(h.day)} ${PERSIAN_MONTHS[viewMonth - 1]} (${h.title})`
                 )
                 .join(isEn ? ' • ' : ' ، ')}
             </span>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Quick selection presets */}
       <div className="flex items-center justify-between flex-wrap gap-2 pt-2 border-t border-stone-800/80 text-xs">

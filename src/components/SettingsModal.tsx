@@ -33,8 +33,6 @@ import {
   Maximize2,
   Download,
   Upload,
-  BellRing,
-  AlertTriangle,
   BatteryCharging,
   Crown,
   Gift
@@ -63,6 +61,8 @@ import {
   requestLocalFolderPermission,
   requestAllNativePermissions,
   checkAllPermissionsStatus,
+  disablePermissionLocally,
+  ToggleablePermissionType,
   hasBackgroundLocationPermission,
   hasExactAlarmPermission,
   hasFullScreenIntentPermission,
@@ -112,7 +112,6 @@ interface SettingsModalProps {
   onRestoreItem?: (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => void;
   onPermanentDeleteItem?: (id: string, type: 'reminder' | 'location' | 'occasion' | 'idea') => void;
   onEmptyRecycleBin?: () => void;
-  onScheduleTestAlarm?: () => Promise<boolean | void> | void;
   proEntitlement?: ProEntitlementState;
   onOpenProPaywall?: (feature?: ProFeatureId) => void;
   onEntitlementUpdated?: (next: ProEntitlementState) => void;
@@ -137,7 +136,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onRestoreItem,
   onPermanentDeleteItem,
   onEmptyRecycleBin,
-  onScheduleTestAlarm,
   proEntitlement,
   onOpenProPaywall,
   onEntitlementUpdated,
@@ -151,8 +149,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const [playingSoundId, setPlayingSoundId] = useState<PhoneAlarmSound | null>(null);
   const soundTimeoutRef = useRef<number | null>(null);
-  const [testAlarmFeedback, setTestAlarmFeedback] = useState<{ type: 'success' | 'warning'; text: string } | null>(null);
-  const [isSchedulingTestAlarm, setIsSchedulingTestAlarm] = useState(false);
   const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isBackupBusy, setIsBackupBusy] = useState(false);
   const [importedRecoveryCode, setImportedRecoveryCode] = useState<string | null>(null);
@@ -335,6 +331,7 @@ https://myket.ir/app/com.yaad.reminder`;
   const [showStoragePermNotice, setShowStoragePermNotice] = useState(false);
   const [showBgLocationNotice, setShowBgLocationNotice] = useState(false);
   const [bgLocationNoticeDismissed, setBgLocationNoticeDismissed] = useState(false);
+  const [revokedPermNotice, setRevokedPermNotice] = useState<ToggleablePermissionType | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -396,6 +393,30 @@ https://myket.ir/app/com.yaad.reminder`;
       setNativePerms({ ...updated, fullScreenIntent: hasFullScreenIntentPermission() });
       return;
     }
+
+    const isCurrentlyOn = Boolean(nativePerms[type as keyof NativePermissionsStatus]);
+    if (isCurrentlyOn) {
+      await disablePermissionLocally(type as ToggleablePermissionType);
+      setNativePerms((prev) => ({
+        ...prev,
+        [type]: false,
+        ...(type === 'location' ? { backgroundLocation: false } : {}),
+      }));
+      if (type === 'location') {
+        setShowBgLocationNotice(false);
+        setGeofenceTrackingEnabled(false);
+        onToggleGeofenceActive?.(false);
+      }
+      if (type === 'storage') {
+        setShowStoragePermNotice(false);
+      }
+      if (isNativeAndroidApp() && type !== 'storage') {
+        setRevokedPermNotice(type as ToggleablePermissionType);
+      }
+      return;
+    }
+
+    setRevokedPermNotice(null);
     let granted = false;
     if (type === 'notifications') {
       granted = await requestNotificationPermission();
@@ -404,16 +425,10 @@ https://myket.ir/app/com.yaad.reminder`;
     } else if (type === 'camera') {
       granted = await requestCameraPermission();
     } else if (type === 'location') {
-      if (nativePerms.location && !nativePerms.backgroundLocation && isNativeAndroidApp()) {
-        setShowBgLocationNotice(true);
-        setBgLocationNoticeDismissed(false);
-        openAndroidSettings('background_location');
-        return;
-      }
       granted = await requestLocationPermission();
     } else if (type === 'storage') {
       if (isNativeAndroidApp()) return;
-      const res = await requestLocalFolderPermission(false);
+      const res = await requestLocalFolderPermission(true);
       granted = res.granted;
       if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
         onRestoreData(
@@ -560,15 +575,17 @@ https://myket.ir/app/com.yaad.reminder`;
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.22 }}
-          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/80 backdrop-blur-sm"
+          transition={{ duration: 0.16, ease: 'easeOut' }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/75"
+          style={{ willChange: 'opacity' }}
         >
           <motion.div
             id="settings-modal-panel"
-            initial={{ y: '100%', opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: '100%', opacity: 0 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            initial={{ opacity: 0, y: 16, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.985 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            style={{ willChange: 'transform, opacity' }}
             className="w-full max-w-xl bg-stone-900 border border-stone-800 rounded-3xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden"
           >
         {/* Header */}
@@ -701,7 +718,7 @@ https://myket.ir/app/com.yaad.reminder`;
           {/* ========================================================= */}
           {/* TOP LANGUAGE SWITCHER (کلید کشویی مینیمال در صدر صفحه تنظیمات) */}
           {/* ========================================================= */}
-          <div className="p-2.5 sm:p-3 rounded-2xl border border-stone-800/80 bg-stone-900/70 backdrop-blur-md flex items-center justify-between gap-3 shadow-xs">
+          <div className="p-2.5 sm:p-3 rounded-2xl border border-stone-800/80 bg-stone-900/90 flex items-center justify-between gap-3 shadow-xs">
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="w-8 h-8 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center text-indigo-400 shrink-0">
                 <Globe className="w-4 h-4" />
@@ -1077,77 +1094,6 @@ https://myket.ir/app/com.yaad.reminder`;
                   </div>
                 </div>
 
-                {/* 2.3 Test Alarm Trigger (1 Minute Reminder Verification) */}
-                {onScheduleTestAlarm && (
-                  <div className="p-3.5 rounded-2xl bg-stone-900/75 border border-indigo-500/35 space-y-2.5">
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                      <div className="flex items-start gap-2.5 min-w-0">
-                        <div className="p-2 rounded-xl bg-indigo-500/15 border border-indigo-500/35 text-indigo-400 shrink-0">
-                          <BellRing className="w-4 h-4" />
-                        </div>
-                        <div className="min-w-0">
-                          <span className="text-xs font-bold text-stone-100 block">
-                            {isFa ? 'بررسی عملکرد زنگ و اعلان در پس‌زمینه' : 'Test Background Alarm (1 Minute)'}
-                          </span>
-                          <span className="text-[11px] text-stone-400 block mt-0.5 leading-relaxed">
-                            {isFa
-                              ? 'یک یادآور واقعی برای ۱ دقیقه دیگر ثبت می‌کند تا با بستن اپ، به صدا درآمدن زنگ را تست کنید.'
-                              : 'Schedules a real 1-minute reminder so you can close the app and verify alarm delivery.'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        disabled={isSchedulingTestAlarm}
-                        onClick={async () => {
-                          setIsSchedulingTestAlarm(true);
-                          setTestAlarmFeedback(null);
-                          try {
-                            const updatedPerms = await checkAllPermissionsStatus();
-                            setNativePerms(updatedPerms);
-                            const ok = await onScheduleTestAlarm();
-                            if (ok === false) {
-                              setTestAlarmFeedback({
-                                type: 'warning',
-                                text: isFa
-                                  ? 'برای عملکرد دقیق تست آلارم، مجوز اعلان یا آلارم دقیق اندروید باید فعال شود.'
-                                  : 'Please enable notification and exact alarm permissions first.',
-                              });
-                            } else {
-                              setTestAlarmFeedback({
-                                type: 'success',
-                                text: isFa
-                                  ? 'یادآور تست برای ۱ دقیقه دیگر ثبت شد؛ می‌توانید اپ را ببندید و صبر کنید.'
-                                  : 'Test reminder scheduled for 1 minute from now. You can close the app to verify.',
-                              });
-                            }
-                          } finally {
-                            setIsSchedulingTestAlarm(false);
-                          }
-                        }}
-                        className="min-h-[44px] px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-black text-xs shadow-md shadow-indigo-950/40 active:scale-95 transition-all cursor-pointer shrink-0 flex items-center justify-center gap-1.5 disabled:opacity-60"
-                      >
-                        <BellRing className="w-3.5 h-3.5" />
-                        <span>{isFa ? 'تست آلارم' : 'Test Alarm'}</span>
-                      </button>
-                    </div>
-
-                    {testAlarmFeedback && (
-                      <div
-                        className={`p-2.5 rounded-xl text-[11px] font-bold flex items-center gap-2 ${
-                          testAlarmFeedback.type === 'success'
-                            ? 'bg-emerald-500/15 border border-emerald-500/40 text-emerald-300'
-                            : 'bg-amber-500/15 border border-amber-500/40 text-amber-300'
-                        }`}
-                      >
-                        <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                        <span>{testAlarmFeedback.text}</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
                 {/* 2.4 Battery Optimization Guide Card (Native Android — opens OS settings directly, no extra permission) */}
                 {isNativeAndroidApp() && (
                   <div className="p-3.5 rounded-2xl bg-stone-900/75 border border-amber-500/35 space-y-2.5">
@@ -1248,11 +1194,13 @@ https://myket.ir/app/com.yaad.reminder`;
 
             {openSections.permissions && (
               <div className="p-3 sm:p-4 space-y-3 animate-in fade-in">
-                {/* 3.1 وضعیت دسترسی‌ها توی یه ردیف فشرده (COMPACT PERMISSIONS ROW) */}
+                {/* 3.1 وضعیت دسترسی‌ها توی یه ردیف فشرده (COMPACT PERMISSIONS ROW - قابل روشن و خاموش کردن) */}
                 <div className={`grid gap-1.5 sm:gap-2 ${isNativeAndroidApp() ? 'grid-cols-3 sm:grid-cols-6' : 'grid-cols-5'}`}>
                   {/* 1. Notifications */}
                   <button
                     type="button"
+                    role="switch"
+                    aria-checked={nativePerms.notifications}
                     onClick={() => handleRequestPerm('notifications')}
                     style={
                       nativePerms.notifications
@@ -1263,28 +1211,37 @@ https://myket.ir/app/com.yaad.reminder`;
                           }
                         : undefined
                     }
-                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                    className={`min-h-[70px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
                       nativePerms.notifications
                         ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                         : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
-                    title={isFa ? 'دسترسی اعلان‌ها' : 'Notifications'}
+                    title={isFa ? 'روشن/خاموش کردن دسترسی اعلان‌ها' : 'Toggle Notifications permission'}
                   >
-                    <div className="relative mb-1">
-                      <Bell className={`w-4 h-4 ${nativePerms.notifications ? 'text-white' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.notifications ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
-                    </div>
+                    <Bell className={`w-4 h-4 mb-1 ${nativePerms.notifications ? 'text-white' : 'text-stone-400'}`} />
                     <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.notifications ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'اعلان' : 'Alert'}
                     </span>
-                    <span className={`text-[9px] font-black ${nativePerms.notifications ? 'text-white' : 'text-indigo-400'}`}>
-                      {nativePerms.notifications ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
-                    </span>
+                    <div className="mt-1 flex items-center gap-1">
+                      <div
+                        dir="ltr"
+                        className={`w-7 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                          nativePerms.notifications ? 'bg-white/30 justify-end' : 'bg-stone-800 justify-start border border-stone-700'
+                        }`}
+                      >
+                        <span className={`w-2.5 h-2.5 rounded-full shadow-sm ${nativePerms.notifications ? 'bg-white' : 'bg-stone-400'}`} />
+                      </div>
+                      <span className={`text-[8.5px] font-black ${nativePerms.notifications ? 'text-white' : 'text-stone-400'}`}>
+                        {nativePerms.notifications ? (isFa ? 'روشن' : 'ON') : (isFa ? 'خاموش' : 'OFF')}
+                      </span>
+                    </div>
                   </button>
 
                   {/* 2. Microphone */}
                   <button
                     type="button"
+                    role="switch"
+                    aria-checked={nativePerms.microphone}
                     onClick={() => handleRequestPerm('microphone')}
                     style={
                       nativePerms.microphone
@@ -1295,28 +1252,37 @@ https://myket.ir/app/com.yaad.reminder`;
                           }
                         : undefined
                     }
-                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                    className={`min-h-[70px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
                       nativePerms.microphone
                         ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                         : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
-                    title={isFa ? 'دسترسی میکروفون و صوت' : 'Microphone'}
+                    title={isFa ? 'روشن/خاموش کردن دسترسی میکروفون' : 'Toggle Microphone permission'}
                   >
-                    <div className="relative mb-1">
-                      <Mic className={`w-4 h-4 ${nativePerms.microphone ? 'text-white' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.microphone ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
-                    </div>
+                    <Mic className={`w-4 h-4 mb-1 ${nativePerms.microphone ? 'text-white' : 'text-stone-400'}`} />
                     <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.microphone ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'میکروفون' : 'Mic'}
                     </span>
-                    <span className={`text-[9px] font-black ${nativePerms.microphone ? 'text-white' : 'text-indigo-400'}`}>
-                      {nativePerms.microphone ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
-                    </span>
+                    <div className="mt-1 flex items-center gap-1">
+                      <div
+                        dir="ltr"
+                        className={`w-7 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                          nativePerms.microphone ? 'bg-white/30 justify-end' : 'bg-stone-800 justify-start border border-stone-700'
+                        }`}
+                      >
+                        <span className={`w-2.5 h-2.5 rounded-full shadow-sm ${nativePerms.microphone ? 'bg-white' : 'bg-stone-400'}`} />
+                      </div>
+                      <span className={`text-[8.5px] font-black ${nativePerms.microphone ? 'text-white' : 'text-stone-400'}`}>
+                        {nativePerms.microphone ? (isFa ? 'روشن' : 'ON') : (isFa ? 'خاموش' : 'OFF')}
+                      </span>
+                    </div>
                   </button>
 
                   {/* 3. Camera */}
                   <button
                     type="button"
+                    role="switch"
+                    aria-checked={nativePerms.camera}
                     onClick={() => handleRequestPerm('camera')}
                     style={
                       nativePerms.camera
@@ -1327,28 +1293,37 @@ https://myket.ir/app/com.yaad.reminder`;
                           }
                         : undefined
                     }
-                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                    className={`min-h-[70px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
                       nativePerms.camera
                         ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                         : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
-                    title={isFa ? 'دسترسی دوربین' : 'Camera'}
+                    title={isFa ? 'روشن/خاموش کردن دسترسی دوربین' : 'Toggle Camera permission'}
                   >
-                    <div className="relative mb-1">
-                      <Camera className={`w-4 h-4 ${nativePerms.camera ? 'text-white' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.camera ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
-                    </div>
+                    <Camera className={`w-4 h-4 mb-1 ${nativePerms.camera ? 'text-white' : 'text-stone-400'}`} />
                     <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.camera ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'دوربین' : 'Camera'}
                     </span>
-                    <span className={`text-[9px] font-black ${nativePerms.camera ? 'text-white' : 'text-indigo-400'}`}>
-                      {nativePerms.camera ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
-                    </span>
+                    <div className="mt-1 flex items-center gap-1">
+                      <div
+                        dir="ltr"
+                        className={`w-7 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                          nativePerms.camera ? 'bg-white/30 justify-end' : 'bg-stone-800 justify-start border border-stone-700'
+                        }`}
+                      >
+                        <span className={`w-2.5 h-2.5 rounded-full shadow-sm ${nativePerms.camera ? 'bg-white' : 'bg-stone-400'}`} />
+                      </div>
+                      <span className={`text-[8.5px] font-black ${nativePerms.camera ? 'text-white' : 'text-stone-400'}`}>
+                        {nativePerms.camera ? (isFa ? 'روشن' : 'ON') : (isFa ? 'خاموش' : 'OFF')}
+                      </span>
+                    </div>
                   </button>
 
                   {/* 4. GPS / Location */}
                   <button
                     type="button"
+                    role="switch"
+                    aria-checked={nativePerms.location}
                     onClick={() => handleRequestPerm('location')}
                     style={
                       nativePerms.location && nativePerms.backgroundLocation !== false
@@ -1365,35 +1340,44 @@ https://myket.ir/app/com.yaad.reminder`;
                           }
                         : undefined
                     }
-                    className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                    className={`min-h-[70px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
                       nativePerms.location && nativePerms.backgroundLocation !== false
                         ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                         : nativePerms.location && nativePerms.backgroundLocation === false
                         ? 'shadow-md shadow-amber-950/40'
                         : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                     }`}
-                    title={isFa ? 'دسترسی موقعیت مکانی (همیشه مجاز)' : 'GPS Location (Allow all the time)'}
+                    title={isFa ? 'روشن/خاموش کردن دسترسی موقعیت مکانی' : 'Toggle GPS Location permission'}
                   >
-                    <div className="relative mb-1">
-                      <MapPin className={`w-4 h-4 ${nativePerms.location ? 'text-white' : 'text-stone-400'}`} />
-                      <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.location ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
-                    </div>
+                    <MapPin className={`w-4 h-4 mb-1 ${nativePerms.location ? 'text-white' : 'text-stone-400'}`} />
                     <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.location ? 'text-white' : 'text-stone-200'}`}>
                       {isFa ? 'موقعیت' : 'GPS'}
                     </span>
-                    <span className={`text-[9px] font-black leading-tight ${nativePerms.location ? 'text-white' : 'text-indigo-400'}`}>
-                      {nativePerms.location
-                        ? nativePerms.backgroundLocation === false
-                          ? (isFa ? 'فقط هنگام استفاده' : 'While using')
-                          : (isFa ? 'همیشه مجاز ✓' : 'Always ✓')
-                        : (isFa ? 'تایید' : 'Allow')}
-                    </span>
+                    <div className="mt-1 flex items-center gap-1">
+                      <div
+                        dir="ltr"
+                        className={`w-7 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                          nativePerms.location ? 'bg-white/30 justify-end' : 'bg-stone-800 justify-start border border-stone-700'
+                        }`}
+                      >
+                        <span className={`w-2.5 h-2.5 rounded-full shadow-sm ${nativePerms.location ? 'bg-white' : 'bg-stone-400'}`} />
+                      </div>
+                      <span className={`text-[8.5px] font-black leading-tight ${nativePerms.location ? 'text-white' : 'text-stone-400'}`}>
+                        {nativePerms.location
+                          ? nativePerms.backgroundLocation === false
+                            ? (isFa ? 'استفاده' : 'InUse')
+                            : (isFa ? 'روشن' : 'ON')
+                          : (isFa ? 'خاموش' : 'OFF')}
+                      </span>
+                    </div>
                   </button>
 
                   {/* 5. Web/PWA Local Folder / Storage (Hidden on Native Android scoped-storage APK) */}
                   {!isNativeAndroidApp() && (
                     <button
                       type="button"
+                      role="switch"
+                      aria-checked={Boolean(nativePerms.storage)}
                       onClick={() => handleRequestPerm('storage')}
                       style={
                         nativePerms.storage
@@ -1404,23 +1388,30 @@ https://myket.ir/app/com.yaad.reminder`;
                             }
                           : undefined
                       }
-                      className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                      className={`min-h-[70px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
                         nativePerms.storage
                           ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                           : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                       }`}
-                      title={isFa ? 'دسترسی پوشه YAAD' : 'YAAD Folder'}
+                      title={isFa ? 'روشن/خاموش کردن دسترسی پوشه YAAD' : 'Toggle YAAD Folder permission'}
                     >
-                      <div className="relative mb-1">
-                        <FolderOpen className={`w-4 h-4 ${nativePerms.storage ? 'text-white' : 'text-stone-400'}`} />
-                        <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.storage ? 'bg-white' : 'bg-indigo-400 animate-pulse'}`} />
-                      </div>
+                      <FolderOpen className={`w-4 h-4 mb-1 ${nativePerms.storage ? 'text-white' : 'text-stone-400'}`} />
                       <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.storage ? 'text-white' : 'text-stone-200'}`}>
                         {isFa ? 'پوشه و حافظه' : 'Folders'}
                       </span>
-                      <span className={`text-[9px] font-black ${nativePerms.storage ? 'text-white' : 'text-indigo-400'}`}>
-                        {nativePerms.storage ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تایید' : 'Allow')}
-                      </span>
+                      <div className="mt-1 flex items-center gap-1">
+                        <div
+                          dir="ltr"
+                          className={`w-7 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                            nativePerms.storage ? 'bg-white/30 justify-end' : 'bg-stone-800 justify-start border border-stone-700'
+                          }`}
+                        >
+                          <span className={`w-2.5 h-2.5 rounded-full shadow-sm ${nativePerms.storage ? 'bg-white' : 'bg-stone-400'}`} />
+                        </div>
+                        <span className={`text-[8.5px] font-black ${nativePerms.storage ? 'text-white' : 'text-stone-400'}`}>
+                          {nativePerms.storage ? (isFa ? 'روشن' : 'ON') : (isFa ? 'خاموش' : 'OFF')}
+                        </span>
+                      </div>
                     </button>
                   )}
 
@@ -1428,6 +1419,8 @@ https://myket.ir/app/com.yaad.reminder`;
                   {isNativeAndroidApp() && (
                     <button
                       type="button"
+                      role="switch"
+                      aria-checked={Boolean(nativePerms.exactAlarm)}
                       onClick={() => handleRequestPerm('exact_alarm')}
                       style={
                         nativePerms.exactAlarm
@@ -1438,23 +1431,30 @@ https://myket.ir/app/com.yaad.reminder`;
                             }
                           : undefined
                       }
-                      className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                      className={`min-h-[70px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
                         nativePerms.exactAlarm
                           ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                           : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                       }`}
-                      title={isFa ? 'آلارم دقیق (اندروید ۱۲+)' : 'Exact Alarms (Android 12+)'}
+                      title={isFa ? 'تغییر وضعیت آلارم دقیق در تنظیمات اندروید' : 'Toggle Exact Alarms in Android Settings'}
                     >
-                      <div className="relative mb-1">
-                        <Clock className={`w-4 h-4 ${nativePerms.exactAlarm ? 'text-white' : 'text-stone-400'}`} />
-                        <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.exactAlarm ? 'bg-white' : 'bg-amber-400 animate-pulse'}`} />
-                      </div>
+                      <Clock className={`w-4 h-4 mb-1 ${nativePerms.exactAlarm ? 'text-white' : 'text-stone-400'}`} />
                       <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.exactAlarm ? 'text-white' : 'text-stone-200'}`}>
                         {isFa ? 'آلارم دقیق' : 'Exact Alarm'}
                       </span>
-                      <span className={`text-[9px] font-black ${nativePerms.exactAlarm ? 'text-white' : 'text-amber-300'}`}>
-                        {nativePerms.exactAlarm ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تنظیمات' : 'Settings')}
-                      </span>
+                      <div className="mt-1 flex items-center gap-1">
+                        <div
+                          dir="ltr"
+                          className={`w-7 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                            nativePerms.exactAlarm ? 'bg-white/30 justify-end' : 'bg-stone-800 justify-start border border-stone-700'
+                          }`}
+                        >
+                          <span className={`w-2.5 h-2.5 rounded-full shadow-sm ${nativePerms.exactAlarm ? 'bg-white' : 'bg-stone-400'}`} />
+                        </div>
+                        <span className={`text-[8.5px] font-black ${nativePerms.exactAlarm ? 'text-white' : 'text-amber-300'}`}>
+                          {nativePerms.exactAlarm ? (isFa ? 'روشن' : 'ON') : (isFa ? 'خاموش' : 'OFF')}
+                        </span>
+                      </div>
                     </button>
                   )}
 
@@ -1462,6 +1462,8 @@ https://myket.ir/app/com.yaad.reminder`;
                   {isNativeAndroidApp() && (
                     <button
                       type="button"
+                      role="switch"
+                      aria-checked={Boolean(nativePerms.fullScreenIntent)}
                       onClick={() => handleRequestPerm('full_screen_intent')}
                       style={
                         nativePerms.fullScreenIntent
@@ -1472,26 +1474,63 @@ https://myket.ir/app/com.yaad.reminder`;
                             }
                           : undefined
                       }
-                      className={`min-h-[60px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
+                      className={`min-h-[70px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
                         nativePerms.fullScreenIntent
                           ? 'perm-card-granted shadow-md shadow-emerald-900/40'
                           : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
                       }`}
-                      title={isFa ? 'اعلان تمام‌صفحه روی صفحه قفل (اندروید ۱۴+)' : 'Full-Screen Intent (Android 14+)'}
+                      title={isFa ? 'تغییر وضعیت اعلان تمام‌صفحه در تنظیمات اندروید' : 'Toggle Full-Screen Intent in Android Settings'}
                     >
-                      <div className="relative mb-1">
-                        <Maximize2 className={`w-4 h-4 ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-400'}`} />
-                        <span className={`absolute -top-1 -end-1 w-2 h-2 rounded-full ${nativePerms.fullScreenIntent ? 'bg-white' : 'bg-amber-400 animate-pulse'}`} />
-                      </div>
+                      <Maximize2 className={`w-4 h-4 mb-1 ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-400'}`} />
                       <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-200'}`}>
                         {isFa ? 'نمایش قفل' : 'Lock Alert'}
                       </span>
-                      <span className={`text-[9px] font-black ${nativePerms.fullScreenIntent ? 'text-white' : 'text-amber-300'}`}>
-                        {nativePerms.fullScreenIntent ? (isFa ? 'فعال ✓' : 'Active ✓') : (isFa ? 'تنظیمات' : 'Settings')}
-                      </span>
+                      <div className="mt-1 flex items-center gap-1">
+                        <div
+                          dir="ltr"
+                          className={`w-7 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
+                            nativePerms.fullScreenIntent ? 'bg-white/30 justify-end' : 'bg-stone-800 justify-start border border-stone-700'
+                          }`}
+                        >
+                          <span className={`w-2.5 h-2.5 rounded-full shadow-sm ${nativePerms.fullScreenIntent ? 'bg-white' : 'bg-stone-400'}`} />
+                        </div>
+                        <span className={`text-[8.5px] font-black ${nativePerms.fullScreenIntent ? 'text-white' : 'text-amber-300'}`}>
+                          {nativePerms.fullScreenIntent ? (isFa ? 'روشن' : 'ON') : (isFa ? 'خاموش' : 'OFF')}
+                        </span>
+                      </div>
                     </button>
                   )}
                 </div>
+
+                {isNativeAndroidApp() && revokedPermNotice && (
+                  <div
+                    dir={isFa ? 'rtl' : 'ltr'}
+                    className="p-2.5 rounded-xl bg-stone-900/90 border border-stone-700 text-[11px] text-stone-200 flex items-center justify-between gap-2 leading-relaxed"
+                  >
+                    <span>
+                      {isFa
+                        ? 'دسترسی در برنامه خاموش شد. برای لغو کامل از سطح سیستم‌عامل، تنظیمات اندروید را باز کنید:'
+                        : 'Disabled inside the app. To also revoke at the OS level, open Android Settings:'}
+                    </span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => openAndroidSettings(revokedPermNotice === 'notifications' ? 'notifications' : 'app_details')}
+                        className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 text-indigo-300 font-bold text-[10.5px] border border-stone-700 cursor-pointer flex items-center gap-1"
+                      >
+                        <ExternalLink className="w-3 h-3" />
+                        <span>{isFa ? 'تنظیمات سیستم' : 'OS Settings'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRevokedPermNotice(null)}
+                        className="p-1 rounded-lg hover:bg-stone-800 text-stone-400 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 {!isNativeAndroidApp() && showStoragePermNotice && !nativePerms.storage && (
                   <div
@@ -2454,7 +2493,7 @@ https://myket.ir/app/com.yaad.reminder`;
         </div>
 
         {/* Footer - Sticky above keyboard (دکمه تأیید همیشه پایین و ثابت، حداقل ۴۸ پیکسل) */}
-        <div className="sticky bottom-0 z-20 shrink-0 px-3 sm:px-5 py-3 border-t border-stone-800 flex justify-end bg-stone-900/95 backdrop-blur shadow-2xl">
+        <div className="sticky bottom-0 z-20 shrink-0 px-3 sm:px-5 py-3 border-t border-stone-800 flex justify-end bg-stone-900 shadow-2xl">
           <button
             type="button"
             onClick={onClose}

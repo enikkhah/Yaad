@@ -389,6 +389,31 @@ export async function checkLocalFolderPermissionStatus(): Promise<boolean> {
   return false;
 }
 
+export async function revokeLocalFolderPermission(): Promise<void> {
+  try {
+    localStorage.removeItem(FOLDER_PERMISSION_GRANTED_KEY);
+  } catch {
+    // ignore
+  }
+  try {
+    const db = await openVaultDB();
+    if (!db) return;
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction([HANDLE_STORE_NAME], 'readwrite');
+        const store = tx.objectStore(HANDLE_STORE_NAME);
+        store.delete('yaad_folder_dir');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => resolve();
+      } catch {
+        resolve();
+      }
+    });
+  } catch {
+    // ignore
+  }
+}
+
 /**
  * Helper to write backup JSON into a FileSystemDirectoryHandle ('YAAD')
  */

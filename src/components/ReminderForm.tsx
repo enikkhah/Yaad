@@ -3,28 +3,18 @@ import { AnimatePresence, motion } from 'motion/react';
 import { Category, Priority, Reminder, RecurrenceType, SavedLocation } from '../types';
 import { 
   getJalaliComponents, 
-  PERSIAN_MONTHS, 
   toPersianDigits, 
   jalaliToGregorian,
-  GREGORIAN_MONTHS,
-  getDaysInGregorianMonth,
-  getDaysInJalaliMonth,
-  getJalaliWeekdayIndex,
-  getGregorianMondayWeekdayIndex,
-  JALALI_WEEKDAYS_HEADER,
-  GREGORIAN_WEEKDAYS_MONDAY_FIRST,
-  getCalendarDayHolidayInfo,
-  getMonthOfficialHolidays,
   getCurrentTimezoneMeta,
   isSelectedDateTimeInPast
 } from '../utils/jalali';
 import { 
   RECURRENCE_OPTIONS, 
   PERSIAN_WEEK_DAYS, 
-  ENGLISH_WEEK_DAYS,
-  HOURLY_INTERVALS 
+  ENGLISH_WEEK_DAYS 
 } from '../utils/recurrence';
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
+import { YaadCalendarPicker } from './YaadCalendarPicker';
 import { CameraCaptureModal } from './CameraCaptureModal';
 import { isNativeAndroidApp, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
@@ -75,8 +65,6 @@ interface IWindow extends Window {
   SpeechRecognition?: any;
 }
 
-const JALALI_YEARS_GRID = Array.from({ length: 1425 - 1404 + 1 }, (_, i) => 1404 + i);
-const GREGORIAN_YEARS_GRID = Array.from({ length: 2046 - 2025 + 1 }, (_, i) => 2025 + i);
 const HOUR_WHEEL_ITEMS = Array.from({ length: 24 }, (_, i) => ({
   value: i,
   label: i.toString().padStart(2, '0'),
@@ -146,17 +134,15 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [selectedHour, setSelectedHour] = useState(() => language === 'en' ? getDynamicDefaultTime().gregorian.hour : getDynamicDefaultTime().jalali.hour);
   const [selectedMinute, setSelectedMinute] = useState(() => language === 'en' ? getDynamicDefaultTime().gregorian.minute : getDynamicDefaultTime().jalali.minute);
 
-  // Date Grid/Table Tab state ('day' | 'month' | 'year' | null) - closed by default until clicked
-  const [dateActiveTab, setDateActiveTab] = useState<'day' | 'month' | 'year' | null>(null);
-  const [customYearInput, setCustomYearInput] = useState<string>('');
-
   // Recurrence states (ساعتی، روزانه، هفتگی، ماهیانه، انتخاب از تقویم)
   const [recurrence, setRecurrence] = useState<RecurrenceType>('none');
   const [recurrenceInterval, setRecurrenceInterval] = useState<number>(1);
+  const [hourlyIntervalDraft, setHourlyIntervalDraft] = useState<string | null>(null);
   const [recurrenceCount, setRecurrenceCount] = useState<number | undefined>(undefined);
   const [recurrenceDaysOfWeek, setRecurrenceDaysOfWeek] = useState<number[]>([]);
   const [recurrenceCustomDates, setRecurrenceCustomDates] = useState<string[]>([]);
   const recurrenceCountInputRef = useRef<HTMLInputElement>(null);
+  const hourlyIntervalInputRef = useRef<HTMLInputElement>(null);
 
   // Speech to text states & continuous listening refs
   const [isListening, setIsListening] = useState(false);
@@ -246,8 +232,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setRecurrenceCount(initialData.recurrenceCount);
       setRecurrenceDaysOfWeek(initialData.recurrenceDaysOfWeek || []);
       setRecurrenceCustomDates(initialData.recurrenceCustomDates || []);
-      setDateActiveTab(null);
-      setCustomYearInput(initialData.dueTimestamp && getJalaliComponents(initialData.dueTimestamp).year > 1425 ? String(getJalaliComponents(initialData.dueTimestamp).year) : '');
 
       const hasExtraData = !!(
         initialData.description ||
@@ -276,8 +260,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         setSelectedMinute(nowJalali.minute);
       }
 
-      setDateActiveTab(null);
-      setCustomYearInput('');
       setTitle('');
       setDescription('');
       setCategory('work');
@@ -651,21 +633,21 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.22 }}
-          className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
-          style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
+          transition={{ duration: 0.16, ease: 'easeOut' }}
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/75 overflow-hidden"
+          style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh', willChange: 'opacity' }}
           dir={isEn ? 'ltr' : 'rtl'}
         >
           <motion.div
-            initial={{ y: '100%', opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: '100%', opacity: 0 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            initial={{ opacity: 0, y: 16, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.985 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-3xl shadow-2xl overflow-hidden flex flex-col"
-            style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '92dvh' }}
+            style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '92dvh', willChange: 'transform, opacity' }}
           >
           {/* Header */}
-          <div className="px-2.5 sm:px-6 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-950/60 sticky top-0 z-10 backdrop-blur shrink-0">
+          <div className="px-2.5 sm:px-6 py-3.5 border-b border-stone-800 flex items-center justify-between bg-stone-950 sticky top-0 z-10 shrink-0">
             <div className="flex items-center gap-2.5 sm:gap-3">
               <div className="p-1.5 sm:p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
                 <Plus className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
@@ -871,323 +853,22 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
                 </button>
               </div>
 
-              {/* Day / Month / Year Table Grids — Separated Independent Boxes */}
-              <div className="space-y-2.5 pt-1">
-                {/* 3 Separated Independent Boxes for Day, Month, and Year */}
-                <div className="grid grid-cols-3 gap-2.5 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setDateActiveTab(dateActiveTab === 'day' ? null : 'day')}
-                    className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
-                      dateActiveTab === 'day'
-                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/25 ring-2 ring-indigo-400/30'
-                        : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-indigo-500/60 hover:bg-stone-900'
-                    }`}
-                  >
-                    <span className={`text-[10px] font-bold ${dateActiveTab === 'day' ? 'text-indigo-100' : 'text-stone-400'}`}>{isEn ? 'Day' : 'روز'}</span>
-                    <span className="text-sm sm:text-base font-black">{isEn ? selectedDay : toPersianDigits(selectedDay)}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setDateActiveTab(dateActiveTab === 'month' ? null : 'month')}
-                    className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
-                      dateActiveTab === 'month'
-                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/25 ring-2 ring-indigo-400/30'
-                        : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-indigo-500/60 hover:bg-stone-900'
-                    }`}
-                  >
-                    <span className={`text-[10px] font-bold ${dateActiveTab === 'month' ? 'text-indigo-100' : 'text-stone-400'}`}>{isEn ? 'Month' : 'ماه'}</span>
-                    <span className="text-sm sm:text-base font-black truncate max-w-full">
-                      {isEn ? GREGORIAN_MONTHS[selectedMonth - 1] : PERSIAN_MONTHS[selectedMonth - 1]}
-                    </span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setDateActiveTab(dateActiveTab === 'year' ? null : 'year')}
-                    className={`py-2.5 px-2 rounded-2xl border-2 text-center font-black transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 shadow-sm ${
-                      dateActiveTab === 'year'
-                        ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg shadow-indigo-600/25 ring-2 ring-indigo-400/30'
-                        : 'bg-stone-950 border-stone-700/90 text-stone-200 hover:text-white hover:border-indigo-500/60 hover:bg-stone-900'
-                    }`}
-                  >
-                    <span className={`text-[10px] font-bold ${dateActiveTab === 'year' ? 'text-indigo-100' : 'text-stone-400'}`}>{isEn ? 'Year' : 'سال'}</span>
-                    <span className="text-sm sm:text-base font-black">{isEn ? selectedYear : toPersianDigits(selectedYear)}</span>
-                  </button>
-                </div>
-
-                {/* Active Table/Grid Content (Only rendered when user clicks Day, Month, or Year button) */}
-                {dateActiveTab === 'day' && (() => {
-                  const totalDays = isEn
-                    ? getDaysInGregorianMonth(selectedYear, selectedMonth)
-                    : getDaysInJalaliMonth(selectedYear, selectedMonth);
-                  const startWeekday = isEn
-                    ? getGregorianMondayWeekdayIndex(selectedYear, selectedMonth, 1)
-                    : getJalaliWeekdayIndex(selectedYear, selectedMonth, 1);
-                  const monthHolidays = getMonthOfficialHolidays(selectedYear, selectedMonth, language);
-                  const selectedDayHoliday = getCalendarDayHolidayInfo(selectedYear, selectedMonth, selectedDay, language);
-
-                  return (
-                    <div className="p-2.5 sm:p-3 rounded-2xl bg-stone-950/90 border border-stone-800 space-y-2.5 animate-in fade-in">
-                      {/* Row 1: Weekday Headers (Saturday-first in FA, Monday-first in EN) */}
-                      <div className="grid grid-cols-7 gap-1 sm:gap-1.5 text-center border-b border-stone-800 pb-2">
-                        {(isEn ? GREGORIAN_WEEKDAYS_MONDAY_FIRST : JALALI_WEEKDAYS_HEADER).map((w) => (
-                          <div
-                            key={w.index}
-                            className={`py-1 rounded-lg text-[10px] sm:text-xs font-extrabold ${
-                              w.isWeekend
-                                ? 'text-rose-400 bg-rose-500/10 border border-rose-500/25'
-                                : 'text-stone-300 bg-stone-900/70 border border-stone-800/70'
-                            }`}
-                            title={w.full}
-                          >
-                            {w.label}
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Days Grid Aligned by Weekday */}
-                      <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
-                        {Array.from({ length: startWeekday }).map((_, idx) => (
-                          <div key={`empty-${idx}`} className="min-h-[34px] sm:min-h-[38px] rounded-xl bg-stone-900/20 border border-stone-900/40" />
-                        ))}
-
-                        {Array.from({ length: totalDays }, (_, i) => i + 1).map((d) => {
-                          const isSelected = selectedDay === d;
-                          const holidayInfo = getCalendarDayHolidayInfo(selectedYear, selectedMonth, d, language);
-                          const nowDate = new Date();
-                          const nowJalali = getJalaliComponents(nowDate.getTime());
-                          const curYear = isEn ? nowDate.getFullYear() : nowJalali.year;
-                          const curMonth = isEn ? nowDate.getMonth() + 1 : nowJalali.month;
-                          const curDay = isEn ? nowDate.getDate() : nowJalali.day;
-                          const isPastDay =
-                            selectedYear < curYear ||
-                            (selectedYear === curYear && selectedMonth < curMonth) ||
-                            (selectedYear === curYear && selectedMonth === curMonth && d < curDay);
-
-                          return (
-                            <button
-                              key={d}
-                              type="button"
-                              disabled={isPastDay}
-                              onClick={() => {
-                                if (isPastDay) return;
-                                setSelectedDay(d);
-                                if (validationError) setValidationError(null);
-                                setDateActiveTab(null);
-                              }}
-                              title={
-                                isPastDay
-                                  ? (isEn ? 'Past date cannot be selected' : 'تاریخ گذشته قابل انتخاب نیست')
-                                  : holidayInfo.occasionTitle
-                                  ? `${isEn ? 'Official Holiday:' : 'تعطیل رسمی:'} ${holidayInfo.occasionTitle}`
-                                  : holidayInfo.isWeekend
-                                  ? (isEn ? 'Weekend Holiday' : 'تعطیل آخر هفته')
-                                  : undefined
-                              }
-                              className={`min-h-[34px] sm:min-h-[38px] rounded-xl text-xs sm:text-sm font-bold flex flex-col items-center justify-center transition-all relative border ${
-                                isPastDay
-                                  ? 'bg-stone-950/40 border-stone-900 text-stone-600 opacity-45 cursor-not-allowed line-through'
-                                  : isSelected
-                                  ? 'bg-indigo-600 border-indigo-400 text-white font-black shadow-md ring-2 ring-indigo-400 cursor-pointer active:scale-95'
-                                  : holidayInfo.isOfficialHoliday
-                                  ? 'bg-rose-500/20 border-rose-500/50 text-rose-300 hover:bg-rose-500/30 font-black cursor-pointer active:scale-95'
-                                  : holidayInfo.isWeekend
-                                  ? 'bg-rose-500/10 border-rose-500/30 text-rose-400 hover:bg-rose-500/20 cursor-pointer active:scale-95'
-                                  : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border-stone-800/80 cursor-pointer active:scale-95'
-                              }`}
-                            >
-                              <span>{isEn ? d : toPersianDigits(d)}</span>
-                              {holidayInfo.isOfficialHoliday && !isSelected && !isPastDay && (
-                                <span className="w-1 h-1 rounded-full bg-rose-400 mt-0.5" />
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-
-                      {/* Holidays Legend & Monthly Occasion Holidays Info */}
-                      <div className="pt-1.5 border-t border-stone-800/80 space-y-1.5">
-                        <div className="flex items-center justify-between flex-wrap gap-2 text-[10px] text-stone-400">
-                          <div className="flex items-center gap-3">
-                            <span className="inline-flex items-center gap-1 text-rose-400 font-bold">
-                              <span className="w-2 h-2 rounded-sm bg-rose-500/30 border border-rose-500/60" />
-                              {isEn ? 'Weekend (Sat & Sun)' : 'تعطیل آخر هفته (پنج‌شنبه و جمعه)'}
-                            </span>
-                            <span className="inline-flex items-center gap-1 text-rose-300 font-bold">
-                              <span className="w-2 h-2 rounded-full bg-rose-400" />
-                              {isEn ? 'Official Holiday' : 'تعطیل رسمی مناسبتی'}
-                            </span>
-                          </div>
-                          {selectedDayHoliday.occasionTitle && (
-                            <span className="text-rose-300 font-black">
-                              {isEn ? `Selected: ${selectedDayHoliday.occasionTitle}` : `مناسبت روز انتخابی: ${selectedDayHoliday.occasionTitle}`}
-                            </span>
-                          )}
-                        </div>
-
-                        {monthHolidays.length > 0 && (
-                          <div className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/25 text-[11px] text-rose-200 leading-relaxed">
-                            <span className="font-black text-rose-300">
-                              {isEn ? 'Official Holidays this month: ' : 'تعطیلات مناسبتی این ماه: '}
-                            </span>
-                            <span>
-                              {monthHolidays
-                                .map((h) =>
-                                  isEn
-                                    ? `${GREGORIAN_MONTHS[selectedMonth - 1]} ${h.day} (${h.title})`
-                                    : `${toPersianDigits(h.day)} ${PERSIAN_MONTHS[selectedMonth - 1]} (${h.title})`
-                                )
-                                .join(isEn ? ' • ' : ' ، ')}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {dateActiveTab === 'month' && (
-                  <div className="p-2 sm:p-2.5 rounded-2xl bg-stone-950/70 border border-stone-800 animate-in fade-in">
-                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
-                      {(isEn ? GREGORIAN_MONTHS : PERSIAN_MONTHS).map((mName, idx) => {
-                        const monthNum = idx + 1;
-                        const isSelected = selectedMonth === monthNum;
-                        const nowDate = new Date();
-                        const nowJalali = getJalaliComponents(nowDate.getTime());
-                        const curYear = isEn ? nowDate.getFullYear() : nowJalali.year;
-                        const curMonth = isEn ? nowDate.getMonth() + 1 : nowJalali.month;
-                        const curDay = isEn ? nowDate.getDate() : nowJalali.day;
-                        const isPastMonth =
-                          selectedYear < curYear ||
-                          (selectedYear === curYear && monthNum < curMonth);
-                        return (
-                          <button
-                            key={mName}
-                            type="button"
-                            disabled={isPastMonth}
-                            onClick={() => {
-                              if (isPastMonth) return;
-                              setSelectedMonth(monthNum);
-                              const maxD = isEn ? getDaysInGregorianMonth(selectedYear, monthNum) : getDaysInJalaliMonth(selectedYear, monthNum);
-                              if (selectedYear === curYear && monthNum === curMonth && selectedDay < curDay) {
-                                setSelectedDay(curDay);
-                              } else if (selectedDay > maxD) {
-                                setSelectedDay(maxD);
-                              }
-                              if (validationError) setValidationError(null);
-                              setDateActiveTab(null);
-                            }}
-                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all text-center ${
-                              isPastMonth
-                                ? 'bg-stone-950/40 text-stone-600 border border-stone-900 opacity-45 cursor-not-allowed line-through'
-                                : isSelected
-                                ? 'bg-indigo-600 text-white font-black shadow-md ring-2 ring-indigo-400 cursor-pointer active:scale-95'
-                                : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80 cursor-pointer active:scale-95'
-                            }`}
-                          >
-                            <span>{mName}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-
-                {dateActiveTab === 'year' && (
-                  <div className="p-2.5 rounded-2xl bg-stone-950/70 border border-stone-800 space-y-3 animate-in fade-in">
-                    {/* Years up to 1425 in Table/Grid (سال تا ۱۴۲۵ به صورت جدول) */}
-                    <div className="grid grid-cols-4 sm:grid-cols-5 gap-1.5 max-h-48 overflow-y-auto no-scrollbar p-0.5">
-                      {(isEn ? GREGORIAN_YEARS_GRID : JALALI_YEARS_GRID).map((yr) => {
-                        const isSelected = selectedYear === yr;
-                        const nowDate = new Date();
-                        const nowJalali = getJalaliComponents(nowDate.getTime());
-                        const curYear = isEn ? nowDate.getFullYear() : nowJalali.year;
-                        const curMonth = isEn ? nowDate.getMonth() + 1 : nowJalali.month;
-                        const curDay = isEn ? nowDate.getDate() : nowJalali.day;
-                        const isPastYear = yr < curYear;
-                        return (
-                          <button
-                            key={yr}
-                            type="button"
-                            disabled={isPastYear}
-                            onClick={() => {
-                              if (isPastYear) return;
-                              setSelectedYear(yr);
-                              if (yr === curYear) {
-                                if (selectedMonth < curMonth) {
-                                  setSelectedMonth(curMonth);
-                                  setSelectedDay(curDay);
-                                } else if (selectedMonth === curMonth && selectedDay < curDay) {
-                                  setSelectedDay(curDay);
-                                }
-                              }
-                              setCustomYearInput('');
-                              if (validationError) setValidationError(null);
-                              setDateActiveTab(null);
-                            }}
-                            className={`py-1.5 px-1 rounded-xl text-xs font-mono font-bold transition-all text-center ${
-                              isPastYear
-                                ? 'bg-stone-950/40 text-stone-600 border border-stone-900 opacity-45 cursor-not-allowed line-through'
-                                : isSelected
-                                ? 'bg-indigo-600 text-white font-black shadow-md ring-2 ring-indigo-400 cursor-pointer active:scale-95'
-                                : 'bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white border border-stone-800/80 cursor-pointer active:scale-95'
-                            }`}
-                          >
-                            {isEn ? yr : toPersianDigits(yr)}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {/* Typing for Years Higher than 1425 (سال بالاتر به صورت تایپی) */}
-                    <div className="pt-2 border-t border-stone-800/80 space-y-1.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold text-stone-300">
-                          {isEn ? 'Years higher than 2046 (Type):' : 'سال‌های بالاتر از ۱۴۲۵ (به صورت تایپی):'}
-                        </span>
-                        {selectedYear > (isEn ? 2046 : 1425) && (
-                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold border border-emerald-500/30">
-                            {isEn ? `Selected: ${selectedYear}` : `انتخاب‌شده: ${toPersianDigits(selectedYear)}`}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="number"
-                          min={isEn ? 2047 : 1426}
-                          max={isEn ? 2200 : 1600}
-                          value={customYearInput}
-                          onChange={(e) => {
-                            setCustomYearInput(e.target.value);
-                            const val = parseInt(e.target.value, 10);
-                            if (!isNaN(val) && val > (isEn ? 2046 : 1425)) {
-                              setSelectedYear(val);
-                            }
-                          }}
-                          placeholder={isEn ? 'e.g. 2050' : 'مثلاً: ۱۴۲۶، ۱۴۳۰...'}
-                          className="flex-1 bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white placeholder-stone-500 focus:outline-none focus:border-indigo-500 font-mono"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const val = parseInt(customYearInput, 10);
-                            if (!isNaN(val) && val > (isEn ? 2046 : 1425)) {
-                              setSelectedYear(val);
-                              setDateActiveTab(null);
-                            }
-                          }}
-                          disabled={!customYearInput || parseInt(customYearInput, 10) <= (isEn ? 2046 : 1425)}
-                          className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white font-bold text-xs cursor-pointer active:scale-95 transition-all"
-                        >
-                          {isEn ? 'Apply' : 'ثبت'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
+              {/* Screenshot-Modeled Unified Calendar Picker (Jalali in FA / Gregorian in EN) */}
+              <YaadCalendarPicker
+                year={selectedYear}
+                month={selectedMonth}
+                day={selectedDay}
+                language={isEn ? 'en' : 'fa'}
+                disablePast={true}
+                yearMode="future"
+                timeLabel={`${selectedHour.toString().padStart(2, '0')}:${selectedMinute.toString().padStart(2, '0')}`}
+                onSelectDate={(y, m, d) => {
+                  setSelectedYear(y);
+                  setSelectedMonth(m);
+                  setSelectedDay(d);
+                  if (validationError) setValidationError(null);
+                }}
+              />
             </div>
 
             {/* Collapsible More Options Section (توضیحات، دسته و اولویت و سایر تنظیمات) */}
@@ -1398,6 +1079,82 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {RECURRENCE_OPTIONS.filter((opt) => opt.id !== 'none').map((opt) => {
                   const isSelected = recurrence === opt.id;
+                  if (opt.id === 'hourly') {
+                    return (
+                      <div
+                        key={opt.id}
+                        onClick={() => {
+                          if (isSelected) {
+                            setRecurrence('none');
+                          } else {
+                            setRecurrence('hourly');
+                            hourlyIntervalInputRef.current?.focus();
+                          }
+                        }}
+                        className={`p-2 rounded-xl border transition-all flex items-center justify-between gap-1 cursor-pointer ${
+                          isSelected
+                            ? 'bg-indigo-500/15 border-indigo-500/80 text-white shadow-md shadow-indigo-500/15 ring-1 ring-indigo-400/50'
+                            : 'bg-stone-900/70 border-stone-800 text-stone-300 hover:border-indigo-500/50 hover:bg-stone-900'
+                        }`}
+                      >
+                        <div className="flex items-center gap-1 min-w-0">
+                          <span className={`text-xs font-black whitespace-nowrap ${isSelected ? 'text-indigo-400' : 'text-stone-300'}`}>
+                            {isEn ? 'Every' : 'هر'}
+                          </span>
+                          <input
+                            ref={hourlyIntervalInputRef}
+                            type="text"
+                            inputMode="numeric"
+                            pattern="[0-9۰-۹]*"
+                            dir="ltr"
+                            value={isSelected ? (hourlyIntervalDraft ?? String(recurrenceInterval)) : (hourlyIntervalDraft ?? '')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              if (!isSelected) {
+                                setRecurrence('hourly');
+                              }
+                            }}
+                            onFocus={(e) => {
+                              if (!isSelected) {
+                                setRecurrence('hourly');
+                              }
+                              setHourlyIntervalDraft(String(recurrenceInterval));
+                              setTimeout(() => e.target.select(), 0);
+                            }}
+                            onChange={(e) => {
+                              const normalized = e.target.value
+                                .replace(/[۰-۹]/g, (d) => String(d.charCodeAt(0) - 1776))
+                                .replace(/[٠-٩]/g, (d) => String(d.charCodeAt(0) - 1632))
+                                .replace(/\D/g, '');
+                              setHourlyIntervalDraft(normalized);
+                              if (!isSelected) {
+                                setRecurrence('hourly');
+                              }
+                              if (normalized) {
+                                const parsed = parseInt(normalized, 10);
+                                if (!isNaN(parsed) && parsed >= 1) {
+                                  setRecurrenceInterval(Math.min(720, parsed));
+                                }
+                              }
+                            }}
+                            onBlur={() => {
+                              const parsed = hourlyIntervalDraft ? parseInt(hourlyIntervalDraft, 10) : NaN;
+                              const finalVal = !isNaN(parsed) && parsed >= 1 ? Math.min(720, parsed) : (recurrenceInterval || 1);
+                              setRecurrenceInterval(finalVal);
+                              setHourlyIntervalDraft(null);
+                            }}
+                            placeholder="X"
+                            aria-label={isEn ? 'Hours interval' : 'تعداد ساعت'}
+                            className="w-10 sm:w-11 bg-stone-950/90 border border-stone-700 focus:border-indigo-400 rounded-lg px-1 py-1 text-center text-xs font-mono font-black text-white placeholder-stone-500 focus:outline-none"
+                          />
+                          <span className={`text-xs font-black whitespace-nowrap ${isSelected ? 'text-indigo-400' : 'text-stone-300'}`}>
+                            {isEn ? 'hrs' : 'ساعت'}
+                          </span>
+                        </div>
+                        {isSelected && <Check className="w-3.5 h-3.5 text-indigo-400 shrink-0" />}
+                      </div>
+                    );
+                  }
                   return (
                     <button
                       key={opt.id}
@@ -1475,40 +1232,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </div>
 
               {/* Sub-panels for each recurrence type */}
-              {/* 1. HOURLY SUB-PANEL */}
-              {recurrence === 'hourly' && (
-                <div className="p-3 rounded-xl bg-stone-900/80 border border-stone-800 space-y-2 animate-in fade-in">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-stone-300 font-bold">
-                      {isEn ? 'Hourly Interval:' : 'بازه تکرار ساعتی:'}
-                    </span>
-                    <span className="text-indigo-400 font-extrabold font-mono">
-                      {isEn ? `Every ${recurrenceInterval} hours` : `هر ${toPersianDigits(recurrenceInterval)} ساعت`}
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-4 sm:grid-cols-7 gap-1.5">
-                    {HOURLY_INTERVALS.map((hours) => {
-                      const isSel = recurrenceInterval === hours;
-                      return (
-                        <button
-                          key={hours}
-                          type="button"
-                          onClick={() => setRecurrenceInterval(hours)}
-                          className={`py-1.5 px-2 rounded-lg text-xs font-bold font-mono transition-all text-center cursor-pointer ${
-                            isSel
-                              ? 'bg-indigo-500 text-white font-black shadow'
-                              : 'bg-stone-950 text-stone-400 hover:text-white border border-stone-800'
-                          }`}
-                        >
-                          {isEn ? `${hours}h` : `${toPersianDigits(hours)}س`}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-
-              {/* 2. DAILY SUB-PANEL */}
+              {/* DAILY SUB-PANEL */}
               {recurrence === 'daily' && (
                 <div className="p-2.5 rounded-xl bg-stone-900/80 border border-indigo-500/20 text-xs text-stone-300 animate-in fade-in">
                   <p className="font-bold text-indigo-300">
@@ -1701,7 +1425,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
             </div>
 
             {/* Sticky Submit Footer - Always positioned right above virtual keyboard with min 48px buttons */}
-            <div className="sticky bottom-0 z-30 shrink-0 bg-stone-900/95 backdrop-blur-md border-t border-stone-800 p-3 sm:p-4 flex items-center justify-end gap-3 shadow-2xl">
+            <div className="sticky bottom-0 z-30 shrink-0 bg-stone-900 border-t border-stone-800 p-3 sm:p-4 flex items-center justify-end gap-3 shadow-2xl">
               <button
                 type="button"
                 onClick={onClose}

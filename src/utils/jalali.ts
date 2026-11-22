@@ -337,6 +337,24 @@ export const GREGORIAN_WEEKDAYS_MONDAY_FIRST = [
   { index: 6, short: 'Sun', label: 'Sun', full: 'Sunday', isWeekend: true },
 ] as const;
 
+export const GREGORIAN_MONTHS_SHORT = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+/**
+ * English week header starting from Sunday (SUN) matching Android/Samsung calendar layout
+ */
+export const GREGORIAN_WEEKDAYS_SUNDAY_FIRST = [
+  { index: 0, short: 'SUN', label: 'SUN', full: 'Sunday', isWeekend: true },
+  { index: 1, short: 'MON', label: 'MON', full: 'Monday', isWeekend: false },
+  { index: 2, short: 'TUE', label: 'TUE', full: 'Tuesday', isWeekend: false },
+  { index: 3, short: 'WED', label: 'WED', full: 'Wednesday', isWeekend: false },
+  { index: 4, short: 'THU', label: 'THU', full: 'Thursday', isWeekend: false },
+  { index: 5, short: 'FRI', label: 'FRI', full: 'Friday', isWeekend: false },
+  { index: 6, short: 'SAT', label: 'SAT', full: 'Saturday', isWeekend: true },
+] as const;
+
 /**
  * Returns weekday index in English Monday-first week:
  * 0: Monday ... 5: Saturday, 6: Sunday
@@ -344,6 +362,15 @@ export const GREGORIAN_WEEKDAYS_MONDAY_FIRST = [
 export function getGregorianMondayWeekdayIndex(gy: number, gm: number, gd: number): number {
   const d = new Date(gy, gm - 1, gd, 12, 0, 0);
   return (d.getDay() + 6) % 7;
+}
+
+/**
+ * Returns weekday index in English Sunday-first week:
+ * 0: Sunday ... 6: Saturday
+ */
+export function getGregorianSundayWeekdayIndex(gy: number, gm: number, gd: number): number {
+  const d = new Date(gy, gm - 1, gd, 12, 0, 0);
+  return d.getDay();
 }
 
 const SOLAR_OFFICIAL_HOLIDAYS: Record<string, { fa: string; en: string }> = {

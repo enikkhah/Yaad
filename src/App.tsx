@@ -32,8 +32,6 @@ import {
   checkDeviceGpsEnabled,
   isDeviceGpsCurrentlyOnSync,
   hasBackgroundLocationPermission,
-  hasExactAlarmPermission,
-  hasFullScreenIntentPermission,
   checkAllPermissionsStatus,
 } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
@@ -3141,95 +3139,6 @@ export default function App() {
     setTimeout(() => setSyncToast(null), 3500);
   };
 
-  // Schedule a real 1-minute reminder so user can close the app and verify background alarm delivery
-  const handleScheduleTestAlarm = async (): Promise<boolean> => {
-    const notifGranted = await requestNotificationPermission().catch(() => false);
-    if (!notifGranted && isNativeAndroidApp()) {
-      setAndroidPermissionModal({
-        isOpen: true,
-        type: 'notifications',
-        onRetry: () => requestNotificationPermission(),
-      });
-      return false;
-    }
-
-    if (isNativeAndroidApp()) {
-      const perms = await checkAllPermissionsStatus().catch(() => ({
-        notifications: notifGranted,
-        exactAlarm: hasExactAlarmPermission(),
-        fullScreenIntent: hasFullScreenIntentPermission(),
-      }));
-      if (perms.exactAlarm === false) {
-        setAndroidPermissionModal({
-          isOpen: true,
-          type: 'exact_alarm',
-        });
-        return false;
-      }
-      if (perms.fullScreenIntent === false) {
-        setAndroidPermissionModal({
-          isOpen: true,
-          type: 'full_screen_intent',
-        });
-        return false;
-      }
-    }
-
-    const dueTimestamp = Date.now() + 60 * 1000;
-    const dueDate = new Date(dueTimestamp);
-    const j = getJalaliComponents(dueTimestamp);
-    const testId = 'rem_test_' + Date.now();
-    const testReminder: Reminder = {
-      id: testId,
-      notificationId: getNotificationId(testId),
-      title: isEn ? 'YAAD Test Alarm (1 Min)' : 'تست زنگ یادآور یاد (۱ دقیقه)',
-      description: isEn
-        ? 'Background alarm & notification delivery test.'
-        : 'بررسی عملکرد زنگ هشدار و اعلان تمام‌صفحه پس از بستن برنامه.',
-      category: 'other',
-      priority: 'high',
-      priorityLevel: 5,
-      dueTimestamp,
-      scheduledTzOffsetMinutes: -dueDate.getTimezoneOffset(),
-      scheduledTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      wallClockTime: isEn
-        ? {
-            year: dueDate.getFullYear(),
-            month: dueDate.getMonth() + 1,
-            day: dueDate.getDate(),
-            hour: dueDate.getHours(),
-            minute: dueDate.getMinutes(),
-            calendar: 'gregorian',
-          }
-        : {
-            year: j.year,
-            month: j.month,
-            day: j.day,
-            hour: j.hour,
-            minute: j.minute,
-            calendar: 'jalali',
-          },
-      createdAt: Date.now(),
-      status: 'pending',
-      acknowledged: false,
-      postponeCount: 0,
-      ringTune: settings.defaultRingTune || 'work',
-      voiceReadAloud: true,
-      sourceApp: 'manual',
-    };
-
-    await scheduleReminderNotification(testReminder, settings).catch(() => {});
-    const nextReminders = [testReminder, ...remindersRef.current];
-    remindersRef.current = nextReminders;
-    setReminders(nextReminders);
-    showSyncNotification(
-      isEn
-        ? '1-minute test alarm scheduled. Close the app to verify!'
-        : 'یادآور تست برای ۱ دقیقه دیگر ثبت شد؛ برای بررسی اپ را ببندید.'
-    );
-    return true;
-  };
-
   // Handler: Save Reminder
   const handleSaveReminder = async (
     data: Omit<Reminder, 'id' | 'createdAt' | 'status' | 'postponeCount'>,
@@ -4450,7 +4359,7 @@ export default function App() {
       {/* 5-SECOND UNDO TOAST NOTIFICATION */}
       {undoToast && (
         <div 
-          className="fixed bottom-22 sm:bottom-10 left-1/2 -translate-x-1/2 z-50 px-4 py-3 rounded-2xl bg-stone-900/95 border-2 border-indigo-500/80 text-white shadow-2xl shadow-black/95 flex items-center gap-3.5 backdrop-blur-xl animate-in fade-in slide-in-from-bottom-4 duration-200"
+          className="fixed bottom-22 sm:bottom-10 left-1/2 -translate-x-1/2 z-50 px-4 py-3 rounded-2xl bg-stone-900 border-2 border-indigo-500/80 text-white shadow-2xl shadow-black/95 flex items-center gap-3.5 animate-in fade-in slide-in-from-bottom-4 duration-200"
           dir={isEn ? 'ltr' : 'rtl'}
         >
           <div className="flex items-center gap-2">
@@ -4484,7 +4393,7 @@ export default function App() {
       )}
 
       {/* Top Navigation Bar */}
-      <header className={`sticky top-0 z-30 backdrop-blur-md border-b transition-colors duration-200 ${
+      <header className={`sticky top-0 z-30 border-b transition-colors duration-200 ${
         settings.theme === 'jade_warm_light'
           ? 'bg-[#F7F6F0]/95 border-[#DDE1DA] text-[#202A29] shadow-xs'
           : settings.theme === 'sketch-contrast'
@@ -4536,7 +4445,7 @@ export default function App() {
                 dir={isEn ? 'ltr' : 'rtl'}
                 className={`absolute top-full mt-2 ${
                   isEn ? 'left-0' : 'right-0'
-                } w-64 sm:w-72 rounded-2xl bg-stone-900/98 border border-stone-800 p-3 shadow-2xl backdrop-blur-xl z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150`}
+                } w-64 sm:w-72 rounded-2xl bg-stone-900 border border-stone-800 p-3 shadow-2xl z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150`}
               >
                 {/* 1. App Version */}
                 <div className="flex items-center justify-between px-2.5 py-2 rounded-xl bg-stone-950/80 border border-stone-800/80">
@@ -5143,31 +5052,33 @@ export default function App() {
         
         {/* VIEW 1: REMINDERS TAB - SINGLE VERTICAL TIMELINE */}
         {activeMainTab === 'reminders' && (
-          <VerticalTimelineView
-            reminders={reminders}
-            categoryFilter={categoryFilter === 'completed' ? 'all' : categoryFilter}
-            onSetCategoryFilter={(filter) => setCategoryFilter(filter)}
-            onToggleComplete={handleToggleComplete}
-            onPostpone={handlePostpone}
-            onEdit={(rem) => {
-              setEditingReminder(rem);
-              setIsFormOpen(true);
-            }}
-            onDelete={handleDelete}
-            onCreateNew={() => {
-              setEditingReminder(null);
-              setIsFormOpen(true);
-            }}
-            language={settings.language}
-            searchQuery={searchQuery}
-            onClearSearch={() => setSearchQuery('')}
-            scrollToNowTrigger={scrollToNowTrigger}
-          />
+          <div className="yaad-page-enter">
+            <VerticalTimelineView
+              reminders={reminders}
+              categoryFilter={categoryFilter === 'completed' ? 'all' : categoryFilter}
+              onSetCategoryFilter={(filter) => setCategoryFilter(filter)}
+              onToggleComplete={handleToggleComplete}
+              onPostpone={handlePostpone}
+              onEdit={(rem) => {
+                setEditingReminder(rem);
+                setIsFormOpen(true);
+              }}
+              onDelete={handleDelete}
+              onCreateNew={() => {
+                setEditingReminder(null);
+                setIsFormOpen(true);
+              }}
+              language={settings.language}
+              searchQuery={searchQuery}
+              onClearSearch={() => setSearchQuery('')}
+              scrollToNowTrigger={scrollToNowTrigger}
+            />
+          </div>
         )}
 
         {/* VIEW 2: IDEAS & THOUGHTS SECTION */}
         {activeMainTab === 'ideas' && (
-          <section className="space-y-4">
+          <section className="space-y-4 yaad-page-enter">
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-stone-800">
               <h3 className="font-bold text-base sm:text-lg text-white flex items-center gap-2">
                 <Lightbulb className="w-5 h-5 text-indigo-400" />
@@ -5255,7 +5166,7 @@ export default function App() {
           });
 
           return (
-            <section className="space-y-4 animate-in fade-in">
+            <section className="space-y-4 yaad-page-enter">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-stone-800/80">
                 <div className="flex items-center justify-between sm:justify-start gap-2.5 flex-wrap">
                   <div className="flex items-center gap-2">
@@ -5512,8 +5423,9 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.22 }}
-            className="fixed inset-0 z-40 bg-black/45 backdrop-blur-[3px]"
+            transition={{ duration: 0.16, ease: 'easeOut' }}
+            style={{ willChange: 'opacity' }}
+            className="fixed inset-0 z-40 bg-black/50"
             onClick={() => setIsCreateChoiceOpen(false)}
           />
         )}
@@ -5532,12 +5444,13 @@ export default function App() {
             {isCreateChoiceOpen && (
               <motion.div
                 ref={fabMenuRef}
-                initial={{ y: 24, opacity: 0, scale: 0.92 }}
+                initial={{ y: 12, opacity: 0, scale: 0.95 }}
                 animate={{ y: 0, opacity: 1, scale: 1 }}
-                exit={{ y: '100%', opacity: 0 }}
-                transition={{ duration: 0.24, ease: [0.32, 0.72, 0, 1] }}
+                exit={{ y: 10, opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
+                style={{ willChange: 'transform, opacity' }}
                 onClick={(e) => e.stopPropagation()}
-                className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900/98 border border-stone-800 rounded-2xl p-2 sm:p-2.5 shadow-2xl backdrop-blur-2xl w-60 sm:w-64 space-y-1"
+                className="absolute bottom-16 sm:bottom-20 right-0 origin-bottom-right z-50 bg-stone-900 border border-stone-800 rounded-2xl p-2 sm:p-2.5 shadow-2xl w-60 sm:w-64 space-y-1"
               >
                 {/* Option 1: Reminder */}
                 <button
@@ -5651,7 +5564,7 @@ export default function App() {
 
       {/* FIXED BOTTOM NAVIGATION BAR (هایلایت مینیمال فقط با تغییر رنگ متن و آیکون متناسب با تم بدون کادر و پس‌زمینه) */}
       <nav 
-        className={`fixed bottom-0 left-0 right-0 z-40 border-t backdrop-blur-xl transition-colors duration-200 pb-safe ${
+        className={`fixed bottom-0 left-0 right-0 z-40 border-t transition-colors duration-200 pb-safe ${
           settings.theme === 'jade_warm_light'
             ? 'bg-[#FFFFFF]/95 border-[#DDE1DA] text-[#202A29] shadow-sm'
             : settings.theme === 'sketch-contrast'
@@ -5838,7 +5751,6 @@ export default function App() {
         onRestoreItem={handleRestoreItem}
         onPermanentDeleteItem={handlePermanentDeleteItem}
         onEmptyRecycleBin={handleEmptyRecycleBin}
-        onScheduleTestAlarm={handleScheduleTestAlarm}
         proEntitlement={proEntitlement}
         onOpenProPaywall={(feat) => openProPaywall(feat)}
         onEntitlementUpdated={(next) => setProEntitlement(next)}
@@ -6004,15 +5916,17 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.25 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90 backdrop-blur-md"
+            transition={{ duration: 0.16, ease: 'easeOut' }}
+            style={{ willChange: 'opacity' }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/90"
             onClick={() => setViewingImageUrl(null)}
           >
             <motion.div
-              initial={{ y: 40, opacity: 0, scale: 0.96 }}
-              animate={{ y: 0, opacity: 1, scale: 1 }}
-              exit={{ y: '100%', opacity: 0 }}
-              transition={{ duration: 0.28, ease: [0.32, 0.72, 0, 1] }}
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              style={{ willChange: 'transform, opacity' }}
               onClick={(e) => e.stopPropagation()}
               className="relative max-w-2xl max-h-[90vh] overflow-hidden rounded-2xl border border-stone-700 bg-black"
             >

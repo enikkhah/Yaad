@@ -18,7 +18,7 @@ export interface RecurrenceOptionMeta {
 
 export const RECURRENCE_OPTIONS: RecurrenceOptionMeta[] = [
   { id: 'none', label: 'بدون تکرار', labelEn: 'No Recurrence', desc: 'یکباره', descEn: 'Once' },
-  { id: 'hourly', label: 'ساعتی', labelEn: 'Hourly', desc: 'هر چند ساعت یک‌بار', descEn: 'Every X hours' },
+  { id: 'hourly', label: 'هر X ساعت یک‌بار', labelEn: 'Every X Hours', desc: 'هر چند ساعت یک‌بار', descEn: 'Every X hours' },
   { id: 'daily', label: 'روزانه', labelEn: 'Daily', desc: 'هر روز در این ساعت', descEn: 'Every day' },
   { id: 'weekly', label: 'هفتگی', labelEn: 'Weekly', desc: 'روزهای مشخص هفته', descEn: 'Specific days of week' },
   { id: 'monthly', label: 'ماهیانه', labelEn: 'Monthly', desc: 'هر ماه در این روز', descEn: 'Every month' },
@@ -61,9 +61,9 @@ export function getRecurrenceLabel(reminder: Reminder, language: AppLanguage = '
     case 'hourly': {
       const interval = reminder.recurrenceInterval || 1;
       if (isEn) {
-        return interval === 1 ? 'Hourly' : `Every ${interval} hrs`;
+        return interval === 1 ? 'Every 1 hr' : `Every ${interval} hrs`;
       }
-      return interval === 1 ? 'تکرار ساعتی' : `هر ${toPersianDigits(interval)} ساعت`;
+      return `هر ${toPersianDigits(interval)} ساعت یک‌بار`;
     }
     case 'daily':
       return isEn ? 'Daily' : 'تکرار روزانه';

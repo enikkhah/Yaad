@@ -1279,3 +1279,86 @@ html:not(.dark)[data-theme="system"] .main-nav-tab-inactive svg {
   box-shadow: 0 0 0 6px rgba(255, 140, 0, 0.45), 0 6px 16px rgba(0, 0, 0, 0.8);
 }
 
+/* ==========================================================================
+   SMOOTH GPU-COMPOSITED PAGE, MODAL & SHEET TRANSITIONS (ZERO FLICKER)
+   ========================================================================== */
+@keyframes yaadPageEnter {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 8px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes yaadBackdropFadeIn {
+  0% {
+    opacity: 0;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+
+@keyframes yaadSheetSlideUp {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 22px, 0) scale(0.985);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+@keyframes yaadSlideFromTop {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -8px, 0);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+@keyframes yaadZoomIn95 {
+  0% {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.yaad-page-enter {
+  will-change: transform, opacity;
+  animation: yaadPageEnter 0.18s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-in.fade-in {
+  will-change: opacity;
+  animation: yaadBackdropFadeIn 0.16s ease-out both;
+}
+
+.animate-in.slide-in-from-bottom,
+.animate-in.slide-in-from-bottom-4 {
+  will-change: transform, opacity;
+  animation: yaadSheetSlideUp 0.2s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-in.slide-in-from-top-2 {
+  will-change: transform, opacity;
+  animation: yaadSlideFromTop 0.16s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.animate-in.zoom-in-95 {
+  will-change: transform, opacity;
+  animation: yaadZoomIn95 0.16s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+

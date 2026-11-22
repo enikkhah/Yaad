@@ -14,8 +14,7 @@ import {
   AlertTriangle,
   Radio,
   Volume2,
-  Sliders,
-  ChevronDown
+  Sliders
 } from 'lucide-react';
 import { SavedLocation, GeofenceTriggerType, LocationCheckpointConfig } from '../types';
 import { toPersianDigits } from '../utils/jalali';
@@ -29,7 +28,6 @@ import {
   logSliderPositionToRadius,
 } from '../utils/geofenceManager';
 import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
-import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
 import { ProBadge } from './ProBadge';
 
 interface LocationCaptureModalProps {
@@ -85,7 +83,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [geofenceTriggerOn, setGeofenceTriggerOn] = useState<GeofenceTriggerType>('enter');
   const [geofenceCustomMessage, setGeofenceCustomMessage] = useState<string>('');
   const [geofencePlayAudio, setGeofencePlayAudio] = useState<boolean>(true);
-  const [showCollapsibleMediaAndGeofence, setShowCollapsibleMediaAndGeofence] = useState(false);
   const geofenceRadiusSectionRef = useRef<HTMLDivElement>(null);
   const formScrollContainerRef = useRef<HTMLDivElement>(null);
 
@@ -253,9 +250,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
           setGeofenceCustomMessage('');
           setGeofencePlayAudio(true);
         }
-        setShowCollapsibleMediaAndGeofence(
-          Boolean(editingLocation.photoUrl || editingLocation.geofence?.enabled || focusGeofenceRadius)
-        );
         if (focusGeofenceRadius) {
           setEnableGeofence(true);
           setTimeout(() => {
@@ -282,7 +276,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         setGeofenceTriggerOn('enter');
         setGeofenceCustomMessage('');
         setGeofencePlayAudio(true);
-        setShowCollapsibleMediaAndGeofence(false);
         fetchCurrentLocation();
       }
       setLocationError(null);
@@ -404,18 +397,18 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          transition={{ duration: 0.22 }}
-          className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/80 backdrop-blur-sm overflow-hidden"
-          style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }}
+          transition={{ duration: 0.16, ease: 'easeOut' }}
+          className="fixed inset-0 z-50 flex flex-col justify-end sm:justify-center items-center p-0 sm:p-4 bg-black/75 overflow-hidden"
+          style={{ height: viewportHeight ? `${viewportHeight}px` : '100dvh', willChange: 'opacity' }}
           dir={isEn ? 'ltr' : 'rtl'}
         >
           <motion.div
-            initial={{ y: '100%', opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: '100%', opacity: 0 }}
-            transition={{ type: 'spring', damping: 28, stiffness: 320 }}
+            initial={{ opacity: 0, y: 16, scale: 0.985 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 12, scale: 0.985 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
             className="bg-stone-900 border border-stone-800 rounded-t-3xl sm:rounded-3xl w-full max-w-xl overflow-hidden shadow-2xl flex flex-col"
-            style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '94dvh' }}
+            style={{ maxHeight: viewportHeight ? `${viewportHeight}px` : '94dvh', willChange: 'transform, opacity' }}
           >
           {/* Header - Fixed & Solid, no scroll bleed-through */}
           <div className="shrink-0 flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-stone-800 bg-stone-900 z-10">
@@ -642,50 +635,9 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
               </div>
             )}
 
-            {/* Collapsible Section: Geofence (حصار مکانی) - Moved above Camera Photo & Description */}
+            {/* فعال‌سازی مستقیم حصار مکانی با سوییچ اسلاید (بدون منوی بازشونده) */}
             <div className="pt-1.5">
-              <button
-                type="button"
-                onClick={(e) => {
-                  const willOpen = !showCollapsibleMediaAndGeofence;
-                  setShowCollapsibleMediaAndGeofence(willOpen);
-                  if (willOpen) {
-                    scrollAccordionHeaderIntoView(e.currentTarget, 38);
-                  }
-                }}
-                style={{ color: '#FFFFFF' }}
-                className={`w-full min-h-[58px] sm:min-h-[64px] py-3.5 sm:py-4 px-4 sm:px-5 rounded-2xl border-2 text-sm sm:text-base font-black flex items-center justify-between transition-all cursor-pointer shadow-md !text-white ${
-                  showCollapsibleMediaAndGeofence || enableGeofence
-                    ? 'bg-emerald-500/20 border-emerald-400/80 shadow-emerald-500/15 ring-2 ring-emerald-400/25'
-                    : 'bg-emerald-500/12 hover:bg-emerald-500/20 border-emerald-400/55 hover:border-emerald-400/80 shadow-emerald-500/10'
-                }`}
-              >
-                <span className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-xl bg-emerald-500/25 border border-emerald-300/45 text-white flex items-center justify-center shrink-0 shadow-sm">
-                    <Radio className={`w-5.5 h-5.5 ${enableGeofence ? 'animate-pulse text-white' : 'text-emerald-200'}`} />
-                  </div>
-                  <span style={{ color: '#FFFFFF' }} className="tracking-wide text-base sm:text-lg font-black !text-white drop-shadow-xs">
-                    {isEn ? 'Activate Geofence' : 'فعال‌سازی حصار مکانی'}
-                  </span>
-                  {enableGeofence && (
-                    <span style={{ color: '#FFFFFF' }} className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/35 !text-white border border-emerald-300/50 font-bold">
-                      {isEn ? 'Active' : 'فعال'}
-                    </span>
-                  )}
-                </span>
-                <div className={`w-9 h-9 rounded-xl flex items-center justify-center border transition-all ${
-                  showCollapsibleMediaAndGeofence
-                    ? 'bg-emerald-500/30 border-emerald-300/50 text-white rotate-180'
-                    : 'bg-white/10 border-white/25 text-white'
-                }`}>
-                  <ChevronDown className="w-5 h-5 transition-transform duration-200" />
-                </div>
-              </button>
-
-              {showCollapsibleMediaAndGeofence && (
-                <div className="mt-3 space-y-4 animate-in fade-in duration-200">
-                  {/* زیرمجموعه حصار مکانی و اعلام ورود/خروج (Geofence Sub-Feature) */}
-                  <div className={`rounded-2xl border-2 transition-all p-4 sm:p-5 shadow-md ${
+              <div className={`rounded-2xl border-2 transition-all p-4 sm:p-5 shadow-md ${
               enableGeofence 
                 ? 'bg-emerald-500/12 border-emerald-400/75 ring-2 ring-emerald-500/20' 
                 : 'bg-stone-800/45 border-stone-600/70'
@@ -935,8 +887,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 </div>
               )}
             </div>
-                </div>
-              )}
             </div>
 
             {/* Camera Photo Capture Field (Independent section between Geofence and Description) */}

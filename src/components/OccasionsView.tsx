@@ -116,7 +116,7 @@ export const OccasionsView: React.FC<OccasionsViewProps> = ({
     : (isEn ? 'Add New Occasion' : 'ثبت مناسبت جدید');
 
   return (
-    <section className="space-y-4 animate-in fade-in" dir={isEn ? 'ltr' : 'rtl'}>
+    <section className="space-y-4 yaad-page-enter" dir={isEn ? 'ltr' : 'rtl'}>
       {/* Header with Dynamic Mood & Color per Selected Occasion Type */}
       <div
         className={`flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 sm:p-4 rounded-2xl border transition-all duration-300 ${

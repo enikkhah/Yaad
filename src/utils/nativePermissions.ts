@@ -8,6 +8,7 @@ import {
 import {
   checkLocalFolderPermissionStatus,
   requestLocalFolderPermission,
+  revokeLocalFolderPermission,
   FOLDER_PERMISSION_GRANTED_KEY
 } from './backupStorage';
 import { getLastKnownPosition } from './geofenceManager';
@@ -27,6 +28,36 @@ export const PERM_NOTIF_GRANTED_KEY = 'yaad_perm_notif_granted';
 export const PERM_MIC_GRANTED_KEY = 'yaad_perm_mic_granted';
 export const PERM_CAM_GRANTED_KEY = 'yaad_perm_cam_granted';
 export const PERM_LOC_GRANTED_KEY = 'yaad_perm_loc_granted';
+export const USER_DISABLED_PERMS_KEY = 'yaad_user_disabled_permissions_v1';
+
+export type ToggleablePermissionType = 'notifications' | 'microphone' | 'camera' | 'location' | 'storage';
+
+function readUserDisabledPerms(): Partial<Record<ToggleablePermissionType, boolean>> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = localStorage.getItem(USER_DISABLED_PERMS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeUserDisabledPerm(type: ToggleablePermissionType, disabled: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = readUserDisabledPerms();
+    if (disabled) {
+      map[type] = true;
+    } else {
+      delete map[type];
+    }
+    localStorage.setItem(USER_DISABLED_PERMS_KEY, JSON.stringify(map));
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export { requestLocalFolderPermission };
 
@@ -42,9 +73,10 @@ export function isNativeAndroidApp(): boolean {
  * Helper to explicitly mark a permission as granted in localStorage when a feature succeeds
  */
 export function markPermissionGranted(
-  type: 'notifications' | 'microphone' | 'camera' | 'location' | 'storage'
+  type: ToggleablePermissionType
 ): void {
   try {
+    writeUserDisabledPerm(type, false);
     if (type === 'notifications') localStorage.setItem(PERM_NOTIF_GRANTED_KEY, 'true');
     else if (type === 'microphone') localStorage.setItem(PERM_MIC_GRANTED_KEY, 'true');
     else if (type === 'camera') localStorage.setItem(PERM_CAM_GRANTED_KEY, 'true');
@@ -56,9 +88,26 @@ export function markPermissionGranted(
 }
 
 /**
+ * Disables a permission within the app (clears cached grant flags and tracks user-disabled preference)
+ */
+export async function disablePermissionLocally(type: ToggleablePermissionType): Promise<void> {
+  writeUserDisabledPerm(type, true);
+  try {
+    if (type === 'notifications') localStorage.removeItem(PERM_NOTIF_GRANTED_KEY);
+    else if (type === 'microphone') localStorage.removeItem(PERM_MIC_GRANTED_KEY);
+    else if (type === 'camera') localStorage.removeItem(PERM_CAM_GRANTED_KEY);
+    else if (type === 'location') localStorage.removeItem(PERM_LOC_GRANTED_KEY);
+    else if (type === 'storage') await revokeLocalFolderPermission();
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+/**
  * Request Notification Permission and persist granted state
  */
 export async function requestNotificationPermission(): Promise<boolean> {
+  writeUserDisabledPerm('notifications', false);
   const granted = await rawRequestNotificationPermission();
   if (granted) {
     markPermissionGranted('notifications');
@@ -82,6 +131,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
  * Request Microphone Permission (forces Android OS / WebView permission prompt)
  */
 export async function requestMicrophonePermission(): Promise<boolean> {
+  writeUserDisabledPerm('microphone', false);
   unlockAudio();
   if (isNativeAndroidApp()) {
     try {
@@ -119,6 +169,7 @@ export async function requestMicrophonePermission(): Promise<boolean> {
  * Request Camera Permission (forces Android OS / WebView permission prompt)
  */
 export async function requestCameraPermission(): Promise<boolean> {
+  writeUserDisabledPerm('camera', false);
   if (isNativeAndroidApp()) {
     try {
       const res = await (LocalNotifications.requestPermissions as any)({
@@ -187,6 +238,7 @@ export async function ensureNativeAndroidCameraPermission(withMicrophone = false
  * Request GPS / Geolocation Permission (forces Android OS / WebView permission prompt)
  */
 export async function requestLocationPermission(): Promise<boolean> {
+  writeUserDisabledPerm('location', false);
   if (isNativeAndroidApp()) {
     try {
       const res = await (LocalNotifications.requestPermissions as any)({
@@ -249,11 +301,13 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
 
   if (typeof window === 'undefined') return result;
 
+  const userDisabled = readUserDisabledPerms();
+
   // 1. Check Native Android OS permissions via Capacitor plugins
-  let nativeExplicitNotifDenied = false;
-  let nativeExplicitMicDenied = false;
-  let nativeExplicitCamDenied = false;
-  let nativeExplicitLocDenied = false;
+  let nativeExplicitNotifDenied = Boolean(userDisabled.notifications);
+  let nativeExplicitMicDenied = Boolean(userDisabled.microphone);
+  let nativeExplicitCamDenied = Boolean(userDisabled.camera);
+  let nativeExplicitLocDenied = Boolean(userDisabled.location);
   let nativeExplicitStorageChecked = false;
 
   if (isNativeAndroidApp()) {
@@ -447,6 +501,12 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
   } catch {
     // Ignore
   }
+
+  if (userDisabled.notifications) result.notifications = false;
+  if (userDisabled.microphone) result.microphone = false;
+  if (userDisabled.camera) result.camera = false;
+  if (userDisabled.location) result.location = false;
+  if (userDisabled.storage) result.storage = false;
 
   result.backgroundLocation = result.location ? hasBackgroundLocationPermission() : false;
   if (isNativeAndroidApp()) {

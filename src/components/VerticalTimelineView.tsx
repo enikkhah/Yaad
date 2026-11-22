@@ -671,7 +671,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
       {/* 3. CARD ACTION BOTTOM SHEET (با لمس کارت: انجام شد، تعویق، ویرایش، حذف) */}
       {selectedReminder && (
         <div 
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end justify-center animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 bg-black/70 flex items-end justify-center animate-in fade-in duration-150"
           onClick={() => {
             setSelectedReminder(null);
             setShowPostponePicker(false);
@@ -820,7 +820,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
       {/* 4. CATEGORY FILTER BOTTOM SHEET */}
       {isFilterSheetOpen && (
         <div 
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-end justify-center animate-in fade-in duration-150"
+          className="fixed inset-0 z-50 bg-black/70 flex items-end justify-center animate-in fade-in duration-150"
           onClick={() => setIsFilterSheetOpen(false)}
         >
           <div

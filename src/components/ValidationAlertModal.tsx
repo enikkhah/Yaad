@@ -74,14 +74,15 @@ export const ValidationAlertModal: React.FC<ValidationAlertModalProps> = ({
           dir={isEn ? 'ltr' : 'rtl'}
         >
           <motion.div
-            initial={{ y: -24, opacity: 0, scale: 0.96 }}
+            initial={{ y: -14, opacity: 0, scale: 0.97 }}
             animate={{ y: 0, opacity: 1, scale: 1 }}
-            exit={{ y: '100%', opacity: 0, scale: 0.96 }}
-            transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+            exit={{ y: -10, opacity: 0, scale: 0.97 }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             onClick={handleManualClose}
-            className="pointer-events-auto relative overflow-hidden rounded-2xl bg-stone-900 border-2 border-indigo-500 shadow-2xl shadow-indigo-950/80 backdrop-blur-md cursor-pointer"
+            className="pointer-events-auto relative overflow-hidden rounded-2xl bg-stone-900 border-2 border-indigo-500 shadow-2xl shadow-indigo-950/80 cursor-pointer"
             style={{
               boxShadow: '0 10px 30px -5px rgba(99, 102, 241, 0.35)',
+              willChange: 'transform, opacity',
             }}
           >
             {/* Ambient background glow */}
