@@ -61,6 +61,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
   const [description, setDescription] = useState('');
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
+  const [latInput, setLatInput] = useState<string>('');
+  const [lngInput, setLngInput] = useState<string>('');
   const [accuracy, setAccuracy] = useState<number | null>(null);
   const [address, setAddress] = useState<string>('');
   const [isLocating, setIsLocating] = useState<boolean>(false);
@@ -128,6 +130,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
 
         setLatitude(lat);
         setLongitude(lng);
+        setLatInput(lat.toFixed(6));
+        setLngInput(lng.toFixed(6));
         setAccuracy(acc);
         setIsLocating(false);
         setIsGpsOffWarning(false);
@@ -231,6 +235,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         setDescription(editingLocation.description || '');
         setLatitude(editingLocation.latitude ?? null);
         setLongitude(editingLocation.longitude ?? null);
+        setLatInput(editingLocation.latitude != null ? String(editingLocation.latitude) : '');
+        setLngInput(editingLocation.longitude != null ? String(editingLocation.longitude) : '');
         setAccuracy(editingLocation.accuracy ?? null);
         setAddress(editingLocation.address || '');
         setPhotoUrl(editingLocation.photoUrl || null);
@@ -266,6 +272,8 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
         setDescription('');
         setLatitude(null);
         setLongitude(null);
+        setLatInput('');
+        setLngInput('');
         setAccuracy(null);
         setPhotoUrl(null);
         setAddress('');
@@ -298,6 +306,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
       setPhotoUrl(reader.result as string);
     };
     reader.readAsDataURL(file);
+    e.target.value = '';
   };
 
   const handleSave = () => {
@@ -307,7 +316,12 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
       return;
     }
 
-    if (latitude === null || longitude === null) {
+    if (
+      latitude === null ||
+      longitude === null ||
+      !Number.isFinite(latitude) ||
+      !Number.isFinite(longitude)
+    ) {
       setValidationFieldName(isEn ? 'GPS Coordinates' : 'موقعیت مکانی (GPS)');
       setShowValidationModal(true);
       return;
@@ -368,13 +382,18 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
     onClose();
   };
 
-  const googleMapsUrl = latitude && longitude 
-    ? `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}` 
+  const hasValidCoords =
+    latitude !== null &&
+    longitude !== null &&
+    Number.isFinite(latitude) &&
+    Number.isFinite(longitude);
+  const googleMapsUrl = hasValidCoords
+    ? `https://www.google.com/maps/search/?api=1&query=${latitude},${longitude}`
     : '';
-  const googleDirectionsUrl = latitude && longitude 
-    ? `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}` 
+  const googleDirectionsUrl = hasValidCoords
+    ? `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`
     : '';
-  const embedMapUrl = latitude && longitude
+  const embedMapUrl = hasValidCoords
     ? `https://maps.google.com/maps?q=${latitude},${longitude}&hl=${isEn ? 'en' : 'fa'}&z=15&output=embed`
     : '';
 
@@ -509,20 +528,42 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 </div>
               )}
 
-              {latitude !== null && longitude !== null ? (
+              {(editingLocation || (latitude !== null && longitude !== null) || latInput !== '' || lngInput !== '') ? (
                 <div className="space-y-2.5 pt-1">
                   <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="bg-stone-900/80 p-2.5 rounded-xl border border-stone-800 flex flex-col">
-                      <span className="text-[11px] text-stone-400">{isEn ? 'Latitude (Lat)' : 'عرض جغرافیایی (Lat)'}</span>
-                      <span className="font-mono font-bold text-emerald-400 text-xs sm:text-sm mt-0.5">
-                        {isEn ? latitude.toFixed(6) : toPersianDigits(latitude.toFixed(6))}
-                      </span>
+                    <div className="bg-stone-900/80 p-2.5 rounded-xl border border-stone-800 flex flex-col gap-1">
+                      <label className="text-[11px] text-stone-400">{isEn ? 'Latitude (Lat)' : 'عرض جغرافیایی (Lat)'}</label>
+                      <input
+                        type="number"
+                        step="any"
+                        dir="ltr"
+                        value={latInput}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setLatInput(val);
+                          const parsed = parseFloat(val);
+                          setLatitude(Number.isFinite(parsed) ? parsed : null);
+                          setAccuracy(null);
+                        }}
+                        className="w-full bg-stone-950 border border-stone-700/80 focus:border-emerald-400 rounded-lg px-2 py-1 font-mono font-bold text-emerald-400 text-xs sm:text-sm focus:outline-none"
+                      />
                     </div>
-                    <div className="bg-stone-900/80 p-2.5 rounded-xl border border-stone-800 flex flex-col">
-                      <span className="text-[11px] text-stone-400">{isEn ? 'Longitude (Lng)' : 'طول جغرافیایی (Lng)'}</span>
-                      <span className="font-mono font-bold text-emerald-400 text-xs sm:text-sm mt-0.5">
-                        {isEn ? longitude.toFixed(6) : toPersianDigits(longitude.toFixed(6))}
-                      </span>
+                    <div className="bg-stone-900/80 p-2.5 rounded-xl border border-stone-800 flex flex-col gap-1">
+                      <label className="text-[11px] text-stone-400">{isEn ? 'Longitude (Lng)' : 'طول جغرافیایی (Lng)'}</label>
+                      <input
+                        type="number"
+                        step="any"
+                        dir="ltr"
+                        value={lngInput}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setLngInput(val);
+                          const parsed = parseFloat(val);
+                          setLongitude(Number.isFinite(parsed) ? parsed : null);
+                          setAccuracy(null);
+                        }}
+                        className="w-full bg-stone-950 border border-stone-700/80 focus:border-emerald-400 rounded-lg px-2 py-1 font-mono font-bold text-emerald-400 text-xs sm:text-sm focus:outline-none"
+                      />
                     </div>
                   </div>
 
@@ -535,12 +576,16 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                     </div>
                   )}
 
-                  {address && (
-                    <div className="text-xs text-stone-300 bg-stone-900/60 p-2.5 rounded-xl border border-stone-800">
-                      <span className="text-stone-400 font-bold block mb-1">{isEn ? 'Estimated Address:' : 'آدرس تخمینی:'}</span>
-                      <span className="line-clamp-2 leading-relaxed">{address}</span>
-                    </div>
-                  )}
+                  <div className="text-xs text-stone-300 bg-stone-900/60 p-2.5 rounded-xl border border-stone-800 space-y-1">
+                    <label className="text-stone-400 font-bold block">{isEn ? 'Address (Editable):' : 'آدرس (قابل ویرایش):'}</label>
+                    <input
+                      type="text"
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      placeholder={isEn ? 'Enter or edit street address...' : 'آدرس مکان را وارد یا ویرایش کنید...'}
+                      className="w-full bg-stone-950 border border-stone-700/80 focus:border-emerald-400 rounded-lg px-2.5 py-1.5 text-xs text-stone-200 placeholder-stone-500 focus:outline-none"
+                    />
+                  </div>
                 </div>
               ) : !isLocating && !locationError && (
                 <div className="text-xs sm:text-sm text-stone-400 text-center py-2">
@@ -550,7 +595,7 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
             </div>
 
             {/* Google Maps Preview */}
-            {latitude !== null && longitude !== null && (
+            {hasValidCoords && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-xs font-bold text-stone-300">
                   <span className="flex items-center gap-1.5">
@@ -900,14 +945,24 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                 {isEn ? 'Camera Photo of Location:' : 'عکس از محل توسط دوربین:'}
               </label>
 
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handleFileUpload}
+                className="hidden"
+              />
+
               {photoUrl ? (
-                <div className="relative rounded-2xl overflow-hidden border border-stone-800 bg-black aspect-video group">
-                  <img
-                    src={photoUrl}
-                    alt={isEn ? 'Location photo' : 'عکس ثبت شده از لوکیشن'}
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
+                <div className="space-y-2.5">
+                  <div className="relative rounded-2xl overflow-hidden border border-stone-800 bg-black aspect-video">
+                    <img
+                      src={photoUrl}
+                      alt={isEn ? 'Location photo' : 'عکس ثبت شده از لوکیشن'}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
                       onClick={() => {
@@ -917,19 +972,34 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                         }
                         setIsCameraOpen(true);
                       }}
-                      className="px-3 py-1.5 rounded-xl bg-stone-900/90 text-white text-xs font-bold flex items-center gap-1.5 border border-white/20 hover:bg-black cursor-pointer"
+                      className="min-h-[42px] px-2.5 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 border border-stone-700 cursor-pointer active:scale-95 transition-all"
                     >
-                      <Camera className="w-3.5 h-3.5 text-indigo-400" />
-                      <span>{isEn ? 'Retake' : 'عکس مجدد'}</span>
+                      <Camera className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      <span className="truncate">{isEn ? 'Retake' : 'عکس مجدد'}</span>
+                      <ProBadge locked={!hasProAccess} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!hasProAccess) {
+                          onRequirePro?.('photo');
+                          return;
+                        }
+                        fileInputRef.current?.click();
+                      }}
+                      className="min-h-[42px] px-2.5 py-2 rounded-xl bg-stone-950 hover:bg-stone-800 text-white text-xs font-bold flex items-center justify-center gap-1.5 border border-stone-700 cursor-pointer active:scale-95 transition-all"
+                    >
+                      <Upload className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                      <span className="truncate">{isEn ? 'Change Photo' : 'تغییر از گالری'}</span>
                       <ProBadge locked={!hasProAccess} />
                     </button>
                     <button
                       type="button"
                       onClick={() => setPhotoUrl(null)}
-                      className="px-3 py-1.5 rounded-xl bg-rose-600/90 text-white text-xs font-bold flex items-center gap-1.5 hover:bg-rose-700 cursor-pointer"
+                      className="min-h-[42px] px-2.5 py-2 rounded-xl bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>{isEn ? 'Delete Photo' : 'حذف عکس'}</span>
+                      <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                      <span className="truncate">{isEn ? 'Delete' : 'حذف عکس'}</span>
                     </button>
                   </div>
                 </div>
@@ -976,14 +1046,6 @@ export const LocationCaptureModal: React.FC<LocationCaptureModalProps> = ({
                     </span>
                     <span className="text-[10px] text-stone-500">{isEn ? 'Upload existing photo' : 'آپلود عکس موجود'}</span>
                   </button>
-
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="image/*"
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
                 </div>
               )}
             </div>

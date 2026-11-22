@@ -78,7 +78,6 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
   const [notifyHour, setNotifyHour] = useState<number>(9);
   const [notifyMinute, setNotifyMinute] = useState<number>(0);
   const [customNote, setCustomNote] = useState('');
-  const [alsoCreateReminder, setAlsoCreateReminder] = useState(true);
 
   // Validation
   const [showValidationModal, setShowValidationModal] = useState(false);
@@ -168,7 +167,6 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
       setNotifyHour(parseInt(hStr || '9', 10));
       setNotifyMinute(parseInt(mStr || '0', 10));
       setCustomNote(editingOccasion.customNote || '');
-      setAlsoCreateReminder(false);
       setDateActiveTab(null);
     } else {
       const initialType = defaultType || 'birthday';
@@ -186,7 +184,6 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
       setNotifyHour(parseInt(hStr || '9', 10));
       setNotifyMinute(parseInt(mStr || '0', 10));
       setCustomNote('');
-      setAlsoCreateReminder(true);
       setDateActiveTab(null);
     }
   }, [editingOccasion, isOpen, defaultType, isEn]);
@@ -286,7 +283,7 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
         notifyTime: timeStr,
         customNote: customNote.trim() || undefined,
       },
-      alsoCreateReminder
+      !editingOccasion
     );
 
     onClose();
@@ -875,27 +872,6 @@ export const OccasionFormModal: React.FC<OccasionFormModalProps> = ({
               </div>
             </div>
 
-            {/* 8. Also Create System Reminder */}
-            {!editingOccasion && (
-              <label className="flex items-center gap-3 p-3 rounded-2xl bg-stone-950 border border-stone-800/80 cursor-pointer hover:border-stone-700 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={alsoCreateReminder}
-                  onChange={(e) => setAlsoCreateReminder(e.target.checked)}
-                  className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
-                />
-                <div className="flex-1">
-                  <span className="text-xs font-bold text-white block">
-                    {isEn ? 'Add alarm reminder to Timeline & Alarm' : 'تنظیم خودکار آلارم صوتی در خط زمانی یادآورها'}
-                  </span>
-                  <span className="text-[10px] text-stone-400 block">
-                    {isEn 
-                      ? 'Automatically triggers alarm audio at specified notification day and hour' 
-                      : 'در تاریخ مشخص‌شده آلارم رسا و اعلان بومی با عنوان مناسبت فعال خواهد شد'}
-                  </span>
-                </div>
-              </label>
-            )}
           </div>
 
           {/* Footer - Sticky at bottom with min 48px buttons */}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Category, Priority, Reminder, RecurrenceType, SavedLocation, GeofenceTriggerType } from '../types';
+import { Category, Priority, Reminder, RecurrenceType, SavedLocation } from '../types';
 import { 
   getJalaliComponents, 
   PERSIAN_MONTHS, 
@@ -26,7 +26,7 @@ import {
 } from '../utils/recurrence';
 import { JalaliMultiDatePicker } from './JalaliMultiDatePicker';
 import { CameraCaptureModal } from './CameraCaptureModal';
-import { isNativeAndroidApp, requestLocationPermission, openAndroidSettings } from '../utils/nativePermissions';
+import { isNativeAndroidApp, openAndroidSettings } from '../utils/nativePermissions';
 import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
 import { appendWithoutDuplicate, safeAbortSpeechRecognition } from '../utils/speechDeduplication';
 import { 
@@ -45,16 +45,13 @@ import {
   Repeat,
   AlertCircle,
   Smartphone,
-  MapPin,
-  Crosshair,
   ChevronDown,
   Sliders
 } from 'lucide-react';
 import { WheelPicker } from './WheelPicker';
-import { AppLanguage, formatSavedLocationTitle } from '../utils/i18n';
+import { AppLanguage } from '../utils/i18n';
 import { ValidationAlertModal } from './ValidationAlertModal';
 import { scrollAccordionHeaderIntoView } from '../utils/accordionScroll';
-import { radiusToLogSliderPosition, logSliderPositionToRadius } from '../utils/geofenceManager';
 import { ProBadge } from './ProBadge';
 
 interface ReminderFormProps {
@@ -95,10 +92,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   onSave,
   initialData,
   googleToken,
-  savedLocations = [],
   language = 'fa',
-  defaultEnableGeofence = false,
-  focusGeofenceRadius = false,
   hasProAccess = true,
   onRequirePro,
 }) => {
@@ -127,18 +121,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
   const [syncWithGoogle, setSyncWithGoogle] = useState(!!googleToken);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [showMoreOptions, setShowMoreOptions] = useState(false);
-
-  // Geofence / Location Checkpoint states (چک‌پوینت هشدار مکان‌محور)
-  const [enableGeofence, setEnableGeofence] = useState(false);
-  const [geofenceLocationName, setGeofenceLocationName] = useState('');
-  const [geofenceLat, setGeofenceLat] = useState<number>(35.6892);
-  const [geofenceLng, setGeofenceLng] = useState<number>(51.3890);
-  const [geofenceRadius, setGeofenceRadius] = useState<number>(200);
-  const [geofenceTriggerOn, setGeofenceTriggerOn] = useState<GeofenceTriggerType>('enter');
-  const [geofenceSavedLocId, setGeofenceSavedLocId] = useState<string>('');
-  const [isDetectingGps, setIsDetectingGps] = useState(false);
-  const [gpsError, setGpsError] = useState<string | null>(null);
-  const geofenceRadiusSectionRef = useRef<HTMLDivElement>(null);
 
   // Calculate dynamic default time (+2 minutes from now)
   const getDynamicDefaultTime = () => {
@@ -267,41 +249,14 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setDateActiveTab(null);
       setCustomYearInput(initialData.dueTimestamp && getJalaliComponents(initialData.dueTimestamp).year > 1425 ? String(getJalaliComponents(initialData.dueTimestamp).year) : '');
 
-      if (initialData.geofence) {
-        setEnableGeofence(initialData.geofence.enabled !== false);
-        setGeofenceLocationName(initialData.geofence.locationName || '');
-        setGeofenceLat(initialData.geofence.latitude);
-        setGeofenceLng(initialData.geofence.longitude);
-        setGeofenceRadius(initialData.geofence.radius || 200);
-        setGeofenceTriggerOn(initialData.geofence.triggerOn === 'exit' ? 'exit' : 'enter');
-        setGeofenceSavedLocId(initialData.geofence.savedLocationId || '');
-      } else {
-        setEnableGeofence(defaultEnableGeofence);
-        setGeofenceLocationName('');
-        setGeofenceSavedLocId('');
-        setGeofenceRadius(200);
-        setGeofenceTriggerOn('enter');
-      }
-
       const hasExtraData = !!(
         initialData.description ||
         initialData.category !== 'work' ||
         initialData.priority !== 'medium' ||
         (initialData.recurrence && initialData.recurrence !== 'none') ||
-        initialData.imageUrl ||
-        initialData.geofence?.enabled ||
-        focusGeofenceRadius
+        initialData.imageUrl
       );
       setShowMoreOptions(hasExtraData);
-      if (focusGeofenceRadius) {
-        setEnableGeofence(true);
-        setTimeout(() => {
-          geofenceRadiusSectionRef.current?.scrollIntoView({
-            behavior: 'smooth',
-            block: 'center',
-          });
-        }, 220);
-      }
     } else {
       // Creating new reminder: default date & time is automatically set to current time + 2 minutes on each open
       const defaultTime = Date.now() + 2 * 60 * 1000;
@@ -337,18 +292,13 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
       setRecurrenceDaysOfWeek([]);
       setRecurrenceCustomDates([]);
 
-      setEnableGeofence(defaultEnableGeofence);
-      setGeofenceLocationName('');
-      setGeofenceSavedLocId('');
-      setGeofenceRadius(200);
-      setGeofenceTriggerOn('enter');
       setShowMoreOptions(false);
     }
 
     return () => {
       stopVoiceListening();
     };
-  }, [isOpen, initialData, defaultEnableGeofence, focusGeofenceRadius]);
+  }, [isOpen, initialData]);
 
   // Virtual keyboard tracking: keeps footer button pinned directly above virtual keyboard
   const [viewportHeight, setViewportHeight] = useState<number | null>(null);
@@ -633,54 +583,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
     reader.readAsDataURL(file);
   };
 
-  const handleGetQuickGps = async () => {
-    setGpsError(null);
-    if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      setGpsError(isEn ? 'Geolocation is not supported.' : 'موقعیت مکانی در این دستگاه پشتیبانی نمی‌شود.');
-      return;
-    }
-    const hasPerm = await requestLocationPermission();
-    if (!hasPerm) {
-      setGpsError(isEn ? 'Location permission denied. Enable in Android Settings.' : 'دسترسی مکان داده نشد. لطفاً در تنظیمات اندروید فعال کنید.');
-      return;
-    }
-    setIsDetectingGps(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setGeofenceLat(parseFloat(pos.coords.latitude.toFixed(6)));
-        setGeofenceLng(parseFloat(pos.coords.longitude.toFixed(6)));
-        if (!geofenceLocationName) {
-          setGeofenceLocationName(isEn ? 'Current GPS Location' : 'موقعیت فعلی من');
-        }
-        setIsDetectingGps(false);
-      },
-      () => {
-        setIsDetectingGps(false);
-        setGpsError(
-          isEn 
-            ? 'GPS request failed or disabled in Android.' 
-            : 'خطا در دریافت موقعیت. لطفاً GPS دستگاه را روشن فرمایید.'
-        );
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
-  };
-
-  const handleSelectSavedLocation = (locId: string) => {
-    setGeofenceSavedLocId(locId);
-    if (!locId) {
-      setGeofenceLocationName('');
-      handleGetQuickGps();
-      return;
-    }
-    const found = savedLocations?.find((l) => l.id === locId);
-    if (found) {
-      setGeofenceLocationName(formatSavedLocationTitle(found.title, language));
-      setGeofenceLat(found.latitude);
-      setGeofenceLng(found.longitude);
-    }
-  };
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) {
@@ -733,19 +635,7 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
         recurrenceCount: recurrence !== 'none' && recurrenceCount && recurrenceCount > 0 ? recurrenceCount : undefined,
         recurrenceDaysOfWeek: recurrence === 'weekly' ? recurrenceDaysOfWeek : undefined,
         recurrenceCustomDates: recurrence === 'custom_dates' ? recurrenceCustomDates : undefined,
-        geofence: enableGeofence
-          ? {
-              enabled: true,
-              locationName: geofenceLocationName.trim() || title.trim() || (isEn ? 'Geofence Place' : 'حصار مکانی'),
-              latitude: Number.isFinite(Number(geofenceLat)) ? Number(geofenceLat) : 35.6892,
-              longitude: Number.isFinite(Number(geofenceLng)) ? Number(geofenceLng) : 51.3890,
-              radius: Number(geofenceRadius) || 200,
-              triggerOn: geofenceTriggerOn,
-              savedLocationId: geofenceSavedLocId || undefined,
-              lastTriggeredAt: undefined,
-              hasTriggered: false,
-            }
-          : (initialData?.geofence ? { ...initialData.geofence, enabled: false } : undefined),
+        geofence: initialData?.geofence,
         sourceApp: !isNativeAndroidApp() && isListening ? 'voice' : 'manual',
       },
       !isNativeAndroidApp() && syncWithGoogle
@@ -1805,274 +1695,6 @@ export const ReminderForm: React.FC<ReminderFormProps> = ({
               </div>
             )}
 
-            {/* GEOFENCE LOCATION CHECKPOINT (حصار مکانی / Geofence) */}
-            <div className={`rounded-2xl border-2 p-3.5 sm:p-5 space-y-3.5 shadow-md transition-all ${
-              enableGeofence
-                ? 'bg-emerald-500/12 border-emerald-400/75 shadow-emerald-500/10'
-                : 'bg-indigo-500/12 border-indigo-400/50 shadow-indigo-500/10'
-            }`}>
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-9 h-9 rounded-xl bg-white/15 border border-white/30 text-white flex items-center justify-center shrink-0">
-                    <MapPin className="w-4.5 h-4.5 text-white" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span style={{ color: '#FFFFFF' }} className="text-sm sm:text-base font-black !text-white">
-                        {isEn ? 'Geofence' : 'حصار مکانی'}
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-stone-200">
-                      {isEn
-                        ? 'Trigger alarm & spoken alert upon arrival or departure from this coordinate'
-                        : 'پخش آلارم، صوت و اعلان اختصاصی هنگام ورود یا خروج از محدوده مکانی'}
-                    </p>
-                  </div>
-                </div>
-
-                {/* High-Visibility Sliding Toggle Switch (کلید کشویی واضح فعال‌سازی) */}
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={enableGeofence}
-                  onClick={(e) => {
-                    const willEnable = !enableGeofence;
-                    if (willEnable && !hasProAccess) {
-                      onRequirePro?.('geofence');
-                      return;
-                    }
-                    setEnableGeofence(willEnable);
-                    if (willEnable) {
-                      if (typeof window !== 'undefined') {
-                        window.dispatchEvent(new CustomEvent('yaad:verify-gps-for-geofence'));
-                      }
-                      if (!geofenceSavedLocId) {
-                        handleGetQuickGps();
-                      }
-                      scrollAccordionHeaderIntoView(e.currentTarget.closest('.rounded-2xl') as HTMLElement, 38);
-                    }
-                  }}
-                  className="flex items-center gap-2 shrink-0 cursor-pointer group focus:outline-none"
-                  title={enableGeofence ? (isEn ? 'Disable Geofence' : 'غیرفعال کردن حصار مکانی') : (isEn ? 'Enable Geofence' : 'فعال کردن حصار مکانی')}
-                >
-                  <ProBadge locked={!hasProAccess} />
-                  <span className={`text-xs font-black transition-colors ${
-                    enableGeofence ? 'text-emerald-300' : 'text-stone-200 group-hover:text-white'
-                  }`}>
-                    {enableGeofence ? (isEn ? 'ON' : 'فعال') : (isEn ? 'OFF' : 'غیرفعال')}
-                  </span>
-                  <div
-                    dir="ltr"
-                    className={`w-14 h-8 rounded-full border-2 p-1 flex items-center transition-all duration-200 shadow-inner ${
-                      enableGeofence
-                        ? 'bg-emerald-500 border-emerald-200 justify-end shadow-[0_0_14px_rgba(16,185,129,0.55)]'
-                        : 'bg-stone-700 border-stone-400 justify-start hover:border-white'
-                    }`}
-                  >
-                    <span
-                      style={{ backgroundColor: '#FFFFFF' }}
-                      className="w-5.5 h-5.5 rounded-full !bg-white shadow-md transition-all duration-200"
-                    />
-                  </div>
-                </button>
-              </div>
-
-              {enableGeofence && (
-                <div className="space-y-3 pt-3 border-t border-emerald-500/20 animate-in fade-in">
-                  {/* 1. Pick from Saved Locations if available (excluding soft-deleted items) */}
-                  {savedLocations && savedLocations.some((l) => !l.deletedAt) && (
-                    <div>
-                      <label className="block text-[11px] font-bold text-stone-300 mb-1">
-                        {isEn ? 'Select from Saved Places:' : 'انتخاب از مکان‌های ثبت‌شده:'}
-                      </label>
-                      <select
-                        value={geofenceSavedLocId}
-                        onChange={(e) => handleSelectSavedLocation(e.target.value)}
-                        className="w-full bg-stone-900 border border-stone-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500 font-bold"
-                      >
-                        <option value="">{isEn ? '-- Custom GPS / Coordinates --' : '-- انتخاب دستی یا GPS جدید --'}</option>
-                        {savedLocations
-                          .filter((loc) => !loc.deletedAt)
-                          .map((loc) => (
-                            <option key={loc.id} value={loc.id}>
-                              📍 {formatSavedLocationTitle(loc.title, language)} {loc.address ? `(${loc.address.slice(0, 28)}...)` : ''}
-                            </option>
-                          ))}
-                      </select>
-                    </div>
-                  )}
-
-                  {/* 2. Checkpoint Name & Quick GPS Capture */}
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <div className="sm:col-span-2">
-                      <label className="block text-[11px] font-bold text-stone-300 mb-1">
-                        {isEn ? 'Location Name:' : 'نام یا عنوان مکان حصار:'}
-                      </label>
-                      <input
-                        type="text"
-                        value={geofenceLocationName}
-                        onChange={(e) => setGeofenceLocationName(e.target.value)}
-                        placeholder={isEn ? 'e.g. Home, Office, Supermarket...' : 'مثلاً: شرکت، منزل، داروخانه، فروشگاه...'}
-                        className="w-full bg-stone-950 border border-stone-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-bold text-stone-300 mb-1">
-                        {isEn ? 'Current GPS:' : 'موقعیت فعلی:'}
-                      </label>
-                      <button
-                        type="button"
-                        onClick={handleGetQuickGps}
-                        disabled={isDetectingGps}
-                        className="w-full py-2 px-3 rounded-xl bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/50 text-emerald-300 text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
-                      >
-                        <Crosshair className={`w-3.5 h-3.5 ${isDetectingGps ? 'animate-spin' : ''}`} />
-                        <span>{isDetectingGps ? (isEn ? 'Getting GPS...' : 'دریافت GPS...') : (isEn ? 'Get GPS' : 'ثبت با GPS فعلی')}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {gpsError && (
-                    <div className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs animate-in fade-in">
-                      <span className="truncate">{gpsError}</span>
-                      <button
-                        type="button"
-                        onClick={() => openAndroidSettings('location')}
-                        className="shrink-0 px-2 py-1 rounded-lg bg-indigo-500 text-white font-black text-[10px] flex items-center gap-1 shadow-sm active:scale-95 cursor-pointer"
-                      >
-                        <Smartphone className="w-2.5 h-2.5" />
-                        <span>{isEn ? 'Android Settings' : 'تنظیمات اندروید'}</span>
-                      </button>
-                    </div>
-                  )}
-
-                  {/* 3. Coordinates Preview (Latitude / Longitude) */}
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                    <div>
-                      <label className="block text-[10px] text-stone-400 font-sans mb-0.5">{isEn ? 'Latitude:' : 'عرض جغرافیایی (Lat):'}</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={geofenceLat}
-                        onChange={(e) => setGeofenceLat(parseFloat(e.target.value) || 0)}
-                        className="w-full bg-stone-950 border border-stone-800 rounded-xl px-2.5 py-1.5 text-xs text-stone-200 focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[10px] text-stone-400 font-sans mb-0.5">{isEn ? 'Longitude:' : 'طول جغرافیایی (Lng):'}</label>
-                      <input
-                        type="number"
-                        step="any"
-                        value={geofenceLng}
-                        onChange={(e) => setGeofenceLng(parseFloat(e.target.value) || 0)}
-                        className="w-full bg-stone-950 border border-stone-800 rounded-xl px-2.5 py-1.5 text-xs text-stone-200 focus:outline-none focus:border-emerald-500"
-                      />
-                    </div>
-                  </div>
-
-                  {/* 4. Trigger Condition (فقط ورود یا فقط خروج) */}
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-300 mb-1.5">
-                      {isEn ? 'Alert Condition (Trigger):' : 'شرط فعال‌سازی هشدار:'}
-                    </label>
-                    <div className="grid grid-cols-2 gap-2.5">
-                      {[
-                        { id: 'enter', labelFa: 'فقط ورود به محدوده', labelEn: 'On Arrival (Enter Only)' },
-                        { id: 'exit', labelFa: 'فقط خروج از محدوده', labelEn: 'On Departure (Exit Only)' },
-                      ].map((item) => {
-                        const isSelected = geofenceTriggerOn === item.id;
-                        return (
-                          <button
-                            key={item.id}
-                            type="button"
-                            onClick={() => setGeofenceTriggerOn(item.id as 'enter' | 'exit')}
-                            className={`py-2.5 px-2.5 rounded-xl text-[11px] font-bold border transition-all flex flex-col items-center gap-1 cursor-pointer ${
-                              isSelected
-                                ? 'bg-emerald-500/25 border-emerald-500 text-white shadow-sm ring-1 ring-emerald-400/50'
-                                : 'bg-stone-950/80 border-stone-800 text-stone-400 hover:text-stone-200'
-                            }`}
-                          >
-                            <span>{isEn ? item.labelEn : item.labelFa}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* 5. Radius Selector */}
-                  <div
-                    ref={geofenceRadiusSectionRef}
-                    className={`space-y-2 transition-all rounded-xl ${
-                      focusGeofenceRadius ? 'p-2.5 ring-2 ring-emerald-400/80 bg-emerald-500/10' : ''
-                    }`}
-                  >
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="text-[11px] font-bold text-stone-300">
-                        {isEn ? 'Trigger Radius:' : 'محدوده شعاع حصار مکانی:'}
-                      </label>
-                      <span className="text-xs font-mono font-bold text-emerald-400 px-2 py-0.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30">
-                        {geofenceRadius >= 1000
-                          ? isEn
-                            ? `${Number((geofenceRadius / 1000).toFixed(2))} km (${geofenceRadius}m)`
-                            : `${toPersianDigits(Number((geofenceRadius / 1000).toFixed(2)))} کیلومتر (${toPersianDigits(geofenceRadius)} متر)`
-                          : isEn
-                          ? `${geofenceRadius} meters`
-                          : `${toPersianDigits(geofenceRadius)} متر`}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5">
-                      {[100, 500, 1000, 5000, 10000, 25000].map((r) => (
-                        <button
-                          key={r}
-                          type="button"
-                          onClick={() => setGeofenceRadius(r)}
-                          className={`py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer ${
-                            geofenceRadius === r
-                              ? 'bg-emerald-500 text-stone-950 font-black border-emerald-400'
-                              : 'bg-stone-900 border-stone-800 text-stone-300 hover:border-stone-700'
-                          }`}
-                        >
-                          {isEn
-                            ? r >= 1000
-                              ? `${r / 1000}km`
-                              : `${r}m`
-                            : r >= 1000
-                            ? `${toPersianDigits(r / 1000)} کیلومتر`
-                            : `${toPersianDigits(r)} متر`}
-                        </button>
-                      ))}
-                    </div>
-                    {(() => {
-                      const sliderPos = radiusToLogSliderPosition(geofenceRadius);
-                      const fillPct = Math.min(100, Math.max(0, (sliderPos / 1000) * 100));
-                      return (
-                        <div className="pt-2 pb-1 px-1 space-y-1.5">
-                          <input
-                            type="range"
-                            min="0"
-                            max="1000"
-                            step="1"
-                            dir="ltr"
-                            value={sliderPos}
-                            onChange={(e) => setGeofenceRadius(logSliderPositionToRadius(Number(e.target.value)))}
-                            style={{
-                              background: `linear-gradient(to right, #10b981 0%, #10b981 ${fillPct}%, rgba(41, 37, 36, 0.9) ${fillPct}%, rgba(41, 37, 36, 0.9) 100%)`,
-                            }}
-                            className="geofence-radius-slider cursor-pointer"
-                          />
-                          <div className="flex items-center justify-between text-[10px] font-bold text-stone-400 px-0.5" dir="ltr">
-                            <span>{isEn ? '0 - 20m' : '۰ تا ۲۰ متر'}</span>
-                            <span>{isEn ? '5km' : '۵ کیلومتر'}</span>
-                            <span>{isEn ? '25km' : '۲۵ کیلومتر'}</span>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-                </div>
-              )}
-            </div>
                 </div>
               )}
             </div>
