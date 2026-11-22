@@ -804,7 +804,7 @@ const legacyImmediateNotifyV5 = `            if (!isSilentChannel) {
                 }
             }`;
 
-const patchedImmediateNotify = `            if (!isSilentChannel) {
+const legacyImmediateNotifyV6 = `            if (!isSilentChannel) {
                 try {
                     val notificationJson = JSObject(localNotification.source ?: "{}")
                     LocalNotificationsPlugin.fireReceived(notificationJson)
@@ -825,14 +825,38 @@ const patchedImmediateNotify = `            if (!isSilentChannel) {
                 }
             }`;
 
+const patchedImmediateNotify = `            if (!isSilentChannel) {
+                try {
+                    val notificationJson = JSObject(localNotification.source ?: "{}")
+                    LocalNotificationsPlugin.fireReceived(notificationJson)
+                } catch (e: JSONException) {
+                }
+            }
+            localNotification.id?.let {
+                val appInFg = LocalNotificationsPlugin.isAppInForeground(context)
+                val isForegroundInsistent = appInFg && !isSilentChannel && (buildNotification.flags and Notification.FLAG_INSISTENT) != 0
+                if (appInFg) {
+                    buildNotification.fullScreenIntent = null
+                }
+                if (!isForegroundInsistent) {
+                    notificationManager.notify(it, buildNotification)
+                }
+                if (!isSilentChannel && (buildNotification.flags and Notification.FLAG_INSISTENT) != 0) {
+                    scheduleMuteAfterOneMinute(it, localNotification.source)
+                    if (!appInFg) {
+                        YaadAlarmPopupActivity.launch(context, it, localNotification.source, wakeScreenOnce = true)
+                    }
+                }
+            }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
   'scheduleMuteAfterOneMinute and YaadAlarmPopupActivity on immediate notify',
   origImmediateNotify,
   patchedImmediateNotify,
-  'val appInFg = LocalNotificationsPlugin.isAppInForeground(context)',
-  [legacyImmediateNotifyV5, legacyImmediateNotifyV4, legacyImmediateNotifyV1, legacyImmediateNotifyV2, legacyImmediateNotifyV3]
+  'val isForegroundInsistent = appInFg',
+  [legacyImmediateNotifyV6, legacyImmediateNotifyV5, legacyImmediateNotifyV4, legacyImmediateNotifyV1, legacyImmediateNotifyV2, legacyImmediateNotifyV3]
 );
 
 const origOpenIntent = `        // Open intent
@@ -1515,7 +1539,9 @@ class TimedNotificationPublisher : BroadcastReceiver() {
         if (appInForeground) {
             notification.fullScreenIntent = null
         }
-        notificationManager.notify(id, notification)
+        if (!(appInForeground && isInsistentAlarm)) {
+            notificationManager.notify(id, notification)
+        }
         if (isInsistentAlarm) {
             scheduleMuteAfterOneMinute(context, id, notificationJson.toString())
             if (!appInForeground) {
@@ -3777,7 +3803,7 @@ const legacyDispatchReceivedV4 = `    @PluginMethod
         notifyListeners("localNotificationActionPerformed", dataJson, true)
     }`;
 
-const patchedDispatchReceived = `    @PluginMethod
+const legacyDispatchReceivedV5 = `    @PluginMethod
     fun playNotificationSound(call: PluginCall) {
         val soundName = call.getString("sound", "digital_beep.wav") ?: "digital_beep.wav"
         val loop = call.getBoolean("loop", false) ?: false
@@ -3849,14 +3875,385 @@ const patchedDispatchReceived = `    @PluginMethod
         notifyListeners("localNotificationActionPerformed", dataJson, true)
     }`;
 
+const patchedDispatchReceived = `    @PluginMethod
+    fun playNotificationSound(call: PluginCall) {
+        val soundName = call.getString("sound", "digital_beep.wav") ?: "digital_beep.wav"
+        val loop = call.getBoolean("loop", false) ?: false
+        val volume = (call.getFloat("volume", 1.0f) ?: 1.0f).coerceIn(0f, 1f)
+        try {
+            if (loop) {
+                // Ensure no status-bar notification sound overlaps with in-app alarm sound
+                try {
+                    androidx.core.app.NotificationManagerCompat.from(context).cancelAll()
+                } catch (e: Exception) {
+                }
+            }
+            stopActiveMediaPlayer()
+            val cleanName = soundName.substringBeforeLast(".")
+            val resId = context.resources.getIdentifier(cleanName, "raw", context.packageName)
+            val mp = android.media.MediaPlayer()
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as? android.media.AudioManager
+            val notifVol = am?.getStreamVolume(android.media.AudioManager.STREAM_NOTIFICATION) ?: 1
+            val useMediaStream = !loop || notifVol <= 0
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(if (useMediaStream) android.media.AudioAttributes.USAGE_MEDIA else android.media.AudioAttributes.USAGE_NOTIFICATION)
+                .setContentType(if (useMediaStream) android.media.AudioAttributes.CONTENT_TYPE_MUSIC else android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build()
+            mp.setAudioAttributes(attrs)
+            if (resId != 0) {
+                val afd = context.resources.openRawResourceFd(resId)
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            } else {
+                val afd = try {
+                    context.assets.openFd("public/\$soundName")
+                } catch (e: Exception) {
+                    context.assets.openFd("public/sounds/\$soundName")
+                }
+                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                afd.close()
+            }
+            mp.setVolume(volume, volume)
+            mp.isLooping = loop
+            mp.setOnCompletionListener { player ->
+                try {
+                    player.release()
+                } catch (e: Exception) {
+                }
+                if (activeMediaPlayer === player) {
+                    activeMediaPlayer = null
+                }
+            }
+            mp.prepare()
+            mp.start()
+            activeMediaPlayer = mp
+            call.resolve()
+        } catch (e: Exception) {
+            call.reject("Failed to play notification sound: \${e.message}")
+        }
+    }
+
+    @PluginMethod
+    fun stopNotificationSound(call: PluginCall) {
+        stopActiveMediaPlayer()
+        call.resolve()
+    }
+
+    @PluginMethod
+    fun pickBackupFolder(call: PluginCall) {
+        try {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+            intent.addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+            )
+            startActivityForResult(call, intent, "backupFolderPickedCallback")
+        } catch (e: Exception) {
+            val res = JSObject()
+            res.put("granted", false)
+            res.put("cancelled", false)
+            res.put("error", e.message ?: "Failed to open folder picker")
+            call.resolve(res)
+        }
+    }
+
+    @ActivityCallback
+    private fun backupFolderPickedCallback(call: PluginCall, result: ActivityResult) {
+        val res = JSObject()
+        val dataUri = result.data?.data
+        if (result.resultCode != android.app.Activity.RESULT_OK || dataUri == null) {
+            res.put("granted", false)
+            res.put("cancelled", true)
+            call.resolve(res)
+            return
+        }
+        try {
+            val rawFlags = result.data?.flags ?: 0
+            val rwMask = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            val takeFlags = if ((rawFlags and rwMask) != 0) (rawFlags and rwMask) else rwMask
+            try {
+                context.contentResolver.takePersistableUriPermission(dataUri, takeFlags)
+            } catch (e: Exception) {
+                try {
+                    context.contentResolver.takePersistableUriPermission(dataUri, rwMask)
+                } catch (ignored: Exception) {
+                }
+            }
+            val folderLabel = extractSafFolderLabel(dataUri)
+            val prefs = context.getSharedPreferences("yaad_saf_backup_prefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putString("tree_uri", dataUri.toString())
+                .putString("folder_label", folderLabel)
+                .apply()
+
+            val existingData = readBackupJsonFromTreeUri(dataUri)
+            res.put("granted", true)
+            res.put("cancelled", false)
+            res.put("uri", dataUri.toString())
+            res.put("folderName", folderLabel)
+            if (existingData != null) {
+                res.put("data", existingData)
+            }
+            call.resolve(res)
+        } catch (e: Exception) {
+            res.put("granted", false)
+            res.put("cancelled", false)
+            res.put("error", e.message ?: "Failed to persist folder access")
+            call.resolve(res)
+        }
+    }
+
+    @PluginMethod
+    fun getBackupFolderInfo(call: PluginCall) {
+        val res = JSObject()
+        val treeUri = getPersistedSafTreeUri()
+        if (treeUri == null) {
+            res.put("granted", false)
+            call.resolve(res)
+            return
+        }
+        val prefs = context.getSharedPreferences("yaad_saf_backup_prefs", Context.MODE_PRIVATE)
+        val savedLabel = prefs.getString("folder_label", null) ?: extractSafFolderLabel(treeUri)
+        res.put("granted", true)
+        res.put("uri", treeUri.toString())
+        res.put("folderName", savedLabel)
+        call.resolve(res)
+    }
+
+    @PluginMethod
+    fun writeBackupToSafFolder(call: PluginCall) {
+        val res = JSObject()
+        val payload = call.getString("data")
+        val fileName = call.getString("fileName") ?: "yaad_backup.json"
+        if (payload == null) {
+            res.put("ok", false)
+            res.put("reason", "empty_payload")
+            call.resolve(res)
+            return
+        }
+        val treeUri = getPersistedSafTreeUri()
+        if (treeUri == null) {
+            res.put("ok", false)
+            res.put("reason", "no_folder")
+            call.resolve(res)
+            return
+        }
+        try {
+            val written = writeTextToSafFolder(treeUri, fileName, payload)
+            res.put("ok", written)
+            call.resolve(res)
+        } catch (e: Exception) {
+            res.put("ok", false)
+            res.put("error", e.message ?: "SAF write error")
+            call.resolve(res)
+        }
+    }
+
+    @PluginMethod
+    fun readBackupFromSafFolder(call: PluginCall) {
+        val res = JSObject()
+        val treeUri = getPersistedSafTreeUri()
+        if (treeUri == null) {
+            res.put("ok", false)
+            res.put("reason", "no_folder")
+            call.resolve(res)
+            return
+        }
+        try {
+            val prefs = context.getSharedPreferences("yaad_saf_backup_prefs", Context.MODE_PRIVATE)
+            val savedLabel = prefs.getString("folder_label", null) ?: extractSafFolderLabel(treeUri)
+            val content = readBackupJsonFromTreeUri(treeUri)
+            res.put("ok", content != null)
+            res.put("folderName", savedLabel)
+            if (content != null) {
+                res.put("data", content)
+            }
+            call.resolve(res)
+        } catch (e: Exception) {
+            res.put("ok", false)
+            res.put("error", e.message ?: "SAF read error")
+            call.resolve(res)
+        }
+    }
+
+    @PluginMethod
+    fun clearBackupFolder(call: PluginCall) {
+        val res = JSObject()
+        try {
+            val prefs = context.getSharedPreferences("yaad_saf_backup_prefs", Context.MODE_PRIVATE)
+            val rawUri = prefs.getString("tree_uri", null)
+            if (!rawUri.isNullOrEmpty()) {
+                try {
+                    val uri = Uri.parse(rawUri)
+                    context.contentResolver.releasePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                } catch (ignored: Exception) {
+                }
+            }
+            prefs.edit().remove("tree_uri").remove("folder_label").apply()
+            res.put("ok", true)
+        } catch (e: Exception) {
+            res.put("ok", false)
+        }
+        call.resolve(res)
+    }
+
+    private fun getPersistedSafTreeUri(): Uri? {
+        return try {
+            val prefs = context.getSharedPreferences("yaad_saf_backup_prefs", Context.MODE_PRIVATE)
+            val rawUri = prefs.getString("tree_uri", null) ?: return null
+            val parsed = Uri.parse(rawUri)
+            val hasPerm = context.contentResolver.persistedUriPermissions.any { perm ->
+                perm.uri == parsed && perm.isReadPermission && perm.isWritePermission
+            }
+            if (hasPerm) parsed else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun extractSafFolderLabel(treeUri: Uri): String {
+        return try {
+            val docId = android.provider.DocumentsContract.getTreeDocumentId(treeUri) ?: ""
+            val afterColon = if (docId.contains(":")) docId.substringAfter(":") else docId
+            val cleaned = afterColon.trim().trim('/')
+            if (cleaned.isNotEmpty()) cleaned else (treeUri.lastPathSegment ?: "YAAD")
+        } catch (e: Exception) {
+            "YAAD"
+        }
+    }
+
+    private fun findSafBackupFileUri(
+        treeUri: Uri,
+        targetFileName: String,
+        fallbackAnyBackupJson: Boolean = false
+    ): Uri? {
+        return try {
+            val treeDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+            val childrenUri = android.provider.DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocId)
+            val projection = arrayOf(
+                android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED
+            )
+            var exactDocId: String? = null
+            var bestFallbackDocId: String? = null
+            var bestFallbackMod = -1L
+
+            val cursor = context.contentResolver.query(childrenUri, projection, null, null, null)
+            cursor?.use { c ->
+                val idIdx = c.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+                val nameIdx = c.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val modIdx = c.getColumnIndex(android.provider.DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                while (c.moveToNext()) {
+                    val docId = if (idIdx >= 0) c.getString(idIdx) else null
+                    val name = if (nameIdx >= 0) c.getString(nameIdx) else null
+                    if (docId.isNullOrEmpty() || name.isNullOrEmpty()) continue
+                    if (name.equals(targetFileName, ignoreCase = false) || name.equals(targetFileName, ignoreCase = true)) {
+                        exactDocId = docId
+                        break
+                    }
+                    if (fallbackAnyBackupJson && name.lowercase().endsWith(".json") && name.lowercase().contains("yaad")) {
+                        val mod = if (modIdx >= 0) c.getLong(modIdx) else 0L
+                        if (mod >= bestFallbackMod) {
+                            bestFallbackMod = mod
+                            bestFallbackDocId = docId
+                        }
+                    }
+                }
+            }
+            val chosenId = exactDocId ?: bestFallbackDocId ?: return null
+            android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, chosenId)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun readSafDocumentText(docUri: Uri): String? {
+        return try {
+            val input = context.contentResolver.openInputStream(docUri) ?: return null
+            input.use { stream ->
+                val buffer = java.io.ByteArrayOutputStream()
+                val chunk = ByteArray(4096)
+                var readLen: Int
+                while (true) {
+                    readLen = stream.read(chunk)
+                    if (readLen <= 0) break
+                    buffer.write(chunk, 0, readLen)
+                }
+                buffer.toString(java.nio.charset.StandardCharsets.UTF_8.name())
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun readBackupJsonFromTreeUri(treeUri: Uri): String? {
+        val docUri = findSafBackupFileUri(treeUri, "yaad_backup.json", true) ?: return null
+        return readSafDocumentText(docUri)
+    }
+
+    private fun writeTextToSafFolder(treeUri: Uri, fileName: String, content: String): Boolean {
+        val bytes = content.toByteArray(java.nio.charset.StandardCharsets.UTF_8)
+        var targetDocUri = findSafBackupFileUri(treeUri, fileName, false)
+        if (targetDocUri != null) {
+            for (mode in arrayOf("rwt", "wt")) {
+                try {
+                    val out = context.contentResolver.openOutputStream(targetDocUri, mode)
+                    if (out != null) {
+                        out.use { stream ->
+                            stream.write(bytes)
+                            stream.flush()
+                        }
+                        return true
+                    }
+                } catch (ignored: Exception) {
+                }
+            }
+            try {
+                android.provider.DocumentsContract.deleteDocument(context.contentResolver, targetDocUri)
+                targetDocUri = null
+            } catch (ignored: Exception) {
+            }
+        }
+
+        val treeDocId = android.provider.DocumentsContract.getTreeDocumentId(treeUri)
+        val parentDocUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocId)
+        val createdUri = android.provider.DocumentsContract.createDocument(
+            context.contentResolver,
+            parentDocUri,
+            "application/json",
+            fileName
+        ) ?: return false
+
+        val out = context.contentResolver.openOutputStream(createdUri, "w") ?: return false
+        out.use { stream ->
+            stream.write(bytes)
+            stream.flush()
+        }
+        return true
+    }
+
+    internal fun dispatchReceived(notification: JSObject?) {
+        notifyListeners("localNotificationReceived", notification, true)
+    }
+
+    internal fun dispatchActionPerformed(dataJson: JSObject) {
+        notifyListeners("localNotificationActionPerformed", dataJson, true)
+    }`;
+
 pluginContent = applyPatchOrVerify(
   pluginContent,
   'LocalNotificationsPlugin.kt',
-  'playNotificationSound, stopNotificationSound, and dispatchActionPerformed',
+  'playNotificationSound, stopNotificationSound, SAF backup folder methods, and dispatchActionPerformed',
   origDispatchReceived,
   patchedDispatchReceived,
-  'val useMediaStream = !loop || notifVol <= 0',
-  [legacyDispatchReceived, legacyDispatchReceivedV2, legacyDispatchReceivedV3, legacyDispatchReceivedV4]
+  'fun pickBackupFolder(call: PluginCall)',
+  [legacyDispatchReceivedV5, legacyDispatchReceived, legacyDispatchReceivedV2, legacyDispatchReceivedV3, legacyDispatchReceivedV4]
 );
 
 const origCompanionFire = `        fun fireReceived(notification: JSObject?) {
@@ -11303,7 +11700,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     }
                 }
                 delayedBannerPostRunnable = postCheckRunnable
-                bannerHandler.postDelayed(postCheckRunnable, 280L)
+                bannerHandler.postDelayed(postCheckRunnable, 450L)
             } else {
                 nmCompat.notify(notificationId, alertNotif)
                 scheduleGeofenceBannerDemote(appCtx, notificationId)

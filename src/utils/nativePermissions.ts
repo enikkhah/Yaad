@@ -6,8 +6,6 @@ import {
   requestNotificationPermission as rawRequestNotificationPermission 
 } from './nativeLocalNotifications';
 import {
-  checkLocalFolderPermissionStatus,
-  requestLocalFolderPermission,
   revokeLocalFolderPermission,
   FOLDER_PERMISSION_GRANTED_KEY
 } from './backupStorage';
@@ -59,7 +57,7 @@ function writeUserDisabledPerm(type: ToggleablePermissionType, disabled: boolean
   }
 }
 
-export { requestLocalFolderPermission };
+
 
 /**
  * Checks if the current environment is running inside Capacitor (Native Android APK / iOS)
@@ -308,7 +306,6 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
   let nativeExplicitMicDenied = Boolean(userDisabled.microphone);
   let nativeExplicitCamDenied = Boolean(userDisabled.camera);
   let nativeExplicitLocDenied = Boolean(userDisabled.location);
-  let nativeExplicitStorageChecked = false;
 
   if (isNativeAndroidApp()) {
     try {
@@ -378,7 +375,7 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
     }
   }
 
-  // 2. Check Notification & Web/PWA Local Folder status
+  // 2. Check Notification status
   if (!result.notifications && !nativeExplicitNotifDenied) {
     const notifOk = await checkNotificationPermission();
     if (notifOk) {
@@ -390,11 +387,6 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
         localStorage.removeItem(PERM_NOTIF_GRANTED_KEY);
       } catch {}
     }
-  }
-
-  if (!isNativeAndroidApp() && !nativeExplicitStorageChecked) {
-    const storageOk = await checkLocalFolderPermissionStatus();
-    result.storage = storageOk;
   }
 
   // 3. Always check Browser / WebView Permissions API, enumerateDevices, and localStorage flags
@@ -525,9 +517,6 @@ export async function checkAllPermissionsStatus(): Promise<NativePermissionsStat
  */
 export async function requestAllNativePermissions(): Promise<NativePermissionsStatus> {
   const notifOk = await requestNotificationPermission();
-  const folderRes = isNativeAndroidApp()
-    ? { granted: true }
-    : await requestLocalFolderPermission(false);
   const micOk = await requestMicrophonePermission();
   const camOk = await requestCameraPermission();
   const locOk = await requestLocationPermission();
@@ -542,7 +531,6 @@ export async function requestAllNativePermissions(): Promise<NativePermissionsSt
     backgroundLocation: locationGranted ? hasBackgroundLocationPermission() : false,
     exactAlarm: isNativeAndroidApp() ? Boolean(checked.exactAlarm || hasExactAlarmPermission()) : true,
     fullScreenIntent: isNativeAndroidApp() ? Boolean(checked.fullScreenIntent || hasFullScreenIntentPermission()) : true,
-    storage: isNativeAndroidApp() ? true : Boolean(checked.storage || folderRes.granted),
   };
 }
 

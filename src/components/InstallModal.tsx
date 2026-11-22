@@ -1,22 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { Download, X, Check, Smartphone, Monitor, Copy, FolderOpen, ShieldCheck } from 'lucide-react';
+import { Download, X, Check, Smartphone, Monitor, Copy } from 'lucide-react';
 import appIcon from '../assets/images/icon.png';
 import { AppLanguage } from '../utils/i18n';
-import {
-  requestLocalFolderPermission,
-  checkLocalFolderPermissionStatus,
-  AutoBackupSnapshot,
-} from '../utils/backupStorage';
-import { requestNotificationPermission } from '../utils/nativeLocalNotifications';
-import { isNativeAndroidApp } from '../utils/nativePermissions';
 
 interface InstallModalProps {
   isOpen: boolean;
   onClose: () => void;
   deferredPrompt: any;
   onInstalled: () => void;
-  onRestoreBackup?: (snapshot: AutoBackupSnapshot) => void;
   language?: AppLanguage;
 }
 
@@ -25,58 +17,14 @@ export const InstallModal: React.FC<InstallModalProps> = ({
   onClose,
   deferredPrompt,
   onInstalled,
-  onRestoreBackup,
   language = 'fa',
 }) => {
   const isEn = language === 'en';
   const [copied, setCopied] = useState(false);
-  const [folderGranted, setFolderGranted] = useState(false);
-  const [isGrantingFolder, setIsGrantingFolder] = useState(false);
-  const [folderStatusMsg, setFolderStatusMsg] = useState<string | null>(null);
 
   const currentUrl = typeof window !== 'undefined' ? window.location.href : 'https://ais-pre-2kjbmpbtqhmpvpj7qdxgez-911396278494.europe-west2.run.app';
 
-  useEffect(() => {
-    if (isOpen) {
-      checkLocalFolderPermissionStatus().then((status) => {
-        setFolderGranted(status);
-      });
-    }
-  }, [isOpen]);
-
-  const handleGrantFolderPermission = async (interactive: boolean = true) => {
-    setIsGrantingFolder(true);
-    setFolderStatusMsg(null);
-    try {
-      await requestNotificationPermission().catch(() => {});
-      const res = await requestLocalFolderPermission(interactive);
-      setFolderGranted(res.granted);
-      if (res.restoredSnapshot && onRestoreBackup) {
-        onRestoreBackup(res.restoredSnapshot);
-        setFolderStatusMsg(
-          isEn
-            ? `Folder "${res.folderName}" connected & previous backup restored!`
-            : `پوشه «${res.folderName}» متصل شد و اطلاعات قبلی با موفقیت فراخوانی گردید!`
-        );
-      } else {
-        setFolderStatusMsg(
-          isEn
-            ? `Access to folder "${res.folderName}" granted for automatic backup.`
-            : `دسترسی به پوشه «${res.folderName}» جهت پشتیبان‌گیری و فراخوانی خودکار تایید شد.`
-        );
-      }
-    } catch {
-      // ignore
-    } finally {
-      setIsGrantingFolder(false);
-    }
-  };
-
   const handleInstallClick = async () => {
-    if (!isNativeAndroidApp()) {
-      await handleGrantFolderPermission(false);
-    }
-
     if (deferredPrompt) {
       try {
         deferredPrompt.prompt();
@@ -128,7 +76,7 @@ export const InstallModal: React.FC<InstallModalProps> = ({
                 {isEn ? 'Install & Run YAAD' : 'نصب و اجرای یاد'}
               </h3>
               <p className="text-[11px] text-teal-400 font-medium">
-                {isEn ? 'Progressive Web App (PWA) with Offline & Auto-Backup' : 'نسخه پیشرو وب (PWA) با پشتیبان‌گیری خودکار در پوشه YAAD'}
+                {isEn ? 'Progressive Web App (PWA) with Offline Support' : 'نسخه پیشرو وب (PWA) با قابلیت اجرای آفلاین'}
               </p>
             </div>
           </div>
@@ -144,55 +92,6 @@ export const InstallModal: React.FC<InstallModalProps> = ({
 
         {/* Body */}
         <div className="p-5 space-y-4 max-h-[75vh] overflow-y-auto">
-          {/* Folder Access Permission on Install (پوشه YAAD - Web/PWA only) */}
-          {!isNativeAndroidApp() && (
-          <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 text-xs font-black text-emerald-300">
-                <FolderOpen className="w-4 h-4 text-emerald-400 shrink-0" />
-                <span>
-                  {isEn
-                    ? 'Automatic Local Backup Folder (YAAD)'
-                    : 'مجوز پوشه پشتیبان محلی (YAAD) هنگام نصب'}
-                </span>
-              </div>
-              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
-                folderGranted
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                  : 'bg-amber-500/20 text-amber-300 border-amber-500/40'
-              }`}>
-                {folderGranted ? (isEn ? 'Ready ✓' : 'فعال ✓') : (isEn ? 'Permission Needed' : 'نیاز به تایید')}
-              </span>
-            </div>
-
-            <p className="text-[11px] text-stone-300 leading-relaxed">
-              {isEn
-                ? 'Grant access to the "YAAD" folder on your device so all reminders, locations, ideas, and occasions are automatically backed up and restored on every app open, close, and re-installation.'
-                : 'جهت ذخیره و فراخوانی خودکار اطلاعات در پوشه «YAAD» در ریشه حافظه گوشی در هر بار بستن، باز شدن و نصب مجدد برنامه، دسترسی به حافظه را تایید نمایید.'}
-            </p>
-
-            {folderStatusMsg && (
-              <div className="p-2.5 rounded-xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-200 text-[11px] flex items-center gap-2">
-                <Check className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                <span>{folderStatusMsg}</span>
-              </div>
-            )}
-
-            <button
-              type="button"
-              disabled={isGrantingFolder}
-              onClick={() => handleGrantFolderPermission(true)}
-              className="w-full min-h-[42px] py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-sm transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-95"
-            >
-              <ShieldCheck className="w-4 h-4 shrink-0" />
-              <span>
-                {isGrantingFolder
-                  ? (isEn ? 'Checking folder...' : 'در حال بررسی پوشه...')
-                  : (isEn ? 'Grant Access to YAAD Folder & Restore' : 'تایید دسترسی پوشه YAAD و فراخوانی خودکار')}
-              </span>
-            </button>
-          </div>
-          )}
 
           {/* If 1-click install prompt is supported & ready */}
           {deferredPrompt ? (

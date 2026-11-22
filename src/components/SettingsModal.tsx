@@ -35,7 +35,10 @@ import {
   Upload,
   BatteryCharging,
   Crown,
-  Gift
+  Gift,
+  Check,
+  RefreshCw,
+  Unlink
 } from 'lucide-react';
 import { Share } from '@capacitor/share';
 import { getT } from '../utils/i18n';
@@ -58,7 +61,6 @@ import {
   requestMicrophonePermission,
   requestCameraPermission,
   requestLocationPermission,
-  requestLocalFolderPermission,
   requestAllNativePermissions,
   checkAllPermissionsStatus,
   disablePermissionLocally,
@@ -70,10 +72,18 @@ import {
   NativePermissionsStatus
 } from '../utils/nativePermissions';
 import {
-  retrieveFromLocalYaadFolder,
   exportBackupToFile,
   importBackupFromFile,
+  importBackupFromFolderFiles,
+  getBackupFolderStatus,
+  chooseAutoBackupFolder,
+  reconnectDesktopBackupFolder,
+  readBackupFromConnectedFolder,
+  revokeLocalFolderPermission,
+  performAutoBackup,
   getSnapshotItemCount,
+  BackupFolderStatus,
+  LAST_LOCAL_BACKUP_KEY,
 } from '../utils/backupStorage';
 import { 
   openGoogleCalendarAccount
@@ -151,9 +161,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const soundTimeoutRef = useRef<number | null>(null);
   const [backupFeedback, setBackupFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isBackupBusy, setIsBackupBusy] = useState(false);
+  const [folderStatus, setFolderStatus] = useState<BackupFolderStatus | null>(null);
+  const [isFolderBusy, setIsFolderBusy] = useState(false);
   const [importedRecoveryCode, setImportedRecoveryCode] = useState<string | null>(null);
   const [isRecoveringFromBackup, setIsRecoveringFromBackup] = useState(false);
   const importBackupInputRef = useRef<HTMLInputElement | null>(null);
+  const folderRestoreInputRef = useRef<HTMLInputElement | null>(null);
 
   // Gift Pro to a friend state (for verified paid Pro users only)
   const [verifiedGiftSku, setVerifiedGiftSku] = useState<'yaad_pro_lifetime' | 'yaad_pro_1y' | null>(null);
@@ -280,7 +293,6 @@ https://myket.ir/app/com.yaad.reminder`;
     camera: false,
     location: false,
     backgroundLocation: false,
-    storage: false,
     exactAlarm: !isNativeAndroidApp(),
     fullScreenIntent: !isNativeAndroidApp(),
   });
@@ -328,7 +340,6 @@ https://myket.ir/app/com.yaad.reminder`;
     ...deletedOccasions.map((o) => ({ id: o.id, type: 'occasion' as const, title: o.title, deletedAt: o.deletedAt! })),
   ].sort((a, b) => b.deletedAt - a.deletedAt);
 
-  const [showStoragePermNotice, setShowStoragePermNotice] = useState(false);
   const [showBgLocationNotice, setShowBgLocationNotice] = useState(false);
   const [bgLocationNoticeDismissed, setBgLocationNoticeDismissed] = useState(false);
   const [revokedPermNotice, setRevokedPermNotice] = useState<ToggleablePermissionType | null>(null);
@@ -340,15 +351,15 @@ https://myket.ir/app/com.yaad.reminder`;
         checkAllPermissionsStatus().then((updated) => {
           if (!isMounted) return;
           setNativePerms(updated);
-          if (updated.storage) {
-            setShowStoragePermNotice(false);
-          }
           if (updated.location && updated.backgroundLocation) {
             setShowBgLocationNotice(false);
             setBgLocationNoticeDismissed(false);
           }
         });
       };
+      getBackupFolderStatus().then((status) => {
+        if (isMounted) setFolderStatus(status);
+      }).catch(() => {});
       refreshPerms();
       const pollTimer = window.setInterval(refreshPerms, 1500);
       window.addEventListener('focus', refreshPerms);
@@ -379,7 +390,7 @@ https://myket.ir/app/com.yaad.reminder`;
   }, [isOpen]);
 
   const handleRequestPerm = async (
-    type: 'notifications' | 'microphone' | 'camera' | 'location' | 'storage' | 'exact_alarm' | 'full_screen_intent'
+    type: 'notifications' | 'microphone' | 'camera' | 'location' | 'exact_alarm' | 'full_screen_intent'
   ) => {
     if (type === 'exact_alarm') {
       openAndroidSettings('exact_alarm');
@@ -407,10 +418,7 @@ https://myket.ir/app/com.yaad.reminder`;
         setGeofenceTrackingEnabled(false);
         onToggleGeofenceActive?.(false);
       }
-      if (type === 'storage') {
-        setShowStoragePermNotice(false);
-      }
-      if (isNativeAndroidApp() && type !== 'storage') {
+      if (isNativeAndroidApp()) {
         setRevokedPermNotice(type as ToggleablePermissionType);
       }
       return;
@@ -426,25 +434,6 @@ https://myket.ir/app/com.yaad.reminder`;
       granted = await requestCameraPermission();
     } else if (type === 'location') {
       granted = await requestLocationPermission();
-    } else if (type === 'storage') {
-      if (isNativeAndroidApp()) return;
-      const res = await requestLocalFolderPermission(true);
-      granted = res.granted;
-      if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
-        onRestoreData(
-          {
-            reminders: res.restoredSnapshot.reminders || [],
-            ideas: res.restoredSnapshot.ideas || [],
-            savedLocations: res.restoredSnapshot.savedLocations || [],
-            occasions: res.restoredSnapshot.occasions || [],
-            settings: res.restoredSnapshot.settings,
-          },
-          'merge'
-        );
-      }
-      if (!res.granted) {
-        setShowStoragePermNotice(true);
-      }
     }
     const updated = await checkAllPermissionsStatus();
     const locGranted = Boolean(updated.location || (type === 'location' && granted));
@@ -456,15 +445,6 @@ https://myket.ir/app/com.yaad.reminder`;
       backgroundLocation: bgLocGranted,
     };
     setNativePerms(merged);
-    if (!isNativeAndroidApp()) {
-      if (type === 'storage' && !merged.storage) {
-        setShowStoragePermNotice(true);
-      } else if (merged.storage) {
-        setShowStoragePermNotice(false);
-      }
-    } else {
-      setShowStoragePermNotice(false);
-    }
     if (type === 'location') {
       if (!merged.location || !merged.backgroundLocation) {
         setShowBgLocationNotice(true);
@@ -477,7 +457,7 @@ https://myket.ir/app/com.yaad.reminder`;
         setShowBgLocationNotice(false);
       }
     }
-    if (!merged[type as keyof NativePermissionsStatus] && type !== 'storage' && isNativeAndroidApp()) {
+    if (!merged[type as keyof NativePermissionsStatus] && isNativeAndroidApp()) {
       openAndroidSettings(type);
     }
   };
@@ -486,34 +466,6 @@ https://myket.ir/app/com.yaad.reminder`;
     setIsRequestingAllPerms(true);
     const updated = await requestAllNativePermissions();
     setNativePerms(updated);
-    if (!isNativeAndroidApp()) {
-      if (updated.storage && onRestoreData) {
-        try {
-          const snap = await retrieveFromLocalYaadFolder();
-          if (snap && getSnapshotItemCount(snap) > 0) {
-            onRestoreData(
-              {
-                reminders: snap.reminders || [],
-                ideas: snap.ideas || [],
-                savedLocations: snap.savedLocations || [],
-                occasions: snap.occasions || [],
-                settings: snap.settings,
-              },
-              'merge'
-            );
-          }
-        } catch {
-          // ignore
-        }
-      }
-      if (!updated.storage) {
-        setShowStoragePermNotice(true);
-      } else {
-        setShowStoragePermNotice(false);
-      }
-    } else {
-      setShowStoragePermNotice(false);
-    }
     if (isNativeAndroidApp() && (!updated.location || !updated.backgroundLocation)) {
       setShowBgLocationNotice(true);
       setBgLocationNoticeDismissed(false);
@@ -1170,7 +1122,7 @@ https://myket.ir/app/com.yaad.reminder`;
                   <p className="text-[11px] text-stone-400 truncate">
                     {(() => {
                       const hasNative = isNativeAndroidApp();
-                      const totalCount = hasNative ? 6 : 5;
+                      const totalCount = hasNative ? 6 : 4;
                       const grantedCount = [
                         nativePerms.notifications,
                         nativePerms.microphone,
@@ -1178,7 +1130,7 @@ https://myket.ir/app/com.yaad.reminder`;
                         nativePerms.location,
                         ...(hasNative
                           ? [Boolean(nativePerms.exactAlarm), Boolean(nativePerms.fullScreenIntent)]
-                          : [nativePerms.storage]),
+                          : []),
                       ].filter(Boolean).length;
                       return isFa
                         ? `${toPersianDigits(grantedCount)} از ${toPersianDigits(totalCount)} دسترسی تایید شده است`
@@ -1195,7 +1147,7 @@ https://myket.ir/app/com.yaad.reminder`;
             {openSections.permissions && (
               <div className="p-3 sm:p-4 space-y-3 animate-in fade-in">
                 {/* 3.1 وضعیت دسترسی‌ها توی یه ردیف فشرده (COMPACT PERMISSIONS ROW - قابل روشن و خاموش کردن) */}
-                <div className={`grid gap-1.5 sm:gap-2 ${isNativeAndroidApp() ? 'grid-cols-3 sm:grid-cols-6' : 'grid-cols-5'}`}>
+                <div className={`grid gap-1.5 sm:gap-2 ${isNativeAndroidApp() ? 'grid-cols-3 sm:grid-cols-6' : 'grid-cols-4'}`}>
                   {/* 1. Notifications */}
                   <button
                     type="button"
@@ -1372,48 +1324,6 @@ https://myket.ir/app/com.yaad.reminder`;
                     </div>
                   </button>
 
-                  {/* 5. Web/PWA Local Folder / Storage (Hidden on Native Android scoped-storage APK) */}
-                  {!isNativeAndroidApp() && (
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={Boolean(nativePerms.storage)}
-                      onClick={() => handleRequestPerm('storage')}
-                      style={
-                        nativePerms.storage
-                          ? {
-                              background: 'linear-gradient(135deg, #059669 0%, #10b981 100%)',
-                              borderColor: '#6ee7b7',
-                              color: '#ffffff',
-                            }
-                          : undefined
-                      }
-                      className={`min-h-[70px] p-2 rounded-xl border flex flex-col items-center justify-center text-center transition-all cursor-pointer active:scale-95 ${
-                        nativePerms.storage
-                          ? 'perm-card-granted shadow-md shadow-emerald-900/40'
-                          : 'bg-stone-900/80 border-stone-800 text-stone-400 hover:border-indigo-500/50'
-                      }`}
-                      title={isFa ? 'روشن/خاموش کردن دسترسی پوشه YAAD' : 'Toggle YAAD Folder permission'}
-                    >
-                      <FolderOpen className={`w-4 h-4 mb-1 ${nativePerms.storage ? 'text-white' : 'text-stone-400'}`} />
-                      <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.storage ? 'text-white' : 'text-stone-200'}`}>
-                        {isFa ? 'پوشه و حافظه' : 'Folders'}
-                      </span>
-                      <div className="mt-1 flex items-center gap-1">
-                        <div
-                          dir="ltr"
-                          className={`w-7 h-3.5 rounded-full p-0.5 flex items-center transition-colors ${
-                            nativePerms.storage ? 'bg-white/30 justify-end' : 'bg-stone-800 justify-start border border-stone-700'
-                          }`}
-                        >
-                          <span className={`w-2.5 h-2.5 rounded-full shadow-sm ${nativePerms.storage ? 'bg-white' : 'bg-stone-400'}`} />
-                        </div>
-                        <span className={`text-[8.5px] font-black ${nativePerms.storage ? 'text-white' : 'text-stone-400'}`}>
-                          {nativePerms.storage ? (isFa ? 'روشن' : 'ON') : (isFa ? 'خاموش' : 'OFF')}
-                        </span>
-                      </div>
-                    </button>
-                  )}
 
                   {/* 5B. Exact Alarms (Android 12+) — Native Android */}
                   {isNativeAndroidApp() && (
@@ -1532,31 +1442,6 @@ https://myket.ir/app/com.yaad.reminder`;
                   </div>
                 )}
 
-                {!isNativeAndroidApp() && showStoragePermNotice && !nativePerms.storage && (
-                  <div
-                    onClick={() => openAndroidSettings('notifications')}
-                    dir={isFa ? 'rtl' : 'ltr'}
-                    className="p-3 rounded-xl bg-[#FF8C00]/15 border border-[#FF8C00]/40 text-[#FF8C00] text-xs flex items-start justify-between gap-2.5 cursor-pointer leading-relaxed"
-                  >
-                    <div className="space-y-1.5">
-                      <p className="font-bold text-stone-100">
-                        {isFa
-                          ? 'برای دسترسی پوشه پشتیبان در نسخه وب، پوشه را مجدد انتخاب کنید:'
-                          : 'Please select a backup folder in your browser to grant folder access:'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowStoragePermNotice(false);
-                      }}
-                      className="p-1 rounded-lg hover:bg-[#FF8C00]/20 text-[#FF8C00] shrink-0 cursor-pointer"
-                    >
-                      <X className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                )}
 
                 {isNativeAndroidApp() && nativePerms.exactAlarm === false && (
                   <div
@@ -1908,9 +1793,9 @@ https://myket.ir/app/com.yaad.reminder`;
                     {isFa ? '۵. پشتیبان‌گیری و اطلاعات' : '5. Backup & Data'}
                   </h4>
                   <p className="text-[11px] text-stone-400 truncate">
-                    {isNativeAndroidApp()
-                      ? (isFa ? 'نسخه پشتیبان داخلی امن • خروجی و ورود فایل JSON' : 'Private Auto Backup • JSON Export & Import')
-                      : (isFa ? 'پشتیبان‌گیری خودکار • خروجی و بازیابی JSON • آمار' : 'Auto Backup • JSON Export & Import • Stats')}
+                    {isFa
+                      ? 'پوشه پشتیبان خودکار • خروجی و ورود JSON'
+                      : 'Auto-Backup Folder • JSON Export & Import'}
                   </p>
                 </div>
               </div>
@@ -1939,6 +1824,367 @@ https://myket.ir/app/com.yaad.reminder`;
                   </div>
                 </div>
 
+                {/* 5.1B Auto-Backup Folder Selection (Android SAF & Desktop Folder - No storage permissions) */}
+                <div className="p-3.5 rounded-2xl bg-emerald-950/25 border border-emerald-500/35 space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FolderOpen className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span className="text-xs font-black text-emerald-200 truncate">
+                        {isFa ? 'پوشه پشتیبان‌گیری خودکار (بدون نیاز به مجوز حافظه)' : 'Automatic Backup Folder (No Storage Permission)'}
+                      </span>
+                    </div>
+                    <span
+                      className={`text-[10px] px-2 py-0.5 rounded-full font-bold border shrink-0 flex items-center gap-1 ${
+                        folderStatus?.connected
+                          ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
+                          : folderStatus?.needsReconnect
+                          ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                          : 'bg-stone-800 text-stone-400 border-stone-700'
+                      }`}
+                    >
+                      {folderStatus?.connected && <Check className="w-3 h-3" />}
+                      <span>
+                        {folderStatus?.connected
+                          ? isFa
+                            ? `متصل: ${folderStatus.folderName || 'YAAD'}`
+                            : `Connected: ${folderStatus.folderName || 'YAAD'}`
+                          : folderStatus?.needsReconnect
+                          ? isFa
+                            ? `نیاز به تایید: ${folderStatus.folderName || 'پوشه'}`
+                            : `Reconnect: ${folderStatus.folderName || 'Folder'}`
+                          : isFa
+                          ? 'انتخاب نشده'
+                          : 'Not Selected'}
+                      </span>
+                    </span>
+                  </div>
+
+                  <p className="text-[11px] text-stone-300 leading-relaxed">
+                    {isNativeAndroidApp()
+                      ? isFa
+                        ? 'با انتخاب پوشه (از طریق مجوز رسمی SAF اندروید)، فایل yaad_backup.json در هر تغییر و در هر بار باز و بسته شدن برنامه به‌صورت خودکار در همان پوشه ذخیره می‌شود و پوشه پیش‌فرض داخلی YAAD نیز ثابت باقی می‌ماند.'
+                        : 'Select any folder using Android SAF (no storage permissions). yaad_backup.json is automatically written on every change and on every app open/close, while the private default YAAD vault stays fixed.'
+                      : folderStatus && !folderStatus.supported
+                      ? isFa
+                        ? 'پشتیبان خودکار داخلی همیشه در هر تغییر و باز/بسته شدن فعال است. انتخاب دائمی پوشه سیستم‌عامل در این مرورگر/پیش‌نمایش در دسترس نیست، اما از «بازیابی از پوشه» و خروجی/ورود JSON می‌توانید استفاده کنید.'
+                        : 'Private auto-backup runs on every change and open/close. Persistent desktop folder selection is unavailable in this browser/preview frame, but "Restore from Folder" and JSON export/import work anytime.'
+                      : isFa
+                      ? 'یک پوشه روی کامپیوتر خود انتخاب کنید تا فایل yaad_backup.json در هر تغییر و هنگام باز و بسته شدن برنامه به‌صورت خودکار ذخیره و همگام‌سازی شود.'
+                      : 'Choose a folder on your computer so yaad_backup.json is automatically saved and synced on every change and app open/close.'}
+                  </p>
+
+                  {(() => {
+                    try {
+                      const ts = parseInt(localStorage.getItem(LAST_LOCAL_BACKUP_KEY) || '0', 10);
+                      if (!isNaN(ts) && ts > 0) {
+                        return (
+                          <div className="text-[10.5px] text-stone-400">
+                            {isFa ? 'آخرین ذخیره خودکار: ' : 'Last auto-backup: '}
+                            <span className="text-stone-200 font-bold">
+                              {formatJalaliFull(ts, isFa ? 'fa' : 'en')}
+                            </span>
+                          </div>
+                        );
+                      }
+                    } catch {}
+                    return null;
+                  })()}
+
+                  {folderStatus?.needsReconnect && (
+                    <button
+                      type="button"
+                      disabled={isFolderBusy}
+                      onClick={async () => {
+                        setIsFolderBusy(true);
+                        setBackupFeedback(null);
+                        try {
+                          const res = await reconnectDesktopBackupFolder();
+                          const nextStatus = await getBackupFolderStatus();
+                          setFolderStatus(nextStatus);
+                          if (!res.granted) {
+                            setBackupFeedback({
+                              type: 'error',
+                              text: isFa ? 'دسترسی مجدد پوشه تایید نشد.' : 'Folder reconnection was not granted.',
+                            });
+                            return;
+                          }
+                          if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
+                            onRestoreData(
+                              {
+                                reminders: res.restoredSnapshot.reminders || [],
+                                ideas: res.restoredSnapshot.ideas || [],
+                                savedLocations: res.restoredSnapshot.savedLocations || [],
+                                occasions: res.restoredSnapshot.occasions || [],
+                                settings: res.restoredSnapshot.settings,
+                              },
+                              'merge'
+                            );
+                          }
+                          await performAutoBackup({ reminders, ideas, savedLocations, occasions, settings });
+                          setBackupFeedback({
+                            type: 'success',
+                            text: isFa
+                              ? `پوشه «${res.folderName || 'YAAD'}» مجدداً متصل و همگام‌سازی شد.`
+                              : `Folder "${res.folderName || 'YAAD'}" reconnected and synced.`,
+                          });
+                        } finally {
+                          setIsFolderBusy(false);
+                        }
+                      }}
+                      className="w-full min-h-[42px] px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-stone-950 font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      <RefreshCw className={`w-4 h-4 shrink-0 ${isFolderBusy ? 'animate-spin' : ''}`} />
+                      <span>
+                        {isFa
+                          ? `اتصال مجدد پوشه «${folderStatus.folderName || 'YAAD'}»`
+                          : `Reconnect Folder "${folderStatus.folderName || 'YAAD'}"`}
+                      </span>
+                    </button>
+                  )}
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {(!folderStatus || folderStatus.supported) && (
+                      <button
+                        type="button"
+                        disabled={isFolderBusy}
+                        onClick={async () => {
+                          setIsFolderBusy(true);
+                          setBackupFeedback(null);
+                          try {
+                            const res = await chooseAutoBackupFolder();
+                            const nextStatus = await getBackupFolderStatus();
+                            setFolderStatus(nextStatus);
+                            if (res.cancelled) return;
+                            if (!res.granted) {
+                              setBackupFeedback({
+                                type: 'error',
+                                text:
+                                  res.unsupportedReason === 'iframe' || res.unsupportedReason === 'browser'
+                                    ? isFa
+                                      ? 'این مرورگر از انتخاب مستقیم پوشه پشتیبانی نمی‌کند.'
+                                      : 'Persistent folder picker is unavailable in this browser or frame.'
+                                    : isFa
+                                    ? 'انتخاب پوشه تکمیل نشد.'
+                                    : 'Folder selection did not complete.',
+                              });
+                              return;
+                            }
+
+                            let restoredItems = 0;
+                            if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
+                              restoredItems = getSnapshotItemCount(res.restoredSnapshot);
+                              onRestoreData(
+                                {
+                                  reminders: res.restoredSnapshot.reminders || [],
+                                  ideas: res.restoredSnapshot.ideas || [],
+                                  savedLocations: res.restoredSnapshot.savedLocations || [],
+                                  occasions: res.restoredSnapshot.occasions || [],
+                                  settings: res.restoredSnapshot.settings,
+                                },
+                                'merge'
+                              );
+                            } else {
+                              await performAutoBackup({ reminders, ideas, savedLocations, occasions, settings });
+                            }
+
+                            setBackupFeedback({
+                              type: 'success',
+                              text:
+                                restoredItems > 0
+                                  ? isFa
+                                    ? `پوشه «${res.folderName}» متصل شد و ${toPersianDigits(restoredItems)} مورد از نسخه پشتیبان داخل آن بازیابی گردید.`
+                                    : `Folder "${res.folderName}" connected & restored ${restoredItems} item(s).`
+                                  : isFa
+                                  ? `پوشه «${res.folderName}» برای ذخیره خودکار yaad_backup.json متصل شد.`
+                                  : `Folder "${res.folderName}" connected for automatic yaad_backup.json saves.`,
+                            });
+                          } finally {
+                            setIsFolderBusy(false);
+                          }
+                        }}
+                        className="min-h-[44px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+                      >
+                        <FolderOpen className="w-4 h-4 shrink-0" />
+                        <span>
+                          {folderStatus?.connected
+                            ? isFa
+                              ? 'تغییر پوشه پشتیبان'
+                              : 'Change Backup Folder'
+                            : isFa
+                            ? 'انتخاب پوشه پشتیبان'
+                            : 'Select Backup Folder'}
+                        </span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      disabled={isFolderBusy}
+                      onClick={async () => {
+                        setBackupFeedback(null);
+                        if (folderStatus?.connected) {
+                          setIsFolderBusy(true);
+                          try {
+                            const readRes = await readBackupFromConnectedFolder();
+                            if (readRes.snapshot && getSnapshotItemCount(readRes.snapshot) > 0 && onRestoreData) {
+                              onRestoreData(
+                                {
+                                  reminders: readRes.snapshot.reminders || [],
+                                  ideas: readRes.snapshot.ideas || [],
+                                  savedLocations: readRes.snapshot.savedLocations || [],
+                                  occasions: readRes.snapshot.occasions || [],
+                                  settings: readRes.snapshot.settings,
+                                },
+                                'merge'
+                              );
+                              const count = getSnapshotItemCount(readRes.snapshot);
+                              setBackupFeedback({
+                                type: 'success',
+                                text: isFa
+                                  ? `${toPersianDigits(count)} مورد از پوشه «${readRes.folderName || 'YAAD'}» با موفقیت بازیابی شد.`
+                                  : `Restored ${count} item(s) from folder "${readRes.folderName || 'YAAD'}".`,
+                              });
+                            } else {
+                              setBackupFeedback({
+                                type: 'error',
+                                text: isFa
+                                  ? `فایل yaad_backup.json با داده معتبر در پوشه «${readRes.folderName || 'انتخابی'}» یافت نشد.`
+                                  : `No valid yaad_backup.json found in "${readRes.folderName || 'selected folder'}".`,
+                              });
+                            }
+                          } finally {
+                            setIsFolderBusy(false);
+                          }
+                          return;
+                        }
+
+                        if (folderStatus && !folderStatus.supported) {
+                          folderRestoreInputRef.current?.click();
+                          return;
+                        }
+
+                        setIsFolderBusy(true);
+                        try {
+                          const res = await chooseAutoBackupFolder();
+                          const nextStatus = await getBackupFolderStatus();
+                          setFolderStatus(nextStatus);
+                          if (res.cancelled) return;
+                          if (!res.granted) {
+                            folderRestoreInputRef.current?.click();
+                            return;
+                          }
+                          if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
+                            const count = getSnapshotItemCount(res.restoredSnapshot);
+                            onRestoreData(
+                              {
+                                reminders: res.restoredSnapshot.reminders || [],
+                                ideas: res.restoredSnapshot.ideas || [],
+                                savedLocations: res.restoredSnapshot.savedLocations || [],
+                                occasions: res.restoredSnapshot.occasions || [],
+                                settings: res.restoredSnapshot.settings,
+                              },
+                              'merge'
+                            );
+                            setBackupFeedback({
+                              type: 'success',
+                              text: isFa
+                                ? `${toPersianDigits(count)} مورد از پوشه «${res.folderName}» بازیابی و ادغام شد.`
+                                : `Restored and merged ${count} item(s) from "${res.folderName}".`,
+                            });
+                          } else {
+                            setBackupFeedback({
+                              type: 'error',
+                              text: isFa
+                                ? `فایل پشتیبان قبلی در پوشه «${res.folderName}» یافت نشد، اما پوشه برای ذخیره خودکار متصل گردید.`
+                                : `No existing backup found in "${res.folderName}", and the folder is now connected for auto-backup.`,
+                            });
+                          }
+                        } finally {
+                          setIsFolderBusy(false);
+                        }
+                      }}
+                      className="min-h-[44px] px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-500 text-white font-black text-xs shadow-sm active:scale-95 transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-60"
+                    >
+                      <Upload className="w-4 h-4 shrink-0" />
+                      <span>{isFa ? 'بازیابی از پوشه' : 'Restore from Folder'}</span>
+                    </button>
+
+                    <input
+                      ref={folderRestoreInputRef}
+                      type="file"
+                      {...({ webkitdirectory: '', directory: '' } as any)}
+                      multiple
+                      className="hidden"
+                      onChange={async (e) => {
+                        const files = e.target.files;
+                        e.target.value = '';
+                        if (!files || files.length === 0) return;
+                        setIsFolderBusy(true);
+                        setBackupFeedback(null);
+                        try {
+                          const snap = await importBackupFromFolderFiles(files);
+                          if (snap && getSnapshotItemCount(snap) > 0 && onRestoreData) {
+                            onRestoreData(
+                              {
+                                reminders: snap.reminders || [],
+                                ideas: snap.ideas || [],
+                                savedLocations: snap.savedLocations || [],
+                                occasions: snap.occasions || [],
+                                settings: snap.settings,
+                              },
+                              'merge'
+                            );
+                            setBackupFeedback({
+                              type: 'success',
+                              text: isFa
+                                ? `${toPersianDigits(getSnapshotItemCount(snap))} مورد از پوشه انتخاب‌شده بازیابی گردید.`
+                                : `Restored ${getSnapshotItemCount(snap)} item(s) from folder.`,
+                            });
+                          } else {
+                            setBackupFeedback({
+                              type: 'error',
+                              text: isFa
+                                ? 'فایل پشتیبان معتبر (yaad_backup.json) در این پوشه پیدا نشد.'
+                                : 'No valid yaad_backup.json was found in that folder.',
+                            });
+                          }
+                        } finally {
+                          setIsFolderBusy(false);
+                        }
+                      }}
+                    />
+                  </div>
+
+                  {(folderStatus?.connected || folderStatus?.needsReconnect) && (
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        disabled={isFolderBusy}
+                        onClick={async () => {
+                          setIsFolderBusy(true);
+                          try {
+                            await revokeLocalFolderPermission();
+                            const nextStatus = await getBackupFolderStatus();
+                            setFolderStatus(nextStatus);
+                            setBackupFeedback({
+                              type: 'success',
+                              text: isFa
+                                ? 'اتصال پوشه پشتیبان قطع شد. پوشه پیش‌فرض داخلی همچنان فعال است.'
+                                : 'Auto-backup folder disconnected. Private internal backup remains active.',
+                            });
+                          } finally {
+                            setIsFolderBusy(false);
+                          }
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-stone-800/80 hover:bg-stone-800 text-stone-400 hover:text-rose-300 text-[11px] font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Unlink className="w-3 h-3" />
+                        <span>{isFa ? 'قطع اتصال پوشه' : 'Disconnect Folder'}</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 {/* 5.2 Scoped-Storage Compliant Manual JSON Export & Import */}
                 <div className="p-3.5 rounded-2xl bg-stone-900/75 border border-stone-800 space-y-3">
                   <div className="space-y-1">
@@ -1947,8 +2193,8 @@ https://myket.ir/app/com.yaad.reminder`;
                     </span>
                     <p className="text-[11px] text-stone-400 leading-relaxed">
                       {isFa
-                        ? 'نسخه پشتیبان خودکار درون فضای خصوصی برنامه برای بازیابی پس از خطا ذخیره می‌شود، اما با حذف و نصب مجدد برنامه پاک می‌گردد؛ برای نگهداری همیشگی فایل بک‌آپ را ذخیره یا ارسال کنید.'
-                        : 'Automatic crash-recovery backups are stored in app-private storage and are removed if you uninstall the app. Export a JSON file regularly to keep your data safe.'}
+                        ? 'علاوه بر پشتیبان خودکار در پوشه انتخابی و حافظه داخلی برنامه، می‌توانید هر زمان فایل JSON را به‌صورت دستی ذخیره یا وارد کنید.'
+                        : 'In addition to automatic backups in your chosen folder and private app vault, you can export or import a JSON file anytime.'}
                     </p>
                   </div>
 
@@ -2422,8 +2668,8 @@ https://myket.ir/app/com.yaad.reminder`;
                   </div>
                   <p>
                     {isFa
-                      ? 'داده‌های شما به‌صورت محلی در فضای خصوصی دستگاه ذخیره می‌شوند و دسترسی به ریشه حافظه حذف شده است. خروجی گرفتن و بازیابی فایل پشتیبان (JSON) برای همه کاربران همیشه رایگان است (بک‌آپ خودکار داخلی با حذف نصب اپ پاک می‌شود). مختصات GPS فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد اختیاری است، پرداخت درون‌برنامه‌ای در محیط امن کافه‌بازار یا مایکت انجام می‌گیرد و برای هدیه جشنواره لانچ (۷۳۰ نفر اول) صرفاً یک شمارنده ناشناس (Firebase Anonymous Auth) و هش یک‌طرفه SHA-256 کد بازیابی بدون هیچ اطلاعات هویتی به کار می‌رود.'
-                      : 'Your reminders, occasions, ideas, and places are stored privately on your device. JSON backup export & import is free forever (auto-backup in app-private storage does not survive uninstall). Coordinates go to OpenStreetMap Nominatim only on address lookup, feedback submission is optional, store purchases run through Cafe Bazaar or Myket, and the 730-user Launch Offer uses anonymous Firebase Auth and a one-way SHA-256 recovery code hash without any personal data.'}
+                      ? 'داده‌های شما به‌صورت محلی در فضای خصوصی دستگاه ذخیره می‌شوند و هیچ مجوز دسترسی گسترده به حافظه درخواست نمی‌شود؛ در صورت تمایل می‌توانید از طریق انتخاب پوشه رسمی اندروید (SAF) یا دسکتاپ، پوشه‌ای را برای پشتیبان خودکار JSON انتخاب کنید. خروجی گرفتن و بازیابی فایل پشتیبان (JSON) برای همه کاربران همیشه رایگان است. مختصات GPS فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد اختیاری است، پرداخت درون‌برنامه‌ای در محیط امن کافه‌بازار یا مایکت انجام می‌گیرد و برای هدیه جشنواره لانچ (۷۳۰ نفر اول) صرفاً یک شمارنده ناشناس (Firebase Anonymous Auth) و هش یک‌طرفه SHA-256 کد بازیابی بدون هیچ اطلاعات هویتی به کار می‌رود.'
+                      : 'Your reminders, occasions, ideas, and places are stored privately on your device with zero broad storage permissions; optionally you may pick a folder via Android SAF or Desktop File System Access for automatic JSON backups. JSON backup export & import is free forever. Coordinates go to OpenStreetMap Nominatim only on address lookup, feedback submission is optional, store purchases run through Cafe Bazaar or Myket, and the 730-user Launch Offer uses anonymous Firebase Auth and a one-way SHA-256 recovery code hash without any personal data.'}
                   </p>
                   <p className="text-[10.5px] text-stone-400">
                     {isFa

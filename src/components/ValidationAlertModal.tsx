@@ -100,9 +100,6 @@ export const ValidationAlertModal: React.FC<ValidationAlertModalProps> = ({
                   <h4 className="text-xs sm:text-sm font-black text-indigo-300">
                     {displayTitle}
                   </h4>
-                  <span className="text-[10px] text-indigo-400/90 bg-indigo-500/10 border border-indigo-500/30 px-2 py-0.5 rounded-full font-mono">
-                    {isEn ? 'Auto-dismiss' : 'محو خودکار'}
-                  </span>
                 </div>
 
                 <p className="mt-1 text-xs text-stone-200 leading-relaxed font-medium">

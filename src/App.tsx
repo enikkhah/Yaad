@@ -42,11 +42,18 @@ import {
   exportBackupToFile,
   snoozePeriodicBackupPrompt,
   shouldShowPeriodicBackupPrompt,
+  initDefaultYaadBackupFolder,
+  getBackupFolderStatus,
+  shouldShowBackupFolderReminderPrompt,
+  snoozeBackupFolderPrompt,
+  dismissBackupFolderPromptForever,
+  BackupFolderStatus,
   AUTO_BACKUP_STORAGE_KEY,
   LAST_LOCAL_BACKUP_KEY,
   LOCAL_BACKUP_FOLDER_NAME,
 } from './utils/backupStorage';
 import { InstallModal } from './components/InstallModal';
+import { BackupFolderPromptModal } from './components/BackupFolderPromptModal';
 import { SplashScreen } from './components/SplashScreen';
 import { useFabVisibility } from './hooks/useFabVisibility';
 import { App as CapacitorApp } from '@capacitor/app';
@@ -589,11 +596,10 @@ export default function App() {
       }
 
       if (restoredAny) {
-
         const srcText =
           settingsRef.current?.language === 'en'
-            ? 'Restored automatically from local folder (YAAD).'
-            : 'اطلاعات از پوشه محلی (YAAD) فراخوانی شد.';
+            ? 'Backup data restored automatically.'
+            : 'اطلاعات پشتیبان با موفقیت بازیابی شد.';
         showSyncNotification(srcText);
       }
 
@@ -606,6 +612,7 @@ export default function App() {
     let isMounted = true;
     const autoRestoreOnOpen = async () => {
       try {
+        await initDefaultYaadBackupFolder();
         const { snapshot, source } = await retrieveLatestBackupWithPriority();
         if (snapshot && isMounted) {
           applyRestoredBackupIfNeeded(snapshot, source);
@@ -621,9 +628,15 @@ export default function App() {
 
     autoRestoreOnOpen();
 
-    // Also re-check when returning from Android Settings (e.g. after granting "All files access" permission)
+    // Also re-check when resuming with empty in-memory collections
+    const isAllCollectionsEmpty = () =>
+      remindersRef.current.length === 0 &&
+      ideasRef.current.length === 0 &&
+      savedLocationsRef.current.length === 0 &&
+      occasionsRef.current.length === 0;
+
     const handleVisibilityOrResume = () => {
-      if (document.visibilityState === 'visible' && remindersRef.current.length === 0) {
+      if (document.visibilityState === 'visible' && isAllCollectionsEmpty()) {
         autoRestoreOnOpen();
       }
     };
@@ -631,7 +644,7 @@ export default function App() {
     let appStateSub: { remove: () => Promise<void> } | null = null;
     try {
       CapacitorApp.addListener('appStateChange', ({ isActive }) => {
-        if (isActive && remindersRef.current.length === 0) {
+        if (isActive && isAllCollectionsEmpty()) {
           autoRestoreOnOpen();
         }
       })
@@ -827,6 +840,12 @@ export default function App() {
   const [installPromptEvent, setInstallPromptEvent] = useState<any>(null);
   const [isAppInstalled, setIsAppInstalled] = useState<boolean>(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState<boolean>(false);
+  const [backupFolderPromptState, setBackupFolderPromptState] = useState<{
+    isOpen: boolean;
+    mode: 'first_launch' | 'reminder' | 'reconnect';
+    status: BackupFolderStatus | null;
+  }>({ isOpen: false, mode: 'reminder', status: null });
+  const hasCheckedBackupFolderPromptRef = useRef(false);
   const [undoToast, setUndoToast] = useState<{
     reminder: Reminder;
     index: number;
@@ -900,7 +919,8 @@ export default function App() {
   const isAnyModalCurrentlyOpen = Boolean(
     isFormOpen || isStatsOpen || isSettingsOpen || isIdeaModalOpen ||
     isLocationModalOpen || isOccasionModalOpen ||
-    isCreateChoiceOpen || viewingImageUrl || isInstallModalOpen
+    isCreateChoiceOpen || viewingImageUrl || isInstallModalOpen ||
+    backupFolderPromptState.isOpen
   );
 
   const closeTopModal = useCallback((): boolean => {
@@ -913,6 +933,11 @@ export default function App() {
     }
     if (viewingImageUrl) { setViewingImageUrl(null); return true; }
     if (isCreateChoiceOpen) { setIsCreateChoiceOpen(false); return true; }
+    if (backupFolderPromptState.isOpen) {
+      snoozeBackupFolderPrompt();
+      setBackupFolderPromptState((prev) => ({ ...prev, isOpen: false }));
+      return true;
+    }
     if (isInstallModalOpen) { setIsInstallModalOpen(false); return true; }
     if (isLocationModalOpen) { setIsLocationModalOpen(false); setEditingLocation(null); setFocusGeofenceRadius(false); return true; }
     if (isIdeaModalOpen) { setIsIdeaModalOpen(false); setEditingIdea(null); return true; }
@@ -930,7 +955,7 @@ export default function App() {
     }
     return false;
   }, [
-    viewingImageUrl, isCreateChoiceOpen, isInstallModalOpen,
+    viewingImageUrl, isCreateChoiceOpen, backupFolderPromptState.isOpen, isInstallModalOpen,
     isLocationModalOpen, isIdeaModalOpen,
     isOccasionModalOpen, isFormOpen, isSettingsOpen, isStatsOpen,
     activeAlarmReminder, activeGeofenceAlert,
@@ -1052,6 +1077,48 @@ export default function App() {
       triggerScrollToNow();
     }
   }, [activeMainTab, showSplash, isAnyModalCurrentlyOpen, triggerScrollToNow]);
+
+  // Offer "Restore from Folder" on first launch and gently remind to choose/reconnect an Auto-Backup Folder
+  useEffect(() => {
+    if (showSplash || !isVaultInitialized || hasCheckedBackupFolderPromptRef.current) return;
+    if (isInitialNotificationLaunch || activeAlarmRemindersRef.current.length > 0 || isAnyModalCurrentlyOpen) {
+      return;
+    }
+
+    hasCheckedBackupFolderPromptRef.current = true;
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      try {
+        const status = await getBackupFolderStatus();
+        if (cancelled) return;
+        const mode = shouldShowBackupFolderReminderPrompt(status, totalActiveDataCount);
+        if (!mode) return;
+
+        const isDesktopWeb =
+          !isNativeAndroidApp() &&
+          typeof navigator !== 'undefined' &&
+          !/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+        const canOfferFirstLaunch = mode === 'first_launch' && (status.supported || isDesktopWeb);
+        const canOfferSupported = (mode === 'reminder' || mode === 'reconnect') && status.supported;
+
+        if (!canOfferFirstLaunch && !canOfferSupported) return;
+        if (activeAlarmRemindersRef.current.length > 0) return;
+
+        setBackupFolderPromptState({
+          isOpen: true,
+          mode,
+          status,
+        });
+      } catch {
+        // ignore
+      }
+    }, 650);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [showSplash, isVaultInitialized, isInitialNotificationLaunch, isAnyModalCurrentlyOpen, totalActiveDataCount]);
 
   // Filters & Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -4513,8 +4580,8 @@ export default function App() {
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
                     <p>
                       {isEn
-                        ? 'Your reminders, occasions, ideas, and places are stored privately on your device. JSON backup export & import is free forever (auto-backup in app-private storage does not survive uninstall). GPS runs adaptively only when Geofence radar is active. Coordinates are sent to OpenStreetMap Nominatim only on address lookup, optional feedback is sent only if you submit it, store billing/reviews run via Bazaar/Myket, and the 730-user Launch Offer uses anonymous Firebase Auth and a one-way SHA-256 recovery code hash without any personal data.'
-                        : 'داده‌های شما در فضای خصوصی دستگاه ذخیره می‌شوند و خروجی/بازیابی فایل پشتیبان (JSON) برای همه کاربران همیشه رایگان است (بک‌آپ خودکار داخلی با حذف نصب اپ پاک می‌شود). رادار GPS فقط هنگام فعال بودن به‌صورت کم‌مصرف کار می‌کند. مختصات فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد کاملاً اختیاری است، پرداخت/امتیازدهی در محیط امن بازار یا مایکت انجام می‌گیرد و هدیه لانچ (۷۳۰ نفر اول) صرفاً از شمارنده ناشناس Firebase و هش یک‌طرفه SHA-256 کد بازیابی استفاده می‌کند.'}
+                        ? 'Your reminders, occasions, ideas, and places are stored privately on your device with zero broad storage permissions; optionally you can connect a backup folder via Android SAF or Desktop folder picker so yaad_backup.json saves automatically on every change and app open/close. Manual JSON export & import is free forever. GPS runs adaptively only when Geofence radar is active. Coordinates go to OpenStreetMap Nominatim only on address lookup, feedback is optional, store billing/reviews run via Bazaar/Myket, and the 730-user Launch Offer uses anonymous Firebase Auth and a one-way SHA-256 recovery code hash without any personal data.'
+                        : 'داده‌های شما در فضای خصوصی دستگاه ذخیره می‌شوند و هیچ مجوز دسترسی گسترده به حافظه دریافت نمی‌شود؛ به انتخاب خودتان می‌توانید از طریق SAF اندروید یا انتخاب پوشه در دسکتاپ یک پوشه را برای ذخیره خودکار yaad_backup.json در هر تغییر و باز/بسته شدن اپ متصل کنید و خروجی/بازیابی JSON همیشه رایگان است. رادار GPS فقط هنگام فعال بودن به‌صورت کم‌مصرف کار می‌کند. مختصات فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد کاملاً اختیاری است، پرداخت/امتیازدهی در محیط امن بازار یا مایکت انجام می‌گیرد و هدیه لانچ (۷۳۰ نفر اول) صرفاً از شمارنده ناشناس Firebase و هش یک‌طرفه SHA-256 کد بازیابی استفاده می‌کند.'}
                     </p>
                     <a
                       href="/privacy.html"
@@ -5778,8 +5845,50 @@ export default function App() {
           setIsAppInstalled(true);
           setInstallPromptEvent(null);
         }}
-        onRestoreBackup={(snap) => handleRestoreData(snap, 'merge')}
         language={settings.language}
+      />
+
+      {/* AUTO-BACKUP FOLDER REMINDER & FIRST-LAUNCH RESTORE MODAL */}
+      <BackupFolderPromptModal
+        isOpen={backupFolderPromptState.isOpen}
+        mode={backupFolderPromptState.mode}
+        folderStatus={backupFolderPromptState.status}
+        language={settings.language}
+        onClose={() => setBackupFolderPromptState((prev) => ({ ...prev, isOpen: false }))}
+        onSnoozeLater={() => {
+          snoozeBackupFolderPrompt();
+          setBackupFolderPromptState((prev) => ({ ...prev, isOpen: false }));
+        }}
+        onDismissForever={() => {
+          dismissBackupFolderPromptForever();
+          setBackupFolderPromptState((prev) => ({ ...prev, isOpen: false }));
+        }}
+        onRestoreSnapshot={(snap) => {
+          handleRestoreData(
+            {
+              reminders: snap.reminders || [],
+              ideas: snap.ideas || [],
+              savedLocations: snap.savedLocations || [],
+              occasions: snap.occasions || [],
+              settings: snap.settings,
+            },
+            'merge'
+          );
+        }}
+        onFolderConnected={(folderName) => {
+          showSyncNotification(
+            settings.language === 'en'
+              ? `Auto-backup folder "${folderName}" connected.`
+              : `پوشه پشتیبان خودکار «${folderName}» متصل شد.`
+          );
+        }}
+        currentData={{
+          reminders,
+          ideas,
+          savedLocations,
+          occasions,
+          settings,
+        }}
       />
 
       {/* STATISTICS MODAL */}
