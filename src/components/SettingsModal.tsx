@@ -1393,7 +1393,7 @@ https://myket.ir/app/com.yaad.reminder`;
                     >
                       <Maximize2 className={`w-4 h-4 mb-1 ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-400'}`} />
                       <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-200'}`}>
-                        {isFa ? 'نمایش قفل' : 'Lock Alert'}
+                        {isFa ? 'زنگ روی قفل‌صفحه' : 'Lock-Screen Alarm'}
                       </span>
                       <div className="mt-1 flex items-center gap-1">
                         <div
@@ -1942,6 +1942,19 @@ https://myket.ir/app/com.yaad.reminder`;
                     </button>
                   )}
 
+                  <div className="p-2.5 rounded-xl bg-stone-950/60 border border-stone-800/80 space-y-1 text-[11px] text-stone-300 leading-relaxed">
+                    <p>
+                      {isFa
+                        ? 'پوشه‌ی جدیدی به نام YAAD بسازید و همان را انتخاب کنید (ریشه‌ی حافظه و پوشه‌ی Download قابل انتخاب نیست).'
+                        : "Create a new folder named YAAD and select it (storage root and Download can't be selected)."}
+                    </p>
+                    <p className="text-stone-400">
+                      {isFa
+                        ? 'پس از حذف و نصب مجدد، برای بازیابی دوباره همین پوشه را انتخاب کنید.'
+                        : 'After reinstalling, choose the same folder to restore.'}
+                    </p>
+                  </div>
+
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                     {(!folderStatus || folderStatus.supported) && (
                       <button
@@ -1964,8 +1977,8 @@ https://myket.ir/app/com.yaad.reminder`;
                                       ? 'این مرورگر از انتخاب مستقیم پوشه پشتیبانی نمی‌کند.'
                                       : 'Persistent folder picker is unavailable in this browser or frame.'
                                     : isFa
-                                    ? 'انتخاب پوشه تکمیل نشد.'
-                                    : 'Folder selection did not complete.',
+                                    ? 'انتخاب پوشه تکمیل نشد. پوشه‌ی جدیدی به نام YAAD بسازید و همان را انتخاب کنید (ریشه‌ی حافظه و پوشه‌ی Download قابل انتخاب نیست).'
+                                    : "Folder selection failed. Create a new folder named YAAD and select it (storage root and Download can't be selected).",
                               });
                               return;
                             }
@@ -2070,7 +2083,16 @@ https://myket.ir/app/com.yaad.reminder`;
                           setFolderStatus(nextStatus);
                           if (res.cancelled) return;
                           if (!res.granted) {
-                            folderRestoreInputRef.current?.click();
+                            if (res.unsupportedReason === 'iframe' || res.unsupportedReason === 'browser') {
+                              folderRestoreInputRef.current?.click();
+                            } else {
+                              setBackupFeedback({
+                                type: 'error',
+                                text: isFa
+                                  ? 'انتخاب پوشه تکمیل نشد. پوشه‌ی جدیدی به نام YAAD بسازید و همان را انتخاب کنید (ریشه‌ی حافظه و پوشه‌ی Download قابل انتخاب نیست).'
+                                  : "Folder selection failed. Create a new folder named YAAD and select it (storage root and Download can't be selected).",
+                              });
+                            }
                             return;
                           }
                           if (res.restoredSnapshot && getSnapshotItemCount(res.restoredSnapshot) > 0 && onRestoreData) {
@@ -2659,18 +2681,28 @@ https://myket.ir/app/com.yaad.reminder`;
 
               {/* Expandable Minimal Info Content for Privacy or About */}
               {activeInfoDialog === 'privacy' && (
-                <div className="p-3 rounded-xl bg-stone-900/90 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
+                <div className="p-3 rounded-xl bg-stone-900/90 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 max-h-[70vh] overflow-y-auto overscroll-contain animate-in fade-in">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-emerald-300">{isFa ? 'حریم خصوصی و امنیت داده‌ها' : 'Privacy Policy'}</span>
                     <button type="button" onClick={() => setActiveInfoDialog(null)} className="text-stone-400 hover:text-white">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
-                  <p>
-                    {isFa
-                      ? 'داده‌های شما به‌صورت محلی در فضای خصوصی دستگاه ذخیره می‌شوند و هیچ مجوز دسترسی گسترده به حافظه درخواست نمی‌شود؛ در صورت تمایل می‌توانید از طریق انتخاب پوشه رسمی اندروید (SAF) یا دسکتاپ، پوشه‌ای را برای پشتیبان خودکار JSON انتخاب کنید. خروجی گرفتن و بازیابی فایل پشتیبان (JSON) برای همه کاربران همیشه رایگان است. مختصات GPS فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد اختیاری است، پرداخت درون‌برنامه‌ای در محیط امن کافه‌بازار یا مایکت انجام می‌گیرد و برای هدیه جشنواره لانچ (۷۳۰ نفر اول) صرفاً یک شمارنده ناشناس (Firebase Anonymous Auth) و هش یک‌طرفه SHA-256 کد بازیابی بدون هیچ اطلاعات هویتی به کار می‌رود.'
-                      : 'Your reminders, occasions, ideas, and places are stored privately on your device with zero broad storage permissions; optionally you may pick a folder via Android SAF or Desktop File System Access for automatic JSON backups. JSON backup export & import is free forever. Coordinates go to OpenStreetMap Nominatim only on address lookup, feedback submission is optional, store purchases run through Cafe Bazaar or Myket, and the 730-user Launch Offer uses anonymous Firebase Auth and a one-way SHA-256 recovery code hash without any personal data.'}
-                  </p>
+                  <ul className="space-y-1">
+                    {isFa ? (
+                      <>
+                        <li>• داده‌ها فقط روی گوشی شما می‌مانند.</li>
+                        <li>• هیچ مجوز گسترده‌ی حافظه گرفته نمی‌شود.</li>
+                        <li>• پشتیبان‌گیری در پوشه‌ی دلخواه شما (اختیاری).</li>
+                      </>
+                    ) : (
+                      <>
+                        <li>• Data stays only on your device.</li>
+                        <li>• No broad storage permissions are requested.</li>
+                        <li>• Backups save to your chosen folder (optional).</li>
+                      </>
+                    )}
+                  </ul>
                   <p className="text-[10.5px] text-stone-400">
                     {isFa
                       ? 'توسعه‌دهنده: تیم فناوری نارون • narvanteam.ir'

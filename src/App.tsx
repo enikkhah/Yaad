@@ -4512,7 +4512,7 @@ export default function App() {
                 dir={isEn ? 'ltr' : 'rtl'}
                 className={`absolute top-full mt-2 ${
                   isEn ? 'left-0' : 'right-0'
-                } w-64 sm:w-72 rounded-2xl bg-stone-900 border border-stone-800 p-3 shadow-2xl z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150`}
+                } w-64 sm:w-72 max-w-[calc(100vw-1.5rem)] max-h-[70vh] overflow-y-auto overscroll-contain rounded-2xl bg-stone-900 border border-stone-800 p-3 shadow-2xl z-50 space-y-2 animate-in fade-in zoom-in-95 duration-150`}
               >
                 {/* 1. App Version */}
                 <div className="flex items-center justify-between px-2.5 py-2 rounded-xl bg-stone-950/80 border border-stone-800/80">
@@ -4578,11 +4578,21 @@ export default function App() {
 
                 {logoMenuInfoSection === 'privacy' && (
                   <div className="p-2.5 rounded-xl bg-stone-950 border border-stone-800 text-[11px] text-stone-300 leading-relaxed space-y-2 animate-in fade-in">
-                    <p>
-                      {isEn
-                        ? 'Your reminders, occasions, ideas, and places are stored privately on your device with zero broad storage permissions; optionally you can connect a backup folder via Android SAF or Desktop folder picker so yaad_backup.json saves automatically on every change and app open/close. Manual JSON export & import is free forever. GPS runs adaptively only when Geofence radar is active. Coordinates go to OpenStreetMap Nominatim only on address lookup, feedback is optional, store billing/reviews run via Bazaar/Myket, and the 730-user Launch Offer uses anonymous Firebase Auth and a one-way SHA-256 recovery code hash without any personal data.'
-                        : 'داده‌های شما در فضای خصوصی دستگاه ذخیره می‌شوند و هیچ مجوز دسترسی گسترده به حافظه دریافت نمی‌شود؛ به انتخاب خودتان می‌توانید از طریق SAF اندروید یا انتخاب پوشه در دسکتاپ یک پوشه را برای ذخیره خودکار yaad_backup.json در هر تغییر و باز/بسته شدن اپ متصل کنید و خروجی/بازیابی JSON همیشه رایگان است. رادار GPS فقط هنگام فعال بودن به‌صورت کم‌مصرف کار می‌کند. مختصات فقط هنگام دریافت آدرس به OpenStreetMap Nominatim ارسال می‌شود، فرم بازخورد کاملاً اختیاری است، پرداخت/امتیازدهی در محیط امن بازار یا مایکت انجام می‌گیرد و هدیه لانچ (۷۳۰ نفر اول) صرفاً از شمارنده ناشناس Firebase و هش یک‌طرفه SHA-256 کد بازیابی استفاده می‌کند.'}
-                    </p>
+                    <ul className="space-y-1">
+                      {isEn ? (
+                        <>
+                          <li>• Data stays only on your device.</li>
+                          <li>• No broad storage permissions are requested.</li>
+                          <li>• Backups save to your chosen folder (optional).</li>
+                        </>
+                      ) : (
+                        <>
+                          <li>• داده‌ها فقط روی گوشی شما می‌مانند.</li>
+                          <li>• هیچ مجوز گسترده‌ی حافظه گرفته نمی‌شود.</li>
+                          <li>• پشتیبان‌گیری در پوشه‌ی دلخواه شما (اختیاری).</li>
+                        </>
+                      )}
+                    </ul>
                     <a
                       href="/privacy.html"
                       target="_blank"

@@ -73,8 +73,8 @@ export const BackupFolderPromptModal: React.FC<BackupFolderPromptModalProps> = (
           setFeedback({
             type: 'error',
             text: isFa
-              ? 'اتصال پوشه پشتیبان انجام نشد. لطفاً دوباره تلاش کنید.'
-              : 'Could not connect the backup folder. Please try again.',
+              ? 'انتخاب پوشه انجام نشد. پوشه‌ی جدیدی به نام YAAD بسازید و همان را انتخاب کنید (ریشه‌ی حافظه و پوشه‌ی Download قابل انتخاب نیست).'
+              : "Folder selection failed. Create a new folder named YAAD and select it (storage root and Download can't be selected).",
           });
         }
         setBusy(false);
@@ -113,8 +113,18 @@ export const BackupFolderPromptModal: React.FC<BackupFolderPromptModalProps> = (
         return;
       }
       if (!res.granted) {
-        setBusy(false);
-        folderFilesInputRef.current?.click();
+        if (res.unsupportedReason === 'iframe' || res.unsupportedReason === 'browser') {
+          setBusy(false);
+          folderFilesInputRef.current?.click();
+        } else {
+          setFeedback({
+            type: 'error',
+            text: isFa
+              ? 'انتخاب پوشه انجام نشد. پوشه‌ی جدیدی به نام YAAD بسازید و همان را انتخاب کنید (ریشه‌ی حافظه و پوشه‌ی Download قابل انتخاب نیست).'
+              : "Folder selection failed. Create a new folder named YAAD and select it (storage root and Download can't be selected).",
+          });
+          setBusy(false);
+        }
         return;
       }
 
@@ -269,6 +279,18 @@ export const BackupFolderPromptModal: React.FC<BackupFolderPromptModalProps> = (
 
               {/* Actions */}
               <div className="space-y-2.5 pt-1">
+                <div className="p-2.5 rounded-xl bg-stone-950/60 border border-stone-800/80 space-y-1 text-[11px] text-stone-300 leading-relaxed">
+                  <p>
+                    {isFa
+                      ? 'پوشه‌ی جدیدی به نام YAAD بسازید و همان را انتخاب کنید (ریشه‌ی حافظه و پوشه‌ی Download قابل انتخاب نیست).'
+                      : "Create a new folder named YAAD and select it (storage root and Download can't be selected)."}
+                  </p>
+                  <p className="text-stone-400">
+                    {isFa
+                      ? 'پس از حذف و نصب مجدد، برای بازیابی دوباره همین پوشه را انتخاب کنید.'
+                      : 'After reinstalling, choose the same folder to restore.'}
+                  </p>
+                </div>
                 {isReconnect && (
                   <button
                     type="button"

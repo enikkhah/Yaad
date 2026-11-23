@@ -319,12 +319,22 @@ async function readSafBackupNative(): Promise<{
   if (!Capacitor.isNativePlatform()) return { ok: false, snapshot: null };
   try {
     const res = await (LocalNotifications as any).readBackupFromSafFolder();
-    if (res?.ok && res?.data) {
+    if (res?.data) {
       const parsed = safeParseJsonFromReadFileData(res.data);
       if (isValidSnapshot(parsed)) {
         return {
           ok: true,
           snapshot: parsed,
+          folderName: res.folderName || undefined,
+        };
+      }
+    }
+    if (res?.prevData) {
+      const prevParsed = safeParseJsonFromReadFileData(res.prevData);
+      if (isValidSnapshot(prevParsed)) {
+        return {
+          ok: true,
+          snapshot: prevParsed,
           folderName: res.folderName || undefined,
         };
       }
@@ -577,6 +587,12 @@ export async function chooseAutoBackupFolder(): Promise<{
         const parsed = safeParseJsonFromReadFileData(res.data);
         if (isValidSnapshot(parsed)) {
           restoredSnapshot = parsed;
+        }
+      }
+      if (!restoredSnapshot && res.prevData) {
+        const prevParsed = safeParseJsonFromReadFileData(res.prevData);
+        if (isValidSnapshot(prevParsed)) {
+          restoredSnapshot = prevParsed;
         }
       }
       try {
