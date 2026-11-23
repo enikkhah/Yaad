@@ -10575,6 +10575,9 @@ class YaadGeofenceService : Service(), LocationListener {
     private var lastAcceptedLat: Double = Double.NaN
     private var lastAcceptedLon: Double = Double.NaN
     private var lastAcceptedAccuracy: Float = Float.MAX_VALUE
+    private var lastEvaluatedFixTimeMs: Long = 0L
+    private var stillSinceMs: Long = 0L
+    private var isStationaryMode: Boolean = false
 
     private fun acquireServiceCpuWakeLock() {
         try {
@@ -10668,7 +10671,8 @@ class YaadGeofenceService : Service(), LocationListener {
                         requestImmediateCurrentLocationUpdate(force = true)
                     }
                     val nowMs = System.currentTimeMillis()
-                    if (lastAcceptedLat.isNaN() || nowMs - lastAcceptedLocationTimeMs > 5000L) {
+                    val staleThresholdMs = if (USE_ZONE_DETECTOR) maxOf(currentGpsIntervalMs + 2000L, 5000L) else 5000L
+                    if (lastAcceptedLat.isNaN() || nowMs - lastAcceptedLocationTimeMs > staleThresholdMs) {
                         requestImmediateCurrentLocationUpdate(force = false)
                     }
                     checkLastKnownLocations()
@@ -10974,7 +10978,7 @@ class YaadGeofenceService : Service(), LocationListener {
         }
     }
 
-    private var currentGpsIntervalMs: Long = 500L
+    private var currentGpsIntervalMs: Long = 1000L
     private var lastWebViewDispatchedTimeMs: Long = 0L
     private var lastWebViewDispatchedLat: Double = Double.NaN
     private var lastWebViewDispatchedLon: Double = Double.NaN
@@ -10983,11 +10987,19 @@ class YaadGeofenceService : Service(), LocationListener {
     @Volatile
     private var wasDeviceLocationEnabledLastTick: Boolean = true
 
-    private fun startLocationUpdates(intervalMs: Long = currentGpsIntervalMs, checkLastKnown: Boolean = true) {
+    private fun startLocationUpdates(
+        intervalMs: Long = currentGpsIntervalMs,
+        checkLastKnown: Boolean = true,
+        requestImmediate: Boolean = checkLastKnown
+    ) {
         val lm = locationManager ?: return
         if (!hasLocationPermission(this)) return
         try {
-            currentGpsIntervalMs = intervalMs.coerceIn(500L, 12_000L)
+            currentGpsIntervalMs = if (USE_ZONE_DETECTOR) {
+                intervalMs.coerceIn(1000L, 20_000L)
+            } else {
+                intervalMs.coerceIn(500L, 12_000L)
+            }
             if (isTrackingRegistered) {
                 try {
                     lm.removeUpdates(this)
@@ -10996,7 +11008,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 isTrackingRegistered = false
             }
             var anyRegistered = false
-            // 1. Adaptive satellite GPS_PROVIDER (500ms near boundary for <=1s response, scaled up when far to save battery)
+            // 1. Adaptive satellite GPS_PROVIDER
             try {
                 if (lm.allProviders.contains(LocationManager.GPS_PROVIDER)) {
                     lm.requestLocationUpdates(
@@ -11010,7 +11022,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             } catch (e: Exception) {
             }
-            // 2. Adaptive NETWORK_PROVIDER for indoor/urban response (<=1s when near boundary)
+            // 2. Adaptive NETWORK_PROVIDER for indoor/urban response
             try {
                 if (lm.allProviders.contains(LocationManager.NETWORK_PROVIDER)) {
                     lm.requestLocationUpdates(
@@ -11024,7 +11036,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             } catch (e: Exception) {
             }
-            // 3. FUSED provider (Android 12+ LocationManager.FUSED_PROVIDER = "fused") for fast indoor/outdoor fused fixes
+            // 3. FUSED provider (Android 12+ LocationManager.FUSED_PROVIDER = "fused")
             try {
                 if (lm.allProviders.contains("fused")) {
                     lm.requestLocationUpdates(
@@ -11038,12 +11050,13 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             } catch (e: Exception) {
             }
-            // 4. PASSIVE_PROVIDER (250ms, 0m) to capture location fixes from any system service immediately with zero extra battery cost
+            // 4. PASSIVE_PROVIDER (>= 1000ms under Zone Detector)
             try {
                 if (lm.allProviders.contains(LocationManager.PASSIVE_PROVIDER)) {
+                    val passiveIntervalMs = if (USE_ZONE_DETECTOR) 1000L else 250L
                     lm.requestLocationUpdates(
                         LocationManager.PASSIVE_PROVIDER,
-                        250L,
+                        passiveIntervalMs,
                         0.0f,
                         this,
                         Looper.getMainLooper()
@@ -11054,7 +11067,9 @@ class YaadGeofenceService : Service(), LocationListener {
             }
             isTrackingRegistered = anyRegistered
             if (isDeviceLocationEnabled(this)) {
-                requestImmediateCurrentLocationUpdate(force = true)
+                if (requestImmediate) {
+                    requestImmediateCurrentLocationUpdate(force = true)
+                }
                 if (checkLastKnown) {
                     checkLastKnownLocations()
                 }
@@ -11083,7 +11098,7 @@ class YaadGeofenceService : Service(), LocationListener {
                             java.util.function.Consumer<Location?> { loc ->
                                 if (loc != null && isDeviceLocationEnabled(this)) {
                                     if (shouldAcceptNativeLocation(loc, allowSameTimestampTick = false)) {
-                                        evaluateLocationAgainstGeofences(loc)
+                                        evaluateLocationAgainstGeofences(loc, isNewFixSample = true)
                                     }
                                 }
                             }
@@ -11112,7 +11127,48 @@ class YaadGeofenceService : Service(), LocationListener {
             else -> 10000L
         }
         if (desiredIntervalMs != currentGpsIntervalMs && isTrackingRegistered) {
-            startLocationUpdates(desiredIntervalMs, checkLastKnown = false)
+            startLocationUpdates(desiredIntervalMs, checkLastKnown = false, requestImmediate = false)
+        }
+    }
+
+    private fun updateZoneDetectorLocationInterval(
+        minMarginMeters: Double,
+        hasAnyActivePhase: Boolean,
+        location: Location,
+        isNewFixSample: Boolean,
+        nowMs: Long
+    ) {
+        if (isNewFixSample && location.hasSpeed()) {
+            val spd = location.speed.toDouble()
+            if (spd < STILL_SPEED) {
+                if (stillSinceMs == 0L) {
+                    stillSinceMs = nowMs
+                }
+                isStationaryMode = (nowMs - stillSinceMs) >= (STILL_AFTER_S * 1000.0).toLong()
+            } else {
+                stillSinceMs = 0L
+                isStationaryMode = false
+            }
+        } else if (stillSinceMs > 0L && (nowMs - stillSinceMs) >= (STILL_AFTER_S * 1000.0).toLong()) {
+            isStationaryMode = true
+        }
+
+        val baseIntervalMs = when {
+            hasAnyActivePhase || minMarginMeters <= 50.0 -> 1000L
+            minMarginMeters <= 150.0 -> 2000L
+            minMarginMeters <= 600.0 -> 4000L
+            minMarginMeters <= 2500.0 -> 8000L
+            else -> 20_000L
+        }
+        val stillIntervalMs = (STILL_INTERVAL_S * 1000.0).toLong()
+        val desiredIntervalMs = if (isStationaryMode) {
+            maxOf(baseIntervalMs, stillIntervalMs)
+        } else {
+            baseIntervalMs
+        }.coerceAtLeast(1000L)
+
+        if (desiredIntervalMs != currentGpsIntervalMs && isTrackingRegistered) {
+            startLocationUpdates(desiredIntervalMs, checkLastKnown = false, requestImmediate = false)
         }
     }
 
@@ -11258,8 +11314,10 @@ class YaadGeofenceService : Service(), LocationListener {
             }
 
             if (chosen != null) {
+                val chosenTime = chosen.time
+                val isNewFix = chosenTime > lastEvaluatedFixTimeMs
                 if (shouldAcceptNativeLocation(chosen, allowSameTimestampTick = true)) {
-                    evaluateLocationAgainstGeofences(chosen)
+                    evaluateLocationAgainstGeofences(chosen, isNewFixSample = isNewFix)
                 }
             }
         } catch (e: SecurityException) {
@@ -11270,7 +11328,7 @@ class YaadGeofenceService : Service(), LocationListener {
     override fun onLocationChanged(location: Location) {
         if (!isDeviceLocationEnabled(this)) return
         if (shouldAcceptNativeLocation(location, allowSameTimestampTick = false)) {
-            evaluateLocationAgainstGeofences(location)
+            evaluateLocationAgainstGeofences(location, isNewFixSample = true)
         }
     }
 
@@ -11334,7 +11392,637 @@ class YaadGeofenceService : Service(), LocationListener {
         return sb.toString()
     }
 
-    private fun evaluateLocationAgainstGeofences(location: Location) {
+    private fun evaluateLocationAgainstGeofences(location: Location, isNewFixSample: Boolean = true) {
+        if (USE_ZONE_DETECTOR) {
+            evaluateLocationAgainstGeofencesZoneDetector(location, isNewFixSample)
+        } else {
+            evaluateLocationAgainstGeofencesLegacy(location)
+        }
+    }
+
+    private fun evaluateLocationAgainstGeofencesZoneDetector(location: Location, isNewFixSample: Boolean) {
+        try {
+            val appInForeground = LocalNotificationsPlugin.isAppInForeground(this)
+            val screenOffOrLocked = isScreenOffOrLocked()
+            val now = System.currentTimeMillis()
+            val tSec = now / 1000.0
+            if (isNewFixSample && location.time > lastEvaluatedFixTimeMs) {
+                lastEvaluatedFixTimeMs = location.time
+            }
+
+            if (appInForeground) {
+                if (!screenOffOrLocked) {
+                    cancelAllGeofenceAlertNotifications(this)
+                    if (YaadAlarmPopupActivity.isShowingGeofencePopup()) {
+                        YaadAlarmPopupActivity.dismissIfMatching(Int.MIN_VALUE)
+                    }
+                }
+                val lat = location.latitude
+                val lon = location.longitude
+                val acc = location.accuracy
+                val movedMeters = if (!lastWebViewDispatchedLat.isNaN() && !lastWebViewDispatchedLon.isNaN()) {
+                    calculateHaversineMeters(lastWebViewDispatchedLat, lastWebViewDispatchedLon, lat, lon)
+                } else {
+                    Int.MAX_VALUE
+                }
+                if (now - lastWebViewDispatchedTimeMs >= 850L || movedMeters >= 2) {
+                    lastWebViewDispatchedTimeMs = now
+                    lastWebViewDispatchedLat = lat
+                    lastWebViewDispatchedLon = lon
+                    LocalNotificationsPlugin.evaluateJsInWebView(
+                        "window.dispatchEvent(new CustomEvent('yaad:native-location', { detail: { latitude: \$lat, longitude: \$lon, accuracy: \$acc, timestamp: \$now } }));"
+                    )
+                }
+            }
+
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val isEn = prefs.getString(KEY_LANGUAGE, "fa") == "en"
+            val rawItems = prefs.getString(KEY_ITEMS_JSON, "[]") ?: "[]"
+            val arr = JSONArray(rawItems)
+            if (arr.length() == 0) return
+
+            val accuracyMeters = if (location.hasAccuracy() && location.accuracy > 0f) location.accuracy.toDouble() else 20.0
+            val fixTimeMs = if (location.time > 0L) location.time else now
+            val editor = prefs.edit()
+            var prefsModified = false
+
+            data class ZoneAlertCandidate(
+                val id: String,
+                val title: String,
+                val statusPhrase: String,
+                val eventType: String,
+                val sonarMode: String,
+                val distance: Int,
+                val radius: Int,
+                val targetDistance: Int,
+                val targetLat: Double,
+                val targetLon: Double,
+                val visualOnlyBanner: Boolean,
+                val visualBannerText: String,
+                val is5Hz: Boolean,
+                val playAudio: Boolean
+            )
+
+            val activeCandidates = ArrayList<ZoneAlertCandidate>()
+            var minMarginMeters = Double.POSITIVE_INFINITY
+            var hasAnyActivePhase = false
+            val isOutOfAppSession = !appInForeground || screenOffOrLocked
+
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val id = item.optString("id", "")
+                if (id.isEmpty()) continue
+
+                val pausedUntilKey = "paused_until_\$id"
+                val pausedUntil = prefs.getLong(pausedUntilKey, 0L)
+                val isPaused = pausedUntil > now
+                if (pausedUntil in 1..now) {
+                    val cleanId = id.removePrefix("loc_").removePrefix("rem_")
+                    for (sfx in listOf(id, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
+                        editor.remove("paused_until_\$sfx")
+                        editor.remove("cooldown_until_\$sfx")
+                        editor.putBoolean("completed_cycle_\$sfx", false)
+                        editor.putBoolean("sonar_done_\$sfx", false)
+                        editor.putBoolean("zd_ui_done_\$sfx", false)
+                        editor.remove("five_hz_start_\$sfx")
+                        editor.remove("banner_start_\$sfx")
+                        editor.remove("banner_text_\$sfx")
+                        val prefix = "\${sfx}_"
+                        for (k in wokenAlertPhaseSet.toList()) {
+                            if (k.startsWith(prefix)) wokenAlertPhaseSet.remove(k)
+                        }
+                    }
+                    prefsModified = true
+                }
+
+                val title = item.optString("title", "")
+                val targetLat = item.optDouble("latitude", Double.NaN)
+                val targetLon = item.optDouble("longitude", Double.NaN)
+                if (targetLat.isNaN() || targetLon.isNaN()) continue
+
+                val radius = item.optInt("radius", 200).coerceAtLeast(20)
+                val rMeters = radius.toDouble()
+                val rcMeters = computeZoneRc(rMeters)
+                val rawTriggerOn = item.optString("triggerOn", "enter")
+                val triggerOn = when (rawTriggerOn) {
+                    "exit" -> "exit"
+                    "both" -> "both"
+                    else -> "enter"
+                }
+                val matchExit = triggerOn == "exit" || triggerOn == "both"
+                val matchEnter = triggerOn == "enter" || triggerOn == "both"
+
+                val rawDistanceDouble = calculateHaversineMetersDouble(
+                    location.latitude,
+                    location.longitude,
+                    targetLat,
+                    targetLon
+                )
+
+                val state = loadZoneFenceState(prefs, id)
+                val shouldRunStep = !state.hasInit || (
+                    isNewFixSample &&
+                        (fixTimeMs > state.lastFixMs || (location.provider != LocationManager.PASSIVE_PROVIDER && fixTimeMs != state.lastFixMs)) &&
+                        (fixTimeMs != state.lastFixMs || kotlin.math.abs(rawDistanceDouble - state.lastRawD) > 0.01)
+                )
+
+                var emittedEvent = ""
+                if (shouldRunStep) {
+                    state.lastFixMs = fixTimeMs
+                    state.lastRawD = rawDistanceDouble
+                    val res = zoneDetectorStep(
+                        state = state,
+                        d = rawDistanceDouble,
+                        acc = accuracyMeters,
+                        t = tSec,
+                        rMeters = rMeters
+                    )
+                    emittedEvent = res.event
+                    if (res.stateDirty) {
+                        saveZoneFenceState(editor, id, state)
+                        prefsModified = true
+                    }
+                }
+
+                val evalDm = if (state.hasInit && state.lastDm.isFinite()) state.lastDm else rawDistanceDouble
+                val distanceInt = evalDm.roundToInt()
+                val fenceMargin = minOf(kotlin.math.abs(evalDm - rcMeters), kotlin.math.abs(evalDm - rMeters))
+                if (fenceMargin < minMarginMeters) {
+                    minMarginMeters = fenceMargin
+                }
+                if (state.exitPhase == "ACTIVE" || state.enterPhase == "ACTIVE") {
+                    hasAnyActivePhase = true
+                }
+
+                val fiveHzKey = "five_hz_start_\$id"
+                val bannerStartKey = "banner_start_\$id"
+                val bannerTextKey = "banner_text_\$id"
+                val sonarDoneKey = "sonar_done_\$id"
+                val completedCycleKey = "completed_cycle_\$id"
+                val uiDoneKey = "zd_ui_done_\$id"
+
+                if (emittedEvent == "EXIT_CANCEL" && matchExit) {
+                    editor.remove(fiveHzKey)
+                    editor.remove(bannerStartKey)
+                    editor.remove(bannerTextKey)
+                    editor.putBoolean(sonarDoneKey, false)
+                    editor.putBoolean(completedCycleKey, false)
+                    editor.putBoolean(uiDoneKey, false)
+                    wokenAlertPhaseSet.remove("\${id}_exit")
+                    prefsModified = true
+                    val notifIdToClose = geofenceNotifId(id)
+                    if (activeGeofenceNotificationId == notifIdToClose) {
+                        stopGeofenceAudio(applicationContext, notifIdToClose)
+                        YaadAlarmPopupActivity.dismissIfMatching(notifIdToClose)
+                    } else {
+                        NotificationManagerCompat.from(this).cancel(notifIdToClose)
+                    }
+                } else if (emittedEvent == "ENTER_CANCEL" && matchEnter) {
+                    editor.remove(fiveHzKey)
+                    editor.remove(bannerStartKey)
+                    editor.remove(bannerTextKey)
+                    editor.putBoolean(sonarDoneKey, false)
+                    editor.putBoolean(completedCycleKey, false)
+                    editor.putBoolean(uiDoneKey, false)
+                    wokenAlertPhaseSet.remove("\${id}_enter")
+                    prefsModified = true
+                    val notifIdToClose = geofenceNotifId(id)
+                    if (activeGeofenceNotificationId == notifIdToClose) {
+                        stopGeofenceAudio(applicationContext, notifIdToClose)
+                        YaadAlarmPopupActivity.dismissIfMatching(notifIdToClose)
+                    } else {
+                        NotificationManagerCompat.from(this).cancel(notifIdToClose)
+                    }
+                } else if (emittedEvent == "EXIT_START" && matchExit) {
+                    editor.remove(fiveHzKey)
+                    editor.remove(bannerStartKey)
+                    editor.remove(bannerTextKey)
+                    editor.putBoolean(sonarDoneKey, false)
+                    editor.putBoolean(completedCycleKey, false)
+                    editor.putBoolean(uiDoneKey, false)
+                    wokenAlertPhaseSet.remove("\${id}_exit")
+                    prefsModified = true
+                } else if (emittedEvent == "ENTER" && matchEnter) {
+                    editor.remove(fiveHzKey)
+                    editor.remove(bannerStartKey)
+                    editor.remove(bannerTextKey)
+                    editor.putBoolean(sonarDoneKey, false)
+                    editor.putBoolean(completedCycleKey, false)
+                    editor.putBoolean(uiDoneKey, false)
+                    wokenAlertPhaseSet.remove("\${id}_enter")
+                    prefsModified = true
+                } else if (emittedEvent == "EXIT_CROSS" && matchExit) {
+                    editor.putLong(fiveHzKey, now)
+                    editor.remove(bannerStartKey)
+                    editor.remove(bannerTextKey)
+                    editor.putBoolean(sonarDoneKey, false)
+                    prefsModified = true
+                } else if (emittedEvent == "ARRIVED" && matchEnter) {
+                    editor.putLong(fiveHzKey, now)
+                    editor.remove(bannerStartKey)
+                    editor.remove(bannerTextKey)
+                    editor.putBoolean(sonarDoneKey, false)
+                    prefsModified = true
+                }
+
+                // Clear uiDone & cycle flags when returning cleanly to NONE for the active direction(s)
+                val directionIdle = (!matchExit || state.exitPhase == "NONE") && (!matchEnter || state.enterPhase == "NONE")
+                if (directionIdle && (prefs.getBoolean(uiDoneKey, false) || prefs.getLong(fiveHzKey, 0L) > 0L || prefs.getLong(bannerStartKey, 0L) > 0L)) {
+                    editor.putBoolean(uiDoneKey, false)
+                    editor.putBoolean(completedCycleKey, false)
+                    editor.putBoolean(sonarDoneKey, false)
+                    editor.remove(fiveHzKey)
+                    editor.remove(bannerStartKey)
+                    editor.remove(bannerTextKey)
+                    wokenAlertPhaseSet.remove("\${id}_exit")
+                    wokenAlertPhaseSet.remove("\${id}_enter")
+                    prefsModified = true
+                }
+
+                if (isPaused || !isOutOfAppSession) {
+                    continue
+                }
+
+                val uiDone = prefs.getBoolean(uiDoneKey, false) || prefs.getBoolean(completedCycleKey, false)
+                if (uiDone) {
+                    continue
+                }
+
+                var fiveHzStart = prefs.getLong(fiveHzKey, 0L)
+                val bannerStart = prefs.getLong(bannerStartKey, 0L)
+                val bannerText = prefs.getString(bannerTextKey, "") ?: ""
+                val sonarDone = prefs.getBoolean(sonarDoneKey, false)
+
+                val activeExitTerminal = matchExit && (state.exitPhase == "CROSSED" || (fiveHzStart > 0L && state.exitPhase != "ACTIVE" && state.enterPhase == "NONE"))
+                val activeEnterTerminal = matchEnter && state.enterPhase == "ARRIVED"
+
+                if (bannerStart > 0L && (activeExitTerminal || activeEnterTerminal)) {
+                    val elapsedBannerMs = (now - bannerStart).coerceAtLeast(0L)
+                    if (elapsedBannerMs >= 10_000L) {
+                        editor.remove(bannerStartKey)
+                        editor.remove(bannerTextKey)
+                        editor.remove(fiveHzKey)
+                        editor.putBoolean(completedCycleKey, true)
+                        editor.putBoolean(sonarDoneKey, true)
+                        editor.putBoolean(uiDoneKey, true)
+                        prefsModified = true
+                        val notifIdToClose = geofenceNotifId(id)
+                        stopGeofenceAudio(applicationContext, notifIdToClose)
+                        YaadAlarmPopupActivity.dismissIfMatching(notifIdToClose)
+                        continue
+                    } else {
+                        val isExitBanner = state.exitPhase == "CROSSED" && matchExit
+                        val targetDist = if (isExitBanner) 0 else distanceInt
+                        activeCandidates.add(
+                            ZoneAlertCandidate(
+                                id = id,
+                                title = title,
+                                statusPhrase = bannerText,
+                                eventType = "visual_banner",
+                                sonarMode = if (isExitBanner) "exit" else "enter",
+                                distance = distanceInt,
+                                radius = radius,
+                                targetDistance = targetDist,
+                                targetLat = targetLat,
+                                targetLon = targetLon,
+                                visualOnlyBanner = true,
+                                visualBannerText = bannerText,
+                                is5Hz = false,
+                                playAudio = false
+                            )
+                        )
+                        continue
+                    }
+                }
+
+                if (matchExit && state.exitPhase == "CROSSED") {
+                    if (fiveHzStart == 0L && !sonarDone) {
+                        fiveHzStart = now
+                        editor.putLong(fiveHzKey, now)
+                        prefsModified = true
+                    }
+                    if (fiveHzStart > 0L) {
+                        val exitedMsg = if (isEn) "Exited geofence «\$title»" else "خارج شدن از حصار مکانی «\$title»"
+                        val elapsed5Hz = (now - fiveHzStart).coerceAtLeast(0L)
+                        if (elapsed5Hz < 10_000L) {
+                            activeCandidates.add(
+                                ZoneAlertCandidate(
+                                    id = id,
+                                    title = title,
+                                    statusPhrase = exitedMsg,
+                                    eventType = "exit",
+                                    sonarMode = "exit",
+                                    distance = distanceInt,
+                                    radius = radius,
+                                    targetDistance = 0,
+                                    targetLat = targetLat,
+                                    targetLon = targetLon,
+                                    visualOnlyBanner = false,
+                                    visualBannerText = exitedMsg,
+                                    is5Hz = true,
+                                    playAudio = true
+                                )
+                            )
+                        } else {
+                            editor.remove(fiveHzKey)
+                            editor.putLong(bannerStartKey, now)
+                            editor.putString(bannerTextKey, exitedMsg)
+                            editor.putBoolean(sonarDoneKey, true)
+                            prefsModified = true
+                            activeCandidates.add(
+                                ZoneAlertCandidate(
+                                    id = id,
+                                    title = title,
+                                    statusPhrase = exitedMsg,
+                                    eventType = "visual_banner",
+                                    sonarMode = "exit",
+                                    distance = distanceInt,
+                                    radius = radius,
+                                    targetDistance = 0,
+                                    targetLat = targetLat,
+                                    targetLon = targetLon,
+                                    visualOnlyBanner = true,
+                                    visualBannerText = exitedMsg,
+                                    is5Hz = false,
+                                    playAudio = false
+                                )
+                            )
+                        }
+                        continue
+                    }
+                }
+
+                if (matchEnter && state.enterPhase == "ARRIVED") {
+                    if (fiveHzStart == 0L && !sonarDone) {
+                        fiveHzStart = now
+                        editor.putLong(fiveHzKey, now)
+                        prefsModified = true
+                    }
+                    if (fiveHzStart > 0L) {
+                        val centerMsg = if (isEn) "Arrived at central zone of «\$title»" else "رسیدن به ناحیه مرکزی «\$title»"
+                        val elapsed5Hz = (now - fiveHzStart).coerceAtLeast(0L)
+                        if (elapsed5Hz < 10_000L) {
+                            activeCandidates.add(
+                                ZoneAlertCandidate(
+                                    id = id,
+                                    title = title,
+                                    statusPhrase = centerMsg,
+                                    eventType = "arrived_under_10m",
+                                    sonarMode = "enter",
+                                    distance = distanceInt,
+                                    radius = radius,
+                                    targetDistance = distanceInt,
+                                    targetLat = targetLat,
+                                    targetLon = targetLon,
+                                    visualOnlyBanner = false,
+                                    visualBannerText = centerMsg,
+                                    is5Hz = true,
+                                    playAudio = true
+                                )
+                            )
+                        } else {
+                            editor.remove(fiveHzKey)
+                            editor.putLong(bannerStartKey, now)
+                            editor.putString(bannerTextKey, centerMsg)
+                            editor.putBoolean(sonarDoneKey, true)
+                            prefsModified = true
+                            activeCandidates.add(
+                                ZoneAlertCandidate(
+                                    id = id,
+                                    title = title,
+                                    statusPhrase = centerMsg,
+                                    eventType = "visual_banner",
+                                    sonarMode = "enter",
+                                    distance = distanceInt,
+                                    radius = radius,
+                                    targetDistance = distanceInt,
+                                    targetLat = targetLat,
+                                    targetLon = targetLon,
+                                    visualOnlyBanner = true,
+                                    visualBannerText = centerMsg,
+                                    is5Hz = false,
+                                    playAudio = false
+                                )
+                            )
+                        }
+                        continue
+                    }
+                }
+
+                if (matchExit && state.exitPhase == "ACTIVE" && !sonarDone) {
+                    val exitingMsg = if (isEn) "Exiting «\$title»" else "در حال خروج از حصار مکانی «\$title»"
+                    val distToBoundary = maxOf(0, radius - distanceInt)
+                    activeCandidates.add(
+                        ZoneAlertCandidate(
+                            id = id,
+                            title = title,
+                            statusPhrase = exitingMsg,
+                            eventType = "exit",
+                            sonarMode = "exit",
+                            distance = distanceInt,
+                            radius = radius,
+                            targetDistance = distToBoundary,
+                            targetLat = targetLat,
+                            targetLon = targetLon,
+                            visualOnlyBanner = false,
+                            visualBannerText = exitingMsg,
+                            is5Hz = false,
+                            playAudio = true
+                        )
+                    )
+                } else if (matchEnter && state.enterPhase == "ACTIVE" && !sonarDone) {
+                    val statusMsg = if (isEn) "Entered «\$title»" else "ورود به حصار مکانی «\$title»"
+                    activeCandidates.add(
+                        ZoneAlertCandidate(
+                            id = id,
+                            title = title,
+                            statusPhrase = statusMsg,
+                            eventType = "enter",
+                            sonarMode = "enter",
+                            distance = distanceInt,
+                            radius = radius,
+                            targetDistance = distanceInt,
+                            targetLat = targetLat,
+                            targetLon = targetLon,
+                            visualOnlyBanner = false,
+                            visualBannerText = statusMsg,
+                            is5Hz = false,
+                            playAudio = true
+                        )
+                    )
+                }
+            }
+
+            if (prefsModified) {
+                editor.apply()
+            }
+
+            updateZoneDetectorLocationInterval(
+                minMarginMeters = minMarginMeters,
+                hasAnyActivePhase = hasAnyActivePhase || activeCandidates.isNotEmpty(),
+                location = location,
+                isNewFixSample = isNewFixSample,
+                nowMs = now
+            )
+
+            if (appInForeground && !screenOffOrLocked) {
+                if (sonarLoopActive) {
+                    sonarLoopActive = false
+                    try {
+                        sonarThread?.interrupt()
+                    } catch (e: Exception) {
+                    }
+                    sonarThread = null
+                }
+                return
+            }
+
+            if (activeCandidates.isEmpty()) {
+                wokenAlertPhaseSet.clear()
+                if (sonarLoopActive || activeGeofenceNotificationId != Int.MIN_VALUE) {
+                    stopGeofenceAudio(applicationContext)
+                } else {
+                    activeGeofenceNotificationId = Int.MIN_VALUE
+                    activeGeofenceItemId = ""
+                    lastActiveMultiCardsJson = ""
+                }
+                return
+            }
+
+            activeCandidates.sortBy { it.targetDistance }
+
+            val topSonarCandidate = activeCandidates.firstOrNull { !it.visualOnlyBanner && it.playAudio }
+            val topOverall = activeCandidates.first()
+
+            val multiCardsArr = JSONArray()
+            for (cand in activeCandidates) {
+                val cardObj = JSONObject().apply {
+                    put("id", cand.id)
+                    put("notificationId", geofenceNotifId(cand.id))
+                    put("title", cand.title)
+                    put("subtitle", cand.statusPhrase)
+                    put("distance", cand.distance)
+                    put("radius", cand.radius)
+                    put("latitude", cand.targetLat)
+                    put("longitude", cand.targetLon)
+                    put("visualOnlyBanner", cand.visualOnlyBanner)
+                    put("visualBannerText", cand.visualBannerText)
+                }
+                multiCardsArr.put(cardObj)
+            }
+            val multiCardsStr = if (activeCandidates.size > 1) multiCardsArr.toString() else ""
+            lastActiveMultiCardsJson = multiCardsStr
+
+            val topBearingDeg = computeBearingDeg(
+                topOverall.targetLat,
+                topOverall.targetLon,
+                location.latitude,
+                location.longitude
+            )
+
+            activeGeofenceNotificationId = geofenceNotifId(topOverall.id)
+            activeGeofenceItemId = topOverall.id
+            activeGeofenceTitle = topOverall.title
+            activeGeofenceDescription = topOverall.statusPhrase
+            activeGeofenceCustomMessage = topOverall.visualBannerText
+            activeGeofenceEventType = topOverall.eventType
+            activeGeofenceRadius = topOverall.radius
+            activeGeofenceLat = topOverall.targetLat
+            activeGeofenceLon = topOverall.targetLon
+            activeGeofenceBearingDeg = topBearingDeg
+            activeGeofenceSonarMode = topOverall.sonarMode
+            activeGeofenceIsEn = isEn
+            liveSonarDistanceMeters = topOverall.distance
+            liveSonarRadiusMeters = topOverall.radius
+
+            if (YaadAlarmPopupActivity.isPhoneCallActiveOrRinging(this)) {
+                pauseSonarForPhoneCall(this)
+                YaadAlarmPopupActivity.yieldActivePopupForPhoneCall(this)
+                YaadAlarmPopupActivity.suspendGeofencePopupForPhoneCall(
+                    this,
+                    activeGeofenceNotificationId,
+                    null,
+                    activeGeofenceItemId
+                )
+                return
+            }
+
+            for ((idx, cand) in activeCandidates.withIndex()) {
+                val candBearing = computeBearingDeg(
+                    cand.targetLat,
+                    cand.targetLon,
+                    location.latitude,
+                    location.longitude
+                )
+                fireOutOfAppGeofenceAlert(
+                    id = cand.id,
+                    title = cand.title,
+                    statusPhrase = cand.statusPhrase,
+                    eventType = cand.eventType,
+                    sonarMode = cand.sonarMode,
+                    is5Hz = cand.is5Hz,
+                    distance = cand.distance,
+                    radius = cand.radius,
+                    targetLat = cand.targetLat,
+                    targetLon = cand.targetLon,
+                    bearingDeg = candBearing,
+                    isEn = isEn,
+                    visualOnlyBanner = cand.visualOnlyBanner,
+                    visualBannerText = cand.visualBannerText,
+                    isTopPriority = (idx == 0),
+                    multiCardsJson = multiCardsStr
+                )
+            }
+
+            if (topSonarCandidate != null && !geofenceAudioMuted) {
+                val sonarBearing = computeBearingDeg(
+                    topSonarCandidate.targetLat,
+                    topSonarCandidate.targetLon,
+                    location.latitude,
+                    location.longitude
+                )
+                updateLiveSonarDistance(topSonarCandidate.distance, topSonarCandidate.radius, topSonarCandidate.sonarMode)
+                YaadAlarmPopupActivity.updateLiveGeofenceDistance(
+                    topSonarCandidate.distance,
+                    topSonarCandidate.radius,
+                    topSonarCandidate.is5Hz,
+                    sonarBearing,
+                    topSonarCandidate.sonarMode,
+                    topSonarCandidate.visualOnlyBanner
+                )
+                if (!sonarLoopActive) {
+                    val notifId = geofenceNotifId(topSonarCandidate.id)
+                    startNativeSubmarineSonarLoop(
+                        applicationContext,
+                        topSonarCandidate.distance,
+                        topSonarCandidate.radius,
+                        notifId,
+                        topSonarCandidate.sonarMode
+                    )
+                }
+            } else {
+                if (sonarLoopActive) {
+                    sonarLoopActive = false
+                    try {
+                        sonarThread?.interrupt()
+                    } catch (e: Exception) {
+                    }
+                    sonarThread = null
+                }
+                YaadAlarmPopupActivity.updateLiveGeofenceDistance(
+                    topOverall.distance,
+                    topOverall.radius,
+                    topOverall.is5Hz,
+                    topBearingDeg,
+                    topOverall.sonarMode,
+                    topOverall.visualOnlyBanner
+                )
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun evaluateLocationAgainstGeofencesLegacy(location: Location) {
         try {
             val appInForeground = LocalNotificationsPlugin.isAppInForeground(this)
             val screenOffOrLocked = isScreenOffOrLocked()
@@ -12558,12 +13246,12 @@ class YaadGeofenceService : Service(), LocationListener {
         return sourceJsonStr
     }
 
-    private fun calculateHaversineMeters(
+    private fun calculateHaversineMetersDouble(
         lat1: Double,
         lon1: Double,
         lat2: Double,
         lon2: Double
-    ): Int {
+    ): Double {
         val r = 6371000.0
         val phi1 = Math.toRadians(lat1)
         val phi2 = Math.toRadians(lat2)
@@ -12573,7 +13261,16 @@ class YaadGeofenceService : Service(), LocationListener {
         val a = sin(dPhi / 2) * sin(dPhi / 2) +
             cos(phi1) * cos(phi2) * sin(dLambda / 2) * sin(dLambda / 2)
         val c = 2 * atan2(sqrt(a), sqrt(1 - a))
-        return (r * c).roundToInt()
+        return r * c
+    }
+
+    private fun calculateHaversineMeters(
+        lat1: Double,
+        lon1: Double,
+        lat2: Double,
+        lon2: Double
+    ): Int {
+        return calculateHaversineMetersDouble(lat1, lon1, lat2, lon2).roundToInt()
     }
 
     override fun onDestroy() {
@@ -12835,6 +13532,423 @@ class YaadGeofenceService : Service(), LocationListener {
          */
         fun geofenceNotifId(id: String): Int {
             return 700_000_000 + (id.hashCode() and 0x07ffffff)
+        }
+
+        const val USE_ZONE_DETECTOR = true
+        private const val HYS_K = 0.75
+        private const val H_MIN = 5.0
+        private const val H_MAX = 25.0
+        private const val H_FRAC = 0.25
+        private const val CONFIRM_SAMPLES = 2
+        private const val CONFIRM_SECONDS = 3.0
+        private const val CONFIRM_SECONDS_POOR = 8.0
+        private const val POOR_ACC = 15.0
+        private const val MEDIAN_N = 3
+        private const val ACC_ABS_MAX = 100.0
+        private const val C_FRAC = 0.10
+        private const val C_FLOOR = 40.0
+        private const val C_CAP = 0.35
+        private const val MIN_DWELL_S = 20.0
+        private const val BACK_MIN = 15.0
+        private const val BACK_ACC = 2.0
+        private const val BACK_FRAC = 0.05
+        private const val EMA_TAU_S = 8.0
+        private const val CANCEL_BLOCK_S = 120.0
+        private const val CANCEL_RESET_S = 900.0
+        private const val FB_MIN = 25.0
+        private const val FB_ACC = 3.0
+        private const val FB_FRAC = 0.10
+        private val REARM_DWELL_S: Double? = null
+        private const val STILL_SPEED = 0.6
+        private const val STILL_AFTER_S = 30.0
+        private const val STILL_INTERVAL_S = 5.0
+
+        private data class ZoneFenceState(
+            var hasInit: Boolean = false,
+            var pos: String = "OUT",
+            var inC: Boolean = false,
+            var exitArmed: Boolean = false,
+            var exitPhase: String = "NONE",
+            var enterArmed: Boolean = false,
+            var enterPhase: String = "NONE",
+            var lastPosChange: Double = 0.0,
+            var blockUntil: Double = 0.0,
+            var cancels: Int = 0,
+            var lastCancelT: Double = 0.0,
+            var rearmT0: Double = Double.NaN,
+            var anchor: Double = Double.NaN,
+            var armedByDwell: Boolean = false,
+            val rawHist: MutableList<Double> = ArrayList(),
+            var ema: Double = Double.NaN,
+            var emaT: Double = Double.NaN,
+            var emaMax: Double = Double.NaN,
+            var lastDm: Double = Double.NaN,
+            var lastRawD: Double = Double.NaN,
+            var lastFixMs: Long = 0L,
+            var cEnterCnt: Int = 0,
+            var cEnterT0: Double = 0.0,
+            var cExitCnt: Int = 0,
+            var cExitT0: Double = 0.0,
+            var bOutCnt: Int = 0,
+            var bOutT0: Double = 0.0,
+            var bInCnt: Int = 0,
+            var bInT0: Double = 0.0,
+            var tbCnt: Int = 0,
+            var tbT0: Double = 0.0
+        )
+
+        private data class ZoneStepResult(
+            val event: String,
+            val dm: Double,
+            val rc: Double,
+            val stateDirty: Boolean
+        )
+
+        private fun computeZoneRc(rMeters: Double): Double {
+            return minOf(maxOf(C_FRAC * rMeters, C_FLOOR), C_CAP * rMeters)
+        }
+
+        private fun computeHystMargin(acc: Double, zoneRadius: Double): Double {
+            return minOf(maxOf(HYS_K * acc, H_MIN), H_MAX, H_FRAC * zoneRadius)
+        }
+
+        private fun updateConfirm(
+            cond: Boolean,
+            cnt: Int,
+            t0: Double,
+            acc: Double,
+            t: Double
+        ): Pair<Boolean, Pair<Int, Double>> {
+            if (!cond) {
+                return Pair(false, Pair(0, 0.0))
+            }
+            val newCnt = cnt + 1
+            val newT0 = if (cnt == 0) t else t0
+            val reqS = if (acc > POOR_ACC) CONFIRM_SECONDS_POOR else CONFIRM_SECONDS
+            val ok = newCnt >= CONFIRM_SAMPLES && (t - newT0) >= reqS
+            return Pair(ok, Pair(newCnt, newT0))
+        }
+
+        private fun putOptFiniteDouble(obj: JSONObject, key: String, value: Double) {
+            if (value.isFinite()) {
+                obj.put(key, value)
+            } else {
+                obj.put(key, JSONObject.NULL)
+            }
+        }
+
+        private fun loadZoneFenceState(prefs: android.content.SharedPreferences, id: String): ZoneFenceState {
+            val st = ZoneFenceState()
+            val raw = prefs.getString("zd_state_\$id", null) ?: return st
+            try {
+                val obj = JSONObject(raw)
+                st.hasInit = obj.optBoolean("has_init", false)
+                st.pos = obj.optString("pos", "OUT")
+                st.inC = obj.optBoolean("inC", false)
+                st.exitArmed = obj.optBoolean("exit_armed", false)
+                st.exitPhase = obj.optString("exit_phase", "NONE")
+                st.enterArmed = obj.optBoolean("enter_armed", false)
+                st.enterPhase = obj.optString("enter_phase", "NONE")
+                st.lastPosChange = obj.optDouble("last_pos_change", 0.0)
+                st.blockUntil = obj.optDouble("block_until", 0.0)
+                st.cancels = obj.optInt("cancels", 0)
+                st.lastCancelT = obj.optDouble("last_cancel_t", 0.0)
+                st.rearmT0 = if (obj.isNull("rearm_t0")) Double.NaN else obj.optDouble("rearm_t0", Double.NaN)
+                st.anchor = if (obj.isNull("anchor")) Double.NaN else obj.optDouble("anchor", Double.NaN)
+                st.armedByDwell = obj.optBoolean("armed_by_dwell", false)
+                val histArr = obj.optJSONArray("raw_hist")
+                if (histArr != null) {
+                    for (idx in 0 until histArr.length()) {
+                        val v = histArr.optDouble(idx, Double.NaN)
+                        if (v.isFinite()) st.rawHist.add(v)
+                    }
+                }
+                st.ema = if (obj.isNull("ema")) Double.NaN else obj.optDouble("ema", Double.NaN)
+                st.emaT = if (obj.isNull("ema_t")) Double.NaN else obj.optDouble("ema_t", Double.NaN)
+                st.emaMax = if (obj.isNull("ema_max")) Double.NaN else obj.optDouble("ema_max", Double.NaN)
+                st.lastDm = if (obj.isNull("last_dm")) Double.NaN else obj.optDouble("last_dm", Double.NaN)
+                st.lastRawD = if (obj.isNull("last_raw_d")) Double.NaN else obj.optDouble("last_raw_d", Double.NaN)
+                st.lastFixMs = obj.optLong("last_fix_ms", 0L)
+                st.cEnterCnt = obj.optInt("c_enter_cnt", 0)
+                st.cEnterT0 = obj.optDouble("c_enter_t0", 0.0)
+                st.cExitCnt = obj.optInt("c_exit_cnt", 0)
+                st.cExitT0 = obj.optDouble("c_exit_t0", 0.0)
+                st.bOutCnt = obj.optInt("b_out_cnt", 0)
+                st.bOutT0 = obj.optDouble("b_out_t0", 0.0)
+                st.bInCnt = obj.optInt("b_in_cnt", 0)
+                st.bInT0 = obj.optDouble("b_in_t0", 0.0)
+                st.tbCnt = obj.optInt("tb_cnt", 0)
+                st.tbT0 = obj.optDouble("tb_t0", 0.0)
+            } catch (e: Exception) {
+            }
+            return st
+        }
+
+        private fun saveZoneFenceState(editor: android.content.SharedPreferences.Editor, id: String, st: ZoneFenceState) {
+            try {
+                val obj = JSONObject()
+                obj.put("has_init", st.hasInit)
+                obj.put("pos", st.pos)
+                obj.put("inC", st.inC)
+                obj.put("exit_armed", st.exitArmed)
+                obj.put("exit_phase", st.exitPhase)
+                obj.put("enter_armed", st.enterArmed)
+                obj.put("enter_phase", st.enterPhase)
+                putOptFiniteDouble(obj, "last_pos_change", st.lastPosChange)
+                putOptFiniteDouble(obj, "block_until", st.blockUntil)
+                obj.put("cancels", st.cancels)
+                putOptFiniteDouble(obj, "last_cancel_t", st.lastCancelT)
+                putOptFiniteDouble(obj, "rearm_t0", st.rearmT0)
+                putOptFiniteDouble(obj, "anchor", st.anchor)
+                obj.put("armed_by_dwell", st.armedByDwell)
+                val histArr = JSONArray()
+                for (v in st.rawHist) {
+                    if (v.isFinite()) histArr.put(v)
+                }
+                obj.put("raw_hist", histArr)
+                putOptFiniteDouble(obj, "ema", st.ema)
+                putOptFiniteDouble(obj, "ema_t", st.emaT)
+                putOptFiniteDouble(obj, "ema_max", st.emaMax)
+                putOptFiniteDouble(obj, "last_dm", st.lastDm)
+                putOptFiniteDouble(obj, "last_raw_d", st.lastRawD)
+                obj.put("last_fix_ms", st.lastFixMs)
+                obj.put("c_enter_cnt", st.cEnterCnt)
+                putOptFiniteDouble(obj, "c_enter_t0", st.cEnterT0)
+                obj.put("c_exit_cnt", st.cExitCnt)
+                putOptFiniteDouble(obj, "c_exit_t0", st.cExitT0)
+                obj.put("b_out_cnt", st.bOutCnt)
+                putOptFiniteDouble(obj, "b_out_t0", st.bOutT0)
+                obj.put("b_in_cnt", st.bInCnt)
+                putOptFiniteDouble(obj, "b_in_t0", st.bInT0)
+                obj.put("tb_cnt", st.tbCnt)
+                putOptFiniteDouble(obj, "tb_t0", st.tbT0)
+                editor.putString("zd_state_\$id", obj.toString())
+            } catch (e: Exception) {
+            }
+        }
+
+        private fun recordZoneCancel(st: ZoneFenceState, t: Double) {
+            if (st.cancels > 0 && st.lastCancelT > 0.0 && (t - st.lastCancelT) >= CANCEL_RESET_S) {
+                st.cancels = 0
+            }
+            val shift = minOf(st.cancels, 3)
+            st.blockUntil = t + CANCEL_BLOCK_S * (1 shl shift).toDouble()
+            st.cancels = st.cancels + 1
+            st.lastCancelT = t
+        }
+
+        private fun zoneDetectorStep(
+            state: ZoneFenceState,
+            d: Double,
+            acc: Double,
+            t: Double,
+            rMeters: Double
+        ): ZoneStepResult {
+            val rc = computeZoneRc(rMeters)
+            val accLimit = minOf(ACC_ABS_MAX, maxOf(50.0, rMeters / 2.0))
+            if (acc > accLimit) {
+                val fallbackDm = if (state.lastDm.isFinite()) state.lastDm else d
+                return ZoneStepResult("", fallbackDm, rc, false)
+            }
+
+            // 1. Median-3 + EMA (tau = 8 s)
+            state.rawHist.add(d)
+            while (state.rawHist.size > MEDIAN_N) {
+                state.rawHist.removeAt(0)
+            }
+            val dm = if (state.rawHist.size < MEDIAN_N) {
+                d
+            } else {
+                val sorted = state.rawHist.sorted()
+                sorted[1]
+            }
+            state.lastDm = dm
+
+            if (!state.ema.isFinite() || !state.emaT.isFinite()) {
+                state.ema = dm
+                state.emaT = t
+                state.emaMax = dm
+            } else {
+                val dt = maxOf(0.0, t - state.emaT)
+                val alpha = if (dt > 0.0) 1.0 - exp(-dt / EMA_TAU_S) else 0.0
+                state.ema = state.ema + alpha * (dm - state.ema)
+                state.emaT = t
+            }
+
+            if (state.cancels > 0 && state.lastCancelT > 0.0 && (t - state.lastCancelT) >= CANCEL_RESET_S) {
+                state.cancels = 0
+            }
+
+            // 2. Hysteresis margins
+            val hb = computeHystMargin(acc, rMeters)
+            val hc = computeHystMargin(acc, rc)
+
+            // 3. First valid fix
+            if (!state.hasInit) {
+                state.hasInit = true
+                state.pos = if (dm <= rMeters) "IN" else "OUT"
+                state.inC = dm <= rc
+                state.exitArmed = state.inC
+                state.exitPhase = "NONE"
+                state.enterArmed = (state.pos == "OUT")
+                state.enterPhase = "NONE"
+                state.lastPosChange = t
+                state.blockUntil = 0.0
+                state.cancels = 0
+                state.lastCancelT = 0.0
+                state.rearmT0 = Double.NaN
+                state.anchor = Double.NaN
+                state.armedByDwell = false
+                state.emaMax = state.ema
+                return ZoneStepResult("", dm, rc, true)
+            }
+
+            var event = ""
+
+            // 4. Centre zone
+            val cEnterRes = updateConfirm(!state.inC && dm <= rc - hc, state.cEnterCnt, state.cEnterT0, acc, t)
+            state.cEnterCnt = cEnterRes.second.first
+            state.cEnterT0 = cEnterRes.second.second
+
+            val cExitRes = updateConfirm(state.inC && dm >= rc + hc, state.cExitCnt, state.cExitT0, acc, t)
+            state.cExitCnt = cExitRes.second.first
+            state.cExitT0 = cExitRes.second.second
+
+            if (!state.inC && cEnterRes.first) {
+                state.inC = true
+                state.exitArmed = true
+                state.armedByDwell = false
+                state.anchor = Double.NaN
+                state.rearmT0 = Double.NaN
+                state.cEnterCnt = 0
+                state.cEnterT0 = 0.0
+                if (state.exitPhase == "ACTIVE") {
+                    state.exitPhase = "NONE"
+                    recordZoneCancel(state, t)
+                    event = "EXIT_CANCEL"
+                } else if (state.exitPhase == "CROSSED") {
+                    state.exitPhase = "NONE"
+                }
+                if (state.enterPhase == "ACTIVE") {
+                    state.enterPhase = "ARRIVED"
+                    event = "ARRIVED"
+                }
+            } else if (state.inC && cExitRes.first) {
+                state.inC = false
+                state.cExitCnt = 0
+                state.cExitT0 = 0.0
+            }
+
+            // 5. Boundary
+            val canLeaveBoundary = state.pos == "IN" && (t - state.lastPosChange) >= MIN_DWELL_S
+            val bOutRes = updateConfirm(canLeaveBoundary && dm >= rMeters + hb, state.bOutCnt, state.bOutT0, acc, t)
+            state.bOutCnt = bOutRes.second.first
+            state.bOutT0 = bOutRes.second.second
+
+            val bInRes = updateConfirm(state.pos == "OUT" && dm <= rMeters - hb, state.bInCnt, state.bInT0, acc, t)
+            state.bInCnt = bInRes.second.first
+            state.bInT0 = bInRes.second.second
+
+            if (state.pos == "IN" && bOutRes.first) {
+                state.pos = "OUT"
+                state.lastPosChange = t
+                state.enterArmed = true
+                state.rearmT0 = Double.NaN
+                state.anchor = Double.NaN
+                state.armedByDwell = false
+                state.bOutCnt = 0
+                state.bOutT0 = 0.0
+                if (state.enterPhase == "ACTIVE") {
+                    state.enterPhase = "NONE"
+                    event = "ENTER_CANCEL"
+                } else if (state.enterPhase == "ARRIVED") {
+                    state.enterPhase = "NONE"
+                }
+                if (state.exitPhase == "ACTIVE") {
+                    state.exitPhase = "CROSSED"
+                    event = "EXIT_CROSS"
+                }
+                state.exitArmed = false
+            } else if (state.pos == "OUT" && bInRes.first) {
+                state.pos = "IN"
+                state.lastPosChange = t
+                state.bInCnt = 0
+                state.bInT0 = 0.0
+                if (state.enterArmed) {
+                    state.enterPhase = "ACTIVE"
+                    state.enterArmed = false
+                    event = "ENTER"
+                    if (state.inC) {
+                        state.enterPhase = "ARRIVED"
+                        event = "ARRIVED"
+                    }
+                }
+            }
+
+            // 8. Optional re-arm by dwell (disabled when REARM_DWELL_S == null)
+            val dwellSeconds = REARM_DWELL_S
+            if (dwellSeconds != null) {
+                if (state.pos == "IN" && !state.inC && !state.exitArmed && state.exitPhase == "NONE" && t >= state.blockUntil) {
+                    if (!state.rearmT0.isFinite() || !state.anchor.isFinite()) {
+                        state.rearmT0 = t
+                        state.anchor = dm
+                    } else if ((t - state.rearmT0) >= dwellSeconds) {
+                        state.exitArmed = true
+                        state.armedByDwell = true
+                        state.rearmT0 = Double.NaN
+                    }
+                } else {
+                    state.rearmT0 = Double.NaN
+                }
+            }
+
+            // 6. EXIT_START
+            if (
+                state.pos == "IN" &&
+                state.exitArmed &&
+                state.exitPhase == "NONE" &&
+                t >= state.blockUntil &&
+                !state.inC &&
+                dm >= rc + hc
+            ) {
+                val fbMargin = maxOf(FB_MIN, FB_ACC * acc, FB_FRAC * rMeters)
+                val dwellAnchorOk = !state.armedByDwell || (state.anchor.isFinite() && dm >= state.anchor + fbMargin)
+                if (dwellAnchorOk) {
+                    state.exitPhase = "ACTIVE"
+                    state.exitArmed = false
+                    state.armedByDwell = false
+                    state.anchor = Double.NaN
+                    state.emaMax = state.ema
+                    state.tbCnt = 0
+                    state.tbT0 = 0.0
+                    event = "EXIT_START"
+                }
+            }
+
+            // 7. Turn back while ACTIVE
+            if (state.exitPhase == "ACTIVE") {
+                if (!state.emaMax.isFinite() || state.ema > state.emaMax) {
+                    state.emaMax = state.ema
+                }
+                val backThresh = maxOf(BACK_MIN, BACK_ACC * acc, BACK_FRAC * (rMeters - rc))
+                val dropFromMax = state.emaMax - state.ema
+                val tbRes = updateConfirm(!state.inC && dropFromMax >= backThresh, state.tbCnt, state.tbT0, acc, t)
+                state.tbCnt = tbRes.second.first
+                state.tbT0 = tbRes.second.second
+                if (tbRes.first) {
+                    state.exitPhase = "NONE"
+                    state.exitArmed = false
+                    state.tbCnt = 0
+                    state.tbT0 = 0.0
+                    recordZoneCancel(state, t)
+                    event = "EXIT_CANCEL"
+                }
+            } else {
+                state.tbCnt = 0
+                state.tbT0 = 0.0
+            }
+
+            return ZoneStepResult(event, dm, rc, true)
         }
 
         private data class WeightedSample(val distance: Double, val weight: Double)
@@ -13383,6 +14497,8 @@ class YaadGeofenceService : Service(), LocationListener {
                         editor.remove("latched_mode_\$sfx")
                         editor.remove("paused_until_\$sfx")
                         editor.remove("cooldown_until_\$sfx")
+                        editor.remove("zd_state_\$sfx")
+                        editor.remove("zd_ui_done_\$sfx")
                     }
                 } else {
                     distanceHistoryMap.clear()
@@ -13419,7 +14535,9 @@ class YaadGeofenceService : Service(), LocationListener {
                             key.startsWith("completed_cycle_") ||
                             key.startsWith("latched_mode_") ||
                             key.startsWith("paused_until_") ||
-                            key.startsWith("cooldown_until_")
+                            key.startsWith("cooldown_until_") ||
+                            key.startsWith("zd_state_") ||
+                            key.startsWith("zd_ui_done_")
                         ) {
                             editor.remove(key)
                         }
@@ -13526,6 +14644,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     for (sfx in listOf(itemKey, cleanId, "loc_\$cleanId", "rem_\$cleanId")) {
                         editor.putBoolean("completed_cycle_\$sfx", true)
                         editor.putBoolean("sonar_done_\$sfx", true)
+                        editor.putBoolean("zd_ui_done_\$sfx", true)
                         editor.putLong("cooldown_until_\$sfx", cooldownUntil)
                         editor.remove("five_hz_start_\$sfx")
                         editor.remove("banner_start_\$sfx")
@@ -13674,6 +14793,7 @@ class YaadGeofenceService : Service(), LocationListener {
                     editor.putLong("cooldown_until_\$sfx", resumeAt)
                     editor.putBoolean("completed_cycle_\$sfx", false)
                     editor.putBoolean("sonar_done_\$sfx", false)
+                    editor.putBoolean("zd_ui_done_\$sfx", false)
                     editor.remove("five_hz_start_\$sfx")
                     editor.remove("banner_start_\$sfx")
                     editor.remove("banner_text_\$sfx")
@@ -13765,12 +14885,16 @@ class YaadGeofenceService : Service(), LocationListener {
         fun computeSonarIntervalMs(distanceMeters: Int, radiusMeters: Int, mode: String = "enter"): Long {
             val safeRadius = radiusMeters.coerceAtLeast(20)
             val clampedDist = distanceMeters.coerceAtLeast(0)
-            val fivePctMeters = kotlin.math.min((safeRadius * 0.35).toInt(), kotlin.math.max(15, (safeRadius * 0.05).roundToInt()))
+            val centerMeters = if (USE_ZONE_DETECTOR) {
+                computeZoneRc(safeRadius.toDouble()).roundToInt()
+            } else {
+                kotlin.math.min((safeRadius * 0.35).toInt(), kotlin.math.max(15, (safeRadius * 0.05).roundToInt()))
+            }
 
             return if (mode == "exit" || mode == "both_exit") {
                 if (clampedDist > safeRadius) 200L else 6000L
             } else {
-                if (clampedDist <= fivePctMeters) 200L else 6000L
+                if (clampedDist <= centerMeters) 200L else 6000L
             }
         }
 
@@ -14127,6 +15251,8 @@ class YaadGeofenceService : Service(), LocationListener {
                             editor.remove("latched_mode_\$sfx")
                             editor.remove("paused_until_\$sfx")
                             editor.remove("cooldown_until_\$sfx")
+                            editor.remove("zd_state_\$sfx")
+                            editor.remove("zd_ui_done_\$sfx")
                         }
                     }
                     if (nid == activeGeofenceItemId) {
@@ -15078,6 +16204,10 @@ function validateKotlinFiles(dir) {
 }
 
 validateKotlinFiles(pluginDir);
+
+if (!geofenceServiceContent.includes('const val USE_ZONE_DETECTOR = true') || !geofenceServiceContent.includes('fun zoneDetectorStep(')) {
+  throw new Error('[patch-capacitor-notifications] Zone detector verification marker missing in YaadGeofenceService.kt');
+}
 
 console.log(
   `[patch-capacitor-notifications] Successfully patched and verified @capacitor/local-notifications@${pluginVersion} (with YaadAlarmPopupActivity, YaadGeofenceService & Kotlin syntax check).`
