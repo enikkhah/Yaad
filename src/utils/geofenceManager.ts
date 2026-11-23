@@ -476,20 +476,21 @@ export function expireInAppGeofenceVisualPhase(
   phase?: GeofenceScenarioPhase
 ): void {
   if (!itemId) return;
+  if (
+    phase === 'enter_approaching' ||
+    phase === 'exit_moving_out' ||
+    phase === 'enter_center_5hz' ||
+    phase === 'exit_border_5hz'
+  ) {
+    return;
+  }
   const cleanId = itemId.replace(/^(loc_|rem_)/, '');
-  const expiredTimestamp = Math.max(1, Date.now() - (GEOFENCE_IN_APP_VISUAL_MAX_MS + 1000));
   for (const key of [`loc_${cleanId}`, `rem_${cleanId}`]) {
     const st = getOrCreateRuntimeState(key);
-    if (phase === 'enter_approaching') {
-      st.enterApproachStartMs = expiredTimestamp;
-    } else if (phase === 'exit_moving_out') {
-      st.exitMovingOutStartMs = expiredTimestamp;
-    } else {
-      st.enterCycleCompleted = true;
-      st.exitCycleCompleted = true;
-      st.enterAlertActive = false;
-      st.sonarFinishedForCycle = true;
-    }
+    st.enterCycleCompleted = true;
+    st.exitCycleCompleted = true;
+    st.enterAlertActive = false;
+    st.sonarFinishedForCycle = true;
   }
 }
 
@@ -1037,22 +1038,13 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    // 1B. Inside geofence boundary outside the 5% central zone (centerZoneMeters < d <= R, or latched within deadband):
-    // Turn off the in-app full-screen visual alert after 10 seconds (`GEOFENCE_IN_APP_VISUAL_MAX_MS`),
-    // while keeping the 5% central zone arrival stage armed to fire when `distance <= centerZoneMeters`!
+    // 1B. Inside geofence boundary outside the central zone Rc (Rc < d <= R, or latched within deadband):
+    // Keep approach alert and 6s sonar active continuously until arrival at Rc (matched with native ZoneDetector).
     if (!st.sonarFinishedForCycle && (st.enterAlertActive || distance <= safeRadius)) {
       st.enterAlertActive = true;
       if (st.enterApproachStartMs === 0) {
         st.enterApproachStartMs = now;
       }
-      const elapsedApproach = now - st.enterApproachStartMs;
-      if (elapsedApproach >= GEOFENCE_IN_APP_VISUAL_MAX_MS) {
-        return null;
-      }
-      const remApproachSec = Math.max(
-        1,
-        Math.ceil((GEOFENCE_IN_APP_VISUAL_MAX_MS - elapsedApproach) / 1000)
-      );
 
       return {
         id: `alert_${itemKey}`,
@@ -1067,7 +1059,6 @@ function evaluateSingleItemScenario(params: {
         sonarIntervalMs: 6000,
         isVisualOnly: false,
         visualBannerMessage: entryToastMessage || msgEntered,
-        phaseRemainingSeconds: remApproachSec,
         entryToastMessage,
         entryToastRemainingSeconds,
         isAudioMuted: st.audioMutedForCycle,
@@ -1154,14 +1145,6 @@ function evaluateSingleItemScenario(params: {
     if (st.exitMovingOutStartMs === 0) {
       st.exitMovingOutStartMs = now;
     }
-    const elapsedMovingOut = now - st.exitMovingOutStartMs;
-    if (elapsedMovingOut >= GEOFENCE_IN_APP_VISUAL_MAX_MS) {
-      return null;
-    }
-    const remMovingOutSec = Math.max(
-      1,
-      Math.ceil((GEOFENCE_IN_APP_VISUAL_MAX_MS - elapsedMovingOut) / 1000)
-    );
     const distToBorder = Math.max(0, safeRadius - distance);
 
     return {
@@ -1177,7 +1160,6 @@ function evaluateSingleItemScenario(params: {
       sonarIntervalMs: 6000,
       isVisualOnly: false,
       visualBannerMessage: msgExiting,
-      phaseRemainingSeconds: remMovingOutSec,
       isAudioMuted: st.audioMutedForCycle,
       initialDistance: distance,
       targetDistance: distToBorder,

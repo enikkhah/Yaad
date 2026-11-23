@@ -221,12 +221,16 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
     };
   }, []);
 
-  // 3) 10-Second Auto-Turn-Off Timer for In-App Full-Screen Visual Alert (`GEOFENCE_IN_APP_VISUAL_MAX_MS = 10_000`)
+  // 3) 10-Second Auto-Turn-Off Timer for terminal visual-only alert phases (enter_center_visual_10s / exit_crossed_visual_10s)
+  const isTerminalVisualPhase =
+    topPriorityAlert?.scenarioPhase === 'enter_center_visual_10s' ||
+    topPriorityAlert?.scenarioPhase === 'exit_crossed_visual_10s' ||
+    Boolean(topPriorityAlert?.isVisualOnly);
   const activeVisualPhaseKey = topPriorityAlert
     ? `${topPriorityAlert.targetId}_${topPriorityAlert.scenarioPhase || topPriorityAlert.triggerType}`
     : '';
   useEffect(() => {
-    if (!topPriorityAlert || isMinimized) return;
+    if (!topPriorityAlert || isMinimized || !isTerminalVisualPhase) return;
     const targetAlert = topPriorityAlert;
     const timeoutMs =
       typeof targetAlert.phaseRemainingSeconds === 'number' &&
@@ -248,7 +252,7 @@ export const GeofenceAlertModal: React.FC<GeofenceAlertModalProps> = ({
       window.clearTimeout(timerId);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeVisualPhaseKey, isMinimized]);
+  }, [activeVisualPhaseKey, isMinimized, isTerminalVisualPhase]);
 
   // Listen to submarine sonar ping events to keep the pulse animation in exact lockstep with each sonar ping
   useEffect(() => {

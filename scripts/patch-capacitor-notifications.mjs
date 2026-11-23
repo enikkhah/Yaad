@@ -2320,6 +2320,9 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
             }
             return
         }
+        val um = context.getSystemService(UserManager::class.java)
+        if (um == null || !um.isUserUnlocked) return
+
         try {
             YaadGeofenceService.ensureServiceState(context.applicationContext)
         } catch (e: Exception) {
@@ -2327,9 +2330,6 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
         if (intent.action == YaadGeofenceService.ACTION_RESTART_GEOFENCE_SERVICE) {
             return
         }
-
-        val um = context.getSystemService(UserManager::class.java)
-        if (um == null || !um.isUserUnlocked) return
 
         val isTimeOrTzChange =
             intent.action == Intent.ACTION_TIMEZONE_CHANGED ||
@@ -6474,6 +6474,16 @@ class YaadAlarmPopupActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (!isMinimizedToFloatingBubble && !isFinishing && !isDestroyed) {
+            performMinimizeToFloatingButton()
+            return
+        }
+        @Suppress("DEPRECATION")
+        super.onBackPressed()
     }
 
     private fun registerCallInterceptionListeners() {
@@ -10725,8 +10735,10 @@ class YaadGeofenceService : Service(), LocationListener {
         if (YaadAlarmPopupActivity.isPhoneCallActiveOrRinging(this)) return
         if (activeGeofenceNotificationId == Int.MIN_VALUE || activeGeofenceItemId.isEmpty()) {
             // If no active candidate is cached yet, evaluate last known location immediately
+            val prevLaunchAttemptMs = lastOutOfAppPopupLaunchAttemptMs
             checkLastKnownLocations()
             if (activeGeofenceNotificationId == Int.MIN_VALUE || activeGeofenceItemId.isEmpty()) return
+            if (!wakeScreen && lastOutOfAppPopupLaunchAttemptMs > prevLaunchAttemptMs) return
         }
         val screenOffOrLocked = isInScreenOffSession || !isScreenInteractive() || isDeviceKeyguardLocked()
         if (!wakeScreen && !allowWhenUnlockedOutOfApp && !screenOffOrLocked) return
@@ -10859,11 +10871,14 @@ class YaadGeofenceService : Service(), LocationListener {
                         if (lastAcceptedLat.isNaN() || nowMs - lastAcceptedLocationTimeMs > 3000L) {
                             requestImmediateCurrentLocationUpdate(force = true)
                         }
+                        val prevLaunchAttemptMs = lastOutOfAppPopupLaunchAttemptMs
                         checkLastKnownLocations()
-                        relaunchActivePopupOnLockscreenIfNeeded(
-                            wakeScreen = !isScreenInteractive(),
-                            allowWhenUnlockedOutOfApp = true
-                        )
+                        if (lastOutOfAppPopupLaunchAttemptMs <= prevLaunchAttemptMs) {
+                            relaunchActivePopupOnLockscreenIfNeeded(
+                                wakeScreen = !isScreenInteractive(),
+                                allowWhenUnlockedOutOfApp = true
+                            )
+                        }
                     }
                 } catch (e: Exception) {
                 }
@@ -11616,12 +11631,14 @@ class YaadGeofenceService : Service(), LocationListener {
                     editor.remove(bannerStartKey)
                     editor.remove(bannerTextKey)
                     editor.putBoolean(sonarDoneKey, false)
+                    wokenAlertPhaseSet.remove("\${id}_exit")
                     prefsModified = true
                 } else if (emittedEvent == "ARRIVED" && matchEnter) {
                     editor.putLong(fiveHzKey, now)
                     editor.remove(bannerStartKey)
                     editor.remove(bannerTextKey)
                     editor.putBoolean(sonarDoneKey, false)
+                    wokenAlertPhaseSet.remove("\${id}_enter")
                     prefsModified = true
                 }
 
@@ -13558,7 +13575,7 @@ class YaadGeofenceService : Service(), LocationListener {
         private const val FB_MIN = 25.0
         private const val FB_ACC = 3.0
         private const val FB_FRAC = 0.10
-        private val REARM_DWELL_S: Double? = null
+        private val REARM_DWELL_S: Double? = 12.0
         private const val STILL_SPEED = 0.6
         private const val STILL_AFTER_S = 30.0
         private const val STILL_INTERVAL_S = 5.0

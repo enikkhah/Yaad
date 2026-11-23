@@ -656,12 +656,12 @@ export const setSubmarineSonarMuted = (muted: boolean): void => {
 };
 
 /**
- * Computes the physical 5% zone threshold with a 15m minimum (capped at 35% of radius for very small geofences)
- * so normal 5-12m GPS jitter never skips the central 5% target zone.
+ * Computes the physical central zone threshold Rc = min(max(0.10*R, 40m), 0.35*R),
+ * aligned with native ZoneDetector.computeZoneRc so in-app and background phases stay consistent.
  */
 export const computeFivePercentZoneMeters = (radiusMeters: number = 200): number => {
   const safeRadius = Math.max(20, radiusMeters || 200);
-  return Math.min(Math.floor(safeRadius * 0.35), Math.max(15, Math.round(safeRadius * 0.05)));
+  return Math.round(Math.min(safeRadius * 0.35, Math.max(40, safeRadius * 0.1)));
 };
 
 /**
