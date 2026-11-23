@@ -489,7 +489,7 @@ const legacyBuildFlagsV6 = `        val isSilentChannel = channelId == "yaad_cha
         }
         mBuilder.setLargeIcon(null as android.graphics.Bitmap?)`;
 
-const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent" || channelId == "yaad_channel_v3_trial_info"
+const legacyBuildFlagsV7 = `        val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent" || channelId == "yaad_channel_v3_trial_info"
         mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         // Hide duplicate Android header timestamp because notification body already displays the reminder time
         mBuilder.setShowWhen(false)
@@ -554,14 +554,84 @@ const patchedBuildFlags = `        val isSilentChannel = channelId == "yaad_chan
         }
         mBuilder.setLargeIcon(null as android.graphics.Bitmap?)`;
 
+const patchedBuildFlags = `        val isShadeOnlyTimedChannel = channelId == "yaad_channel_v7_timed_shade"
+        val isSilentChannel = isShadeOnlyTimedChannel || channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent" || channelId == "yaad_channel_v3_trial_info"
+        mBuilder.setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        // Hide duplicate Android header timestamp because notification body already displays the reminder time
+        mBuilder.setShowWhen(false)
+        // Make notification subject (title) font distinctly larger and bolder than the rest of the notification text
+        try {
+            val rawTitle = localNotification.title ?: ""
+            if (rawTitle.isNotEmpty()) {
+                val styledTitle = android.text.SpannableString(rawTitle)
+                styledTitle.setSpan(
+                    android.text.style.StyleSpan(android.graphics.Typeface.BOLD),
+                    0,
+                    rawTitle.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                styledTitle.setSpan(
+                    android.text.style.RelativeSizeSpan(1.22f),
+                    0,
+                    rawTitle.length,
+                    android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                )
+                mBuilder.setContentTitle(styledTitle)
+                val rawBody = localNotification.body ?: ""
+                if (rawBody.isNotEmpty()) {
+                    val styledBody = android.text.SpannableString(rawBody)
+                    styledBody.setSpan(
+                        android.text.style.RelativeSizeSpan(0.92f),
+                        0,
+                        rawBody.length,
+                        android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                    )
+                    mBuilder.setContentText(styledBody)
+                    mBuilder.setStyle(
+                        NotificationCompat.BigTextStyle()
+                            .setBigContentTitle(styledTitle)
+                            .bigText(styledBody)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+        }
+        // Do NOT call setSilent(true) on legacy silent channel; shade-only channel stays quiet in drawer without heads-up banner
+        if (isSilentChannel) {
+            mBuilder.setOnlyAlertOnce(true)
+            mBuilder.setDefaults(0)
+            mBuilder.setSound(null)
+        } else {
+            mBuilder.setOnlyAlertOnce(!localNotification.ongoing)
+        }
+        if (isShadeOnlyTimedChannel) {
+            mBuilder.setCategory(NotificationCompat.CATEGORY_STATUS)
+            mBuilder.setPriority(NotificationCompat.PRIORITY_LOW)
+            mBuilder.setSortKey("0000_yaad_pinned")
+        } else if (localNotification.ongoing) {
+            mBuilder.setCategory(NotificationCompat.CATEGORY_ALARM)
+            mBuilder.setPriority(NotificationCompat.PRIORITY_MAX)
+            mBuilder.setSortKey("0000_yaad_pinned")
+        }
+
+        // Only set SmallIcon using transparent ic_stat_notification drawable; NEVER set LargeIcon
+        // so there is only ONE transparent app logo and no second left logo with a white background
+        val notifIconResId = context.resources.getIdentifier("ic_stat_notification", "drawable", context.packageName)
+        if (notifIconResId != 0) {
+            mBuilder.setSmallIcon(notifIconResId)
+        } else {
+            mBuilder.setSmallIcon(localNotification.resolveSmallIcon(context, getDefaultSmallIcon(context)))
+        }
+        mBuilder.setLargeIcon(null as android.graphics.Bitmap?)`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
-  'buildNotification visibility, category, priority, single transparent app icon, distinct title font, and top-pinned silent channel handling',
+  'buildNotification visibility, category, priority, single transparent app icon, distinct title font, and top-pinned silent/shade channel handling',
   origBuildFlags,
   patchedBuildFlags,
-  'val isSilentChannel = channelId == "yaad_channel_v3_silent" || channelId == "yaad_channel_v2_silent" || channelId == "yaad_channel_v3_trial_info"',
-  [legacyBuildFlagsV6, legacyBuildFlagsV4, legacyBuildFlagsV5]
+  'val isShadeOnlyTimedChannel = channelId == "yaad_channel_v7_timed_shade"',
+  [legacyBuildFlagsV7, legacyBuildFlagsV6, legacyBuildFlagsV4, legacyBuildFlagsV5]
 );
 
 const origBuildNotif = `        createActionIntents(localNotification, mBuilder)
@@ -825,7 +895,7 @@ const legacyImmediateNotifyV6 = `            if (!isSilentChannel) {
                 }
             }`;
 
-const patchedImmediateNotify = `            if (!isSilentChannel) {
+const legacyImmediateNotifyV7 = `            if (!isSilentChannel) {
                 try {
                     val notificationJson = JSObject(localNotification.source ?: "{}")
                     LocalNotificationsPlugin.fireReceived(notificationJson)
@@ -849,14 +919,56 @@ const patchedImmediateNotify = `            if (!isSilentChannel) {
                 }
             }`;
 
+const patchedImmediateNotify = `            if (!isSilentChannel) {
+                try {
+                    val notificationJson = JSObject(localNotification.source ?: "{}")
+                    LocalNotificationsPlugin.fireReceived(notificationJson)
+                } catch (e: JSONException) {
+                }
+            }
+            localNotification.id?.let {
+                val appInFg = LocalNotificationsPlugin.isAppInForeground(context)
+                val isInsistentImmediate = !isSilentChannel && (buildNotification.flags and Notification.FLAG_INSISTENT) != 0
+                if (appInFg) {
+                    buildNotification.fullScreenIntent = null
+                }
+                if (!isInsistentImmediate) {
+                    notificationManager.notify(it, buildNotification)
+                } else {
+                    scheduleMuteAfterOneMinute(it, localNotification.source)
+                    if (!appInFg) {
+                        YaadAlarmPopupActivity.launch(context, it, localNotification.source, wakeScreenOnce = true)
+                        val appCtx = context.applicationContext
+                        val notifIdVal = it
+                        val rawSrc = localNotification.source
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                            try {
+                                if (YaadAlarmPopupActivity.wasNotificationRecentlyHandled(notifIdVal)) {
+                                    return@postDelayed
+                                }
+                                if (LocalNotificationsPlugin.isAppInForeground(appCtx) && !YaadGeofenceService.isScreenOffOrLockedStatic(appCtx)) {
+                                    return@postDelayed
+                                }
+                                if (YaadAlarmPopupActivity.isShowingAnyPopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) {
+                                    repostAsQuietTimedShadeNotification(appCtx, notifIdVal, rawSrc)
+                                } else {
+                                    NotificationManagerCompat.from(appCtx).notify(notifIdVal, buildNotification)
+                                }
+                            } catch (e: Exception) {
+                            }
+                        }, 650L)
+                    }
+                }
+            }`;
+
 managerContent = applyPatchOrVerify(
   managerContent,
   'LocalNotificationManager.kt',
   'scheduleMuteAfterOneMinute and YaadAlarmPopupActivity on immediate notify',
   origImmediateNotify,
   patchedImmediateNotify,
-  'val isForegroundInsistent = appInFg',
-  [legacyImmediateNotifyV6, legacyImmediateNotifyV5, legacyImmediateNotifyV4, legacyImmediateNotifyV1, legacyImmediateNotifyV2, legacyImmediateNotifyV3]
+  'repostAsQuietTimedShadeNotification(appCtx, notifIdVal, rawSrc)',
+  [legacyImmediateNotifyV7, legacyImmediateNotifyV6, legacyImmediateNotifyV5, legacyImmediateNotifyV4, legacyImmediateNotifyV1, legacyImmediateNotifyV2, legacyImmediateNotifyV3]
 );
 
 const origOpenIntent = `        // Open intent
@@ -1291,6 +1403,94 @@ if (managerContent.includes('private const val DEFAULT_PRESS_ACTION = "tap"')) {
   );
 }
 
+const origManagerCompanion = `        const val DEFAULT_NOTIFICATION_CHANNEL_ID = "default"`;
+
+const patchedManagerCompanion = `        const val DEFAULT_NOTIFICATION_CHANNEL_ID = "default"
+        const val TIMED_SHADE_CHANNEL_ID = "yaad_channel_v7_timed_shade"
+
+        fun ensureTimedShadeChannel(context: Context) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                try {
+                    val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+                    if (nm.getNotificationChannel(TIMED_SHADE_CHANNEL_ID) == null) {
+                        val ch = NotificationChannel(
+                            TIMED_SHADE_CHANNEL_ID,
+                            "YAAD Reminders (Notification Shade)",
+                            android.app.NotificationManager.IMPORTANCE_LOW
+                        ).apply {
+                            this.description = "Silent reminder cards kept in the notification shade without heads-up banner"
+                            enableVibration(false)
+                            lockscreenVisibility = android.app.Notification.VISIBILITY_PUBLIC
+                            setSound(null, null)
+                        }
+                        nm.createNotificationChannel(ch)
+                    }
+                } catch (e: Exception) {
+                }
+            }
+        }
+
+        fun repostAsQuietTimedShadeNotification(
+            context: Context,
+            notificationId: Int,
+            sourceJsonStr: String? = null
+        ) {
+            if (notificationId == Int.MIN_VALUE) return
+            try {
+                val appCtx = context.applicationContext
+                ensureTimedShadeChannel(appCtx)
+                val storage = NotificationStorage(appCtx)
+                val baseObj = if (!sourceJsonStr.isNullOrEmpty()) {
+                    try { JSObject(sourceJsonStr) } catch (e: Exception) { null }
+                } else {
+                    storage.getSavedNotificationAsJSObject(notificationId.toString())
+                } ?: return
+                val shadeJson = JSObject(baseObj.toString())
+                shadeJson.put("id", notificationId)
+                shadeJson.put("channelId", TIMED_SHADE_CHANNEL_ID)
+                shadeJson.remove("sound")
+                shadeJson.remove("schedule")
+                val shadeNotif = LocalNotification.buildNotificationFromJSObject(shadeJson)
+                val mgr = LocalNotificationManager(storage, null, appCtx, CapConfig.loadDefault(appCtx))
+                mgr.repostDeliveredAsSilentPinned(shadeNotif)
+            } catch (e: Exception) {
+            }
+        }
+
+        fun demoteTimedNotificationToShadeIfActive(
+            context: Context,
+            notificationId: Int,
+            sourceJsonStr: String? = null
+        ) {
+            if (notificationId == Int.MIN_VALUE) return
+            try {
+                val appCtx = context.applicationContext
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? android.app.NotificationManager ?: return
+                    for (sbn in nm.activeNotifications) {
+                        if (sbn.id == notificationId) {
+                            val chId = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) sbn.notification?.channelId ?: "" else ""
+                            if (chId != TIMED_SHADE_CHANNEL_ID) {
+                                NotificationManagerCompat.from(appCtx).cancel(notificationId)
+                                repostAsQuietTimedShadeNotification(appCtx, notificationId, sourceJsonStr)
+                            }
+                            break
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }`;
+
+managerContent = applyPatchOrVerify(
+  managerContent,
+  'LocalNotificationManager.kt',
+  'companion quiet timed shade channel helpers',
+  origManagerCompanion,
+  patchedManagerCompanion,
+  'fun repostAsQuietTimedShadeNotification('
+);
+
 // 4. Patch TimedNotificationPublisher.kt:
 // - Respect actual ongoing / autoCancel flags without forcing non-ongoing notifications into insistent mode
 // - Schedule 60-second mute timer (mute_after_1m) so insistent alarm rings for 1 minute and notification remains open afterward
@@ -1306,7 +1506,10 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
+import androidx.core.app.NotificationManagerCompat
 import com.getcapacitor.JSObject
 import com.getcapacitor.Logger
 import java.text.SimpleDateFormat
@@ -1523,9 +1726,8 @@ class TimedNotificationPublisher : BroadcastReceiver() {
             }
         }
 
-        // Always emit the Android notification so the out-of-app notification audio plays whether the app is open or closed;
-        // launch the standalone native full-screen activity in < 1s when the app is NOT in the foreground,
-        // and dispatch immediate JS event when the app IS in the foreground so the in-app full-screen modal opens in < 50ms.
+        // Launch full-screen popup cleanly without emitting an IMPORTANCE_HIGH heads-up banner over it;
+        // post ONLY a quiet IMPORTANCE_LOW shade notification if the full-screen card is showing (or high-importance fallback if launch fails).
         LocalNotificationsPlugin.fireReceived(notificationJson)
         if (appInForeground && reminderId.isNotEmpty()) {
             val safeRemId = reminderId.replace("'", "").replace("\\\\", "")
@@ -1539,10 +1741,9 @@ class TimedNotificationPublisher : BroadcastReceiver() {
         if (appInForeground) {
             notification.fullScreenIntent = null
         }
-        if (!(appInForeground && isInsistentAlarm)) {
+        if (!isInsistentAlarm) {
             notificationManager.notify(id, notification)
-        }
-        if (isInsistentAlarm) {
+        } else {
             scheduleMuteAfterOneMinute(context, id, notificationJson.toString())
             if (!appInForeground) {
                 YaadAlarmPopupActivity.launch(
@@ -1552,6 +1753,25 @@ class TimedNotificationPublisher : BroadcastReceiver() {
                     wakeScreenOnce = true,
                     forceScreenOffDuration = wasScreenOffBeforeWake
                 )
+                val appCtx = context.applicationContext
+                val notifIdVal = id
+                val rawSrc = notificationJson.toString()
+                Handler(Looper.getMainLooper()).postDelayed({
+                    try {
+                        if (YaadAlarmPopupActivity.wasNotificationRecentlyHandled(notifIdVal)) {
+                            return@postDelayed
+                        }
+                        if (LocalNotificationsPlugin.isAppInForeground(appCtx) && !YaadGeofenceService.isScreenOffOrLockedStatic(appCtx)) {
+                            return@postDelayed
+                        }
+                        if (YaadAlarmPopupActivity.isShowingAnyPopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) {
+                            LocalNotificationManager.repostAsQuietTimedShadeNotification(appCtx, notifIdVal, rawSrc)
+                        } else {
+                            NotificationManagerCompat.from(appCtx).notify(notifIdVal, notification)
+                        }
+                    } catch (e: Exception) {
+                    }
+                }, 650L)
             }
         }
         if (!rescheduleNotificationIfNeeded(context, intent, id)) {
@@ -1772,6 +1992,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
         // After 1 minute of continuous alarm ringing without user reaction, silence audio,
         // keep notification pinned quietly at top of shade, and schedule +15m repeat alarm.
         if (actionId == "dismiss_popup_only") {
+            YaadAlarmPopupActivity.stopAllTimedReminderAudio(context)
             YaadAlarmPopupActivity.dismissIfMatching(intExtra)
             LocalNotificationsPlugin.stopActiveMediaPlayer()
             return
@@ -1779,19 +2000,24 @@ class NotificationDismissReceiver : BroadcastReceiver() {
 
         if (actionId == "mute_after_1m") {
             val shouldSchedule15mRepeat = intent.getBooleanExtra("yaad_schedule_15m_repeat", false)
+            YaadAlarmPopupActivity.stopAllTimedReminderAudio(context)
             YaadAlarmPopupActivity.onReminderAudioMutedAfterOneMinute(intExtra)
             LocalNotificationsPlugin.stopActiveMediaPlayer()
 
             if (requestJson != null) {
                 try {
-                    val silentJson = JSObject(requestJson.toString())
-                    silentJson.put("id", intExtra)
-                    silentJson.put("channelId", "yaad_channel_v3_silent")
-                    silentJson.remove("sound")
-                    silentJson.remove("schedule")
-                    val silentNotif = LocalNotification.buildNotificationFromJSObject(silentJson)
-                    val silentManager = LocalNotificationManager(storage, null, context, CapConfig.loadDefault(context))
-                    silentManager.repostDeliveredAsSilentPinned(silentNotif)
+                    if (YaadAlarmPopupActivity.isShowingAnyPopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) {
+                        LocalNotificationManager.repostAsQuietTimedShadeNotification(context, intExtra, requestJson.toString())
+                    } else {
+                        val silentJson = JSObject(requestJson.toString())
+                        silentJson.put("id", intExtra)
+                        silentJson.put("channelId", "yaad_channel_v3_silent")
+                        silentJson.remove("sound")
+                        silentJson.remove("schedule")
+                        val silentNotif = LocalNotification.buildNotificationFromJSObject(silentJson)
+                        val silentManager = LocalNotificationManager(storage, null, context, CapConfig.loadDefault(context))
+                        silentManager.repostDeliveredAsSilentPinned(silentNotif)
+                    }
                 } catch (e: Exception) {
                     Logger.error(Logger.tags("LN"), "Failed to silence pinned notification in-place", e)
                 }
@@ -1891,6 +2117,8 @@ class NotificationDismissReceiver : BroadcastReceiver() {
 
         // Explicit background action button clicked (done, complete, snooze, stop, dismiss) — NEVER launch MainActivity!
         prefs.edit().remove(swipeKey).apply()
+        YaadAlarmPopupActivity.markNotificationRecentlyHandled(intExtra)
+        YaadAlarmPopupActivity.stopAllTimedReminderAudio(context)
         YaadAlarmPopupActivity.clearSuspendedPopupForNotification(context, intExtra)
         YaadAlarmPopupActivity.dismissIfMatching(intExtra)
         val notificationManager = NotificationManagerCompat.from(context)
@@ -5645,7 +5873,10 @@ import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaPlayer
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -5653,6 +5884,8 @@ import android.os.CountDownTimer
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
+import android.os.VibrationEffect
+import android.os.Vibrator
 import android.text.SpannableString
 import android.text.Spanned
 import android.text.TextUtils
@@ -6205,18 +6438,15 @@ class YaadAlarmPopupActivity : Activity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus && isGeofencePopup && !isMinimizedToFloatingBubble && !isFinishing && !isDestroyed) {
-            uiHandler.postDelayed({
-                try {
-                    if (!isFinishing && !isDestroyed && isGeofencePopup && !isMinimizedToFloatingBubble) {
-                        val km = getSystemService(Context.KEYGUARD_SERVICE) as? KeyguardManager
-                        if (km?.isKeyguardLocked != true) {
-                            YaadGeofenceService.demoteActiveBannerToShadeNow(this, notificationId)
-                        }
-                    }
-                } catch (e: Exception) {
+        if (hasFocus && !isMinimizedToFloatingBubble && !isFinishing && !isDestroyed) {
+            try {
+                if (isGeofencePopup) {
+                    YaadGeofenceService.demoteActiveBannerToShadeNow(this, notificationId)
+                } else if (notificationId != Int.MIN_VALUE) {
+                    LocalNotificationManager.demoteTimedNotificationToShadeIfActive(this, notificationId, sourceJson)
                 }
-            }, 220L)
+            } catch (e: Exception) {
+            }
         }
     }
 
@@ -6339,15 +6569,10 @@ class YaadAlarmPopupActivity : Activity() {
 
     private fun silenceActiveTimedNotificationForCall() {
         try {
+            stopAllTimedReminderAudio(this)
             LocalNotificationsPlugin.stopActiveMediaPlayer()
             if (notificationId != Int.MIN_VALUE && requestJson != null) {
-                val silentCopy = JSObject(requestJson.toString())
-                silentCopy.remove("schedule")
-                silentCopy.put("channelId", "yaad_channel_v2_silent")
-                val localNotif = LocalNotification.buildNotificationFromJSObject(silentCopy)
-                val storage = NotificationStorage(this)
-                val manager = LocalNotificationManager(storage, null, this, CapConfig.loadDefault(this))
-                manager.schedule(null, listOf(localNotif))
+                LocalNotificationManager.repostAsQuietTimedShadeNotification(this, notificationId, sourceJson)
             }
         } catch (e: Exception) {
         }
@@ -6805,6 +7030,9 @@ class YaadAlarmPopupActivity : Activity() {
             if (resumeAudioMuted) {
                 muteReminderAudioOnly()
             } else {
+                val chIdStr = requestJson?.optString("channelId", "") ?: ""
+                startTimedReminderAudioForPopup(this, extraObj, chIdStr, notificationId)
+                LocalNotificationManager.demoteTimedNotificationToShadeIfActive(this, notificationId, sourceJson)
                 startOneMinuteCountdown(resumeRemainingMs)
             }
         }
@@ -8577,6 +8805,7 @@ class YaadAlarmPopupActivity : Activity() {
     }
 
     private fun muteReminderAudioOnly() {
+        stopAllTimedReminderAudio(this)
         if (isReminderAudioMuted) return
         isReminderAudioMuted = true
         countDownTimer?.cancel()
@@ -8691,6 +8920,8 @@ class YaadAlarmPopupActivity : Activity() {
             overridePendingTransition(0, 0)
             return
         }
+        markNotificationRecentlyHandled(notificationId)
+        stopAllTimedReminderAudio(this)
         try {
             val broadcastIntent = Intent(this, NotificationDismissReceiver::class.java)
             broadcastIntent.putExtra(LocalNotificationManager.NOTIFICATION_INTENT_KEY, notificationId)
@@ -8831,6 +9062,8 @@ class YaadAlarmPopupActivity : Activity() {
         stopPulseAnimators()
         if (isGeofencePopup) {
             stopGeofenceAlertIfNeeded(cancelStatusBarNotif = true)
+        } else {
+            stopAllTimedReminderAudio(this)
         }
         try {
             val broadcastIntent = Intent(this, NotificationDismissReceiver::class.java)
@@ -8875,6 +9108,9 @@ class YaadAlarmPopupActivity : Activity() {
                 30 * 60_000L,
                 notificationId
             )
+        } else {
+            markNotificationRecentlyHandled(notificationId)
+            stopAllTimedReminderAudio(this)
         }
         try {
             if (notificationId != Int.MIN_VALUE) {
@@ -8921,6 +9157,9 @@ class YaadAlarmPopupActivity : Activity() {
         countDownTimer?.cancel()
         stopPulseAnimators()
         releaseScreenWakeLock()
+        if (!isGeofencePopup) {
+            stopAllTimedReminderAudio(this)
+        }
         val keepingFloatingOverlay = isMinimizedBubbleState && (overlayBubbleRootView != null || isOverlayHiddenForForegroundApp)
         if (activeInstance?.get() === this) {
             activeInstance = null
@@ -8981,6 +9220,168 @@ class YaadAlarmPopupActivity : Activity() {
         private var savedBubbleY: Int = -1
         @Volatile
         private var isOverlayHiddenForForegroundApp: Boolean = false
+        private val recentlyHandledNotifMap = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+        @Volatile
+        private var timedPopupMediaPlayer: MediaPlayer? = null
+        @Volatile
+        private var timedPopupVibrator: Vibrator? = null
+        @Volatile
+        private var timedPopupAudioNotifId: Int = Int.MIN_VALUE
+
+        fun markNotificationRecentlyHandled(notificationId: Int) {
+            if (notificationId != Int.MIN_VALUE) {
+                recentlyHandledNotifMap[notificationId] = System.currentTimeMillis()
+            }
+        }
+
+        fun wasNotificationRecentlyHandled(notificationId: Int): Boolean {
+            if (notificationId == Int.MIN_VALUE) return false
+            val ts = recentlyHandledNotifMap[notificationId] ?: return false
+            return (System.currentTimeMillis() - ts) < 30_000L
+        }
+
+        fun stopAllTimedReminderAudio(context: Context? = null) {
+            timedPopupAudioNotifId = Int.MIN_VALUE
+            try {
+                timedPopupMediaPlayer?.let { mp ->
+                    try {
+                        if (mp.isPlaying) {
+                            mp.stop()
+                        }
+                    } catch (e: Exception) {
+                    }
+                    try {
+                        mp.release()
+                    } catch (e: Exception) {
+                    }
+                }
+            } catch (e: Exception) {
+            } finally {
+                timedPopupMediaPlayer = null
+            }
+            try {
+                timedPopupVibrator?.cancel()
+            } catch (e: Exception) {
+            } finally {
+                timedPopupVibrator = null
+            }
+            if (context != null) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val vib = context.applicationContext.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                    vib?.cancel()
+                } catch (e: Exception) {
+                }
+            }
+        }
+
+        fun startTimedReminderAudioForPopup(
+            context: Context,
+            extraObj: org.json.JSONObject?,
+            channelIdStr: String,
+            targetNotifId: Int
+        ) {
+            val appCtx = context.applicationContext
+            if (isPhoneCallActiveOrRinging(appCtx)) return
+            if (timedPopupAudioNotifId == targetNotifId && timedPopupMediaPlayer?.isPlaying == true) {
+                return
+            }
+            stopAllTimedReminderAudio(appCtx)
+            LocalNotificationsPlugin.stopActiveMediaPlayer()
+
+            val volume = (extraObj?.optDouble("volume", 0.85) ?: 0.85).toFloat().coerceIn(0f, 1f)
+            val vibrationEnabled = (extraObj?.optBoolean("vibrationEnabled", true) ?: true) &&
+                !channelIdStr.endsWith("_novib") &&
+                channelIdStr != "yaad_channel_v3_silent"
+            val isSilent = volume <= 0.01f ||
+                channelIdStr == "yaad_channel_v3_silent" ||
+                channelIdStr == "yaad_channel_v2_silent" ||
+                channelIdStr == "yaad_channel_v3_vibrate_only" ||
+                channelIdStr == "yaad_channel_v7_timed_shade"
+
+            timedPopupAudioNotifId = targetNotifId
+
+            if (!isSilent) {
+                val rawSoundFromExtra = extraObj?.optString("sound", "") ?: ""
+                val soundFromChannel = if (channelIdStr.startsWith("yaad_channel_v3_")) {
+                    channelIdStr.removePrefix("yaad_channel_v3_").removeSuffix("_novib")
+                } else {
+                    ""
+                }
+                val resolvedSound = rawSoundFromExtra.ifEmpty { soundFromChannel }.ifEmpty { "digital_beep" }
+                val cleanName = resolvedSound.replace("-", "_").substringBeforeLast(".")
+                try {
+                    val mp = MediaPlayer()
+                    try {
+                        val attrs = AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                        mp.setAudioAttributes(attrs)
+                        var dataSourceSet = false
+                        val resId = appCtx.resources.getIdentifier(cleanName, "raw", appCtx.packageName)
+                        if (resId != 0) {
+                            val afd = appCtx.resources.openRawResourceFd(resId)
+                            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                            afd.close()
+                            dataSourceSet = true
+                        } else {
+                            try {
+                                val afd = appCtx.assets.openFd("public/\$cleanName.wav")
+                                mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                                afd.close()
+                                dataSourceSet = true
+                            } catch (e: Exception) {
+                            }
+                            if (!dataSourceSet) {
+                                val fallbackUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                                    ?: RingtoneManager.getDefaultUri(RingtoneManager.TYPE_ALARM)
+                                if (fallbackUri != null) {
+                                    mp.setDataSource(appCtx, fallbackUri)
+                                    dataSourceSet = true
+                                }
+                            }
+                        }
+                        if (dataSourceSet) {
+                            mp.setVolume(volume, volume)
+                            mp.isLooping = true
+                            mp.prepare()
+                            mp.start()
+                            timedPopupMediaPlayer = mp
+                        } else {
+                            mp.release()
+                        }
+                    } catch (innerErr: Exception) {
+                        try { mp.release() } catch (_: Exception) {}
+                    }
+                } catch (e: Exception) {
+                }
+            }
+
+            if (vibrationEnabled) {
+                try {
+                    @Suppress("DEPRECATION")
+                    val vib = appCtx.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+                    if (vib != null && vib.hasVibrator()) {
+                        val pattern = longArrayOf(0L, 450L, 250L, 450L, 900L)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            val effect = VibrationEffect.createWaveform(pattern, 0)
+                            val vibAttrs = AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                                .build()
+                            @Suppress("DEPRECATION")
+                            vib.vibrate(effect, vibAttrs)
+                        } else {
+                            @Suppress("DEPRECATION")
+                            vib.vibrate(pattern, 0)
+                        }
+                        timedPopupVibrator = vib
+                    }
+                } catch (e: Exception) {
+                }
+            }
+        }
 
         fun isShowingAnyPopup(): Boolean {
             val act = activeInstance?.get() ?: return false
@@ -9843,6 +10244,7 @@ class YaadAlarmPopupActivity : Activity() {
         }
 
         fun dismissIfMatching(notificationId: Int) {
+            markNotificationRecentlyHandled(notificationId)
             activeBundledTimedReminders.remove(notificationId)
             if (
                 (overlayBubbleRootView != null || isOverlayHiddenForForegroundApp) &&
@@ -9851,7 +10253,12 @@ class YaadAlarmPopupActivity : Activity() {
                 isMinimizedBubbleState = false
                 hideFloatingOverlayBubble(clearState = true)
             }
-            val act = activeInstance?.get() ?: return
+            val act = activeInstance?.get() ?: run {
+                if (activeBundledTimedReminders.isEmpty()) {
+                    stopAllTimedReminderAudio()
+                }
+                return
+            }
             if (!act.isGeofencePopup && activeBundledTimedReminders.isNotEmpty()) {
                 act.runOnUiThread {
                     try {
@@ -9866,6 +10273,7 @@ class YaadAlarmPopupActivity : Activity() {
             }
             if (activeNotificationId == notificationId || notificationId == Int.MIN_VALUE || activeBundledTimedReminders.isEmpty()) {
                 isMinimizedBubbleState = false
+                stopAllTimedReminderAudio(act)
                 act.runOnUiThread {
                     try {
                         if (!act.isFinishing && !act.isDestroyed) {
@@ -12108,34 +12516,28 @@ class YaadGeofenceService : Service(), LocationListener {
             cachedShadeNotificationId = notificationId
             cachedShadeNotification = shadeNotif
 
-            val isUnlockedAndInteractive = !wasScreenOff && !isDeviceKeyguardLocked()
-            if (isUnlockedAndInteractive) {
-                // Wait briefly so YaadAlarmPopupActivity.launch() opens cleanly first;
-                // if the full-screen card is showing, post quietly to shadeChannelId so NO floating banner covers its header!
-                val postCheckRunnable = Runnable {
-                    try {
-                        if (LocalNotificationsPlugin.isAppInForeground(appCtx) && !isScreenOffOrLockedStatic(appCtx)) {
-                            cancelAllGeofenceAlertNotifications(appCtx)
-                            return@Runnable
-                        }
-                        if (activeGeofenceNotificationId != notificationId) {
-                            return@Runnable
-                        }
-                        if (YaadAlarmPopupActivity.isShowingGeofencePopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) {
-                            nmCompat.notify(notificationId, shadeNotif)
-                        } else {
-                            nmCompat.notify(notificationId, alertNotif)
-                            scheduleGeofenceBannerDemote(appCtx, notificationId)
-                        }
-                    } catch (e: Exception) {
+            // Wait briefly so YaadAlarmPopupActivity.launch() opens cleanly first;
+            // if the full-screen card is showing, post quietly to shadeChannelId so NO floating banner covers its header!
+            val postCheckRunnable = Runnable {
+                try {
+                    if (LocalNotificationsPlugin.isAppInForeground(appCtx) && !isScreenOffOrLockedStatic(appCtx)) {
+                        cancelAllGeofenceAlertNotifications(appCtx)
+                        return@Runnable
                     }
+                    if (activeGeofenceNotificationId != notificationId) {
+                        return@Runnable
+                    }
+                    if (YaadAlarmPopupActivity.isShowingGeofencePopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) {
+                        nmCompat.notify(notificationId, shadeNotif)
+                    } else {
+                        nmCompat.notify(notificationId, alertNotif)
+                        scheduleGeofenceBannerDemote(appCtx, notificationId)
+                    }
+                } catch (e: Exception) {
                 }
-                delayedBannerPostRunnable = postCheckRunnable
-                bannerHandler.postDelayed(postCheckRunnable, 450L)
-            } else {
-                nmCompat.notify(notificationId, alertNotif)
-                scheduleGeofenceBannerDemote(appCtx, notificationId)
             }
+            delayedBannerPostRunnable = postCheckRunnable
+            bannerHandler.postDelayed(postCheckRunnable, 650L)
         }
 
         if (showFullScreen && multiCardsJson.isNotEmpty()) {
@@ -12281,14 +12683,24 @@ class YaadGeofenceService : Service(), LocationListener {
                 if (notifId == Int.MIN_VALUE) return
                 val shadeNotif = if (cachedShadeNotificationId == notifId) cachedShadeNotification else null
                 if (shadeNotif == null) return
-                try {
-                    demoteBannerRunnable?.let { bannerHandler.removeCallbacks(it) }
-                } catch (e: Exception) {
+                cancelPendingBannerTimers()
+                var alreadyOnShadeChannel = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+                    if (nm != null) {
+                        for (sbn in nm.activeNotifications) {
+                            if (sbn.id == notifId && sbn.notification?.channelId == "yaad_channel_v7_geofence_shade") {
+                                alreadyOnShadeChannel = true
+                                break
+                            }
+                        }
+                    }
                 }
-                demoteBannerRunnable = null
-                val nmCompat = NotificationManagerCompat.from(appCtx)
-                nmCompat.cancel(notifId)
-                nmCompat.notify(notifId, shadeNotif)
+                if (!alreadyOnShadeChannel) {
+                    val nmCompat = NotificationManagerCompat.from(appCtx)
+                    nmCompat.cancel(notifId)
+                    nmCompat.notify(notifId, shadeNotif)
+                }
             } catch (e: Exception) {
             }
         }
