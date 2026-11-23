@@ -11161,7 +11161,7 @@ class YaadGeofenceService : Service(), LocationListener {
             else -> 20_000L
         }
         val stillIntervalMs = (STILL_INTERVAL_S * 1000.0).toLong()
-        val desiredIntervalMs = if (isStationaryMode) {
+        val desiredIntervalMs = if (isStationaryMode && !hasAnyActivePhase) {
             maxOf(baseIntervalMs, stillIntervalMs)
         } else {
             baseIntervalMs
@@ -13792,7 +13792,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 state.exitPhase = "NONE"
                 state.enterArmed = (state.pos == "OUT")
                 state.enterPhase = "NONE"
-                state.lastPosChange = t
+                state.lastPosChange = t - MIN_DWELL_S
                 state.blockUntil = 0.0
                 state.cancels = 0
                 state.lastCancelT = 0.0
