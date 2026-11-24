@@ -23,7 +23,8 @@ import {
   Heart, 
   Tag, 
   Sparkles,
-  Search
+  Search,
+  AlertTriangle
 } from 'lucide-react';
 
 interface VerticalTimelineViewProps {
@@ -58,15 +59,27 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
   const isEn = language === 'en';
   const [nowMs, setNowMs] = useState<number>(Date.now());
   const [selectedReminder, setSelectedReminder] = useState<Reminder | null>(null);
+  const [deleteConfirmReminder, setDeleteConfirmReminder] = useState<Reminder | null>(null);
   const [isFilterSheetOpen, setIsFilterSheetOpen] = useState<boolean>(false);
   const [showPostponePicker, setShowPostponePicker] = useState<boolean>(false);
   const [completingIds, setCompletingIds] = useState<Record<string, boolean>>({});
   const [justSettledIds, setJustSettledIds] = useState<Record<string, boolean>>({});
   const [emeraldFadeIds, setEmeraldFadeIds] = useState<Record<string, boolean>>({});
+  const [swipeState, setSwipeState] = useState<{ id: string; offsetX: number; isDragging: boolean } | null>(null);
 
   const nowMarkerRef = useRef<HTMLDivElement>(null);
   const completionTimersRef = useRef<Record<string, number>>({});
   const seenExternalActionRef = useRef<Record<string, number>>({});
+  const activeSwipeRef = useRef<{
+    id: string;
+    reminder: Reminder;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lockedAxis: 'x' | 'y' | null;
+    offsetX: number;
+  } | null>(null);
+  const suppressClickUntilRef = useRef<number>(0);
 
   useEffect(() => {
     return () => {
@@ -264,18 +277,19 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     };
   }, [categoryFilter, scrollToNowTrigger, sortedReminders.length === 0]);
 
-  // Handle Escape key to close action sheet or filter sheet
+  // Handle Escape key to close action sheet, delete confirm dialog, or filter sheet
   useEffect(() => {
-    if (!selectedReminder && !isFilterSheetOpen) return;
+    if (!selectedReminder && !isFilterSheetOpen && !deleteConfirmReminder) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         setSelectedReminder(null);
+        setDeleteConfirmReminder(null);
         setIsFilterSheetOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedReminder, isFilterSheetOpen]);
+  }, [selectedReminder, isFilterSheetOpen, deleteConfirmReminder]);
 
   // Live time string for 'NOW' badge
   const liveTimeString = formatJalaliTime(nowMs, isEn ? 'en' : 'fa');
@@ -537,31 +551,51 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                     ? 'border-rose-400 bg-rose-400/20 text-rose-300'
                     : 'border-indigo-400 bg-indigo-400/20 text-indigo-300';
 
+                const SWIPE_THRESHOLD = 72;
+                const SWIPE_MAX = 132;
+                const isSwipingThis = swipeState?.id === reminder.id;
+                const currentOffsetX = isSwipingThis ? swipeState.offsetX : 0;
+                const isDraggingThis = Boolean(isSwipingThis && swipeState?.isDragging);
+                const isEditSwipeActive = currentOffsetX <= -SWIPE_THRESHOLD;
+                const isDeleteSwipeActive = currentOffsetX >= SWIPE_THRESHOLD;
+
+                // Strip mt-3.5 from cardStyle so outer wrapper handles next-badge spacing cleanly without clipping
+                const swipeInnerCardStyle = isNext
+                  ? cardStyle.replace(/\bmt-3\.5\b/, '').trim()
+                  : cardStyle;
+
+                const finishSwipeGesture = (commitAction: boolean) => {
+                  const gesture = activeSwipeRef.current;
+                  if (!gesture || gesture.id !== reminder.id) return;
+                  const finalX = gesture.offsetX;
+                  const wasHorizontal = gesture.lockedAxis === 'x';
+                  activeSwipeRef.current = null;
+                  setSwipeState((prev) => (prev?.id === reminder.id ? null : prev));
+
+                  if (wasHorizontal) {
+                    suppressClickUntilRef.current = Date.now() + 260;
+                    if (commitAction) {
+                      if (finalX <= -SWIPE_THRESHOLD) {
+                        onEdit(reminder);
+                      } else if (finalX >= SWIPE_THRESHOLD) {
+                        setDeleteConfirmReminder(reminder);
+                      }
+                    }
+                  }
+                };
+
                 elements.push(
                   <motion.div
                     layout="position"
                     transition={fastLayoutSpring}
                     key={reminder.id}
-                    onClick={() => {
-                      setShowPostponePicker(false);
-                      setSelectedReminder(reminder);
-                    }}
-                    className={`w-full p-4 sm:p-5 rounded-2xl border transition-colors duration-300 cursor-pointer flex items-center justify-between gap-3 ${
-                      isSettling || isCompleting ? 'relative z-30' : 'relative z-10'
-                    } ${cardStyle}`}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault();
-                        setShowPostponePicker(false);
-                        setSelectedReminder(reminder);
-                      }
-                    }}
+                    className={`relative ${isNext ? 'mt-3.5' : ''} ${
+                      isSettling || isCompleting ? 'z-30' : 'z-10'
+                    }`}
                   >
-                    {/* کادر شمارش معکوس برای یادآوری بعدی (Countdown Badge without crescent wings) */}
+                    {/* کادر شمارش معکوس برای یادآوری بعدی (خارج از محدوده برش سویپ تا بریده نشود) */}
                     {isNext && (
-                      <div className="absolute -top-3.5 inset-x-0 flex items-center justify-center z-10 pointer-events-none">
+                      <div className="absolute -top-3.5 inset-x-0 flex items-center justify-center z-30 pointer-events-none">
                         <div className="px-3 sm:px-4 py-1 rounded-full bg-emerald-500 text-stone-950 font-black text-xs shadow-lg shadow-emerald-500/35 flex items-center gap-2 border border-emerald-300 pointer-events-auto">
                           <span className="w-2 h-2 rounded-full bg-stone-950 animate-pulse shrink-0" />
                           <span className="tracking-wide uppercase text-[10px] sm:text-[11px]">
@@ -574,84 +608,202 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                       </div>
                     )}
 
-                    {/* Title, Optional Description Snippet & Larger Hollow Colored Circle with Checkmark Completion */}
-                    <div className="flex items-center gap-3 min-w-0 flex-1">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          triggerAnimatedToggleComplete(reminder);
-                        }}
-                        className={`w-6 h-6 sm:w-6.5 sm:h-6.5 rounded-full border-[2.5px] flex items-center justify-center shrink-0 transition-colors duration-200 cursor-pointer active:scale-90 group ${
-                          isEmeraldGlow
-                            ? 'border-emerald-400 bg-emerald-500 text-stone-950 shadow-sm shadow-emerald-500/40'
-                            : isCompleted && isSettling
-                            ? 'border-emerald-400 bg-emerald-500/30 text-emerald-300'
-                            : isCompleted
-                            ? completedCircleColor
-                            : `bg-transparent ${circleBorderColor}`
-                        }`}
-                        title={
-                          isCompleted
-                            ? (isEn ? 'Completed (Click to undo)' : 'انجام شده (برای بازگردانی ضربه بزنید)')
-                            : `${isEn ? 'Mark as completed' : 'انجام شد'} • ${getCategoryLabel(reminder.category)} (${getPriorityLabel(reminder.priority)})`
-                        }
-                        aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'انجام شد')}
-                      >
-                        <Check
-                          className={`w-3.5 h-3.5 stroke-[3] transition-opacity duration-150 ${
-                            isCompleted || isCompleting || isSettling
-                              ? 'opacity-100'
-                              : 'opacity-0 group-hover:opacity-60'
+                    <div className="relative rounded-2xl overflow-hidden">
+                      {/* لایه پس‌زمینه سویپ: راست‌کشیدن = حذف (سمت چپ)، چپ‌کشیدن = ویرایش (سمت راست) */}
+                      {currentOffsetX !== 0 && (
+                        <div
+                          dir="ltr"
+                          aria-hidden="true"
+                          className={`absolute inset-0 flex items-center justify-between px-5 rounded-2xl pointer-events-none transition-colors duration-150 ${
+                            currentOffsetX > 0
+                              ? isDeleteSwipeActive
+                                ? 'bg-rose-600 text-white'
+                                : 'bg-rose-950/90 text-rose-300'
+                              : isEditSwipeActive
+                              ? 'bg-sky-600 text-white'
+                              : 'bg-sky-950/90 text-sky-300'
                           }`}
-                        />
-                      </button>
-
-                      <div className="flex flex-col gap-1 min-w-0 flex-1">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span
-                            className={`text-sm sm:text-base font-bold truncate transition-colors duration-300 ${
-                              isEmeraldGlow
-                                ? 'line-through text-emerald-200'
-                                : isCompleted
-                                ? 'line-through text-stone-500'
-                                : ''
+                        >
+                          <div
+                            className={`flex items-center gap-2 font-black text-xs sm:text-sm transition-opacity duration-150 ${
+                              currentOffsetX > 12 ? 'opacity-100' : 'opacity-0'
                             }`}
                           >
-                            {reminder.title}
+                            <Trash2 className="w-5 h-5 shrink-0" />
+                            <span>{isEn ? 'Delete' : 'حذف'}</span>
+                          </div>
+
+                          <div
+                            className={`flex items-center gap-2 font-black text-xs sm:text-sm transition-opacity duration-150 ${
+                              currentOffsetX < -12 ? 'opacity-100' : 'opacity-0'
+                            }`}
+                          >
+                            <span>{isEn ? 'Edit' : 'ویرایش'}</span>
+                            <Edit3 className="w-5 h-5 shrink-0" />
+                          </div>
+                        </div>
+                      )}
+
+                      <div
+                        style={{
+                          touchAction: 'pan-y',
+                          transform: currentOffsetX !== 0 ? `translate3d(${currentOffsetX}px, 0, 0)` : undefined,
+                        }}
+                        onPointerDown={(e) => {
+                          if (e.pointerType === 'mouse' && e.button !== 0) return;
+                          if ((e.target as HTMLElement | null)?.closest('button')) return;
+                          activeSwipeRef.current = {
+                            id: reminder.id,
+                            reminder,
+                            pointerId: e.pointerId,
+                            startX: e.clientX,
+                            startY: e.clientY,
+                            lockedAxis: null,
+                            offsetX: 0,
+                          };
+                        }}
+                        onPointerMove={(e) => {
+                          const gesture = activeSwipeRef.current;
+                          if (!gesture || gesture.id !== reminder.id || gesture.pointerId !== e.pointerId) return;
+
+                          const dx = e.clientX - gesture.startX;
+                          const dy = e.clientY - gesture.startY;
+
+                          if (gesture.lockedAxis === null) {
+                            if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
+                            if (Math.abs(dy) >= Math.abs(dx)) {
+                              gesture.lockedAxis = 'y';
+                              activeSwipeRef.current = null;
+                              return;
+                            }
+                            gesture.lockedAxis = 'x';
+                            suppressClickUntilRef.current = Date.now() + 300;
+                            try {
+                              e.currentTarget.setPointerCapture(e.pointerId);
+                            } catch {
+                              // ignore if capture is unsupported
+                            }
+                          }
+
+                          if (gesture.lockedAxis === 'x') {
+                            const clamped = Math.max(-SWIPE_MAX, Math.min(SWIPE_MAX, dx));
+                            gesture.offsetX = clamped;
+                            setSwipeState({ id: reminder.id, offsetX: clamped, isDragging: true });
+                          }
+                        }}
+                        onPointerUp={(e) => {
+                          const gesture = activeSwipeRef.current;
+                          if (!gesture || gesture.id !== reminder.id || gesture.pointerId !== e.pointerId) return;
+                          try {
+                            if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                              e.currentTarget.releasePointerCapture(e.pointerId);
+                            }
+                          } catch {
+                            // ignore
+                          }
+                          finishSwipeGesture(true);
+                        }}
+                        onPointerCancel={() => finishSwipeGesture(false)}
+                        onClick={() => {
+                          if (Date.now() < suppressClickUntilRef.current) return;
+                          setShowPostponePicker(false);
+                          setSelectedReminder(reminder);
+                        }}
+                        className={`w-full p-4 sm:p-5 rounded-2xl border cursor-pointer flex items-center justify-between gap-3 ${
+                          isDraggingThis
+                            ? 'transition-none'
+                            : 'transition-[transform,colors,opacity,border-color] duration-200 ease-out'
+                        } ${swipeInnerCardStyle}`}
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setShowPostponePicker(false);
+                            setSelectedReminder(reminder);
+                          }
+                        }}
+                      >
+                        {/* Title, Optional Description Snippet & Larger Hollow Colored Circle with Checkmark Completion */}
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              triggerAnimatedToggleComplete(reminder);
+                            }}
+                            className={`w-6 h-6 sm:w-6.5 sm:h-6.5 rounded-full border-[2.5px] flex items-center justify-center shrink-0 transition-colors duration-200 cursor-pointer active:scale-90 group ${
+                              isEmeraldGlow
+                                ? 'border-emerald-400 bg-emerald-500 text-stone-950 shadow-sm shadow-emerald-500/40'
+                                : isCompleted && isSettling
+                                ? 'border-emerald-400 bg-emerald-500/30 text-emerald-300'
+                                : isCompleted
+                                ? completedCircleColor
+                                : `bg-transparent ${circleBorderColor}`
+                            }`}
+                            title={
+                              isCompleted
+                                ? (isEn ? 'Completed (Click to undo)' : 'انجام شده (برای بازگردانی ضربه بزنید)')
+                                : `${isEn ? 'Mark as completed' : 'انجام شد'} • ${getCategoryLabel(reminder.category)} (${getPriorityLabel(reminder.priority)})`
+                            }
+                            aria-label={isCompleted ? (isEn ? 'Completed' : 'انجام شده') : (isEn ? 'Mark as completed' : 'انجام شد')}
+                          >
+                            <Check
+                              className={`w-3.5 h-3.5 stroke-[3] transition-opacity duration-150 ${
+                                isCompleted || isCompleting || isSettling
+                                  ? 'opacity-100'
+                                  : 'opacity-0 group-hover:opacity-60'
+                              }`}
+                            />
+                          </button>
+
+                          <div className="flex flex-col gap-1 min-w-0 flex-1">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span
+                                className={`text-sm sm:text-base font-bold truncate transition-colors duration-300 ${
+                                  isEmeraldGlow
+                                    ? 'line-through text-emerald-200'
+                                    : isCompleted
+                                    ? 'line-through text-stone-500'
+                                    : ''
+                                }`}
+                              >
+                                {reminder.title}
+                              </span>
+                            </div>
+                            {reminder.description && (
+                              <p
+                                className={`text-[11px] sm:text-xs truncate transition-colors duration-300 ${
+                                  isEmeraldGlow ? 'text-emerald-300/80' : 'text-stone-400'
+                                }`}
+                              >
+                                {reminder.description}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Time & Date (with Year) */}
+                        <div className="shrink-0 text-end flex flex-col items-end gap-0.5">
+                          <div className="text-xs sm:text-sm font-mono text-stone-300 font-bold flex items-center gap-1.5">
+                            {(isCompleted || isCompleting) && (
+                              <Check
+                                className={`w-3.5 h-3.5 shrink-0 transition-colors duration-300 ${
+                                  isEmeraldGlow ? 'text-emerald-300' : 'text-emerald-400'
+                                }`}
+                              />
+                            )}
+                            <span className={`transition-colors duration-300 ${isEmeraldGlow ? 'text-emerald-200' : ''}`}>
+                              {formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa')}
+                            </span>
+                          </div>
+                          <span className={`text-[10px] sm:text-[11px] transition-colors duration-300 ${isEmeraldGlow ? 'text-emerald-300/80' : 'text-stone-400'}`}>
+                            {isEn
+                              ? new Date(reminder.dueTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                              : getJalaliComponents(reminder.dueTimestamp).dateString}
                           </span>
                         </div>
-                        {reminder.description && (
-                          <p
-                            className={`text-[11px] sm:text-xs truncate transition-colors duration-300 ${
-                              isEmeraldGlow ? 'text-emerald-300/80' : 'text-stone-400'
-                            }`}
-                          >
-                            {reminder.description}
-                          </p>
-                        )}
                       </div>
-                    </div>
-
-                    {/* Time & Date (with Year) */}
-                    <div className="shrink-0 text-end flex flex-col items-end gap-0.5">
-                      <div className="text-xs sm:text-sm font-mono text-stone-300 font-bold flex items-center gap-1.5">
-                        {(isCompleted || isCompleting) && (
-                          <Check
-                            className={`w-3.5 h-3.5 shrink-0 transition-colors duration-300 ${
-                              isEmeraldGlow ? 'text-emerald-300' : 'text-emerald-400'
-                            }`}
-                          />
-                        )}
-                        <span className={`transition-colors duration-300 ${isEmeraldGlow ? 'text-emerald-200' : ''}`}>
-                          {formatJalaliTime(reminder.dueTimestamp, isEn ? 'en' : 'fa')}
-                        </span>
-                      </div>
-                      <span className={`text-[10px] sm:text-[11px] transition-colors duration-300 ${isEmeraldGlow ? 'text-emerald-300/80' : 'text-stone-400'}`}>
-                        {isEn
-                          ? new Date(reminder.dueTimestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
-                          : getJalaliComponents(reminder.dueTimestamp).dateString}
-                      </span>
                     </div>
                   </motion.div>
                 );
@@ -882,6 +1034,59 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                   </button>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 5. DELETE CONFIRMATION WARNING DIALOG (با سویپ به راست) */}
+      {deleteConfirmReminder && (
+        <div
+          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setDeleteConfirmReminder(null)}
+        >
+          <div
+            className="w-full max-w-sm bg-stone-900 border border-rose-500/40 rounded-3xl p-5 sm:p-6 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+            dir={isEn ? 'ltr' : 'rtl'}
+            role="alertdialog"
+            aria-modal="true"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-rose-500/15 border border-rose-500/35 text-rose-400 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-5 h-5" />
+              </div>
+              <div className="space-y-1 min-w-0 flex-1">
+                <h3 className="text-base font-black text-white">
+                  {isEn ? 'Confirm Reminder Deletion' : 'اخطار حذف یادآور'}
+                </h3>
+                <p className="text-xs sm:text-sm text-stone-300 leading-relaxed break-words">
+                  {isEn
+                    ? `Are you sure you want to delete "${deleteConfirmReminder.title}"? It will be moved to the Recycle Bin and its scheduled alert will be canceled.`
+                    : `آیا از حذف یادآور «${deleteConfirmReminder.title}» اطمینان دارید؟ این یادآور به سطل بازیافت منتقل شده و زنگ هشدار آن لغو می‌شود.`}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmReminder(null)}
+                className="min-h-[48px] flex-1 px-4 py-2.5 rounded-2xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold text-sm transition-all cursor-pointer"
+              >
+                {isEn ? 'Cancel' : 'انصراف'}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const targetId = deleteConfirmReminder.id;
+                  setDeleteConfirmReminder(null);
+                  onDelete(targetId);
+                }}
+                className="min-h-[48px] flex-1 px-4 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-rose-600/25 transition-all cursor-pointer"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>{isEn ? 'Confirm Delete' : 'تأیید و حذف'}</span>
+              </button>
             </div>
           </div>
         </div>
