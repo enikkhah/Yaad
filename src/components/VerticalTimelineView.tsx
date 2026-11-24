@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, LayoutGroup } from 'motion/react';
 import { Reminder, Category } from '../types';
 import { 
@@ -76,10 +77,64 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
     pointerId: number;
     startX: number;
     startY: number;
+    startTime: number;
     lockedAxis: 'x' | 'y' | null;
     offsetX: number;
   } | null>(null);
   const suppressClickUntilRef = useRef<number>(0);
+  const deletePopupOpenedAtRef = useRef<number>(0);
+
+  const SWIPE_THRESHOLD = 56;
+  const SWIPE_FAST_THRESHOLD = 42;
+  const SWIPE_MAX = 132;
+
+  const openDeleteConfirm = (reminder: Reminder) => {
+    deletePopupOpenedAtRef.current = Date.now();
+    setDeleteConfirmReminder(reminder);
+  };
+
+  const finishActiveSwipe = (fromCancel: boolean, targetPointerId?: number) => {
+    const gesture = activeSwipeRef.current;
+    if (!gesture) return;
+    if (typeof targetPointerId === 'number' && gesture.pointerId !== targetPointerId) return;
+
+    const finalX = gesture.offsetX;
+    const wasHorizontal = gesture.lockedAxis === 'x';
+    const elapsed = Math.max(1, Date.now() - gesture.startTime);
+    const targetReminder = gesture.reminder;
+
+    activeSwipeRef.current = null;
+    setSwipeState(null);
+
+    if (wasHorizontal) {
+      suppressClickUntilRef.current = Date.now() + 320;
+      const threshold = !fromCancel && elapsed < 280 ? SWIPE_FAST_THRESHOLD : SWIPE_THRESHOLD;
+      // On cancel, still honor if user already dragged cleanly past full threshold
+      if (!fromCancel || Math.abs(finalX) >= SWIPE_THRESHOLD) {
+        if (finalX <= -threshold) {
+          onEdit(targetReminder);
+        } else if (finalX >= threshold) {
+          openDeleteConfirm(targetReminder);
+        }
+      }
+    }
+  };
+
+  useEffect(() => {
+    if (!swipeState?.isDragging) return;
+    const handleWindowPointerUp = (e: PointerEvent) => {
+      finishActiveSwipe(false, e.pointerId);
+    };
+    const handleWindowPointerCancel = (e: PointerEvent) => {
+      finishActiveSwipe(true, e.pointerId);
+    };
+    window.addEventListener('pointerup', handleWindowPointerUp);
+    window.addEventListener('pointercancel', handleWindowPointerCancel);
+    return () => {
+      window.removeEventListener('pointerup', handleWindowPointerUp);
+      window.removeEventListener('pointercancel', handleWindowPointerCancel);
+    };
+  });
 
   useEffect(() => {
     return () => {
@@ -551,8 +606,6 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                     ? 'border-rose-400 bg-rose-400/20 text-rose-300'
                     : 'border-indigo-400 bg-indigo-400/20 text-indigo-300';
 
-                const SWIPE_THRESHOLD = 72;
-                const SWIPE_MAX = 132;
                 const isSwipingThis = swipeState?.id === reminder.id;
                 const currentOffsetX = isSwipingThis ? swipeState.offsetX : 0;
                 const isDraggingThis = Boolean(isSwipingThis && swipeState?.isDragging);
@@ -563,26 +616,6 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                 const swipeInnerCardStyle = isNext
                   ? cardStyle.replace(/\bmt-3\.5\b/, '').trim()
                   : cardStyle;
-
-                const finishSwipeGesture = (commitAction: boolean) => {
-                  const gesture = activeSwipeRef.current;
-                  if (!gesture || gesture.id !== reminder.id) return;
-                  const finalX = gesture.offsetX;
-                  const wasHorizontal = gesture.lockedAxis === 'x';
-                  activeSwipeRef.current = null;
-                  setSwipeState((prev) => (prev?.id === reminder.id ? null : prev));
-
-                  if (wasHorizontal) {
-                    suppressClickUntilRef.current = Date.now() + 260;
-                    if (commitAction) {
-                      if (finalX <= -SWIPE_THRESHOLD) {
-                        onEdit(reminder);
-                      } else if (finalX >= SWIPE_THRESHOLD) {
-                        setDeleteConfirmReminder(reminder);
-                      }
-                    }
-                  }
-                };
 
                 elements.push(
                   <motion.div
@@ -610,39 +643,39 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
 
                     <div className="relative rounded-2xl overflow-hidden">
                       {/* لایه پس‌زمینه سویپ: راست‌کشیدن = حذف (سمت چپ)، چپ‌کشیدن = ویرایش (سمت راست) */}
-                      {currentOffsetX !== 0 && (
+                      <div
+                        dir="ltr"
+                        aria-hidden="true"
+                        className={`absolute inset-0 flex items-center justify-between px-5 rounded-2xl pointer-events-none transition-opacity duration-150 ${
+                          currentOffsetX === 0 ? 'opacity-0' : 'opacity-100'
+                        } ${
+                          currentOffsetX > 0
+                            ? isDeleteSwipeActive
+                              ? 'bg-rose-600 text-white'
+                              : 'bg-rose-950/90 text-rose-300'
+                            : isEditSwipeActive
+                            ? 'bg-sky-600 text-white'
+                            : 'bg-sky-950/90 text-sky-300'
+                        }`}
+                      >
                         <div
-                          dir="ltr"
-                          aria-hidden="true"
-                          className={`absolute inset-0 flex items-center justify-between px-5 rounded-2xl pointer-events-none transition-colors duration-150 ${
-                            currentOffsetX > 0
-                              ? isDeleteSwipeActive
-                                ? 'bg-rose-600 text-white'
-                                : 'bg-rose-950/90 text-rose-300'
-                              : isEditSwipeActive
-                              ? 'bg-sky-600 text-white'
-                              : 'bg-sky-950/90 text-sky-300'
+                          className={`flex items-center gap-2 font-black text-xs sm:text-sm transition-opacity duration-150 ${
+                            currentOffsetX > 10 ? 'opacity-100' : 'opacity-0'
                           }`}
                         >
-                          <div
-                            className={`flex items-center gap-2 font-black text-xs sm:text-sm transition-opacity duration-150 ${
-                              currentOffsetX > 12 ? 'opacity-100' : 'opacity-0'
-                            }`}
-                          >
-                            <Trash2 className="w-5 h-5 shrink-0" />
-                            <span>{isEn ? 'Delete' : 'حذف'}</span>
-                          </div>
-
-                          <div
-                            className={`flex items-center gap-2 font-black text-xs sm:text-sm transition-opacity duration-150 ${
-                              currentOffsetX < -12 ? 'opacity-100' : 'opacity-0'
-                            }`}
-                          >
-                            <span>{isEn ? 'Edit' : 'ویرایش'}</span>
-                            <Edit3 className="w-5 h-5 shrink-0" />
-                          </div>
+                          <Trash2 className="w-5 h-5 shrink-0" />
+                          <span>{isEn ? 'Delete' : 'حذف'}</span>
                         </div>
-                      )}
+
+                        <div
+                          className={`flex items-center gap-2 font-black text-xs sm:text-sm transition-opacity duration-150 ${
+                            currentOffsetX < -10 ? 'opacity-100' : 'opacity-0'
+                          }`}
+                        >
+                          <span>{isEn ? 'Edit' : 'ویرایش'}</span>
+                          <Edit3 className="w-5 h-5 shrink-0" />
+                        </div>
+                      </div>
 
                       <div
                         style={{
@@ -658,6 +691,7 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                             pointerId: e.pointerId,
                             startX: e.clientX,
                             startY: e.clientY,
+                            startTime: Date.now(),
                             lockedAxis: null,
                             offsetX: 0,
                           };
@@ -670,18 +704,22 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                           const dy = e.clientY - gesture.startY;
 
                           if (gesture.lockedAxis === null) {
-                            if (Math.abs(dx) < 10 && Math.abs(dy) < 10) return;
-                            if (Math.abs(dy) >= Math.abs(dx)) {
+                            if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+                            if (Math.abs(dy) > Math.abs(dx) * 1.35 && Math.abs(dy) > 10) {
                               gesture.lockedAxis = 'y';
                               activeSwipeRef.current = null;
                               return;
                             }
-                            gesture.lockedAxis = 'x';
-                            suppressClickUntilRef.current = Date.now() + 300;
-                            try {
-                              e.currentTarget.setPointerCapture(e.pointerId);
-                            } catch {
-                              // ignore if capture is unsupported
+                            if (Math.abs(dx) >= 8 && Math.abs(dx) >= Math.abs(dy) * 0.85) {
+                              gesture.lockedAxis = 'x';
+                              suppressClickUntilRef.current = Date.now() + 340;
+                              try {
+                                e.currentTarget.setPointerCapture(e.pointerId);
+                              } catch {
+                                // ignore if capture is unsupported
+                              }
+                            } else {
+                              return;
                             }
                           }
 
@@ -701,9 +739,11 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
                           } catch {
                             // ignore
                           }
-                          finishSwipeGesture(true);
+                          finishActiveSwipe(false, e.pointerId);
                         }}
-                        onPointerCancel={() => finishSwipeGesture(false)}
+                        onPointerCancel={(e) => {
+                          finishActiveSwipe(true, e.pointerId);
+                        }}
                         onClick={() => {
                           if (Date.now() < suppressClickUntilRef.current) return;
                           setShowPostponePicker(false);
@@ -1038,59 +1078,66 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
           </div>
         </div>
       )}
-      {/* 5. DELETE CONFIRMATION WARNING DIALOG (با سویپ به راست) */}
-      {deleteConfirmReminder && (
-        <div
-          className="fixed inset-0 z-50 bg-black/75 flex items-center justify-center p-4 animate-in fade-in duration-150"
-          onClick={() => setDeleteConfirmReminder(null)}
-        >
+      {/* 5. DELETE CONFIRMATION WARNING DIALOG (با سویپ به راست — رندر مستقیم روی body خارج از کانتینر انیمیشن‌دار) */}
+      {deleteConfirmReminder &&
+        typeof document !== 'undefined' &&
+        createPortal(
           <div
-            className="w-full max-w-sm bg-stone-900 border border-rose-500/40 rounded-3xl p-5 sm:p-6 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150"
-            onClick={(e) => e.stopPropagation()}
-            dir={isEn ? 'ltr' : 'rtl'}
-            role="alertdialog"
-            aria-modal="true"
+            className="fixed inset-0 z-[9999] bg-black/75 flex items-center justify-center p-4 animate-in fade-in duration-150"
+            onClick={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (Date.now() - deletePopupOpenedAtRef.current < 350) return;
+              setDeleteConfirmReminder(null);
+            }}
           >
-            <div className="flex items-start gap-3">
-              <div className="w-11 h-11 rounded-2xl bg-rose-500/15 border border-rose-500/35 text-rose-400 flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-5 h-5" />
+            <div
+              className="w-full max-w-sm bg-stone-900 border border-rose-500/40 rounded-3xl p-5 sm:p-6 space-y-4 shadow-2xl animate-in zoom-in-95 duration-150"
+              onClick={(e) => e.stopPropagation()}
+              dir={isEn ? 'ltr' : 'rtl'}
+              role="alertdialog"
+              aria-modal="true"
+            >
+              <div className="flex items-start gap-3">
+                <div className="w-11 h-11 rounded-2xl bg-rose-500/15 border border-rose-500/35 text-rose-400 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div className="space-y-1 min-w-0 flex-1">
+                  <h3 className="text-base font-black text-white">
+                    {isEn ? 'Confirm Reminder Deletion' : 'اخطار حذف یادآور'}
+                  </h3>
+                  <p className="text-xs sm:text-sm text-stone-300 leading-relaxed break-words">
+                    {isEn
+                      ? `Are you sure you want to delete "${deleteConfirmReminder.title}"? It will be moved to the Recycle Bin and its scheduled alert will be canceled.`
+                      : `آیا از حذف یادآور «${deleteConfirmReminder.title}» اطمینان دارید؟ این یادآور به سطل بازیافت منتقل شده و زنگ هشدار آن لغو می‌شود.`}
+                  </p>
+                </div>
               </div>
-              <div className="space-y-1 min-w-0 flex-1">
-                <h3 className="text-base font-black text-white">
-                  {isEn ? 'Confirm Reminder Deletion' : 'اخطار حذف یادآور'}
-                </h3>
-                <p className="text-xs sm:text-sm text-stone-300 leading-relaxed break-words">
-                  {isEn
-                    ? `Are you sure you want to delete "${deleteConfirmReminder.title}"? It will be moved to the Recycle Bin and its scheduled alert will be canceled.`
-                    : `آیا از حذف یادآور «${deleteConfirmReminder.title}» اطمینان دارید؟ این یادآور به سطل بازیافت منتقل شده و زنگ هشدار آن لغو می‌شود.`}
-                </p>
-              </div>
-            </div>
 
-            <div className="flex items-center gap-2.5 pt-1">
-              <button
-                type="button"
-                onClick={() => setDeleteConfirmReminder(null)}
-                className="min-h-[48px] flex-1 px-4 py-2.5 rounded-2xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold text-sm transition-all cursor-pointer"
-              >
-                {isEn ? 'Cancel' : 'انصراف'}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const targetId = deleteConfirmReminder.id;
-                  setDeleteConfirmReminder(null);
-                  onDelete(targetId);
-                }}
-                className="min-h-[48px] flex-1 px-4 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-rose-600/25 transition-all cursor-pointer"
-              >
-                <Trash2 className="w-4 h-4" />
-                <span>{isEn ? 'Confirm Delete' : 'تأیید و حذف'}</span>
-              </button>
+              <div className="flex items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setDeleteConfirmReminder(null)}
+                  className="min-h-[48px] flex-1 px-4 py-2.5 rounded-2xl bg-stone-800 hover:bg-stone-700 text-stone-200 font-bold text-sm transition-all cursor-pointer"
+                >
+                  {isEn ? 'Cancel' : 'انصراف'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetId = deleteConfirmReminder.id;
+                    setDeleteConfirmReminder(null);
+                    onDelete(targetId);
+                  }}
+                  className="min-h-[48px] flex-1 px-4 py-2.5 rounded-2xl bg-rose-600 hover:bg-rose-500 text-white font-black text-sm flex items-center justify-center gap-2 shadow-lg shadow-rose-600/25 transition-all cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  <span>{isEn ? 'Confirm Delete' : 'تأیید و حذف'}</span>
+                </button>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   );
 };

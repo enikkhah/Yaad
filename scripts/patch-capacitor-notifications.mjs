@@ -13575,7 +13575,7 @@ class YaadGeofenceService : Service(), LocationListener {
         private const val FB_MIN = 25.0
         private const val FB_ACC = 3.0
         private const val FB_FRAC = 0.10
-        private val REARM_DWELL_S: Double? = 12.0
+        private val REARM_DWELL_S: Double? = null
         private const val STILL_SPEED = 0.6
         private const val STILL_AFTER_S = 30.0
         private const val STILL_INTERVAL_S = 5.0
