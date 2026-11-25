@@ -58,13 +58,13 @@ function applyPatchOrVerify(content, fileName, stepName, origAnchor, replacement
   if (content.includes(patchedMarker)) {
     return content;
   }
-  if (content.includes(origAnchor)) {
-    return content.replace(origAnchor, replacement);
-  }
   for (const legacyAnchor of legacyAnchors) {
     if (content.includes(legacyAnchor)) {
       return content.replace(legacyAnchor, replacement);
     }
+  }
+  if (content.includes(origAnchor)) {
+    return content.replace(origAnchor, replacement);
   }
   console.error(
     `[patch-capacitor-notifications] ERROR in ${fileName} (${stepName}): Expected code anchor not found in @capacitor/local-notifications@${pluginVersion}.`
@@ -10557,12 +10557,12 @@ class YaadAlarmPopupActivity : Activity() {
             forceScreenOffDuration: Boolean = false,
             forceExpandPopup: Boolean = false
         ) {
+            val isGeo = try {
+                sourceJson != null && JSObject(sourceJson).optJSONObject("extra")?.optBoolean("geofence", false) == true
+            } catch (e: Exception) {
+                false
+            }
             if (isPhoneCallActiveOrRinging(context)) {
-                val isGeo = try {
-                    sourceJson != null && JSObject(sourceJson).optJSONObject("extra")?.optBoolean("geofence", false) == true
-                } catch (e: Exception) {
-                    false
-                }
                 if (isGeo) {
                     val gItemId = try {
                         if (sourceJson != null) JSObject(sourceJson).optJSONObject("extra")?.optString("geofenceItemId", "") ?: "" else ""
