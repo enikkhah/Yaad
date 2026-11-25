@@ -121,6 +121,7 @@ export interface Reminder {
   completedAt?: number;
   postponedAt?: number;
   postponeCount: number;
+  autoRepeatCount?: number;
   cancelledAt?: number;
   acknowledged?: boolean;
   notifiedAt?: number;

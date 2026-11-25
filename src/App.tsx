@@ -277,11 +277,20 @@ export default function App() {
     }
     const vibEnabled = settings.vibrationEnabled !== false;
     setGlobalVibration(vibEnabled);
+    let cancelled = false;
     syncNotificationSoundAndVolume(settings.alarmSound, settings.alarmVolume, vibEnabled)
       .then(() => {
-        syncAllRemindersWithLocalNotifications(reminders, settings).catch(() => {});
+        // Defer slightly so mount notification listeners & flushed background actions update remindersRef first
+        window.setTimeout(() => {
+          if (!cancelled) {
+            syncAllRemindersWithLocalNotifications(remindersRef.current, settingsRef.current).catch(() => {});
+          }
+        }, 600);
       })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings.alarmSound, settings.alarmVolume, settings.vibrationEnabled]);
 
@@ -1504,28 +1513,6 @@ export default function App() {
 
       if (targetId) {
         triggeredAlarmsRef.current.add(targetId);
-        let found = remindersRef.current?.find((r) => r.id === targetId);
-        if (!found) {
-          try {
-            const raw = localStorage.getItem(REMINDERS_STORAGE_KEY);
-            if (raw) {
-              const parsed = JSON.parse(raw);
-              if (Array.isArray(parsed)) {
-                found = parsed.find((r: Reminder) => r.id === targetId);
-              }
-            }
-          } catch {
-            // ignore
-          }
-        }
-        if (
-          found &&
-          found.dueTimestamp <= Date.now() &&
-          !found.acknowledged &&
-          found.status !== 'completed'
-        ) {
-          handleNoReactionTimeoutRef.current(targetId);
-        }
       }
 
       setShowSplash(false);
@@ -1920,15 +1907,6 @@ export default function App() {
         stopAlarmRinging();
         if (queryTimelineRemId) {
           triggeredAlarmsRef.current.add(queryTimelineRemId);
-          const found = reminders.find((r) => r.id === queryTimelineRemId);
-          if (
-            found &&
-            found.dueTimestamp <= Date.now() &&
-            !found.acknowledged &&
-            found.status !== 'completed'
-          ) {
-            handleNoReactionTimeoutRef.current(queryTimelineRemId);
-          }
         }
         setShowSplash(false);
         setAppVisible(true);
@@ -2160,6 +2138,9 @@ export default function App() {
           }
         }
         if (dueItems.length > 0) {
+          dueItems.forEach((item) => {
+            triggeredAlarmsRef.current.add(`${item.id}_${item.dueTimestamp}_0`);
+          });
           upsertBundledAlarmReminders(dueItems);
           return;
         }
@@ -3997,6 +3978,7 @@ export default function App() {
             status: 'postponed' as ReminderStatus,
             postponedAt: Date.now(),
             postponeCount: (r.postponeCount || 0) + 1,
+            autoRepeatCount: 0,
             acknowledged: false,
             lastActionAt: Date.now(),
           };
@@ -4067,27 +4049,34 @@ export default function App() {
   // Handler: When 1-minute alarm finishes ringing without user reaction:
   // 1. Silence current 1-minute ring (do NOT close in-app full-screen alarm modal so it stays open until user reaction!)
   // 2. Keep the dropdown shade notification pinned at the top (do NOT dismiss delivered notification)
-  // 3. Move the reminder's dueTimestamp to +15 minutes in the future so it repeats in 15m if still unacknowledged.
+  // 3. Move the reminder's dueTimestamp to +15 minutes in the future (capped at 4 auto-repeats to avoid all-night loops).
   const handleNoReactionTimeout = (id: string, explicitNextDueTimestamp?: number) => {
     stopAlarmRinging();
+    const MAX_AUTO_REPEATS = 4;
 
     setReminders((prev) => {
       const now = Date.now();
       const updated = prev.map((r) => {
         if (r.id === id) {
+          const currentRepeats = r.autoRepeatCount || 0;
+          if (currentRepeats >= MAX_AUTO_REPEATS && typeof explicitNextDueTimestamp !== 'number') {
+            return r;
+          }
           const nextDue =
             typeof explicitNextDueTimestamp === 'number' && explicitNextDueTimestamp > now
               ? explicitNextDueTimestamp
               : Math.max(now, r.dueTimestamp) + 15 * 60000;
+          const nextRepeatCount = currentRepeats + 1;
           triggeredAlarmsRef.current.delete(id);
           const nextRem: Reminder = {
             ...r,
             dueTimestamp: nextDue,
             status: 'postponed' as ReminderStatus,
             postponedAt: now,
+            autoRepeatCount: nextRepeatCount,
             acknowledged: false,
           };
-          if (nextDue > now) {
+          if (nextDue > now && nextRepeatCount <= MAX_AUTO_REPEATS) {
             scheduleReminderRepeatNotification(nextRem, settingsRef.current).catch(() => {});
           }
           return nextRem;

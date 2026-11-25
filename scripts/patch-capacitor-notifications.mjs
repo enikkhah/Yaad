@@ -1544,7 +1544,8 @@ class TimedNotificationPublisher : BroadcastReceiver() {
             return
         }
 
-        // Ignore stale notifications (> 90 seconds past due) or legacy repeat notifications
+        // Ignore ancient stale notifications (> 15 minutes past due) or legacy repeat notifications,
+        // while tolerating minor OEM Doze delays (< 15m) so valid reminders are not silently dropped.
         try {
             val extraCheck = notificationJson.optJSONObject("extra")
             if (extraCheck?.optBoolean("isRepeat", false) == true) {
@@ -1553,14 +1554,18 @@ class TimedNotificationPublisher : BroadcastReceiver() {
             }
             val scheduleObj = notificationJson.getJSObject("schedule")
             val atStr = scheduleObj?.getString("at")
+            var scheduledAtMs = 0L
             if (!atStr.isNullOrEmpty()) {
                 val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
                 sdf.timeZone = java.util.TimeZone.getTimeZone("UTC")
-                val atDate = sdf.parse(atStr)
-                if (atDate != null && (System.currentTimeMillis() - atDate.time) > 90 * 1000L) {
-                    storage.deleteNotification(id.toString())
-                    return
-                }
+                scheduledAtMs = sdf.parse(atStr)?.time ?: 0L
+            }
+            if (scheduledAtMs <= 0L && extraCheck != null) {
+                scheduledAtMs = extraCheck.optLong("dueTimestamp", 0L)
+            }
+            if (scheduledAtMs > 0L && (System.currentTimeMillis() - scheduledAtMs) > 15L * 60L * 1000L) {
+                storage.deleteNotification(id.toString())
+                return
             }
         } catch (e: Exception) {
         }
@@ -1790,7 +1795,7 @@ class TimedNotificationPublisher : BroadcastReceiver() {
                 "yaad:timedReminderScreenWakeUp"
             )
             wl.setReferenceCounted(false)
-            val durMs = if (wasScreenOff) YaadAlarmPopupActivity.SCREEN_OFF_KEEP_AWAKE_MS else YaadAlarmPopupActivity.SCREEN_ON_KEEP_AWAKE_MS
+            val durMs = if (wasScreenOff) YaadAlarmPopupActivity.TIMED_SCREEN_OFF_KEEP_AWAKE_MS else YaadAlarmPopupActivity.SCREEN_ON_KEEP_AWAKE_MS
             wl.acquire(durMs)
         } catch (e: Exception) {
         }
@@ -2023,7 +2028,8 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                 }
             }
 
-            if (!shouldSchedule15mRepeat) {
+            val currentAutoRepeatCount = requestJson?.optJSONObject("extra")?.optInt("autoRepeatCount", 0) ?: 0
+            if (!shouldSchedule15mRepeat || currentAutoRepeatCount >= 4) {
                 return
             }
 
@@ -2050,11 +2056,13 @@ class NotificationDismissReceiver : BroadcastReceiver() {
             } catch (e: Exception) {
             }
 
+            val nextAutoRepeatCount = currentAutoRepeatCount + 1
             val repeatAtMs = nowMs + 15L * 60L * 1000L
             val dataJson = JSObject()
             dataJson.put("actionId", "mute_after_1m")
             dataJson.put("actionTimestamp", nowMs)
             dataJson.put("snoozedUntil", repeatAtMs)
+            dataJson.put("autoRepeatCount", nextAutoRepeatCount)
             if (requestJson != null) {
                 dataJson.put("notification", requestJson)
             } else {
@@ -2080,6 +2088,7 @@ class NotificationDismissReceiver : BroadcastReceiver() {
                         val extraObj = repeatJson.optJSONObject("extra") ?: org.json.JSONObject()
                         extraObj.put("isRepeat", false)
                         extraObj.put("isAutoRepeat", true)
+                        extraObj.put("autoRepeatCount", nextAutoRepeatCount)
                         extraObj.put("dueTimestamp", repeatAtMs)
                         repeatJson.put("extra", extraObj)
                         val currentChannel = repeatJson.optString("channelId", "")
@@ -2360,10 +2369,6 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
                 storage.deleteNotification(id)
                 continue
             }
-            if (!schedule.isPerpetual() && notification.isTriggered()) {
-                storage.deleteNotification(id)
-                continue
-            }
             var at = schedule.at
             if (at == null) {
                 if (!schedule.isPerpetual()) {
@@ -2371,20 +2376,47 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
                     continue
                 }
             } else {
-                // Reconcile local wall-clock hour when user travels across timezones or DST changes
-                if (savedJsObj != null && extraObj != null && extraObj.has("scheduledTzOffsetMinutes")) {
-                    val savedOffsetMins = extraObj.optInt("scheduledTzOffsetMinutes", Int.MIN_VALUE)
-                    if (savedOffsetMins != Int.MIN_VALUE) {
-                        val currentOffsetMins = currentTz.getOffset(at.time) / 60000
-                        val deltaMins = savedOffsetMins - currentOffsetMins
+                // Reconcile local wall-clock hour when user travels across timezones or DST changes.
+                // Note: JS Date.getTimezoneOffset() uses (UTC - Local), whereas Java TimeZone.getOffset() uses (Local - UTC).
+                if (savedJsObj != null && extraObj != null) {
+                    val currentJavaOffsetMins = currentTz.getOffset(at.time) / 60000
+                    val savedTimeZoneId = extraObj.optString("scheduledTimeZone", "")
+                    var deltaMins = 0
+                    var shouldPersistMeta = false
+
+                    if (extraObj.has("scheduledTzOffsetJavaMinutes")) {
+                        val savedJavaOffsetMins = extraObj.optInt("scheduledTzOffsetJavaMinutes", Int.MIN_VALUE)
+                        if (savedJavaOffsetMins != Int.MIN_VALUE) {
+                            deltaMins = savedJavaOffsetMins - currentJavaOffsetMins
+                            shouldPersistMeta = deltaMins != 0
+                        }
+                    } else if (extraObj.has("scheduledTzOffsetMinutes")) {
+                        // Legacy notification stored before scheduledTzOffsetJavaMinutes was introduced:
+                        // Never shift if we are still in the same IANA timezone; otherwise derive Java offset safely.
+                        if (savedTimeZoneId.isNotEmpty() && savedTimeZoneId == currentTz.id) {
+                            deltaMins = 0
+                            shouldPersistMeta = true
+                        } else if (isTimeOrTzChange && savedTimeZoneId.isNotEmpty()) {
+                            val savedTz = TimeZone.getTimeZone(savedTimeZoneId)
+                            val savedJavaOffsetMins = savedTz.getOffset(at.time) / 60000
+                            deltaMins = savedJavaOffsetMins - currentJavaOffsetMins
+                            shouldPersistMeta = true
+                        } else if (isTimeOrTzChange) {
+                            val legacyJsOffsetMins = extraObj.optInt("scheduledTzOffsetMinutes", Int.MIN_VALUE)
+                            if (legacyJsOffsetMins != Int.MIN_VALUE) {
+                                val savedJavaOffsetMins = -legacyJsOffsetMins
+                                deltaMins = savedJavaOffsetMins - currentJavaOffsetMins
+                                shouldPersistMeta = true
+                            }
+                        }
+                    }
+
+                    if (shouldPersistMeta) {
                         if (deltaMins != 0) {
                             val shiftedMs = at.time + (deltaMins.toLong() * 60_000L)
                             at = Date(shiftedMs)
                             schedule.at = at
                             notification.schedule = schedule
-                            extraObj.put("scheduledTzOffsetMinutes", currentOffsetMins)
-                            extraObj.put("scheduledTimeZone", currentTz.id)
-                            savedJsObj.put("extra", extraObj)
                             val schedJsObj = savedJsObj.optJSONObject("schedule")
                             if (schedJsObj != null) {
                                 val sdfUtc = java.text.SimpleDateFormat(LocalNotificationSchedule.JS_DATE_FORMAT, java.util.Locale.US)
@@ -2392,14 +2424,18 @@ class LocalNotificationRestoreReceiver : BroadcastReceiver() {
                                 schedJsObj.put("at", sdfUtc.format(at))
                                 savedJsObj.put("schedule", schedJsObj)
                             }
-                            notification.source = savedJsObj.toString()
-                            updatedNotifications.add(notification)
                         }
+                        extraObj.put("scheduledTzOffsetJavaMinutes", currentJavaOffsetMins)
+                        extraObj.put("scheduledTzOffsetMinutes", -currentJavaOffsetMins)
+                        extraObj.put("scheduledTimeZone", currentTz.id)
+                        savedJsObj.put("extra", extraObj)
+                        notification.source = savedJsObj.toString()
+                        updatedNotifications.add(notification)
                     }
                 }
 
                 // Never fire expired past notifications on boot or time change!
-                if (at.before(Date())) {
+                if (!schedule.isPerpetual() && at.before(Date())) {
                     storage.deleteNotification(id)
                     continue
                 }
@@ -3152,7 +3188,109 @@ const legacyPluginLoadV12 = `        // YAAD clean foreground state, WebView con
         }
     }`;
 
-const patchedPluginLoad = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v4
+const patchedPluginLoad = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v5
+        isAppInForegroundState = true
+        configureWebViewForGoogleOAuth()
+        purgeStaleOneShotNotifications()
+        LegacyNotificationMigrator.run(context, notificationStorage, manager)
+        flushQueuedBackgroundActions()
+        YaadGeofenceService.ensureServiceState(context)
+        activity?.intent?.let { handleOnNewIntent(it) }
+    }
+
+    private fun configureWebViewForGoogleOAuth() {
+        try {
+            activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+            val wv = bridge?.webView
+            if (wv != null) {
+                wv.setBackgroundColor(android.graphics.Color.parseColor("#07070D"))
+                val ua = wv.settings.userAgentString ?: ""
+                if (ua.contains("; wv") || ua.contains("Version/")) {
+                    wv.settings.userAgentString = ua
+                        .replace("; wv", "")
+                        .replace(Regex("Version/\\\\d+\\\\.\\\\d+\\\\s*"), "")
+                }
+                wv.settings.javaScriptCanOpenWindowsAutomatically = true
+                wv.settings.mediaPlaybackRequiresUserGesture = false
+                try {
+                    wv.removeJavascriptInterface("YaadGeofenceBridge")
+                } catch (e: Exception) {
+                }
+                wv.addJavascriptInterface(YaadGeofenceService.JsBridge(context.applicationContext), "YaadGeofenceBridge")
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun purgeStaleOneShotNotifications() {
+        try {
+            val now = System.currentTimeMillis()
+            for (n in notificationStorage.getSavedNotifications()) {
+                val id = n.id ?: continue
+                val savedJs = notificationStorage.getSavedNotificationAsJSObject(id.toString())
+                if (savedJs?.optJSONObject("extra")?.optBoolean("isRepeat", false) == true) {
+                    notificationStorage.deleteNotification(id.toString())
+                    continue
+                }
+                val sched = n.schedule
+                if (sched == null) {
+                    notificationStorage.deleteNotification(id.toString())
+                    continue
+                }
+                val atDate = sched.at
+                if (atDate == null) {
+                    if (!sched.isPerpetual()) {
+                        notificationStorage.deleteNotification(id.toString())
+                    }
+                    continue
+                }
+                if (!sched.isPerpetual() && atDate.time < now) {
+                    notificationStorage.deleteNotification(id.toString())
+                }
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    override fun handleOnResume() {
+        super.handleOnResume()
+        isAppInForegroundState = true
+        activity?.volumeControlStream = android.media.AudioManager.STREAM_NOTIFICATION
+        flushQueuedBackgroundActions()
+        YaadGeofenceService.ensureServiceState(context)
+        YaadGeofenceService.onAppForegrounded(context)
+    }
+
+    override fun handleOnPause() {
+        super.handleOnPause()
+        isAppInForegroundState = false
+        if (YaadGeofenceService.isScreenOffOrLockedStatic(context)) {
+            YaadGeofenceService.onAppBackgrounded(context)
+        }
+    }
+
+    override fun handleOnStop() {
+        super.handleOnStop()
+        isAppInForegroundState = false
+        YaadGeofenceService.onAppBackgrounded(context)
+    }
+
+    private fun flushQueuedBackgroundActions() {
+        try {
+            val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+            val raw = prefs.getString(BG_ACTION_KEY, null) ?: return
+            prefs.edit().remove(BG_ACTION_KEY).apply()
+            val arr = JSONArray(raw)
+            for (i in 0 until arr.length()) {
+                val itemStr = arr.optString(i, null) ?: continue
+                val itemJson = JSObject(itemStr)
+                notifyListeners("localNotificationActionPerformed", itemJson, true)
+            }
+        } catch (e: Exception) {
+        }
+    }`;
+
+const legacyPluginLoadV14 = `        // YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v4
         isAppInForegroundState = true
         configureWebViewForGoogleOAuth()
         purgeStaleOneShotNotifications()
@@ -3438,8 +3576,8 @@ pluginContent = applyPatchOrVerify(
   'load configureWebViewForGoogleOAuth, foreground state tracking, STREAM_NOTIFICATION volume stream, mediaPlaybackRequiresUserGesture, purgeStaleOneShotNotifications, cold-start launch intent, handleOnResume flushQueuedBackgroundActions, and YaadGeofenceBridge',
   origPluginLoad,
   patchedPluginLoad,
-  '// YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v4',
-  [legacyPluginLoadV13, legacyPluginLoadV12, legacyPluginLoadV12b, legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8, legacyPluginLoadV9, legacyPluginLoadV10, legacyPluginLoadV11]
+  '// YAAD clean foreground state, WebView configuration & Out-of-App Geofence Bridge v5',
+  [legacyPluginLoadV14, legacyPluginLoadV13, legacyPluginLoadV12, legacyPluginLoadV12b, legacyPluginLoad, legacyPluginLoadV2, legacyPluginLoadV3, legacyPluginLoadV4, legacyPluginLoadV5, legacyPluginLoadV6, legacyPluginLoadV7, legacyPluginLoadV8, legacyPluginLoadV9, legacyPluginLoadV10, legacyPluginLoadV11]
 );
 
 const origHandleOnNewIntent = `    override fun handleOnNewIntent(data: Intent) {
@@ -5760,6 +5898,107 @@ const patchedCompanionFire = `        private const val BG_ACTION_PREFS = "YAAD_
             val instance = getLocalNotificationsInstance() ?: return false
             val act = instance.activity ?: return false
             if (act.isFinishing || act.isDestroyed) return false
+            if (!isAppInForegroundState || !act.hasWindowFocus()) return false
+            try {
+                val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
+                if (pm != null && !pm.isInteractive) return false
+                val km = context.getSystemService(Context.KEYGUARD_SERVICE) as? android.app.KeyguardManager
+                if (km != null && km.isKeyguardLocked) return false
+            } catch (e: Exception) {
+            }
+            return true
+        }
+
+        fun evaluateJsInWebView(jsCode: String) {
+            try {
+                val instance = getLocalNotificationsInstance() ?: return
+                val wv = instance.bridge?.webView ?: return
+                wv.post {
+                    try {
+                        wv.evaluateJavascript(jsCode, null)
+                    } catch (e: Exception) {
+                    }
+                }
+            } catch (e: Exception) {
+            }
+        }
+
+        fun stopActiveMediaPlayer() {
+            try {
+                activeMediaPlayer?.let { mp ->
+                    if (mp.isPlaying) {
+                        mp.stop()
+                    }
+                    mp.release()
+                }
+            } catch (e: Exception) {
+            } finally {
+                activeMediaPlayer = null
+            }
+        }
+
+        fun fireReceived(notification: JSObject?) {
+            getLocalNotificationsInstance()?.dispatchReceived(notification)
+        }
+
+        fun fireActionPerformed(dataJson: JSObject): Boolean {
+            val instance = getLocalNotificationsInstance()
+            val act = instance?.activity
+            if (
+                instance != null &&
+                act != null &&
+                !act.isFinishing &&
+                !act.isDestroyed &&
+                isAppInForegroundState &&
+                !YaadGeofenceService.isScreenOffOrLockedStatic(act)
+            ) {
+                instance.dispatchActionPerformed(dataJson)
+                return true
+            }
+            return false
+        }
+
+        fun queueBackgroundAction(context: Context, dataJson: JSObject) {
+            try {
+                val prefs = context.getSharedPreferences(BG_ACTION_PREFS, Context.MODE_PRIVATE)
+                val existing = prefs.getString(BG_ACTION_KEY, "[]")
+                val arr = JSONArray(existing)
+                val newRemId = dataJson.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                val filteredArr = JSONArray()
+                for (i in 0 until arr.length()) {
+                    val itemStr = arr.optString(i, null) ?: continue
+                    if (newRemId.isNotEmpty()) {
+                        try {
+                            val prevObj = JSObject(itemStr)
+                            val prevRemId = prevObj.optJSONObject("notification")?.optJSONObject("extra")?.optString("reminderId", "") ?: ""
+                            if (prevRemId == newRemId) continue
+                        } catch (e: Exception) {
+                        }
+                    }
+                    filteredArr.put(itemStr)
+                }
+                filteredArr.put(dataJson.toString())
+                prefs.edit().putString(BG_ACTION_KEY, filteredArr.toString()).apply()
+            } catch (e: Exception) {
+            }
+        }`;
+
+const legacyCompanionFireV11 = `        private const val BG_ACTION_PREFS = "YAAD_BG_NOTIFICATION_ACTIONS"
+        private const val BG_ACTION_KEY = "queued_actions"
+        private var activeMediaPlayer: android.media.MediaPlayer? = null
+        @Volatile
+        private var isAppInForegroundState: Boolean = false
+
+        fun onAppTaskRemoved() {
+            isAppInForegroundState = false
+        }
+
+        fun isAppInForeground(context: Context): Boolean {
+            if (YaadAlarmPopupActivity.isShowingAnyPopup() && !YaadAlarmPopupActivity.isMinimizedBubbleActive()) return false
+            if (YaadGeofenceService.isScreenOffOrLockedStatic(context)) return false
+            val instance = getLocalNotificationsInstance() ?: return false
+            val act = instance.activity ?: return false
+            if (act.isFinishing || act.isDestroyed) return false
             if (!isAppInForegroundState && !act.hasWindowFocus()) return false
             try {
                 val pm = context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager
@@ -5844,8 +6083,8 @@ pluginContent = applyPatchOrVerify(
   'companion isAppInForeground, onAppTaskRemoved, evaluateJsInWebView, stopActiveMediaPlayer, fireActionPerformed, and deduplicated queueBackgroundAction',
   origCompanionFire,
   patchedCompanionFire,
-  'if (!isAppInForegroundState && !act.hasWindowFocus()) return false',
-  [legacyCompanionFireV10, legacyCompanionFireV9, legacyCompanionFireV8, legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3, legacyCompanionFireV4, legacyCompanionFireV5, legacyCompanionFireV6, legacyCompanionFireV7]
+  'if (!isAppInForegroundState || !act.hasWindowFocus()) return false',
+  [legacyCompanionFireV11, legacyCompanionFireV10, legacyCompanionFireV9, legacyCompanionFireV8, legacyCompanionFire, legacyCompanionFireV2, legacyCompanionFireV3, legacyCompanionFireV4, legacyCompanionFireV5, legacyCompanionFireV6, legacyCompanionFireV7]
 );
 
 // 8. Create standalone YaadAlarmPopupActivity.kt (Out-of-app minimal theme-matched 1-minute notification card)
@@ -6384,14 +6623,20 @@ class YaadAlarmPopupActivity : Activity() {
         val shouldWakeScreenOnce = intent?.getBooleanExtra("yaad_wake_screen_once", true) != false
         val fromScreenOff = (intent?.getBooleanExtra("yaad_launched_from_screen_off", false) == true) ||
             !isScreenCurrentlyInteractive(this)
+        val rawSrc = intent?.getStringExtra(LocalNotificationManager.NOTIFICATION_OBJ_INTENT_KEY)
+        val isGeoIntent = try {
+            rawSrc != null && JSObject(rawSrc).optJSONObject("extra")?.optBoolean("geofence", false) == true
+        } catch (e: Exception) {
+            false
+        }
         val requestedDurationMs = if (fromScreenOff) {
-            SCREEN_OFF_KEEP_AWAKE_MS
+            if (isGeoIntent) SCREEN_OFF_KEEP_AWAKE_MS else TIMED_SCREEN_OFF_KEEP_AWAKE_MS
         } else {
             (intent?.getLongExtra("yaad_keep_screen_on_duration_ms", SCREEN_ON_KEEP_AWAKE_MS) ?: SCREEN_ON_KEEP_AWAKE_MS)
                 .coerceAtLeast(SCREEN_ON_KEEP_AWAKE_MS)
         }
 
-        applyScreenKeepAwake(requestedDurationMs, shouldWakeScreenOnce, fromScreenOff)
+        applyScreenKeepAwake(requestedDurationMs, shouldWakeScreenOnce, fromScreenOff && isGeoIntent)
         window.setDimAmount(0.82f)
         setFinishOnTouchOutside(false)
         volumeControlStream = AudioManager.STREAM_NOTIFICATION
@@ -6912,7 +7157,7 @@ class YaadAlarmPopupActivity : Activity() {
         val fromScreenOff = data.getBooleanExtra("yaad_launched_from_screen_off", false) ||
             !isScreenCurrentlyInteractive(this)
         val keepAwakeDurationMs = if (fromScreenOff) {
-            SCREEN_OFF_KEEP_AWAKE_MS
+            if (isGeofencePopup) SCREEN_OFF_KEEP_AWAKE_MS else TIMED_SCREEN_OFF_KEEP_AWAKE_MS
         } else {
             data.getLongExtra("yaad_keep_screen_on_duration_ms", SCREEN_ON_KEEP_AWAKE_MS)
                 .coerceAtLeast(SCREEN_ON_KEEP_AWAKE_MS)
@@ -6987,7 +7232,7 @@ class YaadAlarmPopupActivity : Activity() {
             // Full-screen geofence page MUST stay open until explicit user reaction (Stop, Directions, or Edit).
         } else {
             if (data.getBooleanExtra("yaad_wake_screen_once", true)) {
-                applyScreenKeepAwake(keepAwakeDurationMs, wakeScreenNow = true, fromScreenOff = fromScreenOff)
+                applyScreenKeepAwake(keepAwakeDurationMs, wakeScreenNow = true, fromScreenOff = false)
                 data.removeExtra("yaad_wake_screen_once")
             }
             // Merge into activeBundledTimedReminders so simultaneous or near-simultaneous reminders
@@ -8816,6 +9061,7 @@ class YaadAlarmPopupActivity : Activity() {
 
     private fun muteReminderAudioOnly() {
         stopAllTimedReminderAudio(this)
+        expireScreenKeepAwakeWindowOnly()
         if (isReminderAudioMuted) return
         isReminderAudioMuted = true
         countDownTimer?.cancel()
@@ -9187,7 +9433,8 @@ class YaadAlarmPopupActivity : Activity() {
         private const val CALL_SUSPEND_PREFS = "YAAD_CALL_SUSPEND_PREFS"
         const val ACTION_ALARM_CLOCK_LAUNCH_POPUP = "com.capacitorjs.plugins.localnotifications.ALARM_CLOCK_LAUNCH_POPUP"
         const val SCREEN_ON_KEEP_AWAKE_MS = 60_000L          // 1 minute keep-awake when screen is ON (in Android launcher, other apps, or lockscreen)
-        const val SCREEN_OFF_KEEP_AWAKE_MS = 21 * 60_000L   // 21 minutes keep-awake when screen is OFF
+        const val TIMED_SCREEN_OFF_KEEP_AWAKE_MS = 65_000L   // 65 seconds keep-awake for timed reminders when screen is OFF
+        const val SCREEN_OFF_KEEP_AWAKE_MS = 21 * 60_000L   // 21 minutes keep-awake when screen is OFF (geofence)
         private var activeInstance: WeakReference<YaadAlarmPopupActivity>? = null
         private var activeNotificationId: Int = Int.MIN_VALUE
         private val activeBundledTimedReminders = java.util.LinkedHashMap<Int, JSObject>()
@@ -10329,11 +10576,15 @@ class YaadAlarmPopupActivity : Activity() {
                 return
             }
 
-            // Evaluate screen-off state BEFORE acquiring any wake lock so 21-minute vs 1-minute duration is 100% accurate
+            // Evaluate screen-off state BEFORE acquiring any wake lock so keep-awake duration is accurate
             val wasScreenOff = forceScreenOffDuration ||
                 !isScreenCurrentlyInteractive(context) ||
                 YaadGeofenceService.isInScreenOffSession
-            val keepScreenOnDurationMs = if (wasScreenOff) SCREEN_OFF_KEEP_AWAKE_MS else SCREEN_ON_KEEP_AWAKE_MS
+            val keepScreenOnDurationMs = if (wasScreenOff) {
+                if (isGeo) SCREEN_OFF_KEEP_AWAKE_MS else TIMED_SCREEN_OFF_KEEP_AWAKE_MS
+            } else {
+                SCREEN_ON_KEEP_AWAKE_MS
+            }
 
             if (wakeScreenOnce) {
                 try {

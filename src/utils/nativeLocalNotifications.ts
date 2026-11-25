@@ -360,7 +360,7 @@ export async function requestNotificationPermission(): Promise<boolean> {
 export async function scheduleReminderNotification(
   reminder: Reminder,
   currentSettings?: AppSettings,
-  options?: { overrideNotificationId?: number; isAutoRepeat?: boolean }
+  options?: { overrideNotificationId?: number; isAutoRepeat?: boolean; autoRepeatCount?: number }
 ): Promise<boolean> {
   // Only active (non-deleted, non-acknowledged) pending or postponed reminders in the future should be scheduled
   const now = Date.now();
@@ -432,22 +432,30 @@ export async function scheduleReminderNotification(
         ongoing: true,
         autoCancel: false,
         actionTypeId: NOTIFICATION_ACTION_TYPE_ID,
-        extra: {
-          reminderId: reminder.id,
-          dueTimestamp: reminder.dueTimestamp,
-          scheduledTzOffsetMinutes:
+        extra: (() => {
+          const resolvedJsTzOffset =
             typeof reminder.scheduledTzOffsetMinutes === 'number'
               ? reminder.scheduledTzOffsetMinutes
-              : -new Date(reminder.dueTimestamp).getTimezoneOffset(),
-          scheduledTimeZone: reminder.scheduledTimeZone || '',
-          sound: soundType,
-          volume,
-          vibrationEnabled,
-          theme: appTheme,
-          language: appLang,
-          isRepeat: false,
-          isAutoRepeat: Boolean(options?.isAutoRepeat),
-        },
+              : new Date(reminder.dueTimestamp).getTimezoneOffset();
+          return {
+            reminderId: reminder.id,
+            dueTimestamp: reminder.dueTimestamp,
+            scheduledTzOffsetMinutes: resolvedJsTzOffset,
+            scheduledTzOffsetJavaMinutes: -resolvedJsTzOffset,
+            scheduledTimeZone: reminder.scheduledTimeZone || '',
+            sound: soundType,
+            volume,
+            vibrationEnabled,
+            theme: appTheme,
+            language: appLang,
+            isRepeat: false,
+            isAutoRepeat: Boolean(options?.isAutoRepeat),
+            autoRepeatCount:
+              typeof options?.autoRepeatCount === 'number'
+                ? options.autoRepeatCount
+                : reminder.autoRepeatCount || 0,
+          };
+        })(),
       },
     ];
 
@@ -476,6 +484,7 @@ export async function scheduleReminderRepeatNotification(
   return scheduleReminderNotification(reminder, currentSettings, {
     overrideNotificationId: repeatId,
     isAutoRepeat: true,
+    autoRepeatCount: reminder.autoRepeatCount || 0,
   });
 }
 
