@@ -7,7 +7,7 @@ import { getStoreTarget } from '../config/billingConfig';
 
 export const PACKAGE_NAME = 'com.yaad.reminder';
 export const SUPPORT_EMAIL = 'info@narvanteam.ir';
-export const FORMSPREE_ENDPOINT = 'https://formspree.io/f/narvanapplications@gmail.com';
+export const FORMSPREE_ENDPOINT = 'https://formspree.io/f/mwloaglk';
 
 const FEEDBACK_STATE_STORAGE_KEY = 'yaad_two_stage_feedback_state_v2';
 const LEGACY_REVIEW_STATE_KEY = 'yaad_review_flow_completed_v1';
