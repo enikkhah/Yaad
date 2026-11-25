@@ -10839,6 +10839,7 @@ class YaadGeofenceService : Service(), LocationListener {
     private var lastEvaluatedFixTimeMs: Long = 0L
     private var stillSinceMs: Long = 0L
     private var isStationaryMode: Boolean = false
+    private var lastMaxZoneSpeedMps: Double = 0.0
 
     private fun acquireServiceCpuWakeLock() {
         try {
@@ -11404,14 +11405,21 @@ class YaadGeofenceService : Service(), LocationListener {
         isNewFixSample: Boolean,
         nowMs: Long
     ) {
-        if (isNewFixSample && location.hasSpeed()) {
-            val spd = location.speed.toDouble()
-            if (spd < STILL_SPEED) {
+        val acc = if (location.hasAccuracy() && location.accuracy > 0f) location.accuracy.toDouble() else 20.0
+        val rawSpeed = if (location.hasSpeed() && acc <= 40.0) {
+            location.speed.toDouble().coerceIn(0.0, 65.0)
+        } else {
+            lastMaxZoneSpeedMps
+        }
+        val effSpeedMps = maxOf(rawSpeed, lastMaxZoneSpeedMps)
+
+        if (isNewFixSample && (location.hasSpeed() || lastMaxZoneSpeedMps > 0.0)) {
+            if (effSpeedMps < STILL_SPEED) {
                 if (stillSinceMs == 0L) {
                     stillSinceMs = nowMs
                 }
                 isStationaryMode = (nowMs - stillSinceMs) >= (STILL_AFTER_S * 1000.0).toLong()
-            } else {
+            } else if (effSpeedMps > 0.85) {
                 stillSinceMs = 0L
                 isStationaryMode = false
             }
@@ -11419,15 +11427,21 @@ class YaadGeofenceService : Service(), LocationListener {
             isStationaryMode = true
         }
 
+        val ttcSec = if (minMarginMeters.isFinite()) {
+            minMarginMeters / maxOf(effSpeedMps, 1.0)
+        } else {
+            Double.POSITIVE_INFINITY
+        }
+
         val baseIntervalMs = when {
-            hasAnyActivePhase || minMarginMeters <= 50.0 -> 1000L
-            minMarginMeters <= 150.0 -> 2000L
-            minMarginMeters <= 600.0 -> 4000L
-            minMarginMeters <= 2500.0 -> 8000L
+            hasAnyActivePhase || minMarginMeters <= 50.0 || ttcSec <= 25.0 -> 1000L
+            minMarginMeters <= 150.0 || ttcSec <= 45.0 -> 2000L
+            minMarginMeters <= 600.0 || ttcSec <= 90.0 -> 4000L
+            minMarginMeters <= 2500.0 || ttcSec <= 180.0 -> 8000L
             else -> 20_000L
         }
         val stillIntervalMs = (STILL_INTERVAL_S * 1000.0).toLong()
-        val desiredIntervalMs = if (isStationaryMode && !hasAnyActivePhase) {
+        val desiredIntervalMs = if (isStationaryMode && !hasAnyActivePhase && minMarginMeters > 50.0) {
             maxOf(baseIntervalMs, stillIntervalMs)
         } else {
             baseIntervalMs
@@ -11695,8 +11709,9 @@ class YaadGeofenceService : Service(), LocationListener {
                     lastWebViewDispatchedTimeMs = now
                     lastWebViewDispatchedLat = lat
                     lastWebViewDispatchedLon = lon
+                    val spdJs = if (location.hasSpeed()) location.speed.toDouble().toString() else "null"
                     LocalNotificationsPlugin.evaluateJsInWebView(
-                        "window.dispatchEvent(new CustomEvent('yaad:native-location', { detail: { latitude: \$lat, longitude: \$lon, accuracy: \$acc, timestamp: \$now } }));"
+                        "window.dispatchEvent(new CustomEvent('yaad:native-location', { detail: { latitude: \$lat, longitude: \$lon, accuracy: \$acc, speed: \$spdJs, timestamp: \$now } }));"
                     )
                 }
             }
@@ -11732,6 +11747,9 @@ class YaadGeofenceService : Service(), LocationListener {
             val activeCandidates = ArrayList<ZoneAlertCandidate>()
             var minMarginMeters = Double.POSITIVE_INFINITY
             var hasAnyActivePhase = false
+            var maxObservedSpeedMps = 0.0
+            val hasGpsSpeed = location.hasSpeed()
+            val gpsSpeedMps = if (hasGpsSpeed) location.speed.toDouble() else 0.0
             val isOutOfAppSession = !appInForeground || screenOffOrLocked
 
             for (i in 0 until arr.length()) {
@@ -11769,6 +11787,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 val radius = item.optInt("radius", 200).coerceAtLeast(20)
                 val rMeters = radius.toDouble()
                 val rcMeters = computeZoneRc(rMeters)
+                val exitWarnMeters = rMeters * EXIT_WARN_FRAC
                 val rawTriggerOn = item.optString("triggerOn", "enter")
                 val triggerOn = when (rawTriggerOn) {
                     "exit" -> "exit"
@@ -11801,7 +11820,11 @@ class YaadGeofenceService : Service(), LocationListener {
                         d = rawDistanceDouble,
                         acc = accuracyMeters,
                         t = tSec,
-                        rMeters = rMeters
+                        rMeters = rMeters,
+                        matchEnter = matchEnter,
+                        matchExit = matchExit,
+                        hasGpsSpeed = hasGpsSpeed,
+                        gpsSpeedMps = gpsSpeedMps
                     )
                     emittedEvent = res.event
                     if (res.stateDirty) {
@@ -11809,10 +11832,17 @@ class YaadGeofenceService : Service(), LocationListener {
                         prefsModified = true
                     }
                 }
+                if (state.lastEffSpeed > maxObservedSpeedMps) {
+                    maxObservedSpeedMps = state.lastEffSpeed
+                }
 
                 val evalDm = if (state.hasInit && state.lastDm.isFinite()) state.lastDm else rawDistanceDouble
                 val distanceInt = evalDm.roundToInt()
-                val fenceMargin = minOf(kotlin.math.abs(evalDm - rcMeters), kotlin.math.abs(evalDm - rMeters))
+                val fenceMargin = when {
+                    matchExit && !matchEnter -> minOf(kotlin.math.abs(evalDm - exitWarnMeters), kotlin.math.abs(evalDm - rMeters))
+                    matchEnter && !matchExit -> minOf(kotlin.math.abs(evalDm - rcMeters), kotlin.math.abs(evalDm - rMeters))
+                    else -> minOf(kotlin.math.abs(evalDm - rcMeters), kotlin.math.abs(evalDm - exitWarnMeters), kotlin.math.abs(evalDm - rMeters))
+                }
                 if (fenceMargin < minMarginMeters) {
                     minMarginMeters = fenceMargin
                 }
@@ -11882,6 +11912,8 @@ class YaadGeofenceService : Service(), LocationListener {
                     editor.remove(bannerStartKey)
                     editor.remove(bannerTextKey)
                     editor.putBoolean(sonarDoneKey, false)
+                    editor.putBoolean(completedCycleKey, false)
+                    editor.putBoolean(uiDoneKey, false)
                     wokenAlertPhaseSet.remove("\${id}_exit")
                     prefsModified = true
                 } else if (emittedEvent == "ARRIVED" && matchEnter) {
@@ -11889,6 +11921,8 @@ class YaadGeofenceService : Service(), LocationListener {
                     editor.remove(bannerStartKey)
                     editor.remove(bannerTextKey)
                     editor.putBoolean(sonarDoneKey, false)
+                    editor.putBoolean(completedCycleKey, false)
+                    editor.putBoolean(uiDoneKey, false)
                     wokenAlertPhaseSet.remove("\${id}_enter")
                     prefsModified = true
                 }
@@ -12124,6 +12158,8 @@ class YaadGeofenceService : Service(), LocationListener {
             if (prefsModified) {
                 editor.apply()
             }
+
+            lastMaxZoneSpeedMps = maxObservedSpeedMps
 
             updateZoneDetectorLocationInterval(
                 minMarginMeters = minMarginMeters,
@@ -13809,27 +13845,33 @@ class YaadGeofenceService : Service(), LocationListener {
         private const val H_FRAC = 0.25
         private const val CONFIRM_SAMPLES = 2
         private const val CONFIRM_SECONDS = 3.0
-        private const val CONFIRM_SECONDS_POOR = 8.0
+        private const val CONFIRM_SECONDS_POOR = 7.0
         private const val POOR_ACC = 15.0
         private const val MEDIAN_N = 3
         private const val ACC_ABS_MAX = 100.0
         private const val C_FRAC = 0.10
         private const val C_FLOOR = 40.0
         private const val C_CAP = 0.35
-        private const val MIN_DWELL_S = 20.0
-        private const val BACK_MIN = 15.0
+        private const val EXIT_WARN_FRAC = 0.85
+        private const val MIN_DWELL_S = 18.0
+        private const val BACK_MIN = 20.0
         private const val BACK_ACC = 2.0
-        private const val BACK_FRAC = 0.05
+        private const val BACK_FRAC = 0.03
         private const val EMA_TAU_S = 8.0
         private const val CANCEL_BLOCK_S = 120.0
         private const val CANCEL_RESET_S = 900.0
-        private const val FB_MIN = 25.0
-        private const val FB_ACC = 3.0
-        private const val FB_FRAC = 0.10
-        private val REARM_DWELL_S: Double? = null
         private const val STILL_SPEED = 0.6
-        private const val STILL_AFTER_S = 30.0
+        private const val STILL_AFTER_S = 20.0
         private const val STILL_INTERVAL_S = 5.0
+
+        private data class ZoneSpeedProfile(
+            val confirmGoodS: Double,
+            val confirmPoorS: Double,
+            val minDwellS: Double,
+            val emaTauS: Double,
+            val cancelBlockS: Double,
+            val isSlowOrStill: Boolean
+        )
 
         private data class ZoneFenceState(
             var hasInit: Boolean = false,
@@ -13861,8 +13903,17 @@ class YaadGeofenceService : Service(), LocationListener {
             var bOutT0: Double = 0.0,
             var bInCnt: Int = 0,
             var bInT0: Double = 0.0,
+            var exStartCnt: Int = 0,
+            var exStartT0: Double = 0.0,
             var tbCnt: Int = 0,
-            var tbT0: Double = 0.0
+            var tbT0: Double = 0.0,
+            val spdHist: MutableList<Double> = ArrayList(),
+            var lastSpdD: Double = Double.NaN,
+            var lastSpdT: Double = Double.NaN,
+            var lastSpdAcc: Double = Double.NaN,
+            var stillSinceS: Double = Double.NaN,
+            var isStationary: Boolean = false,
+            var lastEffSpeed: Double = 0.0
         )
 
         private data class ZoneStepResult(
@@ -13880,19 +13931,50 @@ class YaadGeofenceService : Service(), LocationListener {
             return minOf(maxOf(HYS_K * acc, H_MIN), H_MAX, H_FRAC * zoneRadius)
         }
 
+        private fun computeZoneSpeedProfile(effSpeed: Double, isStationary: Boolean): ZoneSpeedProfile {
+            return when {
+                !isStationary && effSpeed > 7.0 -> ZoneSpeedProfile(
+                    confirmGoodS = 1.0,
+                    confirmPoorS = 1.2,
+                    minDwellS = 4.0,
+                    emaTauS = 2.0,
+                    cancelBlockS = 30.0,
+                    isSlowOrStill = false
+                )
+                !isStationary && effSpeed >= 2.5 -> ZoneSpeedProfile(
+                    confirmGoodS = 2.0,
+                    confirmPoorS = 4.5,
+                    minDwellS = 10.0,
+                    emaTauS = 4.5,
+                    cancelBlockS = 60.0,
+                    isSlowOrStill = false
+                )
+                else -> ZoneSpeedProfile(
+                    confirmGoodS = CONFIRM_SECONDS,
+                    confirmPoorS = CONFIRM_SECONDS_POOR,
+                    minDwellS = MIN_DWELL_S,
+                    emaTauS = EMA_TAU_S,
+                    cancelBlockS = CANCEL_BLOCK_S,
+                    isSlowOrStill = true
+                )
+            }
+        }
+
         private fun updateConfirm(
             cond: Boolean,
             cnt: Int,
             t0: Double,
             acc: Double,
-            t: Double
+            t: Double,
+            reqGoodS: Double = CONFIRM_SECONDS,
+            reqPoorS: Double = CONFIRM_SECONDS_POOR
         ): Pair<Boolean, Pair<Int, Double>> {
             if (!cond) {
                 return Pair(false, Pair(0, 0.0))
             }
             val newCnt = cnt + 1
             val newT0 = if (cnt == 0) t else t0
-            val reqS = if (acc > POOR_ACC) CONFIRM_SECONDS_POOR else CONFIRM_SECONDS
+            val reqS = if (acc > POOR_ACC) reqPoorS else reqGoodS
             val ok = newCnt >= CONFIRM_SAMPLES && (t - newT0) >= reqS
             return Pair(ok, Pair(newCnt, newT0))
         }
@@ -13945,8 +14027,23 @@ class YaadGeofenceService : Service(), LocationListener {
                 st.bOutT0 = obj.optDouble("b_out_t0", 0.0)
                 st.bInCnt = obj.optInt("b_in_cnt", 0)
                 st.bInT0 = obj.optDouble("b_in_t0", 0.0)
+                st.exStartCnt = obj.optInt("ex_start_cnt", 0)
+                st.exStartT0 = obj.optDouble("ex_start_t0", 0.0)
                 st.tbCnt = obj.optInt("tb_cnt", 0)
                 st.tbT0 = obj.optDouble("tb_t0", 0.0)
+                val spdArr = obj.optJSONArray("spd_hist")
+                if (spdArr != null) {
+                    for (idx in 0 until spdArr.length()) {
+                        val v = spdArr.optDouble(idx, Double.NaN)
+                        if (v.isFinite()) st.spdHist.add(v)
+                    }
+                }
+                st.lastSpdD = if (obj.isNull("last_spd_d")) Double.NaN else obj.optDouble("last_spd_d", Double.NaN)
+                st.lastSpdT = if (obj.isNull("last_spd_t")) Double.NaN else obj.optDouble("last_spd_t", Double.NaN)
+                st.lastSpdAcc = if (obj.isNull("last_spd_acc")) Double.NaN else obj.optDouble("last_spd_acc", Double.NaN)
+                st.stillSinceS = if (obj.isNull("still_since_s")) Double.NaN else obj.optDouble("still_since_s", Double.NaN)
+                st.isStationary = obj.optBoolean("is_stationary", false)
+                st.lastEffSpeed = obj.optDouble("last_eff_speed", 0.0)
             } catch (e: Exception) {
             }
             return st
@@ -13988,19 +14085,32 @@ class YaadGeofenceService : Service(), LocationListener {
                 putOptFiniteDouble(obj, "b_out_t0", st.bOutT0)
                 obj.put("b_in_cnt", st.bInCnt)
                 putOptFiniteDouble(obj, "b_in_t0", st.bInT0)
+                obj.put("ex_start_cnt", st.exStartCnt)
+                putOptFiniteDouble(obj, "ex_start_t0", st.exStartT0)
                 obj.put("tb_cnt", st.tbCnt)
                 putOptFiniteDouble(obj, "tb_t0", st.tbT0)
+                val spdArr = JSONArray()
+                for (v in st.spdHist) {
+                    if (v.isFinite()) spdArr.put(v)
+                }
+                obj.put("spd_hist", spdArr)
+                putOptFiniteDouble(obj, "last_spd_d", st.lastSpdD)
+                putOptFiniteDouble(obj, "last_spd_t", st.lastSpdT)
+                putOptFiniteDouble(obj, "last_spd_acc", st.lastSpdAcc)
+                putOptFiniteDouble(obj, "still_since_s", st.stillSinceS)
+                obj.put("is_stationary", st.isStationary)
+                putOptFiniteDouble(obj, "last_eff_speed", st.lastEffSpeed)
                 editor.putString("zd_state_\$id", obj.toString())
             } catch (e: Exception) {
             }
         }
 
-        private fun recordZoneCancel(st: ZoneFenceState, t: Double) {
+        private fun recordZoneCancel(st: ZoneFenceState, t: Double, baseBlockS: Double = CANCEL_BLOCK_S) {
             if (st.cancels > 0 && st.lastCancelT > 0.0 && (t - st.lastCancelT) >= CANCEL_RESET_S) {
                 st.cancels = 0
             }
             val shift = minOf(st.cancels, 3)
-            st.blockUntil = t + CANCEL_BLOCK_S * (1 shl shift).toDouble()
+            st.blockUntil = t + baseBlockS * (1 shl shift).toDouble()
             st.cancels = st.cancels + 1
             st.lastCancelT = t
         }
@@ -14010,16 +14120,60 @@ class YaadGeofenceService : Service(), LocationListener {
             d: Double,
             acc: Double,
             t: Double,
-            rMeters: Double
+            rMeters: Double,
+            matchEnter: Boolean = true,
+            matchExit: Boolean = true,
+            hasGpsSpeed: Boolean = false,
+            gpsSpeedMps: Double = 0.0
         ): ZoneStepResult {
             val rc = computeZoneRc(rMeters)
+            val exitWarn = rMeters * EXIT_WARN_FRAC
             val accLimit = minOf(ACC_ABS_MAX, maxOf(50.0, rMeters / 2.0))
             if (acc > accLimit) {
                 val fallbackDm = if (state.lastDm.isFinite()) state.lastDm else d
                 return ZoneStepResult("", fallbackDm, rc, false)
             }
 
-            // 1. Median-3 + EMA (tau = 8 s)
+            // 0. Speed estimation (GPS Doppler speed with |Δd|/Δt fallback) & stationary tracking
+            var candSpeed = Double.NaN
+            if (hasGpsSpeed && acc <= 40.0) {
+                candSpeed = gpsSpeedMps.coerceIn(0.0, 65.0)
+            } else if (state.lastSpdT.isFinite() && (t - state.lastSpdT) >= 0.5 && acc <= 40.0 && state.lastSpdAcc <= 40.0) {
+                val v = kotlin.math.abs(d - state.lastSpdD) / (t - state.lastSpdT)
+                if (v <= 60.0) {
+                    candSpeed = v
+                }
+            }
+            if (acc <= 40.0) {
+                state.lastSpdD = d
+                state.lastSpdT = t
+                state.lastSpdAcc = acc
+            }
+            if (candSpeed.isFinite()) {
+                state.spdHist.add(candSpeed)
+                while (state.spdHist.size > MEDIAN_N) {
+                    state.spdHist.removeAt(0)
+                }
+                if (candSpeed <= STILL_SPEED) {
+                    if (!state.stillSinceS.isFinite()) {
+                        state.stillSinceS = t
+                    }
+                    state.isStationary = (t - state.stillSinceS) >= STILL_AFTER_S
+                } else if (candSpeed > 0.85) {
+                    state.stillSinceS = Double.NaN
+                    state.isStationary = false
+                }
+            }
+            val effSpeed = if (state.spdHist.isEmpty()) {
+                0.0
+            } else {
+                val sortedSpd = state.spdHist.sorted()
+                sortedSpd[sortedSpd.size / 2]
+            }
+            state.lastEffSpeed = effSpeed
+            val profile = computeZoneSpeedProfile(effSpeed, state.isStationary)
+
+            // 1. Median-3 + speed-adaptive EMA
             state.rawHist.add(d)
             while (state.rawHist.size > MEDIAN_N) {
                 state.rawHist.removeAt(0)
@@ -14038,7 +14192,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 state.emaMax = dm
             } else {
                 val dt = maxOf(0.0, t - state.emaT)
-                val alpha = if (dt > 0.0) 1.0 - exp(-dt / EMA_TAU_S) else 0.0
+                val alpha = if (dt > 0.0) 1.0 - exp(-dt / profile.emaTauS) else 0.0
                 state.ema = state.ema + alpha * (dm - state.ema)
                 state.emaT = t
             }
@@ -14055,17 +14209,17 @@ class YaadGeofenceService : Service(), LocationListener {
             if (!state.hasInit) {
                 state.hasInit = true
                 state.pos = if (dm <= rMeters) "IN" else "OUT"
-                state.inC = dm <= rc
-                state.exitArmed = state.inC
+                state.inC = matchEnter && (dm <= rc)
+                state.exitArmed = matchExit && (state.pos == "IN")
                 state.exitPhase = "NONE"
-                state.enterArmed = (state.pos == "OUT")
+                state.enterArmed = matchEnter && (state.pos == "OUT")
                 state.enterPhase = "NONE"
                 state.lastPosChange = t - MIN_DWELL_S
                 state.blockUntil = 0.0
                 state.cancels = 0
                 state.lastCancelT = 0.0
                 state.rearmT0 = Double.NaN
-                state.anchor = Double.NaN
+                state.anchor = if (matchExit && state.pos == "IN") dm else Double.NaN
                 state.armedByDwell = false
                 state.emaMax = state.ema
                 return ZoneStepResult("", dm, rc, true)
@@ -14073,66 +14227,99 @@ class YaadGeofenceService : Service(), LocationListener {
 
             var event = ""
 
-            // 4. Centre zone
-            val cEnterRes = updateConfirm(!state.inC && dm <= rc - hc, state.cEnterCnt, state.cEnterT0, acc, t)
-            state.cEnterCnt = cEnterRes.second.first
-            state.cEnterT0 = cEnterRes.second.second
+            // 4. Centre zone (10% central zone rc) — ONLY for Enter mode, NEVER used in Exit mode
+            if (matchEnter) {
+                val cEnterRes = updateConfirm(
+                    !state.inC && dm <= rc - hc,
+                    state.cEnterCnt,
+                    state.cEnterT0,
+                    acc,
+                    t,
+                    profile.confirmGoodS,
+                    profile.confirmPoorS
+                )
+                state.cEnterCnt = cEnterRes.second.first
+                state.cEnterT0 = cEnterRes.second.second
 
-            val cExitRes = updateConfirm(state.inC && dm >= rc + hc, state.cExitCnt, state.cExitT0, acc, t)
-            state.cExitCnt = cExitRes.second.first
-            state.cExitT0 = cExitRes.second.second
+                val cExitRes = updateConfirm(
+                    state.inC && dm >= rc + hc,
+                    state.cExitCnt,
+                    state.cExitT0,
+                    acc,
+                    t,
+                    profile.confirmGoodS,
+                    profile.confirmPoorS
+                )
+                state.cExitCnt = cExitRes.second.first
+                state.cExitT0 = cExitRes.second.second
 
-            if (!state.inC && cEnterRes.first) {
-                state.inC = true
-                state.exitArmed = true
-                state.armedByDwell = false
-                state.anchor = Double.NaN
-                state.rearmT0 = Double.NaN
+                if (!state.inC && cEnterRes.first) {
+                    state.inC = true
+                    state.cEnterCnt = 0
+                    state.cEnterT0 = 0.0
+                    if (state.enterPhase == "ACTIVE") {
+                        state.enterPhase = "ARRIVED"
+                        event = "ARRIVED"
+                    }
+                } else if (state.inC && cExitRes.first) {
+                    state.inC = false
+                    state.cExitCnt = 0
+                    state.cExitT0 = 0.0
+                }
+            } else {
+                state.inC = false
                 state.cEnterCnt = 0
                 state.cEnterT0 = 0.0
-                if (state.exitPhase == "ACTIVE") {
-                    state.exitPhase = "NONE"
-                    recordZoneCancel(state, t)
-                    event = "EXIT_CANCEL"
-                } else if (state.exitPhase == "CROSSED") {
-                    state.exitPhase = "NONE"
-                }
-                if (state.enterPhase == "ACTIVE") {
-                    state.enterPhase = "ARRIVED"
-                    event = "ARRIVED"
-                }
-            } else if (state.inC && cExitRes.first) {
-                state.inC = false
                 state.cExitCnt = 0
                 state.cExitT0 = 0.0
             }
 
-            // 5. Boundary
-            val canLeaveBoundary = state.pos == "IN" && (t - state.lastPosChange) >= MIN_DWELL_S
-            val bOutRes = updateConfirm(canLeaveBoundary && dm >= rMeters + hb, state.bOutCnt, state.bOutT0, acc, t)
+            // 5. Outer Boundary (R)
+            val canLeaveBoundary = state.pos == "IN" && (t - state.lastPosChange) >= profile.minDwellS
+            val bOutRes = updateConfirm(
+                canLeaveBoundary && dm >= rMeters + hb,
+                state.bOutCnt,
+                state.bOutT0,
+                acc,
+                t,
+                profile.confirmGoodS,
+                profile.confirmPoorS
+            )
             state.bOutCnt = bOutRes.second.first
             state.bOutT0 = bOutRes.second.second
 
-            val bInRes = updateConfirm(state.pos == "OUT" && dm <= rMeters - hb, state.bInCnt, state.bInT0, acc, t)
+            val bInRes = updateConfirm(
+                state.pos == "OUT" && dm <= rMeters - hb,
+                state.bInCnt,
+                state.bInT0,
+                acc,
+                t,
+                profile.confirmGoodS,
+                profile.confirmPoorS
+            )
             state.bInCnt = bInRes.second.first
             state.bInT0 = bInRes.second.second
 
             if (state.pos == "IN" && bOutRes.first) {
                 state.pos = "OUT"
                 state.lastPosChange = t
-                state.enterArmed = true
                 state.rearmT0 = Double.NaN
                 state.anchor = Double.NaN
                 state.armedByDwell = false
                 state.bOutCnt = 0
                 state.bOutT0 = 0.0
-                if (state.enterPhase == "ACTIVE") {
-                    state.enterPhase = "NONE"
-                    event = "ENTER_CANCEL"
-                } else if (state.enterPhase == "ARRIVED") {
-                    state.enterPhase = "NONE"
+                state.exStartCnt = 0
+                state.exStartT0 = 0.0
+                if (matchEnter) {
+                    state.enterArmed = true
+                    if (state.enterPhase == "ACTIVE") {
+                        state.enterPhase = "NONE"
+                        event = "ENTER_CANCEL"
+                    } else if (state.enterPhase == "ARRIVED") {
+                        state.enterPhase = "NONE"
+                    }
                 }
-                if (state.exitPhase == "ACTIVE") {
+                if (matchExit && (state.exitPhase == "ACTIVE" || state.exitArmed)) {
                     state.exitPhase = "CROSSED"
                     event = "EXIT_CROSS"
                 }
@@ -14142,7 +14329,14 @@ class YaadGeofenceService : Service(), LocationListener {
                 state.lastPosChange = t
                 state.bInCnt = 0
                 state.bInT0 = 0.0
-                if (state.enterArmed) {
+                if (matchExit) {
+                    state.exitArmed = true
+                    state.exitPhase = "NONE"
+                    state.anchor = dm
+                    state.exStartCnt = 0
+                    state.exStartT0 = 0.0
+                }
+                if (matchEnter && state.enterArmed) {
                     state.enterPhase = "ACTIVE"
                     state.enterArmed = false
                     event = "ENTER"
@@ -14153,62 +14347,89 @@ class YaadGeofenceService : Service(), LocationListener {
                 }
             }
 
-            // 8. Optional re-arm by dwell (disabled when REARM_DWELL_S == null)
-            val dwellSeconds = REARM_DWELL_S
-            if (dwellSeconds != null) {
-                if (state.pos == "IN" && !state.inC && !state.exitArmed && state.exitPhase == "NONE" && t >= state.blockUntil) {
-                    if (!state.rearmT0.isFinite() || !state.anchor.isFinite()) {
-                        state.rearmT0 = t
-                        state.anchor = dm
-                    } else if ((t - state.rearmT0) >= dwellSeconds) {
-                        state.exitArmed = true
-                        state.armedByDwell = true
-                        state.rearmT0 = Double.NaN
-                    }
-                } else {
-                    state.rearmT0 = Double.NaN
+            // Track conservative inside anchor for Exit mode without any dependency on central 10% zone
+            if (matchExit && state.pos == "IN" && state.exitPhase == "NONE") {
+                if (!state.anchor.isFinite()) {
+                    state.anchor = state.ema
+                } else if (acc <= 25.0 && dm < exitWarn - hb) {
+                    state.anchor = minOf(state.anchor, dm)
+                } else if (acc <= 20.0 && !state.isStationary && effSpeed >= 0.5 && state.ema < state.anchor) {
+                    state.anchor = state.ema
                 }
             }
 
-            // 6. EXIT_START
+            // 6. EXIT_START in outer 15% warning zone (dm >= 0.85 * R), speed-adaptive with stationary drift guard
             if (
+                matchExit &&
                 state.pos == "IN" &&
                 state.exitArmed &&
                 state.exitPhase == "NONE" &&
                 t >= state.blockUntil &&
-                !state.inC &&
-                dm >= rc + hc
+                dm >= exitWarn
             ) {
-                val fbMargin = maxOf(FB_MIN, FB_ACC * acc, FB_FRAC * rMeters)
-                val dwellAnchorOk = !state.armedByDwell || (state.anchor.isFinite() && dm >= state.anchor + fbMargin)
-                if (dwellAnchorOk) {
+                val outwardDispThresh = maxOf(15.0, minOf(60.0, 0.02 * rMeters), 1.8 * acc)
+                val dispFromAnchor = if (state.anchor.isFinite()) {
+                    (if (profile.isSlowOrStill) state.ema else dm) - state.anchor
+                } else {
+                    0.0
+                }
+                val movingOk = !profile.isSlowOrStill ||
+                    effSpeed >= 0.85 ||
+                    (!state.isStationary && dispFromAnchor >= maxOf(40.0, 2.5 * acc))
+
+                val exStartRes = updateConfirm(
+                    dispFromAnchor >= outwardDispThresh && movingOk,
+                    state.exStartCnt,
+                    state.exStartT0,
+                    acc,
+                    t,
+                    profile.confirmGoodS,
+                    profile.confirmPoorS
+                )
+                state.exStartCnt = exStartRes.second.first
+                state.exStartT0 = exStartRes.second.second
+                if (exStartRes.first) {
                     state.exitPhase = "ACTIVE"
                     state.exitArmed = false
                     state.armedByDwell = false
-                    state.anchor = Double.NaN
                     state.emaMax = state.ema
+                    state.exStartCnt = 0
+                    state.exStartT0 = 0.0
                     state.tbCnt = 0
                     state.tbT0 = 0.0
                     event = "EXIT_START"
                 }
+            } else {
+                state.exStartCnt = 0
+                state.exStartT0 = 0.0
             }
 
-            // 7. Turn back while ACTIVE
-            if (state.exitPhase == "ACTIVE") {
+            // 7. Turn back while Exit ACTIVE (moves back below 0.85 * R - hb or drops significantly from emaMax)
+            if (matchExit && state.exitPhase == "ACTIVE") {
                 if (!state.emaMax.isFinite() || state.ema > state.emaMax) {
                     state.emaMax = state.ema
                 }
-                val backThresh = maxOf(BACK_MIN, BACK_ACC * acc, BACK_FRAC * (rMeters - rc))
+                val backThresh = maxOf(BACK_MIN, BACK_ACC * acc, BACK_FRAC * rMeters)
                 val dropFromMax = state.emaMax - state.ema
-                val tbRes = updateConfirm(!state.inC && dropFromMax >= backThresh, state.tbCnt, state.tbT0, acc, t)
+                val tbCond = dm < exitWarn - hb || dropFromMax >= backThresh
+                val tbRes = updateConfirm(
+                    tbCond,
+                    state.tbCnt,
+                    state.tbT0,
+                    acc,
+                    t,
+                    profile.confirmGoodS,
+                    profile.confirmPoorS
+                )
                 state.tbCnt = tbRes.second.first
                 state.tbT0 = tbRes.second.second
                 if (tbRes.first) {
                     state.exitPhase = "NONE"
-                    state.exitArmed = false
+                    state.exitArmed = true
+                    state.anchor = state.ema
                     state.tbCnt = 0
                     state.tbT0 = 0.0
-                    recordZoneCancel(state, t)
+                    recordZoneCancel(state, t, profile.cancelBlockS)
                     event = "EXIT_CANCEL"
                 }
             } else {

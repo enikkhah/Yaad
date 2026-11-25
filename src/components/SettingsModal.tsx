@@ -1393,7 +1393,7 @@ https://myket.ir/app/com.yaad.reminder`;
                     >
                       <Maximize2 className={`w-4 h-4 mb-1 ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-400'}`} />
                       <span className={`text-[10px] sm:text-[11px] font-black truncate w-full block ${nativePerms.fullScreenIntent ? 'text-white' : 'text-stone-200'}`}>
-                        {isFa ? 'زنگ روی قفل‌صفحه' : 'Lock-Screen Alarm'}
+                        {isFa ? 'اعلان صفحه قفل' : 'Lock-Screen Notification'}
                       </span>
                       <div className="mt-1 flex items-center gap-1">
                         <div

@@ -2837,6 +2837,7 @@ export default function App() {
         latitude: pos.coords.latitude,
         longitude: pos.coords.longitude,
         accuracy: pos.coords.accuracy,
+        speed: typeof pos.coords.speed === 'number' && Number.isFinite(pos.coords.speed) ? pos.coords.speed : null,
         timestamp: pos.timestamp || Date.now(),
       };
       evaluateUserPositionAgainstAllGeofences(userPos);
@@ -2857,6 +2858,7 @@ export default function App() {
           latitude: customEv.detail.latitude,
           longitude: customEv.detail.longitude,
           accuracy: customEv.detail.accuracy || 10,
+          speed: typeof customEv.detail.speed === 'number' && Number.isFinite(customEv.detail.speed) ? customEv.detail.speed : null,
           timestamp: customEv.detail.timestamp || Date.now(),
         });
       }
@@ -2898,6 +2900,7 @@ export default function App() {
             latitude: pos.coords.latitude,
             longitude: pos.coords.longitude,
             accuracy: pos.coords.accuracy,
+            speed: typeof pos.coords.speed === 'number' && Number.isFinite(pos.coords.speed) ? pos.coords.speed : null,
             timestamp: pos.timestamp || Date.now(),
           };
           const nextInterval = getAdaptivePollingInterval(
