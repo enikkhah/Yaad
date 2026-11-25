@@ -486,6 +486,32 @@ jobs:
           V_CODE: ${{ steps.versioning.outputs.v_code }}
           V_NAME: ${{ steps.versioning.outputs.v_name }}
         run: |
+          # Route Maven Central requests through Google's official Maven Central mirror to avoid HTTP 429 rate limits on GitHub runners
+          GRADLE_HOME_DIR="${GRADLE_USER_HOME:-$HOME/.gradle}"
+          mkdir -p "${GRADLE_HOME_DIR}/init.d"
+          cat <<'GRADLE_INIT' > "${GRADLE_HOME_DIR}/init.d/maven-central-mirror.gradle"
+          import org.gradle.api.artifacts.repositories.MavenArtifactRepository
+
+          def mirrorUrl = "https://maven-central.storage-download.googleapis.com/maven2"
+          def rewriteCentral = { repo ->
+              if (repo instanceof MavenArtifactRepository && repo.url != null) {
+                  def u = repo.url.toString()
+                  if (u.startsWith("https://repo.maven.apache.org/maven2") || u.startsWith("https://repo1.maven.org/maven2")) {
+                      repo.setUrl(mirrorUrl)
+                  }
+              }
+          }
+
+          gradle.settingsEvaluated { settings ->
+              settings.pluginManagement.repositories.all(rewriteCentral)
+          }
+
+          gradle.beforeProject { proj ->
+              proj.buildscript.repositories.all(rewriteCentral)
+              proj.repositories.all(rewriteCentral)
+          }
+          GRADLE_INIT
+
           # Run release AAB + APK build using verified Gradle distribution with automatic retry on transient network timeouts
           set -o pipefail
           BUILD_OK=0
@@ -495,11 +521,11 @@ jobs:
               BUILD_OK=1
               break
             fi
-            echo "::warning::Gradle build attempt $attempt failed; retrying in 5 seconds..."
-            sleep 5
+            echo "::warning::Gradle build attempt $attempt failed; retrying in 10 seconds..."
+            sleep 10
           done
           if [ "$BUILD_OK" -ne 1 ]; then
-            ERR_LINES=$(grep -E '^e: |FAILURE:|Execution failed for task|\* What went wrong:' /tmp/gradle-build.log | head -n 10 || true)
+            ERR_LINES=$(grep -E -A 4 '^e: |FAILURE:|Execution failed for task|\* What went wrong:' /tmp/gradle-build.log | head -n 25 || true)
             if [ -n "$ERR_LINES" ]; then
               while IFS= read -r eline; do
                 [ -n "$eline" ] && echo "::error::${eline}"
