@@ -1,4 +1,8 @@
 import { Capacitor } from '@capacitor/core';
+import { AppLauncher } from '@capacitor/app-launcher';
+import { Preferences } from '@capacitor/preferences';
+import { APP_VERSION } from './version';
+import { getStoreTarget } from '../config/billingConfig';
 
 export const PACKAGE_NAME = 'com.yaad.reminder';
 export const SUPPORT_EMAIL = 'info@narvanteam.ir';
@@ -9,9 +13,15 @@ const LEGACY_REVIEW_STATE_KEY = 'yaad_review_flow_completed_v1';
 const FEEDBACK_LIST_KEY = 'yaad_user_internal_feedbacks_v1';
 
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+const FORMSPREE_TIMEOUT_MS = 10_000;
+
+export const MAX_FEEDBACK_LENGTH = 2000;
+export const MAX_LOCAL_FEEDBACK_ITEMS = 20;
+export const SIMPLE_EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export type ReviewTargetStore = 'bazaar' | 'myket' | 'auto';
 export type ReviewCompletionReason = 'rated' | 'feedback_sent' | 'dismissed';
+export type FeedbackSubmitVia = 'formspree' | 'mailto' | 'failed';
 
 export interface TwoStageFeedbackPersistedState {
   hasGivenFeedback: boolean;
@@ -116,20 +126,17 @@ export function saveTwoStageFeedbackState(state: TwoStageFeedbackPersistedState)
   }
 
   try {
-    const capPlugins = (window as any)?.Capacitor?.Plugins;
-    if (capPlugins?.Preferences?.set) {
-      capPlugins.Preferences.set({
-        key: FEEDBACK_STATE_STORAGE_KEY,
-        value: serialized,
-      }).catch(() => {});
-    }
+    Preferences.set({
+      key: FEEDBACK_STATE_STORAGE_KEY,
+      value: serialized,
+    }).catch(() => {});
   } catch {
     // ignore
   }
 }
 
 /**
- * ثبت نهایی بازخورد (زمانی که کاربر امتیاز داده یا فرم پیشنهاد را ارسال کرده است)
+ * ثبت نهایی بازخورد (زمانی که کاربر امتیاز داده یا فرم پیشنهاد را با موفقیت ارسال کرده است)
  */
 export async function markReviewFlowCompleted(reason: ReviewCompletionReason): Promise<void> {
   const current = getTwoStageFeedbackState();
@@ -164,8 +171,36 @@ export function markFeedbackModalDismissed(): void {
   saveTwoStageFeedbackState(updated);
 }
 
+async function canLaunchUrl(url: string): Promise<boolean> {
+  try {
+    const res = await AppLauncher.canOpenUrl({ url });
+    return Boolean(res?.value);
+  } catch {
+    return false;
+  }
+}
+
+async function tryOpenUrl(url: string): Promise<boolean> {
+  try {
+    const res = await AppLauncher.openUrl({ url });
+    return res?.completed !== false;
+  } catch {
+    return false;
+  }
+}
+
+async function openExternalWebUrl(url: string): Promise<void> {
+  if (Capacitor.isNativePlatform()) {
+    const opened = await tryOpenUrl(url);
+    if (opened) return;
+  }
+  if (typeof window !== 'undefined') {
+    window.location.href = url;
+  }
+}
+
 /**
- * باز کردن صفحه ثبت ۵ ستاره در کافه‌بازار یا مایکت با استفاده از لینک‌های استاندارد و Capacitor AppLauncher
+ * باز کردن صفحه ثبت نظر در کافه‌بازار یا مایکت بر اساس VITE_STORE و Capacitor AppLauncher
  */
 export async function openStoreReviewPage(store: ReviewTargetStore = 'auto'): Promise<void> {
   const bazaarDeepLink = `bazaar://details?id=${PACKAGE_NAME}`;
@@ -173,120 +208,172 @@ export async function openStoreReviewPage(store: ReviewTargetStore = 'auto'): Pr
   const bazaarWebFallback = `https://cafebazaar.ir/app/${PACKAGE_NAME}`;
   const myketWebFallback = `https://myket.ir/app/${PACKAGE_NAME}`;
 
-  const capAppLauncher = (window as any)?.Capacitor?.Plugins?.AppLauncher;
+  const envStore = getStoreTarget();
+  let effectiveStore: ReviewTargetStore;
+  if (envStore === 'bazaar') {
+    effectiveStore = 'bazaar';
+  } else if (envStore === 'myket') {
+    effectiveStore = 'myket';
+  } else {
+    effectiveStore = store;
+  }
 
-  const tryLaunchUrl = async (url: string): Promise<boolean> => {
-    if (capAppLauncher?.openUrl) {
-      try {
-        if (capAppLauncher.canOpenUrl) {
-          const canOpen = await capAppLauncher.canOpenUrl({ url });
-          if (canOpen?.value) {
-            await capAppLauncher.openUrl({ url });
-            return true;
-          }
-        }
-        await capAppLauncher.openUrl({ url });
-        return true;
-      } catch {
-        return false;
-      }
+  if (!Capacitor.isNativePlatform()) {
+    if (typeof window !== 'undefined') {
+      window.location.href = effectiveStore === 'myket' ? myketWebFallback : bazaarWebFallback;
     }
-    return false;
-  };
+    return;
+  }
+
+  if (effectiveStore === 'bazaar') {
+    const opened = await tryOpenUrl(bazaarDeepLink);
+    if (!opened) {
+      await openExternalWebUrl(bazaarWebFallback);
+    }
+    return;
+  }
+
+  if (effectiveStore === 'myket') {
+    const opened = await tryOpenUrl(myketDeepLink);
+    if (!opened) {
+      await openExternalWebUrl(myketWebFallback);
+    }
+    return;
+  }
+
+  // حالت auto (فقط زمانی که VITE_STORE=none باشد)
+  const bazaarInstalled =
+    (await canLaunchUrl('com.farsitel.bazaar')) || (await canLaunchUrl(bazaarDeepLink));
+  if (bazaarInstalled) {
+    const opened = await tryOpenUrl(bazaarDeepLink);
+    if (!opened) {
+      await openExternalWebUrl(bazaarWebFallback);
+    }
+    return;
+  }
+
+  const myketInstalled =
+    (await canLaunchUrl('ir.mservices.market')) || (await canLaunchUrl(myketDeepLink));
+  if (myketInstalled) {
+    const opened = await tryOpenUrl(myketDeepLink);
+    if (!opened) {
+      await openExternalWebUrl(myketWebFallback);
+    }
+    return;
+  }
+
+  // اگر بررسی نصب نتیجه نداد، ابتدا deep link بازار سپس مایکت را امتحان کن و در نهایت وب بازار
+  if (await tryOpenUrl(bazaarDeepLink)) return;
+  if (await tryOpenUrl(myketDeepLink)) return;
+  await openExternalWebUrl(bazaarWebFallback);
+}
+
+/**
+ * باز کردن مستقیم برنامه ایمیل کاربر با متن پیام پشتیبانی (mailto)
+ */
+export async function openSupportMailto(text: string, userEmail?: string): Promise<boolean> {
+  const cleanMessage = text.trim().slice(0, MAX_FEEDBACK_LENGTH);
+  const cleanEmail = userEmail?.trim() || '';
+  const storeTarget = getStoreTarget();
+  const subject = encodeURIComponent('نقد و پیشنهاد اپلیکیشن یاد (YAAD Feedback)');
+  const replyLine = cleanEmail ? `\nایمیل کاربر: ${cleanEmail}` : '';
+  const body = encodeURIComponent(
+    `${cleanMessage}${replyLine}\n\n---\nارسال شده از اپلیکیشن یاد (${PACKAGE_NAME} | v${APP_VERSION} | ${storeTarget})`
+  );
+  const mailtoUrl = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
 
   if (Capacitor.isNativePlatform()) {
-    if (store === 'bazaar') {
-      const opened = await tryLaunchUrl(bazaarDeepLink);
-      if (!opened) window.location.href = bazaarDeepLink;
-      return;
-    }
-
-    if (store === 'myket') {
-      const opened = await tryLaunchUrl(myketDeepLink);
-      if (!opened) window.location.href = myketDeepLink;
-      return;
-    }
-
-    const openedBazaar = await tryLaunchUrl(bazaarDeepLink);
-    if (openedBazaar) return;
-
-    const openedMyket = await tryLaunchUrl(myketDeepLink);
-    if (openedMyket) return;
-
-    window.location.href = bazaarDeepLink;
-  } else {
-    window.location.href = store === 'myket' ? myketWebFallback : bazaarWebFallback;
+    return tryOpenUrl(mailtoUrl);
   }
+
+  try {
+    if (typeof window !== 'undefined') {
+      window.location.href = mailtoUrl;
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 /**
  * ارسال مستقیم نقد یا پیشنهاد کاربر به سرویس Formspree و ذخیره محلی
- * به همراه قابلیت هدایت به ایمیل پشتیبانی در صورت آفلاین بودن
+ * به همراه قابلیت هدایت به ایمیل پشتیبانی در صورت خطا یا آفلاین بودن
  */
 export async function submitNegativeFeedbackToSupport(
   feedbackText: string,
   userEmail?: string
-): Promise<{ ok: boolean; via: 'formspree' | 'mailto' }> {
-  const cleanMessage = feedbackText.trim();
-  const createdAt = new Date().toISOString();
+): Promise<{ ok: boolean; via: FeedbackSubmitVia }> {
+  const cleanMessage = feedbackText.trim().slice(0, MAX_FEEDBACK_LENGTH);
+  const cleanEmail = userEmail?.trim() || '';
 
-  // ۱. ذخیره در تاریخچه محلی
+  if (cleanEmail && !SIMPLE_EMAIL_REGEX.test(cleanEmail)) {
+    return { ok: false, via: 'failed' };
+  }
+
+  const createdAt = new Date().toISOString();
+  const storeTarget = getStoreTarget();
+
+  // ۱. ذخیره در تاریخچه محلی (حداکثر ۲۰ مورد و هر مورد حداکثر ۲۰۰۰ کاراکتر)
   try {
-    const existing = JSON.parse(localStorage.getItem(FEEDBACK_LIST_KEY) || '[]');
+    const parsed = JSON.parse(localStorage.getItem(FEEDBACK_LIST_KEY) || '[]');
+    const existing = Array.isArray(parsed) ? parsed : [];
     existing.push({
       message: cleanMessage,
-      email: userEmail?.trim() || undefined,
+      email: cleanEmail || undefined,
       createdAt,
     });
-    localStorage.setItem(FEEDBACK_LIST_KEY, JSON.stringify(existing));
+    const bounded = existing.slice(-MAX_LOCAL_FEEDBACK_ITEMS);
+    localStorage.setItem(FEEDBACK_LIST_KEY, JSON.stringify(bounded));
   } catch {
     // ignore storage errors
   }
 
-  // ۲. ارسال به سرویس Formspree
+  // ۲. ارسال به سرویس Formspree با timeout ده ثانیه‌ای
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), FORMSPREE_TIMEOUT_MS);
+
   try {
+    const payload: Record<string, string> = {
+      app: 'YAAD Reminder',
+      package: PACKAGE_NAME,
+      appVersion: APP_VERSION,
+      store: storeTarget,
+      supportEmail: SUPPORT_EMAIL,
+      message: cleanMessage,
+      submittedAt: createdAt,
+    };
+    if (cleanEmail) {
+      payload.email = cleanEmail;
+    }
+
     const response = await fetch(FORMSPREE_ENDPOINT, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        app: 'YAAD Reminder',
-        package: PACKAGE_NAME,
-        supportEmail: SUPPORT_EMAIL,
-        userEmail: userEmail?.trim() || 'anonymous@yaad.app',
-        message: cleanMessage,
-        submittedAt: createdAt,
-      }),
+      body: JSON.stringify(payload),
+      signal: controller.signal,
     });
 
     if (response.ok) {
       return { ok: true, via: 'formspree' };
     }
   } catch {
-    // در صورت عدم دسترسی به شبکه یا خطای Formspree، هدایت به کلاینت ایمیل
+    // در صورت عدم دسترسی به شبکه، تایم‌اوت یا خطای Formspree، هدایت به کلاینت ایمیل
+  } finally {
+    clearTimeout(timeoutId);
   }
 
-  // ۳. هدایت استاندارد به ایمیل تیم پشتیبانی (mailto:info@narvanteam.ir)
-  const subject = encodeURIComponent('نقد و پیشنهاد اپلیکیشن یاد (YAAD Feedback)');
-  const body = encodeURIComponent(
-    `${cleanMessage}\n\n---\nارسال شده از اپلیکیشن یاد (${PACKAGE_NAME})`
-  );
-  const mailtoUrl = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
-
-  const capAppLauncher = (window as any)?.Capacitor?.Plugins?.AppLauncher;
-  if (Capacitor.isNativePlatform() && capAppLauncher?.openUrl) {
-    try {
-      await capAppLauncher.openUrl({ url: mailtoUrl });
-      return { ok: true, via: 'mailto' };
-    } catch {
-      // fallback below
-    }
+  // ۳. هدایت به ایمیل تیم پشتیبانی (ارسال قطعی نیست و نیازمند تأیید کاربر در برنامه ایمیل است)
+  const openedMailto = await openSupportMailto(cleanMessage, cleanEmail || undefined);
+  if (openedMailto) {
+    return { ok: false, via: 'mailto' };
   }
 
-  window.location.href = mailtoUrl;
-  return { ok: true, via: 'mailto' };
+  return { ok: false, via: 'failed' };
 }
 
 /**
@@ -359,4 +446,3 @@ export async function triggerReviewFlow(options: TriggerReviewFlowOptions = {}):
 
   return true;
 }
-

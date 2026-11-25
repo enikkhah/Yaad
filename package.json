@@ -16,10 +16,12 @@
   "dependencies": {
     "@capacitor/android": "8.5.2",
     "@capacitor/app": "8.1.2",
+    "@capacitor/app-launcher": "8.0.1",
     "@capacitor/cli": "8.5.2",
     "@capacitor/core": "8.5.2",
     "@capacitor/filesystem": "8.1.5",
     "@capacitor/local-notifications": "8.3.1",
+    "@capacitor/preferences": "8.0.1",
     "@capacitor/share": "8.0.3",
     "@fontsource/jetbrains-mono": "^5.3.0",
     "@fontsource/vazirmatn": "^5.3.0",

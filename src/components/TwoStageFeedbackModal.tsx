@@ -1,12 +1,17 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, ExternalLink, Mail, MessageSquareHeart, Send, Star, X } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Mail, MessageSquareHeart, RefreshCw, Send, Star, X } from 'lucide-react';
+import { getStoreTarget } from '../config/billingConfig';
 import {
+  FeedbackSubmitVia,
   markFeedbackModalDismissed,
   markReviewFlowCompleted,
+  MAX_FEEDBACK_LENGTH,
   openReviewDialogDirectly,
   openStoreReviewPage,
+  openSupportMailto,
   ReviewTargetStore,
+  SIMPLE_EMAIL_REGEX,
   submitNegativeFeedbackToSupport,
   SUPPORT_EMAIL,
   TriggerReviewFlowOptions,
@@ -42,6 +47,10 @@ export const TwoStageFeedbackModal: React.FC = () => {
   const [userEmail, setUserEmail] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submittedVia, setSubmittedVia] = useState<FeedbackSubmitVia>('formspree');
+  const [hasFailed, setHasFailed] = useState(false);
+
+  const envStore = getStoreTarget();
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -53,6 +62,8 @@ export const TwoStageFeedbackModal: React.FC = () => {
       setFeedbackText('');
       setErrorMsg('');
       setIsSubmitting(false);
+      setSubmittedVia('formspree');
+      setHasFailed(false);
       setIsOpen(true);
     };
 
@@ -75,40 +86,102 @@ export const TwoStageFeedbackModal: React.FC = () => {
     await openStoreReviewPage(options.store || targetStore);
   };
 
-  // ارسال نقد یا پیشنهاد از طریق Formspree / ایمیل پشتیبانی
-  const handleSubmitNegativeFeedback = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = feedbackText.trim();
+  const executeFeedbackSubmission = async () => {
+    const trimmed = feedbackText.trim().slice(0, MAX_FEEDBACK_LENGTH);
     if (!trimmed) {
       setErrorMsg('لطفاً پیش از ارسال، نقد یا پیشنهاد خود را بنویسید.');
       return;
     }
 
+    const trimmedEmail = userEmail.trim();
+    if (trimmedEmail && !SIMPLE_EMAIL_REGEX.test(trimmedEmail)) {
+      setErrorMsg('لطفاً یک ایمیل معتبر وارد کنید یا این فیلد را خالی بگذارید.');
+      return;
+    }
+
     setErrorMsg('');
+    setHasFailed(false);
     setIsSubmitting(true);
 
     try {
-      await submitNegativeFeedbackToSupport(trimmed, userEmail);
-      if (typeof options.onSubmitFeedback === 'function') {
-        await options.onSubmitFeedback(trimmed);
+      const result = await submitNegativeFeedbackToSupport(trimmed, trimmedEmail || undefined);
+
+      if (result.via === 'formspree' && result.ok) {
+        if (typeof options.onSubmitFeedback === 'function') {
+          await options.onSubmitFeedback(trimmed);
+        }
+        await markReviewFlowCompleted('feedback_sent');
+        setSubmittedVia('formspree');
+        setStage('submitted');
+        setTimeout(() => {
+          setIsOpen(false);
+        }, 2200);
+        return;
       }
-      await markReviewFlowCompleted('feedback_sent');
-      setStage('submitted');
-      setTimeout(() => {
-        setIsOpen(false);
-      }, 2200);
+
+      if (result.via === 'mailto') {
+        // در حالت mailto ارسال قطعی نیست؛ بنابراین بازخورد تکمیل‌شده ثبت نمی‌شود
+        setSubmittedVia('mailto');
+        setStage('submitted');
+        setTimeout(() => {
+          setIsOpen(false);
+        }, 3000);
+        return;
+      }
+
+      setHasFailed(true);
+      setErrorMsg('ارسال بازخورد انجام نشد و برنامه ایمیل در دسترس نبود. لطفاً دوباره تلاش کنید.');
+    } catch {
+      setHasFailed(true);
+      setErrorMsg('در ارسال بازخورد خطایی رخ داد. لطفاً اتصال اینترنت را بررسی کرده و دوباره تلاش کنید.');
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  // هدایت مستقیم به فرم تماس ایمیلی در صورت تمایل کاربر
-  const handleDirectEmailContact = async () => {
-    const trimmed = feedbackText.trim() || 'پیشنهاد / گزارش مشکل در اپلیکیشن یاد:';
-    await submitNegativeFeedbackToSupport(trimmed, userEmail);
-    await markReviewFlowCompleted('feedback_sent');
-    setIsOpen(false);
+  // ارسال نقد یا پیشنهاد با نمایش نتیجه واقعی
+  const handleSubmitNegativeFeedback = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await executeFeedbackSubmission();
   };
+
+  // هدایت مستقیم به فرم تماس ایمیلی بدون فراخوانی Formspree و بدون ثبت تکمیل بازخورد
+  const handleDirectEmailContact = async () => {
+    const trimmedEmail = userEmail.trim();
+    if (trimmedEmail && !SIMPLE_EMAIL_REGEX.test(trimmedEmail)) {
+      setErrorMsg('لطفاً یک ایمیل معتبر وارد کنید یا این فیلد را خالی بگذارید.');
+      return;
+    }
+
+    setErrorMsg('');
+    setHasFailed(false);
+    const trimmed = (feedbackText.trim() || 'پیشنهاد / گزارش مشکل در اپلیکیشن یاد:').slice(
+      0,
+      MAX_FEEDBACK_LENGTH
+    );
+
+    const opened = await openSupportMailto(trimmed, trimmedEmail || undefined);
+    if (opened) {
+      setIsOpen(false);
+    } else {
+      setHasFailed(true);
+      setErrorMsg('برنامه ایمیلی روی دستگاه پیدا نشد یا باز نشد. لطفاً دوباره تلاش کنید.');
+    }
+  };
+
+  const positiveButtonLabel =
+    envStore === 'bazaar'
+      ? 'ثبت نظر در کافه‌بازار'
+      : envStore === 'myket'
+      ? 'ثبت نظر در مایکت'
+      : 'ثبت نظر در کافه‌بازار / مایکت';
+
+  const positivePromptStoreLabel =
+    envStore === 'bazaar'
+      ? 'کافه‌بازار'
+      : envStore === 'myket'
+      ? 'مایکت'
+      : 'بازار/مایکت';
 
   return (
     <AnimatePresence>
@@ -191,7 +264,7 @@ export const TwoStageFeedbackModal: React.FC = () => {
               </div>
             )}
 
-            {/* مرحله دوم (مسیر مثبت): ثبت ۵ ستاره در کافه‌بازار / مایکت */}
+            {/* مرحله دوم (مسیر مثبت): ثبت نظر در کافه‌بازار / مایکت */}
             {stage === 'positive' && (
               <div className="space-y-4 pt-1">
                 <div className="flex items-center justify-center gap-1.5 text-emerald-400">
@@ -204,7 +277,7 @@ export const TwoStageFeedbackModal: React.FC = () => {
                 </div>
 
                 <p className="text-xs sm:text-sm font-bold text-stone-200 leading-relaxed px-1">
-                  چقدر عالی! انرژی مثبت شما چراغ راه ماست. با ثبت ۵ ستاره در بازار/مایکت، به ما در توسعه‌ی «
+                  چقدر عالی! انرژی مثبت شما چراغ راه ماست. با ثبت نظر در {positivePromptStoreLabel}، به ما در توسعه‌ی «
                   <span data-keep-color="true" className="text-[#FF8C00] font-black">
                     یاد
                   </span>
@@ -218,31 +291,33 @@ export const TwoStageFeedbackModal: React.FC = () => {
                     className="w-full min-h-[44px] py-2.5 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-stone-950 font-black text-xs sm:text-sm shadow-lg shadow-emerald-500/25 transition-all active:scale-98 cursor-pointer flex items-center justify-center gap-2"
                   >
                     <Star className="w-4 h-4 fill-stone-950 text-stone-950 shrink-0" />
-                    <span>ثبت ۵ ستاره در کافه‌بازار / مایکت</span>
+                    <span>{positiveButtonLabel}</span>
                     <ExternalLink className="w-3.5 h-3.5 shrink-0" />
                   </button>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => handleRateInStore('bazaar')}
-                      className="py-2 px-3 rounded-xl bg-stone-900/90 hover:bg-stone-800 border border-emerald-500/25 text-emerald-300 font-bold text-xs transition-all cursor-pointer"
-                    >
-                      کافه‌بازار
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleRateInStore('myket')}
-                      className="py-2 px-3 rounded-xl bg-stone-900/90 hover:bg-stone-800 border border-emerald-500/25 text-emerald-300 font-bold text-xs transition-all cursor-pointer"
-                    >
-                      مایکت
-                    </button>
-                  </div>
+                  {envStore === 'none' && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleRateInStore('bazaar')}
+                        className="py-2 px-3 rounded-xl bg-stone-900/90 hover:bg-stone-800 border border-emerald-500/25 text-emerald-300 font-bold text-xs transition-all cursor-pointer"
+                      >
+                        کافه‌بازار
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRateInStore('myket')}
+                        className="py-2 px-3 rounded-xl bg-stone-900/90 hover:bg-stone-800 border border-emerald-500/25 text-emerald-300 font-bold text-xs transition-all cursor-pointer"
+                      >
+                        مایکت
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
 
-            {/* مرحله دوم (مسیر منفی): فرم نقد و پیشنهاد + ارسال به Formspree / ایمیل پشتیبانی */}
+            {/* مرحله دوم (مسیر منفی): فرم نقد و پیشنهاد */}
             {stage === 'negative' && (
               <form onSubmit={handleSubmitNegativeFeedback} className="space-y-3.5 pt-1 text-right">
                 <p className="text-xs sm:text-sm font-bold text-stone-200 leading-relaxed text-center px-1">
@@ -256,9 +331,11 @@ export const TwoStageFeedbackModal: React.FC = () => {
                 <div className="space-y-2">
                   <textarea
                     value={feedbackText}
+                    maxLength={MAX_FEEDBACK_LENGTH}
                     onChange={(e) => {
                       setFeedbackText(e.target.value);
                       if (errorMsg) setErrorMsg('');
+                      if (hasFailed) setHasFailed(false);
                     }}
                     rows={3}
                     placeholder="نقد، پیشنهاد یا مشکل خود را اینجا بنویسید..."
@@ -270,13 +347,30 @@ export const TwoStageFeedbackModal: React.FC = () => {
                     type="email"
                     dir="ltr"
                     value={userEmail}
-                    onChange={(e) => setUserEmail(e.target.value)}
+                    onChange={(e) => {
+                      setUserEmail(e.target.value);
+                      if (errorMsg) setErrorMsg('');
+                      if (hasFailed) setHasFailed(false);
+                    }}
                     placeholder="Your Email (Optional)"
                     className="w-full rounded-xl bg-[#07110E] border border-stone-800 focus:border-emerald-500/50 px-3 py-2 text-xs text-stone-200 placeholder:text-stone-500 outline-none transition-colors text-left font-mono"
                   />
 
                   {errorMsg && (
-                    <p className="text-[11px] font-bold text-rose-400 pr-1">{errorMsg}</p>
+                    <div className="space-y-2 pr-1">
+                      <p className="text-[11px] font-bold text-rose-400">{errorMsg}</p>
+                      {hasFailed && (
+                        <button
+                          type="button"
+                          disabled={isSubmitting}
+                          onClick={executeFeedbackSubmission}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-400/40 text-rose-300 font-bold text-[11px] transition-colors cursor-pointer"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5 shrink-0" />
+                          <span>تلاش دوباره</span>
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -287,7 +381,7 @@ export const TwoStageFeedbackModal: React.FC = () => {
                     className="w-full min-h-[44px] py-2.5 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-stone-950 font-black text-xs sm:text-sm shadow-lg shadow-emerald-500/25 transition-all active:scale-98 cursor-pointer flex items-center justify-center gap-2"
                   >
                     <Send className="w-4 h-4 shrink-0" />
-                    <span>{isSubmitting ? 'در حال ارسال...' : 'ارسال مستقیم به پشتیبانی (Formspree)'}</span>
+                    <span>{isSubmitting ? 'در حال ارسال...' : 'ارسال بازخورد'}</span>
                   </button>
 
                   <button
@@ -302,17 +396,23 @@ export const TwoStageFeedbackModal: React.FC = () => {
               </form>
             )}
 
-            {/* پیام تأیید پس از ارسال موفق پیشنهاد */}
+            {/* پیام وضعیت پس از اقدام کاربر */}
             {stage === 'submitted' && (
               <div className="space-y-3 py-3 text-center">
                 <div className="mx-auto w-12 h-12 rounded-2xl bg-emerald-500/20 border border-emerald-400/40 flex items-center justify-center text-emerald-400">
-                  <CheckCircle2 className="w-6 h-6" />
+                  {submittedVia === 'mailto' ? (
+                    <Mail className="w-6 h-6" />
+                  ) : (
+                    <CheckCircle2 className="w-6 h-6" />
+                  )}
                 </div>
                 <h4 className="text-sm sm:text-base font-black text-emerald-300">
                   سپاس از همراهی شما با «<span data-keep-color="true" className="text-[#FF8C00]">یاد</span>»!
                 </h4>
                 <p className="text-xs text-stone-300 leading-relaxed">
-                  پیام ارزشمند شما با موفقیت برای تیم فناوری نارون ارسال شد.
+                  {submittedVia === 'mailto'
+                    ? 'برنامه‌ی ایمیل باز شد؛ لطفاً ارسال را در همانجا تأیید کنید.'
+                    : 'پیام ارزشمند شما با موفقیت ارسال شد.'}
                 </p>
               </div>
             )}
