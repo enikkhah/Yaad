@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { AnimatePresence, motion } from 'motion/react';
 import { CheckCircle2, ExternalLink, Mail, MessageSquareHeart, RefreshCw, Send, Star, X } from 'lucide-react';
 import { getStoreTarget } from '../config/billingConfig';
@@ -16,6 +17,7 @@ import {
   SUPPORT_EMAIL,
   TriggerReviewFlowOptions,
   triggerReviewFlow,
+  wasLastSupportMailtoCanceled,
   YAAD_OPEN_FEEDBACK_MODAL_EVENT,
 } from '../utils/reviewFlow';
 
@@ -130,7 +132,11 @@ export const TwoStageFeedbackModal: React.FC = () => {
       }
 
       setHasFailed(true);
-      setErrorMsg('ارسال بازخورد انجام نشد و برنامه ایمیل در دسترس نبود. لطفاً دوباره تلاش کنید.');
+      if (result.canceled) {
+        setErrorMsg('اشتراک‌گذاری لغو شد؛ در صورت نیاز می‌توانید دوباره تلاش کنید.');
+      } else {
+        setErrorMsg('ارسال بازخورد انجام نشد و برنامه ایمیل در دسترس نبود. لطفاً دوباره تلاش کنید.');
+      }
     } catch {
       setHasFailed(true);
       setErrorMsg('در ارسال بازخورد خطایی رخ داد. لطفاً اتصال اینترنت را بررسی کرده و دوباره تلاش کنید.');
@@ -165,7 +171,11 @@ export const TwoStageFeedbackModal: React.FC = () => {
       setIsOpen(false);
     } else {
       setHasFailed(true);
-      setErrorMsg('برنامه ایمیلی روی دستگاه پیدا نشد یا باز نشد. لطفاً دوباره تلاش کنید.');
+      if (wasLastSupportMailtoCanceled()) {
+        setErrorMsg('اشتراک‌گذاری لغو شد؛ در صورت نیاز می‌توانید دوباره تلاش کنید.');
+      } else {
+        setErrorMsg('برنامه ایمیلی روی دستگاه پیدا نشد یا باز نشد. لطفاً دوباره تلاش کنید.');
+      }
     }
   };
 
@@ -411,7 +421,9 @@ export const TwoStageFeedbackModal: React.FC = () => {
                 </h4>
                 <p className="text-xs text-stone-300 leading-relaxed">
                   {submittedVia === 'mailto'
-                    ? 'برنامه‌ی ایمیل باز شد؛ لطفاً ارسال را در همانجا تأیید کنید.'
+                    ? Capacitor.isNativePlatform()
+                      ? 'منوی اشتراک‌گذاری باز شد؛ برنامه‌ی ایمیل را انتخاب کنید و ارسال را تأیید کنید.'
+                      : 'برنامه‌ی ایمیل باز شد؛ لطفاً ارسال را در همان‌جا تأیید کنید.'
                     : 'پیام ارزشمند شما با موفقیت ارسال شد.'}
                 </p>
               </div>

@@ -1,6 +1,7 @@
 import { Capacitor } from '@capacitor/core';
 import { AppLauncher } from '@capacitor/app-launcher';
 import { Preferences } from '@capacitor/preferences';
+import { Share } from '@capacitor/share';
 import { APP_VERSION } from './version';
 import { getStoreTarget } from '../config/billingConfig';
 
@@ -268,23 +269,51 @@ export async function openStoreReviewPage(store: ReviewTargetStore = 'auto'): Pr
   await openExternalWebUrl(bazaarWebFallback);
 }
 
+let lastSupportShareCanceled = false;
+
+export function wasLastSupportMailtoCanceled(): boolean {
+  return lastSupportShareCanceled;
+}
+
 /**
- * باز کردن مستقیم برنامه ایمیل کاربر با متن پیام پشتیبانی (mailto)
+ * باز کردن منوی اشتراک‌گذاری (در نیتیو) یا کلاینت ایمیل (در وب) با متن پیام پشتیبانی
  */
 export async function openSupportMailto(text: string, userEmail?: string): Promise<boolean> {
+  lastSupportShareCanceled = false;
   const cleanMessage = text.trim().slice(0, MAX_FEEDBACK_LENGTH);
   const cleanEmail = userEmail?.trim() || '';
   const storeTarget = getStoreTarget();
-  const subject = encodeURIComponent('نقد و پیشنهاد اپلیکیشن یاد (YAAD Feedback)');
+  const subjectText = 'نقد و پیشنهاد اپلیکیشن یاد (YAAD Feedback)';
   const replyLine = cleanEmail ? `\nایمیل کاربر: ${cleanEmail}` : '';
-  const body = encodeURIComponent(
-    `${cleanMessage}${replyLine}\n\n---\nارسال شده از اپلیکیشن یاد (${PACKAGE_NAME} | v${APP_VERSION} | ${storeTarget})`
-  );
-  const mailtoUrl = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
+  const footerLine = `ارسال شده از اپلیکیشن یاد (${PACKAGE_NAME} | v${APP_VERSION} | ${storeTarget})`;
 
   if (Capacitor.isNativePlatform()) {
-    return tryOpenUrl(mailtoUrl);
+    try {
+      navigator.clipboard?.writeText?.(SUPPORT_EMAIL).catch(() => {});
+    } catch {
+      // ignore clipboard errors
+    }
+
+    const shareText = `ارسال به: ${SUPPORT_EMAIL}\n\n${cleanMessage}${replyLine}\n\n---\n${footerLine}`;
+    try {
+      await Share.share({
+        title: subjectText,
+        text: shareText,
+        dialogTitle: 'ارسال با ایمیل',
+      });
+      return true;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err || '');
+      if (/cancel/i.test(msg)) {
+        lastSupportShareCanceled = true;
+      }
+      return false;
+    }
   }
+
+  const subject = encodeURIComponent(subjectText);
+  const body = encodeURIComponent(`${cleanMessage}${replyLine}\n\n---\n${footerLine}`);
+  const mailtoUrl = `mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`;
 
   try {
     if (typeof window !== 'undefined') {
@@ -304,7 +333,7 @@ export async function openSupportMailto(text: string, userEmail?: string): Promi
 export async function submitNegativeFeedbackToSupport(
   feedbackText: string,
   userEmail?: string
-): Promise<{ ok: boolean; via: FeedbackSubmitVia }> {
+): Promise<{ ok: boolean; via: FeedbackSubmitVia; canceled?: boolean }> {
   const cleanMessage = feedbackText.trim().slice(0, MAX_FEEDBACK_LENGTH);
   const cleanEmail = userEmail?.trim() || '';
 
@@ -373,7 +402,7 @@ export async function submitNegativeFeedbackToSupport(
     return { ok: false, via: 'mailto' };
   }
 
-  return { ok: false, via: 'failed' };
+  return { ok: false, via: 'failed', canceled: wasLastSupportMailtoCanceled() };
 }
 
 /**
