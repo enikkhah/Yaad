@@ -860,224 +860,230 @@ export const VerticalTimelineView: React.FC<VerticalTimelineViewProps> = ({
         )}
       </div>
 
-      {/* 3. CARD ACTION BOTTOM SHEET (با لمس کارت: انجام شد، تعویق، ویرایش، حذف) */}
-      {selectedReminder && (
-        <div 
-          className="fixed inset-0 z-50 bg-black/70 flex items-end justify-center animate-in fade-in duration-150"
-          onClick={() => {
-            setSelectedReminder(null);
-            setShowPostponePicker(false);
-          }}
-        >
-          <div
-            className="w-full max-w-lg bg-stone-900 border-t border-stone-800 rounded-t-3xl p-5 sm:p-6 space-y-4 shadow-2xl animate-in slide-in-from-bottom duration-200"
-            onClick={(e) => e.stopPropagation()}
-            dir={isEn ? 'ltr' : 'rtl'}
+      {/* 3. CARD ACTION BOTTOM SHEET (با لمس کارت: انجام شد، تعویق، ویرایش، حذف — رندر مستقیم روی body خارج از کانتینر انیمیشن‌دار) */}
+      {selectedReminder &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div 
+            className="fixed inset-0 z-[9999] bg-black/70 flex items-end justify-center animate-in fade-in duration-150"
+            onClick={() => {
+              setSelectedReminder(null);
+              setShowPostponePicker(false);
+            }}
           >
-            {/* Grab Handle */}
-            <div className="w-12 h-1.5 bg-stone-700/80 rounded-full mx-auto" />
+            <div
+              className="w-full max-w-lg max-h-[88dvh] overflow-y-auto bg-stone-900 border-t border-stone-800 rounded-t-3xl p-5 sm:p-6 pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-4 shadow-2xl animate-in slide-in-from-bottom duration-200"
+              onClick={(e) => e.stopPropagation()}
+              dir={isEn ? 'ltr' : 'rtl'}
+            >
+              {/* Grab Handle */}
+              <div className="w-12 h-1.5 bg-stone-700/80 rounded-full mx-auto" />
 
-            {/* Header: Title & Time */}
-            <div className="flex items-start justify-between gap-3 pt-1">
-              <div className="space-y-1 min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className={`w-4 h-4 rounded-full border-2 bg-transparent ${
-                    selectedReminder.priority === 'high'
-                      ? 'border-red-500'
-                      : selectedReminder.category === 'work'
-                      ? 'border-cyan-400'
-                      : selectedReminder.category === 'family'
-                      ? 'border-rose-400'
-                      : 'border-indigo-400'
-                  }`} />
-                  <span className="text-xs text-stone-400 font-medium">
-                    {getCategoryLabel(selectedReminder.category)} • {getPriorityLabel(selectedReminder.priority)}
+              {/* Header: Title & Time */}
+              <div className="flex items-start justify-between gap-3 pt-1">
+                <div className="space-y-1 min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`w-4 h-4 rounded-full border-2 bg-transparent ${
+                      selectedReminder.priority === 'high'
+                        ? 'border-red-500'
+                        : selectedReminder.category === 'work'
+                        ? 'border-cyan-400'
+                        : selectedReminder.category === 'family'
+                        ? 'border-rose-400'
+                        : 'border-indigo-400'
+                    }`} />
+                    <span className="text-xs text-stone-400 font-medium">
+                      {getCategoryLabel(selectedReminder.category)} • {getPriorityLabel(selectedReminder.priority)}
+                    </span>
+                  </div>
+                  <h3 className={`text-base sm:text-lg font-bold text-white break-words ${
+                    selectedReminder.status === 'completed' ? 'line-through text-stone-400' : ''
+                  }`}>
+                    {selectedReminder.title}
+                  </h3>
+                  <p className="text-xs text-stone-400">
+                    {formatJalaliFull(selectedReminder.dueTimestamp, isEn ? 'en' : 'fa')}
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setSelectedReminder(null)}
+                  className="min-h-[40px] p-2 text-stone-400 hover:text-white rounded-xl hover:bg-stone-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Quick Postpone options if toggled */}
+              {showPostponePicker ? (
+                <div className="space-y-2 p-3 bg-stone-950/60 rounded-2xl border border-stone-800 animate-in fade-in duration-150">
+                  <span className="text-xs font-bold text-stone-300 block mb-2">
+                    {isEn ? 'Choose postponement duration:' : 'مدت زمان تعویق را انتخاب کنید:'}
                   </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { label: isEn ? '+15 Minutes' : '۱۵ دقیقه', mins: 15 },
+                      { label: isEn ? '+30 Minutes' : '۳۰ دقیقه', mins: 30 },
+                      { label: isEn ? '+1 Hour' : '۱ ساعت', mins: 60 },
+                      { label: isEn ? '+24 Hours (Tomorrow)' : 'فردا (۲۴ ساعت)', mins: 1440 },
+                    ].map((opt) => (
+                      <button
+                        key={opt.mins}
+                        type="button"
+                        onClick={() => {
+                          onPostpone(selectedReminder.id, opt.mins);
+                          setSelectedReminder(null);
+                          setShowPostponePicker(false);
+                        }}
+                        className="min-h-[48px] py-2.5 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-stone-200 hover:text-white text-xs font-bold border border-stone-800 transition-all cursor-pointer text-center"
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <h3 className={`text-base sm:text-lg font-bold text-white break-words ${
-                  selectedReminder.status === 'completed' ? 'line-through text-stone-400' : ''
-                }`}>
-                  {selectedReminder.title}
-                </h3>
-                <p className="text-xs text-stone-400">
-                  {formatJalaliFull(selectedReminder.dueTimestamp, isEn ? 'en' : 'fa')}
-                </p>
+              ) : null}
+
+              {/* Action Buttons (حداقل ۴۸ پیکسل) */}
+              <div className="space-y-2 pt-2">
+                {/* 1. انجام شد / انجام نشده */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetReminder = selectedReminder;
+                    setSelectedReminder(null);
+                    triggerAnimatedToggleComplete(targetReminder);
+                  }}
+                  className={`min-h-[48px] w-full px-4 py-3 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer ${
+                    selectedReminder.status === 'completed'
+                      ? 'bg-stone-800 hover:bg-stone-700 text-stone-200'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20'
+                  }`}
+                >
+                  <CheckCircle2 className="w-5 h-5" />
+                  <span>
+                    {selectedReminder.status === 'completed'
+                      ? (isEn ? 'Mark as Incomplete' : 'تغییر به انجام‌نشده')
+                      : (isEn ? 'Mark as Completed' : 'انجام شد')}
+                  </span>
+                </button>
+
+                {/* 2. تعویق (Snooze) */}
+                <button
+                  type="button"
+                  onClick={() => setShowPostponePicker(!showPostponePicker)}
+                  className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-stone-800/90 hover:bg-stone-700/90 text-stone-200 font-bold text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer"
+                >
+                  <Clock className="w-5 h-5 text-indigo-400" />
+                  <span>{isEn ? 'Snooze / Postpone' : 'تعویق زمان'}</span>
+                </button>
+
+                {/* 3. ویرایش */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const rem = selectedReminder;
+                    setSelectedReminder(null);
+                    onEdit(rem);
+                  }}
+                  className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-stone-800/90 hover:bg-stone-700/90 text-stone-200 font-bold text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer"
+                >
+                  <Edit3 className="w-5 h-5 text-sky-400" />
+                  <span>{isEn ? 'Edit Reminder' : 'ویرایش یادآور'}</span>
+                </button>
+
+                {/* 4. حذف (انتقال به سطل بازیافت) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const remId = selectedReminder.id;
+                    setSelectedReminder(null);
+                    onDelete(remId);
+                  }}
+                  className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 font-bold text-sm flex items-center justify-center gap-2.5 border border-rose-500/25 transition-all cursor-pointer"
+                >
+                  <Trash2 className="w-5 h-5 text-rose-400" />
+                  <span>{isEn ? 'Move to Recycle Bin' : 'انتقال به سطل بازیافت'}</span>
+                </button>
               </div>
-
-              <button
-                type="button"
-                onClick={() => setSelectedReminder(null)}
-                className="min-h-[40px] p-2 text-stone-400 hover:text-white rounded-xl hover:bg-stone-800 transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
             </div>
-
-            {/* Quick Postpone options if toggled */}
-            {showPostponePicker ? (
-              <div className="space-y-2 p-3 bg-stone-950/60 rounded-2xl border border-stone-800 animate-in fade-in duration-150">
-                <span className="text-xs font-bold text-stone-300 block mb-2">
-                  {isEn ? 'Choose postponement duration:' : 'مدت زمان تعویق را انتخاب کنید:'}
-                </span>
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { label: isEn ? '+15 Minutes' : '۱۵ دقیقه', mins: 15 },
-                    { label: isEn ? '+30 Minutes' : '۳۰ دقیقه', mins: 30 },
-                    { label: isEn ? '+1 Hour' : '۱ ساعت', mins: 60 },
-                    { label: isEn ? '+24 Hours (Tomorrow)' : 'فردا (۲۴ ساعت)', mins: 1440 },
-                  ].map((opt) => (
-                    <button
-                      key={opt.mins}
-                      type="button"
-                      onClick={() => {
-                        onPostpone(selectedReminder.id, opt.mins);
-                        setSelectedReminder(null);
-                        setShowPostponePicker(false);
-                      }}
-                      className="min-h-[48px] py-2.5 px-3 rounded-xl bg-stone-900 hover:bg-stone-800 text-stone-200 hover:text-white text-xs font-bold border border-stone-800 transition-all cursor-pointer text-center"
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            {/* Action Buttons (حداقل ۴۸ پیکسل) */}
-            <div className="space-y-2 pt-2">
-              {/* 1. انجام شد / انجام نشده */}
-              <button
-                type="button"
-                onClick={() => {
-                  const targetReminder = selectedReminder;
-                  setSelectedReminder(null);
-                  triggerAnimatedToggleComplete(targetReminder);
-                }}
-                className={`min-h-[48px] w-full px-4 py-3 rounded-2xl font-black text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer ${
-                  selectedReminder.status === 'completed'
-                    ? 'bg-stone-800 hover:bg-stone-700 text-stone-200'
-                    : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg shadow-emerald-600/20'
-                }`}
-              >
-                <CheckCircle2 className="w-5 h-5" />
-                <span>
-                  {selectedReminder.status === 'completed'
-                    ? (isEn ? 'Mark as Incomplete' : 'تغییر به انجام‌نشده')
-                    : (isEn ? 'Mark as Completed' : 'انجام شد')}
-                </span>
-              </button>
-
-              {/* 2. تعویق (Snooze) */}
-              <button
-                type="button"
-                onClick={() => setShowPostponePicker(!showPostponePicker)}
-                className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-stone-800/90 hover:bg-stone-700/90 text-stone-200 font-bold text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer"
-              >
-                <Clock className="w-5 h-5 text-indigo-400" />
-                <span>{isEn ? 'Snooze / Postpone' : 'تعویق زمان'}</span>
-              </button>
-
-              {/* 3. ویرایش */}
-              <button
-                type="button"
-                onClick={() => {
-                  const rem = selectedReminder;
-                  setSelectedReminder(null);
-                  onEdit(rem);
-                }}
-                className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-stone-800/90 hover:bg-stone-700/90 text-stone-200 font-bold text-sm flex items-center justify-center gap-2.5 transition-all cursor-pointer"
-              >
-                <Edit3 className="w-5 h-5 text-sky-400" />
-                <span>{isEn ? 'Edit Reminder' : 'ویرایش یادآور'}</span>
-              </button>
-
-              {/* 4. حذف (انتقال به سطل بازیافت) */}
-              <button
-                type="button"
-                onClick={() => {
-                  const remId = selectedReminder.id;
-                  setSelectedReminder(null);
-                  onDelete(remId);
-                }}
-                className="min-h-[48px] w-full px-4 py-3 rounded-2xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 font-bold text-sm flex items-center justify-center gap-2.5 border border-rose-500/25 transition-all cursor-pointer"
-              >
-                <Trash2 className="w-5 h-5 text-rose-400" />
-                <span>{isEn ? 'Move to Recycle Bin' : 'انتقال به سطل بازیافت'}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       {/* 4. CATEGORY FILTER BOTTOM SHEET */}
-      {isFilterSheetOpen && (
-        <div 
-          className="fixed inset-0 z-50 bg-black/70 flex items-end justify-center animate-in fade-in duration-150"
-          onClick={() => setIsFilterSheetOpen(false)}
-        >
-          <div
-            className="w-full max-w-md bg-stone-900 border-t border-stone-800 rounded-t-3xl p-5 sm:p-6 space-y-4 shadow-2xl animate-in slide-in-from-bottom duration-200"
-            onClick={(e) => e.stopPropagation()}
-            dir={isEn ? 'ltr' : 'rtl'}
+      {isFilterSheetOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div 
+            className="fixed inset-0 z-[9999] bg-black/70 flex items-end justify-center animate-in fade-in duration-150"
+            onClick={() => setIsFilterSheetOpen(false)}
           >
-            <div className="w-12 h-1.5 bg-stone-700/80 rounded-full mx-auto" />
+            <div
+              className="w-full max-w-md max-h-[88dvh] overflow-y-auto bg-stone-900 border-t border-stone-800 rounded-t-3xl p-5 sm:p-6 pb-[max(1.25rem,env(safe-area-inset-bottom))] space-y-4 shadow-2xl animate-in slide-in-from-bottom duration-200"
+              onClick={(e) => e.stopPropagation()}
+              dir={isEn ? 'ltr' : 'rtl'}
+            >
+              <div className="w-12 h-1.5 bg-stone-700/80 rounded-full mx-auto" />
 
-            <div className="flex items-center justify-between pb-2 border-b border-stone-800">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <Filter className="w-4 h-4 text-indigo-400" />
-                <span>{isEn ? 'Filter by Category' : 'انتخاب دسته‌بندی'}</span>
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsFilterSheetOpen(false)}
-                className="p-1.5 text-stone-400 hover:text-white rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center justify-between pb-2 border-b border-stone-800">
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <Filter className="w-4 h-4 text-indigo-400" />
+                  <span>{isEn ? 'Filter by Category' : 'انتخاب دسته‌بندی'}</span>
+                </h3>
+                <button
+                  type="button"
+                  onClick={() => setIsFilterSheetOpen(false)}
+                  className="p-1.5 text-stone-400 hover:text-white rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {[
+                  { id: 'all', label: isEn ? 'All Categories' : 'همه دسته‌ها', icon: Sparkles, count: nonDeleted.length },
+                  { id: 'work', label: isEn ? 'Work' : 'کاری', icon: Briefcase, count: nonDeleted.filter((r) => r.category === 'work').length },
+                  { id: 'family', label: isEn ? 'Family' : 'خانوادگی', icon: Heart, count: nonDeleted.filter((r) => r.category === 'family').length },
+                  { id: 'other', label: isEn ? 'Other' : 'سایر', icon: Tag, count: nonDeleted.filter((r) => r.category === 'other').length },
+                ].map((cat) => {
+                  const Icon = cat.icon;
+                  const isSelected = categoryFilter === cat.id;
+
+                  return (
+                    <button
+                      key={cat.id}
+                      type="button"
+                      onClick={() => {
+                        onSetCategoryFilter(cat.id as any);
+                        setIsFilterSheetOpen(false);
+                      }}
+                      className={`min-h-[48px] w-full px-4 py-3 rounded-2xl flex items-center justify-between transition-all cursor-pointer border ${
+                        isSelected
+                          ? 'bg-indigo-500/15 border-indigo-500 text-white font-bold'
+                          : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-white hover:bg-stone-800/60'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Icon className={`w-4 h-4 ${isSelected ? 'text-indigo-400' : 'text-stone-400'}`} />
+                        <span className="text-sm">{cat.label}</span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-stone-400 font-mono">
+                          ({isEn ? cat.count : toPersianDigits(cat.count)})
+                        </span>
+                        {isSelected && <Check className="w-4 h-4 text-indigo-400" />}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </div>
-
-            <div className="space-y-2">
-              {[
-                { id: 'all', label: isEn ? 'All Categories' : 'همه دسته‌ها', icon: Sparkles, count: nonDeleted.length },
-                { id: 'work', label: isEn ? 'Work' : 'کاری', icon: Briefcase, count: nonDeleted.filter((r) => r.category === 'work').length },
-                { id: 'family', label: isEn ? 'Family' : 'خانوادگی', icon: Heart, count: nonDeleted.filter((r) => r.category === 'family').length },
-                { id: 'other', label: isEn ? 'Other' : 'سایر', icon: Tag, count: nonDeleted.filter((r) => r.category === 'other').length },
-              ].map((cat) => {
-                const Icon = cat.icon;
-                const isSelected = categoryFilter === cat.id;
-
-                return (
-                  <button
-                    key={cat.id}
-                    type="button"
-                    onClick={() => {
-                      onSetCategoryFilter(cat.id as any);
-                      setIsFilterSheetOpen(false);
-                    }}
-                    className={`min-h-[48px] w-full px-4 py-3 rounded-2xl flex items-center justify-between transition-all cursor-pointer border ${
-                      isSelected
-                        ? 'bg-indigo-500/15 border-indigo-500 text-white font-bold'
-                        : 'bg-stone-900 border-stone-800 text-stone-300 hover:text-white hover:bg-stone-800/60'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <Icon className={`w-4 h-4 ${isSelected ? 'text-indigo-400' : 'text-stone-400'}`} />
-                      <span className="text-sm">{cat.label}</span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-stone-400 font-mono">
-                        ({isEn ? cat.count : toPersianDigits(cat.count)})
-                      </span>
-                      {isSelected && <Check className="w-4 h-4 text-indigo-400" />}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
       {/* 5. DELETE CONFIRMATION WARNING DIALOG (با سویپ به راست — رندر مستقیم روی body خارج از کانتینر انیمیشن‌دار) */}
       {deleteConfirmReminder &&
         typeof document !== 'undefined' &&
