@@ -1255,13 +1255,13 @@ function evaluateSingleItemScenario(params: {
     st.wasInsideForExit = true;
     st.armedForExit = true;
     st.exitCycleCompleted = false;
-    st.lastBoundaryInMs = now;
+    st.lastBoundaryInMs = st.startedOutsideBoundary ? now : now - 18_000;
     st.minDistanceReachedInside = distance;
     st.emaMaxMeters = speedAndEma.emaDistance;
   } else if (distance <= safeRadius && rawDistance <= safeRadius + fuzzyHysteresisMeters && !st.exitCycleCompleted && !st.armedForExit && !st.wasInsideForExit) {
     st.wasInsideForExit = true;
     st.armedForExit = true;
-    st.lastBoundaryInMs = now;
+    st.lastBoundaryInMs = st.startedOutsideBoundary ? now : now - 18_000;
     st.minDistanceReachedInside = distance;
     st.emaMaxMeters = speedAndEma.emaDistance;
   }
@@ -1320,10 +1320,15 @@ function evaluateSingleItemScenario(params: {
     }
   }
 
-  // Check boundary crossing FIRST so high-speed 100+ km/h exits are never blocked by the warning-zone guard
+  // Check boundary crossing FIRST so high-speed 100+ km/h and interior-origin exits are never blocked by stationary/warning-zone delays
+  const exitStartedFromInterior =
+    Number.isFinite(st.minDistanceReachedInside) &&
+    st.minDistanceReachedInside < exitWarnMeters - fuzzyHysteresisMeters;
   const canLeaveBoundary =
     (st.armedForExit || st.wasInsideForExit) &&
-    (now - st.lastBoundaryInMs >= speedAndEma.profile.minDwellMs || st.bothDirectionLock === 'outward');
+    (now - st.lastBoundaryInMs >= speedAndEma.profile.minDwellMs ||
+      st.bothDirectionLock === 'outward' ||
+      (exitStartedFromInterior && distance - st.minDistanceReachedInside >= Math.max(25, 1.8 * safeAcc)));
 
   if (
     canLeaveBoundary &&
@@ -1343,9 +1348,12 @@ function evaluateSingleItemScenario(params: {
     st.exitBoundaryOutFirstMs = 0;
   }
 
+  const crossConfirmMs = exitStartedFromInterior
+    ? Math.min(exitConfirmMs, safeAcc > 15 ? 1500 : 1000)
+    : exitConfirmMs;
   const confirmedBoundaryCrossed =
     st.border5HzStartMs > 0 ||
-    (st.exitBoundaryOutConsecutive >= 2 && now - st.exitBoundaryOutFirstMs >= exitConfirmMs);
+    (st.exitBoundaryOutConsecutive >= 2 && now - st.exitBoundaryOutFirstMs >= crossConfirmMs);
 
   if (
     !st.exitCycleCompleted &&
@@ -1620,14 +1628,28 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
 
   // 4. Outer 15% warning zone [0.85 * R .. R]: confirm real outward motion + stationary drift protection
   if (!isAlreadyLatchedOutward && smoothedDistance <= safeRadius) {
+    const startedFromInterior =
+      Number.isFinite(st.minDistanceReachedInside) &&
+      st.minDistanceReachedInside < exitWarnMeters - hb;
     const outwardDispThresh = Math.max(15, Math.min(60, 0.02 * safeRadius), 1.8 * safeAcc);
+    const evalDistForDisp = isSlowOrStill && !startedFromInterior ? emaDistance : smoothedDistance;
     const dispFromAnchor = Number.isFinite(st.minDistanceReachedInside)
-      ? (isSlowOrStill ? emaDistance : smoothedDistance) - st.minDistanceReachedInside
+      ? evalDistForDisp - st.minDistanceReachedInside
       : 0;
     const movingOk =
       !isSlowOrStill ||
       effectiveSpeedMps >= 0.85 ||
+      (startedFromInterior && dispFromAnchor >= Math.max(25, 1.8 * safeAcc)) ||
       (!st.isStationaryMode && dispFromAnchor >= Math.max(40, 2.5 * safeAcc));
+
+    if (startedFromInterior && dispFromAnchor >= outwardDispThresh && movingOk) {
+      st.isStationaryMode = false;
+      st.stillSinceMs = 0;
+    }
+
+    const startConfirmMs = startedFromInterior
+      ? Math.min(reqConfirmMs, safeAcc > 15 ? 1500 : 1000)
+      : reqConfirmMs;
 
     if (dispFromAnchor >= outwardDispThresh && movingOk) {
       if (isNewSampleTick) {
@@ -1636,7 +1658,7 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
         }
         st.consecutiveExitOutwardSamples += 1;
       }
-      if (st.consecutiveExitOutwardSamples >= 2 && now - st.exitStartFirstMs >= reqConfirmMs) {
+      if (st.consecutiveExitOutwardSamples >= 2 && now - st.exitStartFirstMs >= startConfirmMs) {
         st.emaMaxMeters = emaDistance;
         st.exitCancelConsecutive = 0;
         st.exitCancelFirstMs = 0;

@@ -14275,15 +14275,25 @@ class YaadGeofenceService : Service(), LocationListener {
             }
 
             // 5. Outer Boundary (R)
-            val canLeaveBoundary = state.pos == "IN" && (t - state.lastPosChange) >= profile.minDwellS
+            val exitStartedFromInterior = matchExit && (
+                state.exitPhase == "ACTIVE" ||
+                    (state.exitArmed && state.anchor.isFinite() && state.anchor < exitWarn - hb)
+                )
+            val canLeaveBoundary = state.pos == "IN" && (
+                (t - state.lastPosChange) >= profile.minDwellS ||
+                    (matchExit && state.exitPhase == "ACTIVE") ||
+                    (exitStartedFromInterior && state.anchor.isFinite() && (dm - state.anchor) >= maxOf(25.0, 1.8 * acc))
+                )
+            val outReqGoodS = if (exitStartedFromInterior) minOf(profile.confirmGoodS, 1.0) else profile.confirmGoodS
+            val outReqPoorS = if (exitStartedFromInterior) minOf(profile.confirmPoorS, 1.5) else profile.confirmPoorS
             val bOutRes = updateConfirm(
                 canLeaveBoundary && dm >= rMeters + hb,
                 state.bOutCnt,
                 state.bOutT0,
                 acc,
                 t,
-                profile.confirmGoodS,
-                profile.confirmPoorS
+                outReqGoodS,
+                outReqPoorS
             )
             state.bOutCnt = bOutRes.second.first
             state.bOutT0 = bOutRes.second.second
@@ -14367,15 +14377,26 @@ class YaadGeofenceService : Service(), LocationListener {
                 t >= state.blockUntil &&
                 dm >= exitWarn
             ) {
+                val startedFromInterior = state.anchor.isFinite() && state.anchor < exitWarn - hb
                 val outwardDispThresh = maxOf(15.0, minOf(60.0, 0.02 * rMeters), 1.8 * acc)
+                val evalDistForDisp = if (profile.isSlowOrStill && !startedFromInterior) state.ema else dm
                 val dispFromAnchor = if (state.anchor.isFinite()) {
-                    (if (profile.isSlowOrStill) state.ema else dm) - state.anchor
+                    evalDistForDisp - state.anchor
                 } else {
                     0.0
                 }
                 val movingOk = !profile.isSlowOrStill ||
                     effSpeed >= 0.85 ||
+                    (startedFromInterior && dispFromAnchor >= maxOf(25.0, 1.8 * acc)) ||
                     (!state.isStationary && dispFromAnchor >= maxOf(40.0, 2.5 * acc))
+
+                if (startedFromInterior && dispFromAnchor >= outwardDispThresh && movingOk) {
+                    state.isStationary = false
+                    state.stillSinceS = Double.NaN
+                }
+
+                val exStartReqGoodS = if (startedFromInterior) minOf(profile.confirmGoodS, 1.0) else profile.confirmGoodS
+                val exStartReqPoorS = if (startedFromInterior) minOf(profile.confirmPoorS, 1.5) else profile.confirmPoorS
 
                 val exStartRes = updateConfirm(
                     dispFromAnchor >= outwardDispThresh && movingOk,
@@ -14383,8 +14404,8 @@ class YaadGeofenceService : Service(), LocationListener {
                     state.exStartT0,
                     acc,
                     t,
-                    profile.confirmGoodS,
-                    profile.confirmPoorS
+                    exStartReqGoodS,
+                    exStartReqPoorS
                 )
                 state.exStartCnt = exStartRes.second.first
                 state.exStartT0 = exStartRes.second.second
