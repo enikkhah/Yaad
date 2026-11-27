@@ -7107,7 +7107,7 @@ class YaadAlarmPopupActivity : Activity() {
         targetLongitude = extraObj?.optDouble("longitude", Double.NaN) ?: Double.NaN
 
         val rawTitle = requestJson?.getString("title") ?: (if (isPersian) "یادآور" else "Reminder")
-        val cleanTitle = rawTitle
+        val cleanTitleBase = rawTitle
             .replaceFirst("🔔 یادآور: ", "")
             .replaceFirst("یادآور: ", "")
             .replaceFirst("🔔 ", "")
@@ -7120,6 +7120,14 @@ class YaadAlarmPopupActivity : Activity() {
             .replaceFirst("📍 ", "")
             .substringBefore("  |  ")
             .trim()
+        val cleanTitle = if (isGeofencePopup) {
+            cleanTitleBase
+                .substringBefore("  •  ")
+                .substringBefore(" • ")
+                .trim()
+        } else {
+            cleanTitleBase
+        }
         cleanLocationTitle = cleanTitle
 
         // If launched via Status Bar Notification "✎ ویرایش" ("Edit") action button,
@@ -7531,7 +7539,7 @@ class YaadAlarmPopupActivity : Activity() {
             val titleRow = TextView(this)
             titleRow.text = itemTitle
             titleRow.setTextColor(Color.WHITE)
-            titleRow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            titleRow.setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
             titleRow.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
             titleRow.maxLines = 2
             titleRow.ellipsize = TextUtils.TruncateAt.END
@@ -7809,7 +7817,7 @@ class YaadAlarmPopupActivity : Activity() {
         titleTv.text = titleStr
         titleTv.gravity = Gravity.CENTER
         titleTv.setTextColor(Color.WHITE)
-        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 22f)
+        titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28f)
         titleTv.typeface = Typeface.create("sans-serif-black", Typeface.BOLD)
         titleTv.maxLines = 2
         titleTv.ellipsize = TextUtils.TruncateAt.END
@@ -13327,8 +13335,8 @@ class YaadGeofenceService : Service(), LocationListener {
         }
 
         val now = System.currentTimeMillis()
-        // Do not overwrite an active fullScreenIntent notification with a silent live update within 3.5 seconds of firing
-        if (isLiveUpdate && !showFullScreen && now - lastFullScreenNotificationPostMs < 3_500L) {
+        // Do not overwrite an active fullScreenIntent notification with a silent live update within 5.2 seconds of firing
+        if (isLiveUpdate && !showFullScreen && now - lastFullScreenNotificationPostMs < 5_200L) {
             return sourceJsonStr
         }
 
@@ -13670,7 +13678,7 @@ class YaadGeofenceService : Service(), LocationListener {
                 demoteActiveBannerToShadeNow(appCtx, notifId)
             }
             demoteBannerRunnable = r
-            bannerHandler.postDelayed(r, 3_000L)
+            bannerHandler.postDelayed(r, 5_000L)
         }
 
         fun demoteActiveBannerToShadeNow(context: Context, targetNotifId: Int = activeGeofenceNotificationId) {
