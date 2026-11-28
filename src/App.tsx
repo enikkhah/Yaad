@@ -32,6 +32,7 @@ import {
   checkDeviceGpsEnabled,
   isDeviceGpsCurrentlyOnSync,
   hasBackgroundLocationPermission,
+  hasFullScreenIntentPermission,
   checkAllPermissionsStatus,
 } from './utils/nativePermissions';
 import { OCCASIONS_STORAGE_KEY, createReminderFromOccasion } from './utils/occasionUtils';
@@ -745,6 +746,7 @@ export default function App() {
   }, [isGeofenceActive]);
   const deviceGpsEnabledRef = useRef<boolean>(isDeviceGpsCurrentlyOnSync() !== false);
   const hasShownBgLocationPromptRef = useRef<boolean>(false);
+  const hasShownFullScreenIntentPromptRef = useRef<boolean>(false);
   const [isCreateChoiceOpen, setIsCreateChoiceOpen] = useState(false);
   const [locationFilter, setLocationFilter] = useState<'all' | 'checkpoints'>('all');
   const [activeAlarmReminders, setActiveAlarmReminders] = useState<Reminder[]>([]);
@@ -2210,6 +2212,20 @@ export default function App() {
           type: 'background_location',
           onRetry: () => {
             hasShownBgLocationPromptRef.current = false;
+            verifyGpsTurnedOnForGeofence();
+          },
+        });
+      } else if (
+        isNativeAndroidApp() &&
+        !hasFullScreenIntentPermission() &&
+        !hasShownFullScreenIntentPromptRef.current
+      ) {
+        hasShownFullScreenIntentPromptRef.current = true;
+        setAndroidPermissionModal({
+          isOpen: true,
+          type: 'full_screen_intent',
+          onRetry: () => {
+            hasShownFullScreenIntentPromptRef.current = false;
             verifyGpsTurnedOnForGeofence();
           },
         });

@@ -125,6 +125,15 @@ interface ItemScenarioRuntimeState {
   exitBoundaryOutConsecutive: number;
   exitBoundaryOutFirstMs: number;
   lastBoundaryInMs: number;
+  // Hybrid 1-minute speed-proportional pre-entry & inward radial speed tracking
+  preEnterConsecutive: number;
+  preEnterFirstMs: number;
+  preEnterCancelConsecutive: number;
+  preEnterCancelFirstMs: number;
+  inwardRateHistory: number[];
+  lastClosingDistMeters: number;
+  lastClosingTimeMs: number;
+  lastClosingAccMeters: number;
 }
 
 export const GEOFENCE_PASS_THROUGH_SNOOZE_MS = 5 * 60 * 1000; // 5 minutes snooze ("الان نه (Snooze)") after which the alert process re-emits
@@ -259,6 +268,14 @@ function getOrCreateRuntimeState(key: string, nowMs: number = Date.now()): ItemS
       exitBoundaryOutConsecutive: 0,
       exitBoundaryOutFirstMs: 0,
       lastBoundaryInMs: nowMs - 20_000,
+      preEnterConsecutive: 0,
+      preEnterFirstMs: 0,
+      preEnterCancelConsecutive: 0,
+      preEnterCancelFirstMs: 0,
+      inwardRateHistory: [],
+      lastClosingDistMeters: Number.NaN,
+      lastClosingTimeMs: 0,
+      lastClosingAccMeters: 100,
     };
     scenarioRuntimeMap.set(key, st);
   }
@@ -361,30 +378,30 @@ interface SpeedTierProfile {
 function computeSpeedTierProfile(effSpeedMps: number, isStationary: boolean): SpeedTierProfile {
   if (!isStationary && effSpeedMps > 7.0) {
     return {
-      confirmGoodMs: 1000,
-      confirmPoorMs: 1200,
-      minDwellMs: 4000,
-      emaTauMs: 2000,
-      cancelBlockMs: 30_000,
+      confirmGoodMs: 800,
+      confirmPoorMs: 1000,
+      minDwellMs: 3000,
+      emaTauMs: 1800,
+      cancelBlockMs: 15_000,
       isSlowOrStill: false,
     };
   }
   if (!isStationary && effSpeedMps >= 2.5) {
     return {
-      confirmGoodMs: 2000,
-      confirmPoorMs: 4500,
-      minDwellMs: 10_000,
-      emaTauMs: 4500,
-      cancelBlockMs: 60_000,
+      confirmGoodMs: 1000,
+      confirmPoorMs: 1500,
+      minDwellMs: 5000,
+      emaTauMs: 3000,
+      cancelBlockMs: 15_000,
       isSlowOrStill: false,
     };
   }
   return {
-    confirmGoodMs: 3000,
-    confirmPoorMs: 7000,
-    minDwellMs: 18_000,
-    emaTauMs: 8000,
-    cancelBlockMs: 120_000,
+    confirmGoodMs: 1500,
+    confirmPoorMs: 2500,
+    minDwellMs: 8000,
+    emaTauMs: 3500,
+    cancelBlockMs: 15_000,
     isSlowOrStill: true,
   };
 }
@@ -395,7 +412,13 @@ function updateRuntimeSpeedAndMedianEma(
   accuracy: number,
   now: number,
   gpsSpeedMps?: number | null
-): { medianDm: number; emaDistance: number; effectiveSpeedMps: number; profile: SpeedTierProfile } {
+): {
+  medianDm: number;
+  emaDistance: number;
+  effectiveSpeedMps: number;
+  inwardClosingSpeedMps: number;
+  profile: SpeedTierProfile;
+} {
   const safeAcc = Math.max(5, Math.min(100, accuracy || 15));
 
   let candSpeed = Number.NaN;
@@ -415,10 +438,34 @@ function updateRuntimeSpeedAndMedianEma(
     }
   }
 
+  let rawClosingRate = Number.NaN;
+  if (
+    Number.isFinite(st.lastClosingDistMeters) &&
+    st.lastClosingTimeMs > 0 &&
+    now - st.lastClosingTimeMs >= 500 &&
+    safeAcc <= 38 &&
+    st.lastClosingAccMeters <= 38
+  ) {
+    const dtCloseSec = (now - st.lastClosingTimeMs) / 1000;
+    const rate = (st.lastClosingDistMeters - rawDistance) / dtCloseSec;
+    if (rate >= -60 && rate <= 60) {
+      rawClosingRate = rate;
+      st.inwardRateHistory.push(rate);
+      if (st.inwardRateHistory.length > 3) {
+        st.inwardRateHistory.shift();
+      }
+    }
+  }
+
   if (safeAcc <= 40 && (st.lastSpeedTimeMs === 0 || now - st.lastSpeedTimeMs >= 300)) {
     st.lastSpeedDistMeters = rawDistance;
     st.lastSpeedTimeMs = now;
     st.lastSpeedAccMeters = safeAcc;
+  }
+  if (safeAcc <= 38 && (st.lastClosingTimeMs === 0 || now - st.lastClosingTimeMs >= 500)) {
+    st.lastClosingDistMeters = rawDistance;
+    st.lastClosingTimeMs = now;
+    st.lastClosingAccMeters = safeAcc;
   }
 
   if (Number.isFinite(candSpeed)) {
@@ -440,7 +487,30 @@ function updateRuntimeSpeedAndMedianEma(
     const sorted = [...st.speedHistory].sort((a, b) => a - b);
     effSpeed = sorted[Math.floor(sorted.length / 2)];
   }
+  // Immediate GPS Doppler boost so start-of-motion isn't held back by stale 0 m/s history
+  if (typeof gpsSpeedMps === 'number' && Number.isFinite(gpsSpeedMps) && gpsSpeedMps >= 1.5 && safeAcc <= 40) {
+    effSpeed = Math.max(effSpeed, Math.min(65, gpsSpeedMps * 0.85));
+  }
   st.effectiveSpeedMps = effSpeed;
+
+  let inwardClosingSpeedMps = 0;
+  if (st.inwardRateHistory.length > 0) {
+    const sortedRates = [...st.inwardRateHistory].sort((a, b) => a - b);
+    inwardClosingSpeedMps = Math.max(0, sortedRates[Math.floor(sortedRates.length / 2)]);
+  }
+  if (
+    typeof gpsSpeedMps === 'number' &&
+    Number.isFinite(gpsSpeedMps) &&
+    gpsSpeedMps >= 1.2 &&
+    Number.isFinite(rawClosingRate) &&
+    rawClosingRate > 0.4 &&
+    safeAcc <= 38
+  ) {
+    inwardClosingSpeedMps = Math.max(
+      inwardClosingSpeedMps,
+      Math.min(60, Math.min(gpsSpeedMps, rawClosingRate * 1.25))
+    );
+  }
 
   const profile = computeSpeedTierProfile(effSpeed, st.isStationaryMode);
 
@@ -468,6 +538,7 @@ function updateRuntimeSpeedAndMedianEma(
     medianDm,
     emaDistance: st.emaDistanceMeters,
     effectiveSpeedMps: effSpeed,
+    inwardClosingSpeedMps,
     profile,
   };
 }
@@ -1046,12 +1117,56 @@ function evaluateSingleItemScenario(params: {
 
   // =========================================================================
   // SCENARIO 1: ENTER ONLY ('enter')
-  // Keeps the 10% central zone (`centerZoneMeters`), enhanced with speed-adaptive EMA & deadband reset.
+  // Hybrid Combined:
+  // 1A-Pre: 1-minute speed-proportional inward approach before border (TTC <= 60s, capped at 1500m).
+  // 1B: Immediate border trigger upon crossing real boundary R (no R - hb penalty).
+  // 1A: Central 10% zone (`centerZoneMeters`) 5 Hz sonar + 10s visual window.
   // =========================================================================
   if (triggerOn === 'enter') {
+    const safeAccEnter = Math.max(5, Math.min(100, accuracy || 15));
+    const inwardMps = speedAndEma.inwardClosingSpeedMps;
+    const preEntryMarginMeters =
+      inwardMps >= 1.2 ? Math.min(1500, Math.round(inwardMps * 60)) : 0;
     const enterResetSamplesNeeded = !st.isStationaryMode && st.effectiveSpeedMps > 7.0 ? 2 : 3;
     const enterEvalDist = !st.isStationaryMode && st.effectiveSpeedMps > 7.0 ? distance : legacySmoothed;
-    if (enterEvalDist > safeRadius + antiPingPongDeadbandMeters) {
+    const inPreEntryCorridor =
+      rawDistance > safeRadius &&
+      preEntryMarginMeters > 0 &&
+      rawDistance <= safeRadius + preEntryMarginMeters &&
+      safeAccEnter <= 38 &&
+      trend !== 'outward';
+
+    if (st.enterAlertActive && rawDistance > safeRadius + antiPingPongDeadbandMeters) {
+      const movedAwayFromPreEntry =
+        preEntryMarginMeters <= 0 ||
+        rawDistance > safeRadius + preEntryMarginMeters + 60 ||
+        (trend === 'outward' && rawDistance > safeRadius + 30);
+      if (movedAwayFromPreEntry && st.consecutiveOutsideSamples >= enterResetSamplesNeeded) {
+        st.enterAlertActive = false;
+        st.enterCycleCompleted = false;
+        st.wasInsideBorder = false;
+        st.center5HzStartMs = 0;
+        st.entryBannerStartMs = 0;
+        st.enterApproachStartMs = 0;
+        st.visual10sStartMs = 0;
+        st.visualCrossingType = null;
+        st.audioMutedForCycle = false;
+        st.sonarFinishedForCycle = false;
+        st.acknowledgedUntilExit = false;
+        st.cooldownUntilMs = 0;
+        st.minDistanceReachedInside = Number.POSITIVE_INFINITY;
+        st.maxDistanceInApproach = enterEvalDist;
+        st.startedOutsideBoundary = true;
+        st.preEnterConsecutive = 0;
+        st.preEnterFirstMs = 0;
+        setGeofenceMinimizedState(targetId, false, false);
+        return null;
+      }
+    } else if (
+      !st.enterAlertActive &&
+      !inPreEntryCorridor &&
+      enterEvalDist > safeRadius + antiPingPongDeadbandMeters
+    ) {
       if (st.consecutiveOutsideSamples >= enterResetSamplesNeeded) {
         st.enterAlertActive = false;
         st.enterCycleCompleted = false;
@@ -1068,6 +1183,8 @@ function evaluateSingleItemScenario(params: {
         st.minDistanceReachedInside = Number.POSITIVE_INFINITY;
         st.maxDistanceInApproach = enterEvalDist;
         st.startedOutsideBoundary = true;
+        st.preEnterConsecutive = 0;
+        st.preEnterFirstMs = 0;
         setGeofenceMinimizedState(targetId, false, false);
       }
       return null;
@@ -1077,14 +1194,33 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    // Only start a new Enter alert when inside the geofence radius (d <= safeRadius),
-    // or keep it active if already latched (`st.enterAlertActive === true`) within the anti-ping-pong deadband.
-    if (distance > safeRadius && !st.enterAlertActive) {
+    // Confirm 1-minute speed-proportional pre-entry over >= 2 inward samples & 1.0s-1.5s
+    if (!st.enterAlertActive && inPreEntryCorridor) {
+      if (isDistinctEvalTick) {
+        if (st.preEnterConsecutive === 0) st.preEnterFirstMs = now;
+        st.preEnterConsecutive += 1;
+      }
+      const preReqMs = safeAccEnter > 28 ? 1500 : 1000;
+      if (st.preEnterConsecutive >= 2 && now - st.preEnterFirstMs >= preReqMs) {
+        st.enterAlertActive = true;
+        st.preEnterConsecutive = 0;
+        st.preEnterFirstMs = 0;
+        if (st.entryBannerStartMs === 0) {
+          st.entryBannerStartMs = now;
+        }
+      }
+    } else if (!inPreEntryCorridor && rawDistance > safeRadius) {
+      st.preEnterConsecutive = 0;
+      st.preEnterFirstMs = 0;
+    }
+
+    const insidePhysicalBoundary = distance <= safeRadius || (rawDistance <= safeRadius && safeAccEnter <= 35);
+    if (!insidePhysicalBoundary && !st.enterAlertActive) {
       return null;
     }
 
-    // Latch Enter alert immediately upon entering / being inside the geofence radius
-    if (distance <= safeRadius) {
+    // Latch Enter alert immediately upon entering physical radius R
+    if (insidePhysicalBoundary) {
       st.enterAlertActive = true;
       if (!st.wasInsideBorder) {
         st.wasInsideBorder = true;
@@ -1092,19 +1228,24 @@ function evaluateSingleItemScenario(params: {
       }
     }
 
+    const msgApproachingEarly = isEn
+      ? `Approaching «${title}» (~1 min to border)`
+      : `نزدیک شدن به «${title}» (~۱ دقیقه تا مرز)`;
+    const activeApproachPhrase = insidePhysicalBoundary ? msgEntered : msgApproachingEarly;
+
     let entryToastMessage: string | undefined = undefined;
     let entryToastRemainingSeconds: number | undefined = undefined;
     if (st.entryBannerStartMs > 0) {
       const elapsedEntryBanner = now - st.entryBannerStartMs;
       if (elapsedEntryBanner < 10_000) {
-        entryToastMessage = msgEntered;
+        entryToastMessage = activeApproachPhrase;
         entryToastRemainingSeconds = Math.max(1, Math.ceil((10_000 - elapsedEntryBanner) / 1000));
       } else {
         st.entryBannerStartMs = 0;
       }
     }
 
-    // 1A. Central 5% target zone (d <= max(5% R, 15m)):
+    // 1A. Central 10% target zone:
     // - 0..10s: 5 Hz sonar + visual arrival message
     // - Next 10s: audio cuts off, visual arrival message continues for 10 seconds
     // - After 10s visual window: all alerts stop and cycle completes
@@ -1200,9 +1341,8 @@ function evaluateSingleItemScenario(params: {
       return null;
     }
 
-    // 1B. Inside geofence boundary outside the central zone Rc (Rc < d <= R, or latched within deadband):
-    // Keep approach alert and 6s sonar active continuously until arrival at Rc (matched with native ZoneDetector).
-    if (!st.sonarFinishedForCycle && (st.enterAlertActive || distance <= safeRadius)) {
+    // 1B. Approaching inside geofence boundary (or 1-minute speed-proportional pre-entry corridor)
+    if (!st.sonarFinishedForCycle && (st.enterAlertActive || insidePhysicalBoundary)) {
       st.enterAlertActive = true;
       if (st.enterApproachStartMs === 0) {
         st.enterApproachStartMs = now;
@@ -1220,7 +1360,7 @@ function evaluateSingleItemScenario(params: {
         sonarMode: 'enter',
         sonarIntervalMs: 6000,
         isVisualOnly: false,
-        visualBannerMessage: entryToastMessage || msgEntered,
+        visualBannerMessage: entryToastMessage || activeApproachPhrase,
         entryToastMessage,
         entryToastRemainingSeconds,
         isAudioMuted: st.audioMutedForCycle,
@@ -1238,30 +1378,29 @@ function evaluateSingleItemScenario(params: {
 
   // =========================================================================
   // SCENARIO 2: EXIT ONLY ('exit')
-  // Central 10% zone is NOT used in Exit equations!
+  // Hybrid Combined:
   // 1. Arms whenever user is inside boundary (d <= R).
-  // 2. In [0 .. 0.85 * R): silent (no premature alert inside interior).
-  // 3. In outer 15% warning zone [0.85 * R .. R]: starts `exit_moving_out` ONLY when confirmed moving outward
-  //    with speed-adaptive timing & stationary drift protection.
-  // 4. Upon crossing outside boundary (d >= R + hb) while armed or active:
-  //    - Plays 5 Hz Exit sonar for 10s (`exit_border_5hz`), then 10s visual banner (`exit_crossed_visual_10s`).
-  //    - Works reliably even at 100+ km/h highway speeds when passing 0.85 * R quickly.
+  // 2. In [0 .. 0.50 * R): silent (no premature alert inside interior).
+  // 3. Starting at 50% of radius (0.50 * R <= d <= R): starts `exit_moving_out`
+  //    in 1.0-1.5s once outward displacement & movement confirm real exit.
+  // 4. Upon crossing outside boundary (d >= R + min(hb, 10)) while armed/active:
+  //    - Plays 5 Hz Exit sonar for 10s (`exit_border_5hz`), then 10s visual banner.
   // =========================================================================
-  const exitWarnMeters = safeRadius * 0.85;
+  const exitWarnMeters = safeRadius * 0.50;
   const safeAcc = Math.max(5, Math.min(100, accuracy || 15));
-  const exitConfirmMs = safeAcc > 15 ? speedAndEma.profile.confirmPoorMs : speedAndEma.profile.confirmGoodMs;
+  const exitConfirmMs = safeAcc > 28 ? speedAndEma.profile.confirmPoorMs : speedAndEma.profile.confirmGoodMs;
 
   if (distance <= safeRadius - fuzzyHysteresisMeters && !st.wasInsideForExit) {
     st.wasInsideForExit = true;
     st.armedForExit = true;
     st.exitCycleCompleted = false;
-    st.lastBoundaryInMs = st.startedOutsideBoundary ? now : now - 18_000;
+    st.lastBoundaryInMs = st.startedOutsideBoundary ? now : now - 10_000;
     st.minDistanceReachedInside = distance;
     st.emaMaxMeters = speedAndEma.emaDistance;
   } else if (distance <= safeRadius && rawDistance <= safeRadius + fuzzyHysteresisMeters && !st.exitCycleCompleted && !st.armedForExit && !st.wasInsideForExit) {
     st.wasInsideForExit = true;
     st.armedForExit = true;
-    st.lastBoundaryInMs = st.startedOutsideBoundary ? now : now - 18_000;
+    st.lastBoundaryInMs = st.startedOutsideBoundary ? now : now - 10_000;
     st.minDistanceReachedInside = distance;
     st.emaMaxMeters = speedAndEma.emaDistance;
   }
@@ -1304,35 +1443,32 @@ function evaluateSingleItemScenario(params: {
     return null;
   }
 
-  // Update conservative inside anchor for Exit mode (no central 10% zone needed)
+  // Update conservative inside anchor for Exit mode
   if (distance <= safeRadius && st.bothDirectionLock !== 'outward' && st.border5HzStartMs === 0) {
     if (!Number.isFinite(st.minDistanceReachedInside)) {
-      st.minDistanceReachedInside = speedAndEma.emaDistance;
-    } else if (safeAcc <= 25 && distance < exitWarnMeters - fuzzyHysteresisMeters) {
-      st.minDistanceReachedInside = Math.min(st.minDistanceReachedInside, distance);
-    } else if (
-      safeAcc <= 20 &&
-      !st.isStationaryMode &&
-      st.effectiveSpeedMps >= 0.5 &&
-      speedAndEma.emaDistance < st.minDistanceReachedInside
-    ) {
-      st.minDistanceReachedInside = speedAndEma.emaDistance;
+      st.minDistanceReachedInside = distance;
+    } else if (safeAcc <= 30 && distance < st.minDistanceReachedInside) {
+      st.minDistanceReachedInside = distance;
     }
   }
 
-  // Check boundary crossing FIRST so high-speed 100+ km/h and interior-origin exits are never blocked by stationary/warning-zone delays
+  const exitCrossMargin = Math.min(fuzzyHysteresisMeters, 10);
   const exitStartedFromInterior =
     Number.isFinite(st.minDistanceReachedInside) &&
-    st.minDistanceReachedInside < exitWarnMeters - fuzzyHysteresisMeters;
+    st.minDistanceReachedInside < Math.max(exitWarnMeters - Math.min(fuzzyHysteresisMeters, 12), safeRadius * 0.25);
+  const movedOutwardEnough =
+    Number.isFinite(st.minDistanceReachedInside) &&
+    rawDistance - st.minDistanceReachedInside >= Math.max(15, 1.2 * safeAcc);
   const canLeaveBoundary =
     (st.armedForExit || st.wasInsideForExit) &&
     (now - st.lastBoundaryInMs >= speedAndEma.profile.minDwellMs ||
       st.bothDirectionLock === 'outward' ||
-      (exitStartedFromInterior && distance - st.minDistanceReachedInside >= Math.max(25, 1.8 * safeAcc)));
+      movedOutwardEnough ||
+      trend === 'outward');
 
   if (
     canLeaveBoundary &&
-    distance >= safeRadius + fuzzyHysteresisMeters &&
+    distance >= safeRadius + exitCrossMargin &&
     !st.exitCycleCompleted &&
     !st.acknowledgedUntilExit &&
     st.border5HzStartMs === 0
@@ -1348,9 +1484,10 @@ function evaluateSingleItemScenario(params: {
     st.exitBoundaryOutFirstMs = 0;
   }
 
-  const crossConfirmMs = exitStartedFromInterior
-    ? Math.min(exitConfirmMs, safeAcc > 15 ? 1500 : 1000)
-    : exitConfirmMs;
+  const crossConfirmMs =
+    exitStartedFromInterior || movedOutwardEnough || st.bothDirectionLock === 'outward'
+      ? Math.min(exitConfirmMs, safeAcc > 28 ? 1500 : 1000)
+      : exitConfirmMs;
   const confirmedBoundaryCrossed =
     st.border5HzStartMs > 0 ||
     (st.exitBoundaryOutConsecutive >= 2 && now - st.exitBoundaryOutFirstMs >= crossConfirmMs);
@@ -1557,12 +1694,12 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
   } = params;
 
   const safeAcc = Math.max(5, Math.min(100, accuracy || 15));
-  const exitWarnMeters = safeRadius * 0.85;
+  const exitWarnMeters = safeRadius * 0.50;
   const hb =
     hysteresisMeters ??
     Math.min(25, Math.min(Math.round(safeRadius * 0.25), Math.max(5, Math.round(safeAcc * 0.75))));
-  const reqConfirmMs = confirmMs ?? (safeAcc > 15 ? 7000 : 3000);
-  const baseBlockMs = cancelBlockMs ?? 120_000;
+  const reqConfirmMs = confirmMs ?? (safeAcc > 28 ? 2500 : 1500);
+  const baseBlockMs = cancelBlockMs ?? 15_000;
 
   const isNewSampleTick =
     Number.isNaN(st.lastEvaluatedDistanceMeters) ||
@@ -1577,7 +1714,7 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
   const isAlreadyLatchedOutward =
     st.bothDirectionLock === 'outward' || st.border5HzStartMs > 0;
 
-  // 1. Cooldown guard after recent turn-back cancellation (does NOT block actual d > R crossing handled above)
+  // 1. Short cooldown guard after recent turn-back cancellation (does NOT block actual d > R crossing)
   if (!isAlreadyLatchedOutward && now < st.exitGpsAntiBounceUntilMs && smoothedDistance <= safeRadius) {
     st.consecutiveExitOutwardSamples = 0;
     st.exitStartFirstMs = 0;
@@ -1589,9 +1726,9 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
     if (!Number.isFinite(st.emaMaxMeters) || emaDistance > st.emaMaxMeters) {
       st.emaMaxMeters = emaDistance;
     }
-    const backThresh = Math.max(20, 2.0 * safeAcc, 0.03 * safeRadius);
+    const backThresh = Math.max(20, 2.0 * safeAcc, 0.04 * safeRadius);
     const dropFromMax = st.emaMaxMeters - emaDistance;
-    const tbCond = smoothedDistance < exitWarnMeters - hb || dropFromMax >= backThresh;
+    const tbCond = smoothedDistance < exitWarnMeters - Math.min(hb, 15) || dropFromMax >= backThresh;
 
     if (tbCond) {
       if (isNewSampleTick) {
@@ -1605,11 +1742,10 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
         st.exitStartFirstMs = 0;
         st.exitCancelConsecutive = 0;
         st.exitCancelFirstMs = 0;
-        st.minDistanceReachedInside = emaDistance;
+        st.minDistanceReachedInside = rawDistance;
         st.emaMaxMeters = emaDistance;
-        st.exitBoundaryOscillationCount = Math.min(3, st.exitBoundaryOscillationCount + 1);
-        const shift = Math.min(3, st.exitBoundaryOscillationCount - 1);
-        st.exitGpsAntiBounceUntilMs = Math.max(st.exitGpsAntiBounceUntilMs, now + baseBlockMs * (1 << shift));
+        st.exitBoundaryOscillationCount = Math.min(1, st.exitBoundaryOscillationCount + 1);
+        st.exitGpsAntiBounceUntilMs = Math.max(st.exitGpsAntiBounceUntilMs, now + Math.min(30_000, baseBlockMs));
         return { suppressAlert: true };
       }
     } else {
@@ -1619,39 +1755,41 @@ export function evaluateExitFivePercentAndGpsJitterGuard(params: {
     return { suppressAlert: false };
   }
 
-  // 3. Silent interior (d < 0.85 * R): never trigger exit warning here
-  if (!isAlreadyLatchedOutward && smoothedDistance < exitWarnMeters) {
+  // 3. Silent interior (both raw and smoothed below 50% R): never trigger exit warning here
+  const evalOutwardDist = Math.max(smoothedDistance, rawDistance);
+  if (!isAlreadyLatchedOutward && evalOutwardDist < exitWarnMeters) {
     st.consecutiveExitOutwardSamples = 0;
     st.exitStartFirstMs = 0;
     return { suppressAlert: true };
   }
 
-  // 4. Outer 15% warning zone [0.85 * R .. R]: confirm real outward motion + stationary drift protection
+  // 4. Outer 50% warning zone [0.50 * R .. R]: confirm real outward displacement/trend in 1.0-1.5s
   if (!isAlreadyLatchedOutward && smoothedDistance <= safeRadius) {
     const startedFromInterior =
       Number.isFinite(st.minDistanceReachedInside) &&
-      st.minDistanceReachedInside < exitWarnMeters - hb;
-    const outwardDispThresh = Math.max(15, Math.min(60, 0.02 * safeRadius), 1.8 * safeAcc);
-    const evalDistForDisp = isSlowOrStill && !startedFromInterior ? emaDistance : smoothedDistance;
+      st.minDistanceReachedInside < Math.max(exitWarnMeters - Math.min(hb, 12), safeRadius * 0.25);
+    const outwardDispThresh = Math.max(15, Math.min(45, 0.05 * safeRadius), 1.4 * safeAcc);
     const dispFromAnchor = Number.isFinite(st.minDistanceReachedInside)
-      ? evalDistForDisp - st.minDistanceReachedInside
+      ? rawDistance - st.minDistanceReachedInside
       : 0;
     const movingOk =
       !isSlowOrStill ||
-      effectiveSpeedMps >= 0.85 ||
-      (startedFromInterior && dispFromAnchor >= Math.max(25, 1.8 * safeAcc)) ||
-      (!st.isStationaryMode && dispFromAnchor >= Math.max(40, 2.5 * safeAcc));
+      effectiveSpeedMps >= 0.7 ||
+      dispFromAnchor >= outwardDispThresh ||
+      params.trend === 'outward' ||
+      params.isConfirmedExitingDirection;
 
-    if (startedFromInterior && dispFromAnchor >= outwardDispThresh && movingOk) {
+    if (dispFromAnchor >= outwardDispThresh && movingOk) {
       st.isStationaryMode = false;
       st.stillSinceMs = 0;
     }
 
-    const startConfirmMs = startedFromInterior
-      ? Math.min(reqConfirmMs, safeAcc > 15 ? 1500 : 1000)
-      : reqConfirmMs;
+    const startConfirmMs =
+      startedFromInterior || dispFromAnchor >= outwardDispThresh
+        ? Math.min(reqConfirmMs, safeAcc > 28 ? 1500 : 1000)
+        : reqConfirmMs;
 
-    if (dispFromAnchor >= outwardDispThresh && movingOk) {
+    if ((dispFromAnchor >= outwardDispThresh || rawDistance >= safeRadius * 0.75) && movingOk) {
       if (isNewSampleTick) {
         if (st.consecutiveExitOutwardSamples === 0) {
           st.exitStartFirstMs = now;
@@ -2185,7 +2323,7 @@ export function getNearestActiveGeofenceDistance(
  * Adaptive Speed-Aware (Time-To-Crossing) GPS Polling Interval:
  * Harmonized with native YaadGeofenceService:
  * - No active geofences: 60,000ms (Idle)
- * - Uses minimum margin to outer boundary R and either 0.85*R (exit) or 10% rc (enter),
+ * - Uses minimum margin to outer boundary R and either 0.50*R (exit) or 10% rc (enter),
  *   combined with Time-To-Boundary (`margin / max(speedMps, 1.0)`).
  */
 export function getAdaptivePollingInterval(
@@ -2208,7 +2346,7 @@ export function getAdaptivePollingInterval(
     const r = Math.max(20, rawRadius || 200);
     const mode = triggerOn === 'exit' ? 'exit' : triggerOn === 'both' ? 'both' : 'enter';
     const rc = computeFivePercentZoneMeters(r);
-    const exitWarn = r * 0.85;
+    const exitWarn = r * 0.50;
     let margin = Math.abs(d - r);
     if (mode === 'exit') {
       margin = Math.min(Math.abs(d - exitWarn), Math.abs(d - r));
@@ -2259,18 +2397,15 @@ export function getAdaptivePollingInterval(
   const effSpeedMps = Math.max(rawPosSpeed, maxObservedRuntimeSpeed);
   const ttcSec = minMarginMeters / Math.max(effSpeedMps, 1.0);
 
-  if (minMarginMeters <= 50 || ttcSec <= 25) {
+  if (minMarginMeters <= 120 || ttcSec <= 75) {
     return 1000;
   }
-  if (minMarginMeters <= 150 || ttcSec <= 45) {
+  if (minMarginMeters <= 350 || ttcSec <= 110) {
     return 2000;
   }
-  if (minMarginMeters <= 600 || ttcSec <= 90) {
+  if (minMarginMeters <= 1200 || ttcSec <= 180) {
     return 4000;
   }
-  if (minMarginMeters <= 2500 || ttcSec <= 180) {
-    return 8000;
-  }
-  return 12000;
+  return 10000;
 }
 
